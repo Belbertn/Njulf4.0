@@ -1,4 +1,5 @@
 using System.IO;
+using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
 using NUnit.Framework;
@@ -71,6 +72,15 @@ public sealed class PerformanceSnapshotWriterTests
             DdgiEffectiveMaxShadedLights = 4,
             DdgiAdaptiveBudgetReason = "emergency-degrade",
             DdgiScheduledPrimaryRayCount = 768,
+            SimpleDdgiInactiveProbeCount = 3,
+            SimpleDdgiInactiveProbeSkipCount = 2,
+            SimpleDdgiSavedRaysPerFrame = 256,
+            SimpleDdgiLightingDirtyFrames = 12,
+            SimpleDdgiLightingDirtyBoostedCapacity = 128,
+            SimpleDdgiDirtyReasonFlags = VulkanRenderer.SimpleDdgiDirtyReasonLight | VulkanRenderer.SimpleDdgiDirtyReasonDynamicGeometry,
+            SimpleDdgiFullRayProbeUpdateCount = 5,
+            SimpleDdgiMaintenanceRayProbeUpdateCount = 9,
+            SimpleDdgiAdaptiveRaySavedRaysPerFrame = 864,
             DdgiEstimatedShadowRayUpperBound = 1_536,
             DdgiSelectedDirectionalHitCount = 768,
             DdgiSelectedLocalHitCount = 768,
@@ -313,6 +323,15 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"DdgiEffectiveMaxShadedLights\": 4"));
             Assert.That(json, Does.Contain("\"DdgiAdaptiveBudgetReason\": \"emergency-degrade\""));
             Assert.That(json, Does.Contain("\"DdgiScheduledPrimaryRayCount\": 768"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiInactiveProbeCount\": 3"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiInactiveProbeSkipCount\": 2"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiSavedRaysPerFrame\": 256"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiLightingDirtyFrames\": 12"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiLightingDirtyBoostedCapacity\": 128"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiDirtyReasonFlags\": 5"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiFullRayProbeUpdateCount\": 5"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiMaintenanceRayProbeUpdateCount\": 9"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiAdaptiveRaySavedRaysPerFrame\": 864"));
             Assert.That(json, Does.Contain("\"DdgiEstimatedShadowRayUpperBound\": 1536"));
             Assert.That(json, Does.Contain("\"DdgiSelectedDirectionalHitCount\": 768"));
             Assert.That(json, Does.Contain("\"DdgiSelectedLocalHitCount\": 768"));

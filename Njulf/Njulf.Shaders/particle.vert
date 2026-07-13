@@ -3,6 +3,7 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 
 #include "common.glsl"
+#include "ddgi_simple_shared.glsl"
 
 layout(location = 0) out vec2 outUv;
 layout(location = 1) out vec4 outColor;
@@ -104,7 +105,17 @@ void main()
     float centerViewLength = length(centerViewVector);
     vec3 particleDdgiNormal = centerViewLength > 0.0001 ? centerViewVector / centerViewLength : vec3(0.0, 1.0, 0.0);
     vec3 particleAlbedo = max(particle.Color.rgb, vec3(0.0));
-    outDdgiAmbient = SampleDdgiAmbientDiffuse(center, particleDdgiNormal, particleAlbedo, 0.75, 4u);
+    SimpleDdgiParams simpleParams = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    if ((simpleParams.flags & (SIMPLE_DDGI_FLAG_ENABLED | SIMPLE_DDGI_FLAG_PARTICLE_ENABLED)) ==
+        (SIMPLE_DDGI_FLAG_ENABLED | SIMPLE_DDGI_FLAG_PARTICLE_ENABLED) &&
+        simpleParams.probeCount > 0u)
+    {
+        outDdgiAmbient = SampleSimpleDdgiIrradiance(center, particleDdgiNormal, particleDdgiNormal) * particleAlbedo * 0.75 / SIMPLE_DDGI_PI;
+    }
+    else
+    {
+        outDdgiAmbient = SampleDdgiAmbientDiffuse(center, particleDdgiNormal, particleAlbedo, 0.75, 4u);
+    }
 
     uint columns = max(particle.FlipbookColumns, 1u);
     uint rows = max(particle.FlipbookRows, 1u);

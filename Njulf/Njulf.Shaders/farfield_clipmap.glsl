@@ -13,6 +13,8 @@ struct FarFieldClipmapParams
     bool forceAll;
     uint instanceCount;
     uint voxelBufferIndex;
+    uint distanceBufferIndex;
+    bool distanceFieldValid;
 };
 
 FarFieldClipmapParams ReadFarFieldClipmapParams(uint bufferIndex)
@@ -23,6 +25,7 @@ FarFieldClipmapParams ReadFarFieldClipmapParams(uint bufferIndex)
     vec4 trace = ReadStorageVec4(bufferIndex, 8u);
     vec4 bake = ReadStorageVec4(bufferIndex, 12u);
     vec4 diagnostics = ReadStorageVec4(bufferIndex, 16u);
+    vec4 jumpFlood = ReadStorageVec4(bufferIndex, 20u);
     p.origin = origin.xyz;
     p.voxelSize = max(origin.w, 0.0001);
     p.resolution = uvec3(max(resolution.xyz, vec3(1.0)));
@@ -33,6 +36,8 @@ FarFieldClipmapParams ReadFarFieldClipmapParams(uint bufferIndex)
     p.forceAll = trace.w > 0.5;
     p.instanceCount = uint(max(bake.x, 0.0));
     p.voxelBufferIndex = uint(max(diagnostics.x, 0.0));
+    p.distanceBufferIndex = uint(max(jumpFlood.x, 0.0));
+    p.distanceFieldValid = jumpFlood.w > 0.5;
     return p;
 }
 
@@ -45,6 +50,31 @@ uint FarFieldVoxelIndex(ivec3 voxel, FarFieldClipmapParams p)
 bool FarFieldInside(ivec3 voxel, FarFieldClipmapParams p)
 {
     return all(greaterThanEqual(voxel, ivec3(0))) && all(lessThan(voxel, ivec3(p.resolution)));
+}
+
+uint FarFieldPackedDistanceWordIndex(uint voxelIndex)
+{
+    return voxelIndex >> 1u;
+}
+
+float ReadFarFieldDistanceVoxels(ivec3 voxel, FarFieldClipmapParams p)
+{
+    uint voxelIndex = FarFieldVoxelIndex(voxel, p);
+    uint packed = ReadStorageWord(p.distanceBufferIndex, FarFieldPackedDistanceWordIndex(voxelIndex));
+    uint encoded = ((voxelIndex & 1u) == 0u) ? (packed & 0xffffu) : ((packed >> 16u) & 0xffffu);
+    return float(encoded) * (1.0 / 256.0);
+}
+
+vec3 EstimateFarFieldNormal(ivec3 voxel, FarFieldClipmapParams p, vec3 fallbackNormal)
+{
+    ivec3 lo = max(voxel - ivec3(1), ivec3(0));
+    ivec3 hi = min(voxel + ivec3(1), ivec3(p.resolution) - ivec3(1));
+    vec3 gradient = vec3(
+        ReadFarFieldDistanceVoxels(ivec3(hi.x, voxel.y, voxel.z), p) - ReadFarFieldDistanceVoxels(ivec3(lo.x, voxel.y, voxel.z), p),
+        ReadFarFieldDistanceVoxels(ivec3(voxel.x, hi.y, voxel.z), p) - ReadFarFieldDistanceVoxels(ivec3(voxel.x, lo.y, voxel.z), p),
+        ReadFarFieldDistanceVoxels(ivec3(voxel.x, voxel.y, hi.z), p) - ReadFarFieldDistanceVoxels(ivec3(voxel.x, voxel.y, lo.z), p));
+    float len2 = dot(gradient, gradient);
+    return len2 > 0.000001 ? normalize(gradient) : fallbackNormal;
 }
 
 bool TraceFarFieldClipmapDetailed(
@@ -72,25 +102,23 @@ bool TraceFarFieldClipmap(
     return TraceFarFieldClipmapDetailed(origin, dir, tMin, tMax, hitT, faceNormal, albedo, stepExhausted, visitedSteps);
 }
 
-bool TraceFarFieldClipmapDetailed(
+bool TraceFarFieldClipmapDda(
     vec3 origin,
     vec3 dir,
     float tMin,
     float tMax,
+    FarFieldClipmapParams p,
     out float hitT,
     out vec3 faceNormal,
     out vec3 albedo,
     out bool stepExhausted,
     out uint visitedSteps)
 {
-    FarFieldClipmapParams p = ReadFarFieldClipmapParams(uint(FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX));
     hitT = tMax;
     faceNormal = vec3(0.0);
     albedo = vec3(0.0);
     stepExhausted = false;
     visitedSteps = 0u;
-    if (!p.enabled)
-        return false;
 
     vec3 invDir = vec3(
         abs(dir.x) > 0.000001 ? 1.0 / dir.x : 1.0e30,
@@ -161,6 +189,100 @@ bool TraceFarFieldClipmapDetailed(
 
     stepExhausted = visitedSteps >= p.maxTraceSteps && t <= tFar;
     return false;
+}
+
+bool TraceFarFieldClipmapSphereMarch(
+    vec3 origin,
+    vec3 dir,
+    float tMin,
+    float tMax,
+    FarFieldClipmapParams p,
+    out float hitT,
+    out vec3 faceNormal,
+    out vec3 albedo,
+    out bool stepExhausted,
+    out uint visitedSteps)
+{
+    hitT = tMax;
+    faceNormal = vec3(0.0);
+    albedo = vec3(0.0);
+    stepExhausted = false;
+    visitedSteps = 0u;
+
+    vec3 invDir = vec3(
+        abs(dir.x) > 0.000001 ? 1.0 / dir.x : 1.0e30,
+        abs(dir.y) > 0.000001 ? 1.0 / dir.y : 1.0e30,
+        abs(dir.z) > 0.000001 ? 1.0 / dir.z : 1.0e30);
+    vec3 boundsMin = p.origin;
+    vec3 boundsMax = p.origin + vec3(p.resolution) * p.voxelSize;
+    vec3 t0 = (boundsMin - origin) * invDir;
+    vec3 t1 = (boundsMax - origin) * invDir;
+    vec3 tNear3 = min(t0, t1);
+    vec3 tFar3 = max(t0, t1);
+    float tNear = max(max(tNear3.x, tNear3.y), max(tNear3.z, tMin));
+    float tFar = min(min(tFar3.x, tFar3.y), min(tFar3.z, tMax));
+    if (tNear > tFar)
+        return false;
+
+    float t = tNear;
+    vec3 fallbackNormal = -normalize(dir);
+    for (uint stepIndex = 0u; stepIndex < p.maxTraceSteps && t <= tFar; stepIndex++)
+    {
+        visitedSteps = stepIndex + 1u;
+        vec3 pos = origin + dir * t;
+        ivec3 voxel = ivec3(floor((pos - p.origin) / p.voxelSize));
+        if (!FarFieldInside(voxel, p))
+            break;
+
+        uint packed = ReadStorageWord(p.voxelBufferIndex, FarFieldVoxelIndex(voxel, p));
+        if ((packed & 0x80000000u) != 0u)
+        {
+            vec3 rgb = vec3(
+                float((packed >> 0u) & 0xffu),
+                float((packed >> 8u) & 0xffu),
+                float((packed >> 16u) & 0xffu)) / 255.0;
+            albedo = rgb;
+            hitT = t;
+            faceNormal = EstimateFarFieldNormal(voxel, p, fallbackNormal);
+            return true;
+        }
+
+        float distanceVoxels = ReadFarFieldDistanceVoxels(voxel, p);
+        float stepDistance = max(distanceVoxels * p.voxelSize, p.voxelSize * 0.5);
+        t += min(stepDistance, p.voxelSize * 8.0);
+        faceNormal = fallbackNormal;
+    }
+
+    stepExhausted = visitedSteps >= p.maxTraceSteps && t <= tFar;
+    return false;
+}
+
+bool TraceFarFieldClipmapDetailed(
+    vec3 origin,
+    vec3 dir,
+    float tMin,
+    float tMax,
+    out float hitT,
+    out vec3 faceNormal,
+    out vec3 albedo,
+    out bool stepExhausted,
+    out uint visitedSteps)
+{
+    FarFieldClipmapParams p = ReadFarFieldClipmapParams(uint(FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX));
+    hitT = tMax;
+    faceNormal = vec3(0.0);
+    albedo = vec3(0.0);
+    stepExhausted = false;
+    visitedSteps = 0u;
+    if (!p.enabled)
+        return false;
+
+    if (p.distanceFieldValid)
+    {
+        return TraceFarFieldClipmapSphereMarch(origin, dir, tMin, tMax, p, hitT, faceNormal, albedo, stepExhausted, visitedSteps);
+    }
+
+    return TraceFarFieldClipmapDda(origin, dir, tMin, tMax, p, hitT, faceNormal, albedo, stepExhausted, visitedSteps);
 }
 
 #endif

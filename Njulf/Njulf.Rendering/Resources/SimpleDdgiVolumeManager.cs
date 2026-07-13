@@ -14,6 +14,14 @@ using Vma;
 
 namespace Njulf.Rendering.Resources
 {
+    public enum SimpleDdgiQueueTransfer
+    {
+        GraphicsReleaseToCompute,
+        ComputeAcquireFromGraphics,
+        ComputeReleaseToGraphics,
+        GraphicsAcquireFromCompute
+    }
+
     public sealed class SimpleDdgiVolumeManager : IDisposable
     {
         public const int IrradianceTexelsPerProbe = 8;
@@ -46,6 +54,8 @@ namespace Njulf.Rendering.Resources
         private byte[] _probeFresh = Array.Empty<byte>();
         private byte[] _probeInactive = Array.Empty<byte>();
         private byte[] _probeQueued = Array.Empty<byte>();
+        private byte[] _probeStableUpdateCounts = Array.Empty<byte>();
+        private float[] _probeLuminanceChangeEma = Array.Empty<float>();
         private uint[] _probeAges = Array.Empty<uint>();
         private readonly Dictionary<int, int> _volumeRoundRobinCursors = new();
         private int _previousVolumeCount;
@@ -64,6 +74,7 @@ namespace Njulf.Rendering.Resources
         private readonly bool[] _probeStateReadbackRecorded = new bool[RenderingConstants.FramesInFlight];
         private readonly int[] _probeStateReadbackProbeCounts = new int[RenderingConstants.FramesInFlight];
         private readonly ulong[] _probeStateReadbackBytes = new ulong[RenderingConstants.FramesInFlight];
+        private readonly uint[] _probeStateReadbackGenerations = new uint[RenderingConstants.FramesInFlight];
         private ulong _irradianceAtlasBytes;
         private ulong _visibilityAtlasBytes;
         private ulong _rayScratchBytes;
@@ -109,6 +120,18 @@ namespace Njulf.Rendering.Resources
         private int _classifiedInactiveProbeCountEstimate;
         private float _averageRelocationFractionEstimate;
         private int _probeStateReadbackValid;
+        private uint _volumeTableGeneration;
+        private int _inactiveProbeSkipCount;
+        private ulong _inactiveProbeSavedPrimaryRayCount;
+        private int _lightingDirtyFrames;
+        private int _lightingDirtyBoostedCapacity;
+        private bool _hasLightingSignature;
+        private ulong _lastLightingSignature;
+        private uint _activeDirtyReasonFlags;
+        private ulong _scheduledPrimaryRayCount;
+        private ulong _adaptiveRaySavedPrimaryRayCount;
+        private int _fullRayProbeUpdateCount;
+        private int _maintenanceRayProbeUpdateCount;
         private string _lastBudgetWarning = string.Empty;
         private bool _disposed;
 
@@ -170,12 +193,57 @@ namespace Njulf.Rendering.Resources
         public int FullRefreshProbeCount => _fullRefreshProbeCount;
         public int ScrollCopyCount => _scrollCopyCount;
         public int ActiveProbeCount => _probeStateReadbackValid != 0 ? _activeProbeCount : _probeCount;
+        public int InactiveProbeCount => _probeStateReadbackValid != 0 ? Math.Max(0, _probeCount - _activeProbeCount) : 0;
+        public int InactiveProbeSkipCount => _inactiveProbeSkipCount;
+        public ulong InactiveProbeSavedPrimaryRayCount => _inactiveProbeSavedPrimaryRayCount;
+        public int LightingDirtyFrames => _lightingDirtyFrames;
+        public int LightingDirtyBoostedCapacity => _lightingDirtyBoostedCapacity;
+        public uint DirtyReasonFlags => _lightingDirtyFrames > 0 ? _activeDirtyReasonFlags : 0u;
+        public ulong ScheduledPrimaryRayCount => _scheduledPrimaryRayCount;
+        public ulong AdaptiveRaySavedPrimaryRayCount => _adaptiveRaySavedPrimaryRayCount;
+        public int FullRayProbeUpdateCount => _fullRayProbeUpdateCount;
+        public int MaintenanceRayProbeUpdateCount => _maintenanceRayProbeUpdateCount;
         public int ProbeRelocationCount => _probeStateReadbackValid != 0 ? _probeRelocationCount : 0;
         public int ClassifiedInactiveProbeCountEstimate => _probeStateReadbackValid != 0 ? _classifiedInactiveProbeCountEstimate : 0;
         public float AverageRelocationFractionEstimate => _probeStateReadbackValid != 0 ? _averageRelocationFractionEstimate : 0.0f;
         public int ProbeStateReadbackValid => _probeStateReadbackValid;
         public GPUSimpleDdgiParams LastParams => _lastParams;
         public ReadOnlySpan<GPUSimpleDdgiVolume> LastVolumes => new(_volumeScratch, 0, _volumeCount);
+
+        public unsafe int RecordAsyncComputeQueueFamilyTransfer(
+            CommandBuffer commandBuffer,
+            SimpleDdgiQueueTransfer transfer,
+            uint graphicsQueueFamily,
+            uint computeQueueFamily)
+        {
+            if (commandBuffer.Handle == 0 ||
+                graphicsQueueFamily == computeQueueFamily)
+            {
+                return 0;
+            }
+
+            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[7];
+            uint barrierCount = 0;
+            AddQueueTransferBarrier(barriers, ref barrierCount, _paramsBuffer, ParamsBufferSize, transfer, graphicsQueueFamily, computeQueueFamily);
+            AddQueueTransferBarrier(barriers, ref barrierCount, _irradianceAtlasBuffer, _irradianceAtlasBytes, transfer, graphicsQueueFamily, computeQueueFamily);
+            AddQueueTransferBarrier(barriers, ref barrierCount, _visibilityAtlasBuffer, _visibilityAtlasBytes, transfer, graphicsQueueFamily, computeQueueFamily);
+            AddQueueTransferBarrier(barriers, ref barrierCount, _rayResultScratchBuffer, _rayScratchBytes, transfer, graphicsQueueFamily, computeQueueFamily);
+            AddQueueTransferBarrier(barriers, ref barrierCount, _probeStateBuffer, _probeStateBytes, transfer, graphicsQueueFamily, computeQueueFamily);
+            AddQueueTransferBarrier(barriers, ref barrierCount, _probeUpdateQueueBuffer, _probeUpdateQueueBytes, transfer, graphicsQueueFamily, computeQueueFamily);
+            AddQueueTransferBarrier(barriers, ref barrierCount, _relocationClassificationBuffer, _relocationClassificationBytes, transfer, graphicsQueueFamily, computeQueueFamily);
+
+            if (barrierCount == 0)
+                return 0;
+
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                BufferMemoryBarrierCount = barrierCount,
+                PBufferMemoryBarriers = barriers
+            };
+            _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+            return checked((int)barrierCount);
+        }
 
         public IReadOnlyList<DdgiVolumeDiagnosticsEntry> GetVolumeDiagnostics()
         {
@@ -254,7 +322,14 @@ namespace Njulf.Rendering.Resources
             RegisterIfValid(BindlessIndex.SimpleDdgiRelocationClassificationBuffer, _relocationClassificationBuffer, _relocationClassificationBytes);
         }
 
-        public void Upload(Scene scene, Vector3 cameraPosition, StagingRing stagingRing, CommandBuffer commandBuffer, int frameIndex)
+        public void Upload(
+            Scene scene,
+            Vector3 cameraPosition,
+            StagingRing stagingRing,
+            CommandBuffer commandBuffer,
+            int frameIndex,
+            ulong lightingSignature,
+            uint dirtyReasonFlags)
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
@@ -265,7 +340,6 @@ namespace Njulf.Rendering.Resources
             RenderingConstants.ValidateFrameIndex(frameIndex);
 
             ResetFrameCounters();
-            ReadCompletedProbeStateReadback(frameIndex);
 
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             bool enabled = gi.EffectiveUseSimpleDdgi;
@@ -274,6 +348,8 @@ namespace Njulf.Rendering.Resources
                 _volumeCount = 0;
                 _probeCount = 0;
                 _probesToUpdate = 0;
+                _activeProbeCount = 0;
+                _probeStateReadbackValid = 0;
                 _hasGridOrigin = false;
                 Array.Fill(_ringHasOrigins, false);
                 _atlasClearRequired = true;
@@ -286,9 +362,15 @@ namespace Njulf.Rendering.Resources
             }
 
             BoundingBox sceneBounds = ExpandBounds(DdgiFrameLayoutBuilder.EstimateSceneProbeBounds(scene), gi.SimpleDdgiRingBaseSpacing * 1.5f);
+            int previousProbeCount = _probeCount;
+            int previousVolumeCount = _volumeCount;
             CapturePreviousVolumes();
             BuildVolumeTable(gi, sceneBounds, cameraPosition);
             EnsureCpuProbeStateCapacity(_probeCount);
+            if (VolumeTableRemapped(previousProbeCount, previousVolumeCount))
+                AdvanceVolumeTableGenerationAndDropPendingReadbacks();
+            ReadCompletedProbeStateReadback(frameIndex);
+            UpdateLightingDirtyState(gi, lightingSignature, dirtyReasonFlags);
 
             _raysPerProbe = Math.Clamp(gi.SimpleDdgiRaysPerProbe, 1, GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe);
             if (_recenteredThisFrame)
@@ -297,9 +379,10 @@ namespace Njulf.Rendering.Resources
                 _framesSinceLastRecenter = 0;
             }
 
-            int updateBudget = gi.SimpleDdgiProbeUpdatesPerFrame <= 0
+            int baseUpdateBudget = gi.SimpleDdgiProbeUpdatesPerFrame <= 0
                 ? _probeCount
                 : Math.Min(_probeCount, gi.SimpleDdgiProbeUpdatesPerFrame);
+            int updateBudget = ResolveLightingDirtyUpdateBudget(gi, baseUpdateBudget);
             EnsureCapacity(_probeCount, _raysPerProbe, updateBudget);
             MarkFreshForNewOrScrolledProbes();
             _probesToUpdate = BuildUpdateQueue(updateBudget);
@@ -336,7 +419,7 @@ namespace Njulf.Rendering.Resources
                 ProbeUpdateRange = new Vector4(_updateStartProbe, _probesToUpdate, _volumeCount, _probeCount),
                 DebugAndBias = new Vector4((float)gi.DebugView, gi.DdgiSelfShadowBiasScale, gi.IndirectIntensity, gi.FarFieldMaxTraceSteps),
                 RotationQuaternion = BuildFrameRotation(_frameIndex),
-                BiasAndPadding = new Vector4(gi.SimpleDdgiNormalBias, gi.SimpleDdgiViewBias, 0.0f, 0.0f),
+                BiasAndPadding = new Vector4(gi.SimpleDdgiNormalBias, gi.SimpleDdgiViewBias, gi.SimpleDdgiHysteresisChangeThreshold, gi.SimpleDdgiHysteresisStepThreshold),
                 Reserved0 = new Vector4(_volumeCount, _probeCount, GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount, 0.0f)
             };
 
@@ -387,6 +470,13 @@ namespace Njulf.Rendering.Resources
             _fullRefreshProbeCount = 0;
             _scrollCopyCount = 0;
             _ringRecenteredThisFrame = false;
+            _inactiveProbeSkipCount = 0;
+            _inactiveProbeSavedPrimaryRayCount = 0;
+            _lightingDirtyBoostedCapacity = 0;
+            _scheduledPrimaryRayCount = 0;
+            _adaptiveRaySavedPrimaryRayCount = 0;
+            _fullRayProbeUpdateCount = 0;
+            _maintenanceRayProbeUpdateCount = 0;
         }
 
         private void CapturePreviousVolumes()
@@ -402,14 +492,20 @@ namespace Njulf.Rendering.Resources
 
             byte[] previousFresh = _probeFresh;
             byte[] previousInactive = _probeInactive;
+            byte[] previousStableUpdateCounts = _probeStableUpdateCounts;
+            float[] previousLuminanceChangeEma = _probeLuminanceChangeEma;
             uint[] previousAges = _probeAges;
             _probeFresh = new byte[Math.Max(0, probeCount)];
             _probeInactive = new byte[Math.Max(0, probeCount)];
             _probeQueued = new byte[Math.Max(0, probeCount)];
+            _probeStableUpdateCounts = new byte[Math.Max(0, probeCount)];
+            _probeLuminanceChangeEma = new float[Math.Max(0, probeCount)];
             _probeAges = new uint[Math.Max(0, probeCount)];
             int copyCount = Math.Min(probeCount, previousFresh.Length);
             Array.Copy(previousFresh, _probeFresh, copyCount);
             Array.Copy(previousInactive, _probeInactive, copyCount);
+            Array.Copy(previousStableUpdateCounts, _probeStableUpdateCounts, Math.Min(copyCount, previousStableUpdateCounts.Length));
+            Array.Copy(previousLuminanceChangeEma, _probeLuminanceChangeEma, Math.Min(copyCount, previousLuminanceChangeEma.Length));
             Array.Copy(previousAges, _probeAges, copyCount);
             if (probeCount > copyCount)
             {
@@ -418,6 +514,76 @@ namespace Njulf.Rendering.Resources
             }
 
             _activeProbeCount = Math.Max(0, probeCount - CountInactiveProbes(_probeInactive, probeCount));
+        }
+
+        private bool VolumeTableRemapped(int previousProbeCount, int previousVolumeCount)
+        {
+            if (previousProbeCount != _probeCount || previousVolumeCount != _volumeCount)
+                return true;
+            if (_recenteredThisFrame || _ringRecenteredThisFrame)
+                return true;
+
+            for (int i = 0; i < _volumeCount; i++)
+            {
+                GPUSimpleDdgiVolume previous = _previousVolumeScratch[i];
+                GPUSimpleDdgiVolume current = _volumeScratch[i];
+                if (Kind(previous) != Kind(current) ||
+                    SourceOrdinal(previous) != SourceOrdinal(current) ||
+                    FirstProbe(previous) != FirstProbe(current) ||
+                    VolumeProbeCount(previous) != VolumeProbeCount(current) ||
+                    !ApproximatelyEqual(Origin(previous), Origin(current)) ||
+                    !NearlyEqual(Spacing(previous), Spacing(current), 0.0001f))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void AdvanceVolumeTableGenerationAndDropPendingReadbacks()
+        {
+            _volumeTableGeneration++;
+            for (int i = 0; i < _probeStateReadbackRecorded.Length; i++)
+                _probeStateReadbackRecorded[i] = false;
+            _probeStateReadbackValid = 0;
+        }
+
+        private void UpdateLightingDirtyState(GlobalIlluminationSettings settings, ulong lightingSignature, uint dirtyReasonFlags)
+        {
+            if (!_hasLightingSignature)
+            {
+                _lastLightingSignature = lightingSignature;
+                _activeDirtyReasonFlags = 0u;
+                _hasLightingSignature = true;
+                return;
+            }
+
+            if (lightingSignature != _lastLightingSignature)
+            {
+                _lastLightingSignature = lightingSignature;
+                _lightingDirtyFrames = settings.SimpleDdgiLightingDirtyBoostEnabled
+                    ? settings.SimpleDdgiLightingDirtyFrameCount
+                    : 0;
+                _activeDirtyReasonFlags = _lightingDirtyFrames > 0 ? dirtyReasonFlags : 0u;
+            }
+            else if (_lightingDirtyFrames > 0)
+            {
+                _lightingDirtyFrames--;
+                if (_lightingDirtyFrames == 0)
+                    _activeDirtyReasonFlags = 0u;
+            }
+        }
+
+        private int ResolveLightingDirtyUpdateBudget(GlobalIlluminationSettings settings, int baseUpdateBudget)
+        {
+            int capacity = Math.Clamp(baseUpdateBudget, 0, _probeCount);
+            if (!settings.SimpleDdgiLightingDirtyBoostEnabled || _lightingDirtyFrames <= 0 || capacity <= 0)
+                return capacity;
+
+            int boosted = Math.Min(_probeCount, Math.Min(GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount, checked(capacity * 2)));
+            _lightingDirtyBoostedCapacity = Math.Max(0, boosted - capacity);
+            return boosted;
         }
 
         private void MarkFreshForNewOrScrolledProbes()
@@ -503,8 +669,11 @@ namespace Njulf.Rendering.Resources
                     visited++;
                     if ((uint)probeIndex >= (uint)_probeCount || _probeQueued[probeIndex] != 0)
                         continue;
-                    if (_probeInactive[probeIndex] != 0 && _probeAges[probeIndex] < 240u)
+                    if (ShouldSkipInactiveProbe(probeIndex))
+                    {
+                        RecordInactiveProbeSkip();
                         continue;
+                    }
 
                     AddProbeUpdate(ref count, capacity, probeIndex, _probeInactive[probeIndex] != 0 ? ProbeStateInactiveFlag : 0u);
                     quota--;
@@ -537,14 +706,31 @@ namespace Njulf.Rendering.Resources
                     visited++;
                     if ((uint)probeIndex >= (uint)_probeCount || _probeQueued[probeIndex] != 0)
                         continue;
-                    if (_probeInactive[probeIndex] != 0 && _probeAges[probeIndex] < 240u)
+                    if (ShouldSkipInactiveProbe(probeIndex))
+                    {
+                        RecordInactiveProbeSkip();
                         continue;
+                    }
 
                     AddProbeUpdate(ref count, capacity, probeIndex, _probeInactive[probeIndex] != 0 ? ProbeStateInactiveFlag : 0u);
                 }
 
                 _volumeRoundRobinCursors[cursorKey] = probeCount > 0 ? (cursor + visited) % probeCount : 0;
             }
+        }
+
+        private bool ShouldSkipInactiveProbe(int probeIndex)
+        {
+            return _settings.GlobalIllumination.SimpleDdgiClassificationSchedulingEnabled &&
+                (uint)probeIndex < (uint)_probeInactive.Length &&
+                _probeInactive[probeIndex] != 0 &&
+                _probeAges[probeIndex] < 240u;
+        }
+
+        private void RecordInactiveProbeSkip()
+        {
+            _inactiveProbeSkipCount++;
+            _inactiveProbeSavedPrimaryRayCount += (ulong)Math.Max(1, _raysPerProbe);
         }
 
         private int[] ResolveVolumeQuotas(int remainingBudget)
@@ -616,9 +802,44 @@ namespace Njulf.Rendering.Resources
             {
                 ProbeIndex = checked((uint)probeIndex),
                 VolumeIndex = checked((uint)Math.Max(0, ResolveVolumeIndexForProbe(probeIndex))),
-                Flags = flags | (_probeFresh[probeIndex] != 0 ? ProbeStateFreshFlag : 0u)
+                Flags = PackUpdateFlags(probeIndex, flags | (_probeFresh[probeIndex] != 0 ? ProbeStateFreshFlag : 0u))
             };
             _probeQueued[probeIndex] = 1;
+        }
+
+        private uint PackUpdateFlags(int probeIndex, uint flags)
+        {
+            int rayCount = ResolveUpdateRayCount(probeIndex, flags);
+            _scheduledPrimaryRayCount += (ulong)rayCount;
+            if (rayCount >= _raysPerProbe)
+            {
+                _fullRayProbeUpdateCount++;
+            }
+            else
+            {
+                _maintenanceRayProbeUpdateCount++;
+                _adaptiveRaySavedPrimaryRayCount += (ulong)Math.Max(0, _raysPerProbe - rayCount);
+            }
+
+            return flags | ((uint)Math.Clamp(rayCount, 1, ushort.MaxValue) << 16);
+        }
+
+        private int ResolveUpdateRayCount(int probeIndex, uint flags)
+        {
+            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+            if (!gi.SimpleDdgiAdaptiveRaysEnabled ||
+                _lightingDirtyFrames > 0 ||
+                (flags & ProbeStateFreshFlag) != 0 ||
+                _probeStateReadbackValid == 0 ||
+                (uint)probeIndex >= (uint)_probeStableUpdateCounts.Length)
+            {
+                return _raysPerProbe;
+            }
+
+            if (_probeStableUpdateCounts[probeIndex] < gi.SimpleDdgiStableMaintenanceUpdateCount)
+                return _raysPerProbe;
+
+            return Math.Clamp(gi.SimpleDdgiMaintenanceRaysPerProbe, 1, _raysPerProbe);
         }
 
         private void MarkVolumeFresh(GPUSimpleDdgiVolume volume)
@@ -639,6 +860,8 @@ namespace Njulf.Rendering.Resources
 
             _probeFresh[probeIndex] = 1;
             _probeInactive[probeIndex] = 0;
+            if ((uint)probeIndex < (uint)_probeStableUpdateCounts.Length)
+                _probeStableUpdateCounts[probeIndex] = 0;
             if (scrollExposed)
                 _recenterRefreshProbeCount++;
         }
@@ -991,7 +1214,7 @@ namespace Njulf.Rendering.Resources
                     Flags = flags,
                     Age = _probeAges[i],
                     Classification = _probeInactive[i] == 0 ? 0u : 1u,
-                    Reserved0 = 0u
+                    Reserved0 = BitConverter.SingleToUInt32Bits((uint)i < (uint)_probeLuminanceChangeEma.Length ? _probeLuminanceChangeEma[i] : 0.0f)
                 };
             }
 
@@ -1404,7 +1627,7 @@ namespace Njulf.Rendering.Resources
                 ProbeUpdateRange = Vector4.Zero,
                 DebugAndBias = new Vector4((float)settings.DebugView, settings.DdgiSelfShadowBiasScale, settings.IndirectIntensity, settings.FarFieldMaxTraceSteps),
                 RotationQuaternion = new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
-                BiasAndPadding = new Vector4(settings.SimpleDdgiNormalBias, settings.SimpleDdgiViewBias, 0.0f, 0.0f),
+                BiasAndPadding = new Vector4(settings.SimpleDdgiNormalBias, settings.SimpleDdgiViewBias, settings.SimpleDdgiHysteresisChangeThreshold, settings.SimpleDdgiHysteresisStepThreshold),
                 Reserved0 = Vector4.Zero
             };
         }
@@ -1416,6 +1639,18 @@ namespace Njulf.Rendering.Resources
                 flags |= 1u << 1;
             if (settings.FarFieldForceAll)
                 flags |= 1u << 2;
+            if (settings.SimpleDdgiFogEnabled)
+                flags |= 1u << 3;
+            if (settings.SimpleDdgiParticlesEnabled)
+                flags |= 1u << 4;
+            if (settings.SimpleDdgiAdaptiveHysteresisEnabled)
+                flags |= 1u << 5;
+            if (settings.FarFieldClipmapEnabled && settings.FarFieldSkyVisibilityEnabled)
+                flags |= 1u << 6;
+            if (settings.FarFieldClipmapEnabled && settings.FarFieldSunShadowEnabled)
+                flags |= 1u << 7;
+            if (settings.SimpleDdgiRoughSpecularEnabled)
+                flags |= 1u << 8;
             return flags;
         }
 
@@ -1445,7 +1680,10 @@ namespace Njulf.Rendering.Resources
         public unsafe void RecordProbeStateReadback(CommandBuffer commandBuffer, int frameIndex)
         {
             RenderingConstants.ValidateFrameIndex(frameIndex);
-            if (commandBuffer.Handle == 0 || !_probeStateBuffer.IsValid || _probeCount <= 0)
+            if (!_settings.GlobalIllumination.SimpleDdgiClassificationReadbackEnabled ||
+                commandBuffer.Handle == 0 ||
+                !_probeStateBuffer.IsValid ||
+                _probeCount <= 0)
                 return;
 
             ulong copyBytes = checked((ulong)_probeCount * ProbeStateStride);
@@ -1487,13 +1725,23 @@ namespace Njulf.Rendering.Resources
             _probeStateReadbackRecorded[frameIndex] = true;
             _probeStateReadbackProbeCounts[frameIndex] = _probeCount;
             _probeStateReadbackBytes[frameIndex] = copyBytes;
+            _probeStateReadbackGenerations[frameIndex] = _volumeTableGeneration;
         }
 
         private unsafe void ReadCompletedProbeStateReadback(int frameIndex)
         {
             RenderingConstants.ValidateFrameIndex(frameIndex);
-            if (!_probeStateReadbackRecorded[frameIndex] || !_probeStateReadbackBuffers[frameIndex].IsValid)
+            if (!_settings.GlobalIllumination.SimpleDdgiClassificationReadbackEnabled ||
+                !_probeStateReadbackRecorded[frameIndex] ||
+                !_probeStateReadbackBuffers[frameIndex].IsValid)
             {
+                _probeStateReadbackValid = 0;
+                return;
+            }
+
+            if (_probeStateReadbackGenerations[frameIndex] != _volumeTableGeneration)
+            {
+                _probeStateReadbackRecorded[frameIndex] = false;
                 _probeStateReadbackValid = 0;
                 return;
             }
@@ -1519,6 +1767,18 @@ namespace Njulf.Rendering.Resources
                 GPUSimpleDdgiProbeState state = states[probeIndex];
                 bool inactive = state.Classification == 1u || state.RelocationAndActive.W <= 0.001f;
                 _probeInactive[probeIndex] = inactive ? (byte)1 : (byte)0;
+                float luminanceChangeEma = Math.Max(BitConverter.UInt32BitsToSingle(state.Reserved0), 0.0f);
+                if (!float.IsFinite(luminanceChangeEma))
+                    luminanceChangeEma = 0.0f;
+                _probeLuminanceChangeEma[probeIndex] = luminanceChangeEma;
+                if (inactive || luminanceChangeEma > _settings.GlobalIllumination.SimpleDdgiStableMaintenanceEmaThreshold)
+                {
+                    _probeStableUpdateCounts[probeIndex] = 0;
+                }
+                else if (_probeStableUpdateCounts[probeIndex] < byte.MaxValue)
+                {
+                    _probeStableUpdateCounts[probeIndex]++;
+                }
                 if (inactive)
                     inactiveCount++;
                 else
@@ -1592,6 +1852,110 @@ namespace Njulf.Rendering.Resources
                 PBufferMemoryBarriers = &barrier
             };
             _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        }
+
+        private unsafe void AddQueueTransferBarrier(
+            BufferMemoryBarrier2* barriers,
+            ref uint barrierCount,
+            BufferHandle handle,
+            ulong size,
+            SimpleDdgiQueueTransfer transfer,
+            uint graphicsQueueFamily,
+            uint computeQueueFamily)
+        {
+            if (!handle.IsValid || size == 0)
+                return;
+
+            ResolveQueueTransfer(
+                transfer,
+                graphicsQueueFamily,
+                computeQueueFamily,
+                out uint sourceQueueFamily,
+                out uint destinationQueueFamily,
+                out PipelineStageFlags2 sourceStage,
+                out AccessFlags2 sourceAccess,
+                out PipelineStageFlags2 destinationStage,
+                out AccessFlags2 destinationAccess);
+
+            barriers[barrierCount++] = new BufferMemoryBarrier2
+            {
+                SType = StructureType.BufferMemoryBarrier2,
+                SrcStageMask = sourceStage,
+                SrcAccessMask = sourceAccess,
+                DstStageMask = destinationStage,
+                DstAccessMask = destinationAccess,
+                SrcQueueFamilyIndex = sourceQueueFamily,
+                DstQueueFamilyIndex = destinationQueueFamily,
+                Buffer = _bufferManager.GetBuffer(handle),
+                Offset = 0,
+                Size = size
+            };
+        }
+
+        private static void ResolveQueueTransfer(
+            SimpleDdgiQueueTransfer transfer,
+            uint graphicsQueueFamily,
+            uint computeQueueFamily,
+            out uint sourceQueueFamily,
+            out uint destinationQueueFamily,
+            out PipelineStageFlags2 sourceStage,
+            out AccessFlags2 sourceAccess,
+            out PipelineStageFlags2 destinationStage,
+            out AccessFlags2 destinationAccess)
+        {
+            const PipelineStageFlags2 graphicsStages =
+                PipelineStageFlags2.TransferBit |
+                PipelineStageFlags2.ComputeShaderBit |
+                PipelineStageFlags2.FragmentShaderBit;
+            const AccessFlags2 graphicsAccess =
+                AccessFlags2.TransferReadBit |
+                AccessFlags2.TransferWriteBit |
+                AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit |
+                AccessFlags2.ShaderSampledReadBit;
+            const AccessFlags2 computeAccess =
+                AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit |
+                AccessFlags2.TransferReadBit |
+                AccessFlags2.TransferWriteBit;
+
+            switch (transfer)
+            {
+                case SimpleDdgiQueueTransfer.GraphicsReleaseToCompute:
+                    sourceQueueFamily = graphicsQueueFamily;
+                    destinationQueueFamily = computeQueueFamily;
+                    sourceStage = graphicsStages;
+                    sourceAccess = graphicsAccess;
+                    destinationStage = PipelineStageFlags2.None;
+                    destinationAccess = AccessFlags2.None;
+                    break;
+                case SimpleDdgiQueueTransfer.ComputeAcquireFromGraphics:
+                    sourceQueueFamily = graphicsQueueFamily;
+                    destinationQueueFamily = computeQueueFamily;
+                    sourceStage = PipelineStageFlags2.None;
+                    sourceAccess = AccessFlags2.None;
+                    destinationStage = PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TransferBit;
+                    destinationAccess = computeAccess;
+                    break;
+                case SimpleDdgiQueueTransfer.ComputeReleaseToGraphics:
+                    sourceQueueFamily = computeQueueFamily;
+                    destinationQueueFamily = graphicsQueueFamily;
+                    sourceStage = PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TransferBit;
+                    sourceAccess = computeAccess;
+                    destinationStage = PipelineStageFlags2.None;
+                    destinationAccess = AccessFlags2.None;
+                    break;
+                case SimpleDdgiQueueTransfer.GraphicsAcquireFromCompute:
+                    sourceQueueFamily = computeQueueFamily;
+                    destinationQueueFamily = graphicsQueueFamily;
+                    sourceStage = PipelineStageFlags2.None;
+                    sourceAccess = AccessFlags2.None;
+                    destinationStage = graphicsStages;
+                    destinationAccess = graphicsAccess;
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(transfer), transfer, null);
+            }
         }
 
         public void Dispose()

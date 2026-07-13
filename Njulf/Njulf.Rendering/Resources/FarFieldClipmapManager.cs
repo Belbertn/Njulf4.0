@@ -29,15 +29,22 @@ namespace Njulf.Rendering.Resources
         private BufferHandle _paramsBuffer;
         private BufferHandle _voxelBuffer;
         private BufferHandle _bakeVoxelBuffer;
+        private BufferHandle _distanceBuffer;
+        private BufferHandle _jumpFloodScratch0Buffer;
+        private BufferHandle _jumpFloodScratch1Buffer;
         private BufferHandle _instanceBuffer;
         private ulong _voxelBufferBytes;
         private ulong _bakeVoxelBufferBytes;
+        private ulong _distanceBufferBytes;
+        private ulong _jumpFloodScratch0BufferBytes;
+        private ulong _jumpFloodScratch1BufferBytes;
         private ulong _instanceBufferBytes;
         private BindlessHeap? _registeredBindlessHeap;
         private GPUFarFieldClipmapParams _lastParams;
         private ulong _lastSignature;
         private int _activeVoxelBufferIndex = BindlessIndex.FarFieldClipmapVoxelBuffer;
         private int _bakeVoxelBufferIndex = BindlessIndex.FarFieldClipmapBakeVoxelBuffer;
+        private bool _distanceFieldValid;
         private Vector3 _clipmapOrigin;
         private bool _hasClipmapOrigin;
         private bool _bakePending;
@@ -67,8 +74,11 @@ namespace Njulf.Rendering.Resources
         public int Resolution => _settings.GlobalIllumination.FarFieldClipmapResolution;
         public bool BakePending => _bakePending;
         public int BakeVoxelBufferIndex => _bakeVoxelBufferIndex;
+        public int DistanceBufferIndex => BindlessIndex.FarFieldClipmapDistanceBuffer;
+        public int JumpFloodScratch0BufferIndex => BindlessIndex.FarFieldClipmapJumpFloodScratch0Buffer;
+        public int JumpFloodScratch1BufferIndex => BindlessIndex.FarFieldClipmapJumpFloodScratch1Buffer;
         public GPUFarFieldClipmapParams LastParams => _lastParams;
-        public ulong BufferBytes => ParamsSize + _voxelBufferBytes + _bakeVoxelBufferBytes + _instanceBufferBytes;
+        public ulong BufferBytes => ParamsSize + _voxelBufferBytes + _bakeVoxelBufferBytes + _distanceBufferBytes + _jumpFloodScratch0BufferBytes + _jumpFloodScratch1BufferBytes + _instanceBufferBytes;
 
         public uint GetTriangleCount(int instanceIndex)
         {
@@ -88,12 +98,15 @@ namespace Njulf.Rendering.Resources
         public void MarkBakePending()
         {
             _bakePending = true;
+            _distanceFieldValid = false;
         }
 
         public void MarkBakePublished()
         {
             (_activeVoxelBufferIndex, _bakeVoxelBufferIndex) = (_bakeVoxelBufferIndex, _activeVoxelBufferIndex);
+            _distanceFieldValid = true;
             _lastParams.Diagnostics = new Vector4(_activeVoxelBufferIndex, _bakeVoxelBufferIndex, 0.0f, 0.0f);
+            _lastParams.Reserved0 = new Vector4(DistanceBufferIndex, JumpFloodScratch0BufferIndex, JumpFloodScratch1BufferIndex, 1.0f);
         }
 
         public void Register(BindlessHeap bindlessHeap)
@@ -105,6 +118,9 @@ namespace Njulf.Rendering.Resources
             bindlessHeap.RegisterStorageBuffer(BindlessIndex.FarFieldClipmapParamsBuffer, _bufferManager.GetBuffer(_paramsBuffer), 0, Math.Max(MinBufferSize, ParamsSize));
             RegisterIfValid(BindlessIndex.FarFieldClipmapVoxelBuffer, _voxelBuffer, _voxelBufferBytes);
             RegisterIfValid(BindlessIndex.FarFieldClipmapBakeVoxelBuffer, _bakeVoxelBuffer, _bakeVoxelBufferBytes);
+            RegisterIfValid(BindlessIndex.FarFieldClipmapDistanceBuffer, _distanceBuffer, _distanceBufferBytes);
+            RegisterIfValid(BindlessIndex.FarFieldClipmapJumpFloodScratch0Buffer, _jumpFloodScratch0Buffer, _jumpFloodScratch0BufferBytes);
+            RegisterIfValid(BindlessIndex.FarFieldClipmapJumpFloodScratch1Buffer, _jumpFloodScratch1Buffer, _jumpFloodScratch1BufferBytes);
             RegisterIfValid(BindlessIndex.FarFieldClipmapInstanceBuffer, _instanceBuffer, _instanceBufferBytes);
         }
 
@@ -155,7 +171,18 @@ namespace Njulf.Rendering.Resources
             float cubicExtent = voxelSize * resolution;
             _clipmapOrigin = ResolveSceneClampedOrigin(bounds.Min, bounds.Max, cubicExtent, voxelSize, cameraPosition, _clipmapOrigin, ref _hasClipmapOrigin, out bool recentered);
             if (recentered)
+            {
                 _bakePending = true;
+                _distanceFieldValid = false;
+            }
+
+            ulong signature = CreateSignature(resolution, new BoundingBox(_clipmapOrigin, _clipmapOrigin + new Vector3(cubicExtent)), _gpuInstances);
+            if (signature != _lastSignature)
+            {
+                _lastSignature = signature;
+                _bakePending = true;
+                _distanceFieldValid = false;
+            }
 
             _lastParams = new GPUFarFieldClipmapParams
             {
@@ -164,7 +191,7 @@ namespace Njulf.Rendering.Resources
                 TraceParams = new Vector4(gi.FarFieldStartDistance, gi.FarFieldMaxTraceSteps, gi.FarFieldClipmapEnabled ? 1.0f : 0.0f, gi.FarFieldForceAll ? 1.0f : 0.0f),
                 BakeParams = new Vector4(_gpuInstances.Count, 0.0f, 0.0f, 0.0f),
                 Diagnostics = new Vector4(_activeVoxelBufferIndex, _bakeVoxelBufferIndex, _bakePending ? 1.0f : 0.0f, 0.0f),
-                Reserved0 = Vector4.Zero
+                Reserved0 = new Vector4(DistanceBufferIndex, JumpFloodScratch0BufferIndex, JumpFloodScratch1BufferIndex, _distanceFieldValid ? 1.0f : 0.0f)
             };
 
             GpuBufferUploader.UploadValueToBuffer(
@@ -175,21 +202,19 @@ namespace Njulf.Rendering.Resources
                 _paramsBuffer,
                 _lastParams,
                 barrierDescription: new UploadBarrierDescription(PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit));
-
-            ulong signature = CreateSignature(resolution, new BoundingBox(_clipmapOrigin, _clipmapOrigin + new Vector3(cubicExtent)), _gpuInstances);
-            if (signature != _lastSignature)
-            {
-                _lastSignature = signature;
-                _bakePending = true;
-            }
         }
 
         private void EnsureVoxelCapacity(int resolution)
         {
             ulong voxelCount = checked((ulong)Math.Max(1, resolution) * (ulong)Math.Max(1, resolution) * (ulong)Math.Max(1, resolution));
             ulong requiredBytes = Math.Max(MinBufferSize, checked(voxelCount * VoxelStride));
+            ulong packedDistanceBytes = Math.Max(MinBufferSize, checked(((voxelCount + 1UL) / 2UL) * sizeof(uint)));
+            ulong seedBytes = Math.Max(MinBufferSize, checked(voxelCount * sizeof(uint)));
             EnsureBuffer(ref _voxelBuffer, ref _voxelBufferBytes, requiredBytes, "Far Field Clipmap Voxels");
             EnsureBuffer(ref _bakeVoxelBuffer, ref _bakeVoxelBufferBytes, requiredBytes, "Far Field Clipmap Bake Voxels");
+            EnsureBuffer(ref _distanceBuffer, ref _distanceBufferBytes, packedDistanceBytes, "Far Field Clipmap Distance Field R16");
+            EnsureBuffer(ref _jumpFloodScratch0Buffer, ref _jumpFloodScratch0BufferBytes, seedBytes, "Far Field Clipmap Jump Flood Scratch 0");
+            EnsureBuffer(ref _jumpFloodScratch1Buffer, ref _jumpFloodScratch1BufferBytes, seedBytes, "Far Field Clipmap Jump Flood Scratch 1");
         }
 
         private void EnsureInstanceCapacity(int instanceCount)
@@ -361,6 +386,12 @@ namespace Njulf.Rendering.Resources
                 _bufferManager.DestroyBuffer(_voxelBuffer);
             if (_bakeVoxelBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_bakeVoxelBuffer);
+            if (_distanceBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_distanceBuffer);
+            if (_jumpFloodScratch0Buffer.IsValid)
+                _bufferManager.DestroyBuffer(_jumpFloodScratch0Buffer);
+            if (_jumpFloodScratch1Buffer.IsValid)
+                _bufferManager.DestroyBuffer(_jumpFloodScratch1Buffer);
             if (_instanceBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_instanceBuffer);
         }

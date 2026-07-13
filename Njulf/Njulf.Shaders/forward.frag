@@ -148,6 +148,8 @@ const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE = 118u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS = 119u;
 const uint GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_OCCUPANCY_SLICE = 120u;
 const uint GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_TRACE_RESULT = 121u;
+const uint GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SKY_VISIBILITY = 122u;
+const uint GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SUN_SHADOW = 123u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -2106,6 +2108,39 @@ float SampleShadowCascade(uint textureIndex, vec2 uv, float receiverDepth, float
     return receiverDepth >= sampledDepth - bias ? 1.0 : 0.0;
 }
 
+float EstimateFarFieldSunShadow(vec3 worldPosition, vec3 normal, vec3 lightDirection)
+{
+    SimpleDdgiParams simpleParams = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    if ((simpleParams.flags & SIMPLE_DDGI_FLAG_FAR_SUN_SHADOW_ENABLED) == 0u)
+        return 1.0;
+
+    FarFieldClipmapParams farField = ReadFarFieldClipmapParams(uint(FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX));
+    if (!farField.enabled)
+        return 1.0;
+
+    float hitT;
+    vec3 hitNormal;
+    vec3 hitAlbedo;
+    bool stepExhausted;
+    uint visitedSteps;
+    vec3 origin = worldPosition + normal * max(farField.voxelSize * 0.35, 0.05);
+    bool blocked = TraceFarFieldClipmapDetailed(
+        origin,
+        normalize(lightDirection),
+        farField.voxelSize * 0.5,
+        max(farField.extent, farField.startDistance + farField.voxelSize),
+        hitT,
+        hitNormal,
+        hitAlbedo,
+        stepExhausted,
+        visitedSteps);
+
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_FAR_SUN_SHADOW_SAMPLE_COUNTER, 1u);
+    if (blocked)
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_FAR_SUN_SHADOW_OCCLUDED_COUNTER, 1u);
+    return blocked ? 0.0 : 1.0;
+}
+
 float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal, out uint selectedCascade)
 {
     selectedCascade = 0u;
@@ -2131,8 +2166,17 @@ float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal
     int radius = int(clamp(round(shadowSettings.w), 0.0, 3.0));
     vec2 texelSize = vec2(1.0 / mapSize);
     uint textureIndex = uint(DIRECTIONAL_SHADOW_TEXTURE_BASE) + selectedCascade;
+    float shadow = 1.0;
     if (radius <= 0)
-        return SampleShadowCascade(textureIndex, uv, receiverDepth, 0.0005);
+    {
+        shadow = SampleShadowCascade(textureIndex, uv, receiverDepth, 0.0005);
+        if (selectedCascade + 1u >= cascadeCount && cameraDistance > splits[int(selectedCascade)])
+        {
+            GPULight light = ReadLight(lightIndex);
+            shadow *= EstimateFarFieldSunShadow(worldPosition, normal, normalize(-light.Direction));
+        }
+        return shadow;
+    }
 
     float lit = 0.0;
     float taps = 0.0;
@@ -2145,7 +2189,14 @@ float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal
         }
     }
 
-    return taps > 0.0 ? lit / taps : 1.0;
+    shadow = taps > 0.0 ? lit / taps : 1.0;
+    if (selectedCascade + 1u >= cascadeCount && cameraDistance > splits[int(selectedCascade)])
+    {
+        GPULight light = ReadLight(lightIndex);
+        shadow *= EstimateFarFieldSunShadow(worldPosition, normal, normalize(-light.Direction));
+    }
+
+    return shadow;
 }
 
 float CompareReverseZDepth(float receiverDepth, float sampledDepth, float bias)
@@ -2655,6 +2706,23 @@ void EvaluateIbl(
         reflectionDebugActive,
         reflectionDebugColor);
 #endif
+
+    SimpleDdgiParams simpleSpecularParams = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    if ((simpleSpecularParams.flags & (SIMPLE_DDGI_FLAG_ENABLED | SIMPLE_DDGI_FLAG_ROUGH_SPECULAR_ENABLED)) ==
+        (SIMPLE_DDGI_FLAG_ENABLED | SIMPLE_DDGI_FLAG_ROUGH_SPECULAR_ENABLED) &&
+        simpleSpecularParams.probeCount > 0u)
+    {
+        float roughSpecularWeight = smoothstep(0.6, 0.85, roughness);
+        if (roughSpecularWeight > 0.0)
+        {
+            vec3 specularProbeIrradiance = SampleSimpleDdgiUnifiedIrradiance(fragWorldPosition, reflectionDirection, viewDirection, false);
+            vec3 specularProbeFallback = specularProbeIrradiance * (fresnel * brdf.x + brdf.y) * specularOcclusion;
+            AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_ROUGH_SPECULAR_SAMPLE_COUNTER, 1u);
+            if (DdgiDiagnosticLuminance(specularProbeFallback) > 0.00001)
+                AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_ROUGH_SPECULAR_NONZERO_COUNTER, 1u);
+            specularIbl = mix(specularIbl, max(specularIbl, specularProbeFallback), roughSpecularWeight);
+        }
+    }
 }
 
 vec3 EvaluatePbrLight(
@@ -2772,7 +2840,7 @@ void WriteForwardColor(vec4 color)
 bool IsDdgiDebugView(uint view)
 {
     return view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE &&
-           view <= GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_TRACE_RESULT;
+           view <= GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SUN_SHADOW;
 }
 
 vec3 DdgiDebugCategoryColor(uint view)
@@ -2824,7 +2892,9 @@ vec3 DdgiDebugCategoryColor(uint view)
         return vec3(0.85, 0.85, 0.10);
 
     if (view == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_OCCUPANCY_SLICE ||
-        view == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_TRACE_RESULT)
+        view == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_TRACE_RESULT ||
+        view == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SKY_VISIBILITY ||
+        view == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SUN_SHADOW)
         return vec3(0.20, 1.0, 0.55);
 
     return vec3(1.0, 1.0, 1.0);
@@ -3465,7 +3535,7 @@ void main()
         ddgiSample.minProbeSpacing = selectedSimpleVolume.spacing;
         ddgiSample.rayBudget = float(simpleDdgiParams.raysPerProbe) / 256.0;
         ddgiDiffuse = simpleIrradiance * albedo * max(1.0 - metallic, 0.0) / PI;
-        finalDiffuseIndirect = (ddgiDiffuse + diffuseIbl) * indirectAo;
+        finalDiffuseIndirect = ddgiDiffuse + diffuseIbl * indirectAo;
         ddgiCoverage = 1.0;
         hybridDebugDiffuse = finalDiffuseIndirect;
         hybridSuppressionMask = vec3(1.0);
@@ -3576,6 +3646,31 @@ void main()
         bool hitFar = TraceFarFieldClipmap(pc.Push.CameraPosition, traceDir, 0.0, 512.0, hitT, farNormal, farAlbedo);
         vec3 traceColor = hitFar ? farAlbedo * (abs(farNormal) * 0.35 + vec3(0.65)) : vec3(0.0, 0.02, 0.05);
         WriteForwardColor(vec4(traceColor, 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SKY_VISIBILITY)
+    {
+        SimpleDdgiParams simpleParams = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+        float visibility = (simpleParams.flags & SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u
+            ? EstimateFarFieldSkyVisibility(fragWorldPosition)
+            : 1.0;
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SKY_VISIBILITY, vec3(visibility));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SUN_SHADOW)
+    {
+        float farShadow = 1.0;
+        for (uint lightIndex = 0u; lightIndex < uint(pc.Push.LightCount); lightIndex++)
+        {
+            GPULight light = ReadLight(lightIndex);
+            if (light.Type != 1)
+                continue;
+            farShadow = EstimateFarFieldSunShadow(fragWorldPosition, normal, normalize(-light.Direction));
+            break;
+        }
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SUN_SHADOW, vec3(farShadow));
         return;
     }
 

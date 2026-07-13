@@ -519,6 +519,15 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Inactive coarse far-field occupancy clipmap voxel buffer used for full rebakes</summary>
         public const int FarFieldClipmapBakeVoxelBuffer = FarFieldClipmapInstanceBuffer + 1;
+
+        /// <summary>Published coarse far-field jump-flood distance field</summary>
+        public const int FarFieldClipmapDistanceBuffer = FarFieldClipmapBakeVoxelBuffer + 1;
+
+        /// <summary>First ping-pong scratch buffer used while building the far-field jump-flood distance field</summary>
+        public const int FarFieldClipmapJumpFloodScratch0Buffer = FarFieldClipmapDistanceBuffer + 1;
+
+        /// <summary>Second ping-pong scratch buffer used while building the far-field jump-flood distance field</summary>
+        public const int FarFieldClipmapJumpFloodScratch1Buffer = FarFieldClipmapJumpFloodScratch0Buffer + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -664,7 +673,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = FarFieldClipmapBakeVoxelBuffer + 1;
+        public const int StaticBufferCount = FarFieldClipmapJumpFloodScratch1Buffer + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -860,6 +869,9 @@ namespace Njulf.Rendering.Descriptors
                     FarFieldClipmapVoxelBuffer => nameof(FarFieldClipmapVoxelBuffer),
                     FarFieldClipmapInstanceBuffer => nameof(FarFieldClipmapInstanceBuffer),
                     FarFieldClipmapBakeVoxelBuffer => nameof(FarFieldClipmapBakeVoxelBuffer),
+                    FarFieldClipmapDistanceBuffer => nameof(FarFieldClipmapDistanceBuffer),
+                    FarFieldClipmapJumpFloodScratch0Buffer => nameof(FarFieldClipmapJumpFloodScratch0Buffer),
+                    FarFieldClipmapJumpFloodScratch1Buffer => nameof(FarFieldClipmapJumpFloodScratch1Buffer),
                     _ => "Unknown"
                 };
             }

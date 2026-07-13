@@ -72,13 +72,14 @@ void main()
     uint hitCount = 0u;
     uint backfaceCount = 0u;
     uint closeCount = 0u;
+    uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
     vec3 backfaceDirectionSum = vec3(0.0);
     float nearestHitDistance = 3.402823466e+38;
     float nearestBackfaceDistance = 3.402823466e+38;
     vec3 nearestBackfaceDirection = vec3(0.0);
     float closeDistance = max(volume.spacing * 0.25, 0.001);
 
-    for (uint ray = 0u; ray < params.raysPerProbe; ray++)
+    for (uint ray = 0u; ray < activeRayCount; ray++)
     {
         uint rayResultIndex = queueOffset * params.raysPerProbe + ray;
         vec4 radianceDistance = ReadSimpleRayRadianceDistance(rayResultIndex);
@@ -110,7 +111,7 @@ void main()
         }
     }
 
-    float rayCount = max(float(params.raysPerProbe), 1.0);
+    float rayCount = max(float(activeRayCount), 1.0);
     float missRatio = float(missCount) / rayCount;
     float hitRatio = float(hitCount) / rayCount;
     float backfaceRatio = float(backfaceCount) / rayCount;
@@ -146,6 +147,7 @@ void main()
         state.flags &= ~SIMPLE_DDGI_PROBE_FLAG_INACTIVE;
     state.age = 0u;
     state.classification = activeProbe ? SIMPLE_DDGI_CLASSIFICATION_ACTIVE : SIMPLE_DDGI_CLASSIFICATION_INACTIVE;
+    state.luminanceChangeEma = previous.luminanceChangeEma;
     WriteSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex, state);
 
     float nearestDistance = nearestHitDistance < 3.0e+38 ? nearestHitDistance : 0.0;

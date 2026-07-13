@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Resources;
 using NjulfHelloGame;
 using NUnit.Framework;
 
@@ -38,6 +40,8 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             Assert.That(names, Does.Contain("ddgi-open-plaza"));
             Assert.That(scenes[0].Name, Is.EqualTo("ddgi-closed-room"));
             Assert.That(scenes[0].Scenario, Is.EqualTo(SamplePerformanceScenario.GiCornellRoom));
+            Assert.That(names, Does.Contain("simple-ddgi-furnace"));
+            Assert.That(names, Does.Contain("ddgi-quality-interior"));
             Assert.That(names, Does.Contain("ddgi-closed-room"));
             Assert.That(names, Does.Contain("ddgi-thin-wall"));
             Assert.That(names, Does.Contain("ddgi-long-corridor"));
@@ -48,14 +52,163 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             Assert.That(names, Does.Contain("ddgi-local-volume-streaming"));
             Assert.That(names, Does.Contain("ddgi-fast-traversal-teleport"));
             Assert.That(names, Does.Contain("ddgi-bright-exterior-room"));
+            Assert.That(names, Does.Contain("ddgi-instanced-city-stress"));
             Assert.That(names, Is.SupersetOf(phase10Names));
             Assert.That(requiredNames, Is.SupersetOf(phase10Names));
             Assert.That(scenes.Select(scene => scene.Scenario), Does.Contain(SamplePerformanceScenario.GiBrightExteriorRoom));
+            Assert.That(scenes.Select(scene => scene.Scenario), Does.Contain(SamplePerformanceScenario.GiQualityInterior));
+            Assert.That(SampleGlobalIlluminationValidation.IsValidationScenario(SamplePerformanceScenario.GiQualityInterior), Is.True);
             Assert.That(requiredNames, Has.Length.GreaterThanOrEqualTo(16));
             Assert.That(scenes.Select(scene => scene.Scenario), Has.All.Not.EqualTo(SamplePerformanceScenario.Normal));
             Assert.That(distinctNames, Has.Length.EqualTo(scenes.Length));
             Assert.That(scenes.Select(scene => scene.Coverage), Has.All.Not.Empty);
         });
+    }
+
+    [Test]
+    public void AccuracyOracles_CoverResponsivenessEmissiveAndDynamicGeometryGates()
+    {
+        SampleGiAccuracyOracle[] oracles = SampleGlobalIlluminationValidation.AccuracyOracles.ToArray();
+        string[] names = oracles.Select(oracle => oracle.Name).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(names, Is.EquivalentTo(new[]
+            {
+                "simple-ddgi-furnace",
+                "simple-ddgi-light-toggle",
+                "simple-ddgi-cornell-reference",
+                "simple-ddgi-emissive-panel",
+                "simple-ddgi-moving-occluder"
+            }));
+            Assert.That(oracles.Single(oracle => oracle.Name == "simple-ddgi-light-toggle").MaximumLatencyFrames, Is.EqualTo(15));
+            Assert.That(oracles.Single(oracle => oracle.Name == "simple-ddgi-furnace").Scenario, Is.EqualTo(SamplePerformanceScenario.GiSimpleDdgiFurnace));
+            Assert.That(oracles.Single(oracle => oracle.Name == "simple-ddgi-furnace").ReferenceValue, Is.EqualTo(SampleGlobalIlluminationValidation.SimpleDdgiFurnaceExpectedIrradianceLuminance));
+            Assert.That(oracles.Single(oracle => oracle.Name == "simple-ddgi-emissive-panel").Scenario, Is.EqualTo(SamplePerformanceScenario.GiEmissiveMaterialRoom));
+            Assert.That(oracles.Single(oracle => oracle.Name == "simple-ddgi-moving-occluder").Scenario, Is.EqualTo(SamplePerformanceScenario.GiMovingRigidObject));
+            Assert.That(oracles.Single(oracle => oracle.Name == "simple-ddgi-cornell-reference").MaximumRelativeError, Is.EqualTo(0.02f));
+            Assert.That(oracles, Has.All.Matches<SampleGiAccuracyOracle>(oracle =>
+                !string.IsNullOrWhiteSpace(oracle.Metric) &&
+                oracle.MaximumRelativeError > 0.0f &&
+                oracle.MaximumRelativeError <= 0.10f));
+        });
+    }
+
+    [Test]
+    public void AccuracyOracleEvaluator_PassesFurnaceAnalyticReferenceWithinTolerance()
+    {
+        RendererDiagnostics[] samples =
+        [
+            RendererDiagnostics.Empty with { SimpleDdgiAverageSampledIrradianceLuminance = SampleGlobalIlluminationValidation.SimpleDdgiFurnaceExpectedIrradianceLuminance * 0.98f },
+            RendererDiagnostics.Empty with { SimpleDdgiAverageSampledIrradianceLuminance = SampleGlobalIlluminationValidation.SimpleDdgiFurnaceExpectedIrradianceLuminance * 1.01f }
+        ];
+
+        SampleGiAccuracyOracleResult result = SampleGiAccuracyOracleEvaluator
+            .Evaluate(SamplePerformanceScenario.GiSimpleDdgiFurnace, samples)
+            .Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(SampleGiAccuracyOracleStatus.Passed));
+            Assert.That(result.ReferenceValue, Is.EqualTo(SampleGlobalIlluminationValidation.SimpleDdgiFurnaceExpectedIrradianceLuminance));
+            Assert.That(result.RelativeError, Is.LessThanOrEqualTo(0.05f));
+        });
+    }
+
+    [Test]
+    public void AccuracyOracleEvaluator_RequiresDirtyBoostForLightEmissiveAndMovingOccluder()
+    {
+        RendererDiagnostics[] lightSamples =
+        [
+            RendererDiagnostics.Empty with
+            {
+                SimpleDdgiAverageSampledIrradianceLuminance = 0.1f,
+                SimpleDdgiDirtyReasonFlags = VulkanRenderer.SimpleDdgiDirtyReasonLight,
+                SimpleDdgiLightingDirtyBoostedCapacity = 16
+            },
+            RendererDiagnostics.Empty with { SimpleDdgiAverageSampledIrradianceLuminance = 1.0f }
+        ];
+        RendererDiagnostics[] emissiveSamples =
+        [
+            RendererDiagnostics.Empty with
+            {
+                DdgiSimpleTraceEmissiveHitCount = 8,
+                DdgiEmissiveSourceCount = 2,
+                DdgiEmissiveSourceRevision = 3,
+                SimpleDdgiDirtyReasonFlags = VulkanRenderer.SimpleDdgiDirtyReasonEmissive
+            }
+        ];
+        RendererDiagnostics[] movingSamples =
+        [
+            RendererDiagnostics.Empty with
+            {
+                SimpleDdgiAverageVisibility = 0.2f,
+                SimpleDdgiDirtyReasonFlags = VulkanRenderer.SimpleDdgiDirtyReasonDynamicGeometry,
+                SimpleDdgiLightingDirtyBoostedCapacity = 8,
+                AccelerationStructureTlasUpdateCount = 1
+            },
+            RendererDiagnostics.Empty with { SimpleDdgiAverageVisibility = 0.8f }
+        ];
+
+        SampleGiAccuracyOracleResult light = SampleGiAccuracyOracleEvaluator
+            .Evaluate(SamplePerformanceScenario.GiMovingPointLight, lightSamples)
+            .Single();
+        SampleGiAccuracyOracleResult emissive = SampleGiAccuracyOracleEvaluator
+            .Evaluate(SamplePerformanceScenario.GiEmissiveMaterialRoom, emissiveSamples)
+            .Single();
+        SampleGiAccuracyOracleResult moving = SampleGiAccuracyOracleEvaluator
+            .Evaluate(SamplePerformanceScenario.GiMovingRigidObject, movingSamples)
+            .Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(light.Status, Is.EqualTo(SampleGiAccuracyOracleStatus.Passed));
+            Assert.That(emissive.Status, Is.EqualTo(SampleGiAccuracyOracleStatus.Passed));
+            Assert.That(moving.Status, Is.EqualTo(SampleGiAccuracyOracleStatus.Passed));
+            Assert.That(light.LatencyFrames, Is.LessThanOrEqualTo(15));
+            Assert.That(moving.LatencyFrames, Is.LessThanOrEqualTo(18));
+        });
+    }
+
+    [Test]
+    public void SimpleDdgiLightingSignature_IsSensitiveToGiLightingFieldsAndEmissiveRevision()
+    {
+        Light baseLight = new()
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(1.0f, 2.0f, 3.0f),
+            Color = new System.Numerics.Vector3(1.0f, 0.8f, 0.6f),
+            Intensity = 4.0f,
+            Range = 8.0f,
+            CastsShadows = true,
+            ShadowStrength = 0.7f
+        };
+        ulong baseSignature = VulkanRenderer.CreateSimpleDdgiLightingSignature(CreateLightSnapshot(baseLight, revision: 10), emissiveSourceRevision: 3);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(VulkanRenderer.CreateSimpleDdgiLightingSignature(CreateLightSnapshot(baseLight with { Intensity = 4.25f }, 10), 3), Is.Not.EqualTo(baseSignature));
+            Assert.That(VulkanRenderer.CreateSimpleDdgiLightingSignature(CreateLightSnapshot(baseLight with { Color = new System.Numerics.Vector3(0.8f, 0.8f, 0.6f) }, 10), 3), Is.Not.EqualTo(baseSignature));
+            Assert.That(VulkanRenderer.CreateSimpleDdgiLightingSignature(CreateLightSnapshot(baseLight with { Position = new System.Numerics.Vector3(1.25f, 2.0f, 3.0f) }, 10), 3), Is.Not.EqualTo(baseSignature));
+            Assert.That(VulkanRenderer.CreateSimpleDdgiLightingSignature(CreateLightSnapshot(baseLight with { Range = 9.0f }, 10), 3), Is.Not.EqualTo(baseSignature));
+            Assert.That(VulkanRenderer.CreateSimpleDdgiLightingSignature(CreateLightSnapshot(baseLight with { CastsShadows = false }, 10), 3), Is.Not.EqualTo(baseSignature));
+            Assert.That(VulkanRenderer.CreateSimpleDdgiLightingSignature(CreateLightSnapshot(baseLight with { ShadowStrength = 0.5f }, 10), 3), Is.Not.EqualTo(baseSignature));
+            Assert.That(VulkanRenderer.CreateSimpleDdgiLightingSignature(CreateLightSnapshot(baseLight, revision: 10), emissiveSourceRevision: 4), Is.Not.EqualTo(baseSignature));
+            Assert.That(VulkanRenderer.CreateSimpleDdgiLightingSignature(CreateLightSnapshot(baseLight, revision: 11), emissiveSourceRevision: 3), Is.EqualTo(baseSignature));
+        });
+    }
+
+    private static LightFrameSnapshot CreateLightSnapshot(Light light, ulong revision)
+    {
+        Light[] lights = [light];
+        return new LightFrameSnapshot(
+            lights,
+            count: lights.Length,
+            directionalLightCount: light.Type == LightType.Directional ? 1 : 0,
+            localLightCount: light.Type == LightType.Directional ? 0 : 1,
+            firstShadowCastingDirectionalLightIndex: -1,
+            firstShadowCastingDirectionalLight: default,
+            revision);
     }
 
     [Test]

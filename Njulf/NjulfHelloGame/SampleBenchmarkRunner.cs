@@ -251,7 +251,10 @@ public sealed class SampleBenchmarkAnalyzer
             CpuStages: cpuStages,
             Findings: BuildFindings(cpuFrame, gpuFrame, gpuPasses, cpuStages, _lastBudget),
             BudgetMetrics: _lastBudget.Metrics,
-            LastDiagnostics: last);
+            LastDiagnostics: last)
+        {
+            AccuracyOracleResults = SampleGiAccuracyOracleEvaluator.Evaluate(scenario, _samples)
+        };
     }
 
     private IReadOnlyList<SampleBenchmarkTimingStats> BuildTimingStats(

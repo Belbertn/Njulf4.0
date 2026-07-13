@@ -623,6 +623,8 @@ namespace Njulf.Rendering.Data
         public int AsyncComputeCandidatePassCount { get; init; }
         public int AsyncComputeEnabledPassCount { get; init; }
         public int AsyncComputeQueueOwnershipTransitionCount { get; init; }
+        public int AsyncComputeOwnershipTransferCount { get; init; }
+        public long AsyncComputeEstimatedOverlapMicroseconds { get; init; }
         public string AsyncComputeStatus { get; init; } = string.Empty;
         public IReadOnlyList<string> AsyncComputeCandidatePasses { get; init; } = [];
         public IReadOnlyList<string> AsyncComputeEnabledPasses { get; init; } = [];
@@ -696,6 +698,15 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiProbeCount { get; init; }
         public int SimpleDdgiProbesUpdated { get; init; }
         public ulong SimpleDdgiRaysPerFrame { get; init; }
+        public int SimpleDdgiInactiveProbeCount { get; init; }
+        public int SimpleDdgiInactiveProbeSkipCount { get; init; }
+        public ulong SimpleDdgiSavedRaysPerFrame { get; init; }
+        public int SimpleDdgiLightingDirtyFrames { get; init; }
+        public int SimpleDdgiLightingDirtyBoostedCapacity { get; init; }
+        public uint SimpleDdgiDirtyReasonFlags { get; init; }
+        public int SimpleDdgiFullRayProbeUpdateCount { get; init; }
+        public int SimpleDdgiMaintenanceRayProbeUpdateCount { get; init; }
+        public ulong SimpleDdgiAdaptiveRaySavedRaysPerFrame { get; init; }
         public ulong SimpleDdgiAtlasBytes { get; init; }
         public int SimpleDdgiRecentered { get; init; }
         public int SimpleDdgiAtlasPreservedOnRecenter { get; init; }
@@ -751,6 +762,17 @@ namespace Njulf.Rendering.Data
         public uint DdgiSimpleTraceFarFieldHitCount { get; init; }
         public uint DdgiSimpleTraceFarFieldMissCount { get; init; }
         public uint DdgiSimpleTraceTlasUnavailableFrameCount { get; init; }
+        public uint SimpleDdgiSkyVisibilitySampleCount { get; init; }
+        public float SimpleDdgiAverageSkyVisibility { get; init; }
+        public uint FarFieldSunShadowSampleCount { get; init; }
+        public uint FarFieldSunShadowOccludedCount { get; init; }
+        public uint SimpleDdgiRoughSpecularSampleCount { get; init; }
+        public uint SimpleDdgiRoughSpecularNonzeroCount { get; init; }
+        public uint DdgiSimpleTraceFarFieldStepBucket0Count { get; init; }
+        public uint DdgiSimpleTraceFarFieldStepBucket1Count { get; init; }
+        public uint DdgiSimpleTraceFarFieldStepBucket2Count { get; init; }
+        public uint DdgiSimpleTraceFarFieldStepBucket3Count { get; init; }
+        public uint DdgiSimpleTraceFarFieldStepBucket4Count { get; init; }
         public int DdgiBlackFrameSuspect { get; init; }
         public int DdgiBlackFrameAfterRecenter { get; init; }
         public int DdgiBlackFrameAfterAtlasClear { get; init; }

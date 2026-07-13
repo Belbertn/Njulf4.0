@@ -31,6 +31,27 @@ namespace Njulf.Tests
             });
         }
 
+        [TestCase(32)]
+        [TestCase(128)]
+        public void FibonacciDirections_RemainUniformForAdaptiveRayTiers(int rayCount)
+        {
+            Vector3 sum = Vector3.Zero;
+            float maxLengthError = 0.0f;
+
+            for (uint i = 0; i < rayCount; i++)
+            {
+                Vector3 direction = SimpleDdgiFibonacciDirection(i, (uint)rayCount, Quaternion.CreateFromYawPitchRoll(0.11f, 0.23f, 0.37f));
+                sum += direction;
+                maxLengthError = Math.Max(maxLengthError, Math.Abs(direction.Length() - 1.0f));
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(maxLengthError, Is.LessThan(1.0e-5f));
+                Assert.That((sum / rayCount).Length(), Is.LessThan(rayCount == 32 ? 0.04f : 0.02f));
+            });
+        }
+
         [Test]
         public void OctEncodeDecode_RoundTripsRepresentativeDirections()
         {
@@ -93,6 +114,59 @@ namespace Njulf.Tests
                 Assert.That(first.Y, Is.EqualTo(radiance.Y * MathF.PI).Within(0.04f));
                 Assert.That(first.Z, Is.EqualTo(radiance.Z * MathF.PI).Within(0.04f));
             });
+        }
+
+        [Test]
+        public void IrradianceBlend_ConstantFieldEnergyInvariantAcrossRayTiers()
+        {
+            Vector3 radiance = new(0.35f, 0.45f, 0.55f);
+            Vector3 maintenance = BlendConstantIrradianceTexel(texel: 21, texelsPerProbe: 8, rayCount: 32, radiance);
+            Vector3 full = BlendConstantIrradianceTexel(texel: 21, texelsPerProbe: 8, rayCount: 128, radiance);
+
+            Assert.That(Vector3.Distance(maintenance, full), Is.LessThan(0.035f));
+        }
+
+        [Test]
+        public void AdaptiveHysteresis_SmoothlyLowersHistoryForLightingSteps()
+        {
+            float unchanged = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 1.0f, currentLuma: 1.05f, changeThreshold: 0.25f, stepThreshold: 0.80f);
+            float changed = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 1.0f, currentLuma: 1.35f, changeThreshold: 0.25f, stepThreshold: 0.80f);
+            float stepped = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 1.0f, currentLuma: 6.0f, changeThreshold: 0.25f, stepThreshold: 0.80f);
+            float boundaryA = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 1.0f, currentLuma: 1.249f, changeThreshold: 0.25f, stepThreshold: 0.80f);
+            float boundaryB = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 1.0f, currentLuma: 1.251f, changeThreshold: 0.25f, stepThreshold: 0.80f);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(unchanged, Is.EqualTo(0.97f).Within(0.0001f));
+                Assert.That(changed, Is.LessThan(0.97f).And.GreaterThan(0.30f));
+                Assert.That(stepped, Is.EqualTo(0.30f).Within(0.01f));
+                Assert.That(Math.Abs(boundaryA - boundaryB), Is.LessThan(0.02f));
+            });
+        }
+
+        [Test]
+        public void IrradianceBlend_SharedRayCacheMatchesDirectStorageOrder()
+        {
+            CpuSimpleRayResult[] rays =
+            [
+                new(Vector3.Normalize(new Vector3(1.0f, 0.2f, 0.1f)), HitKind: 1.0f, Distance: 0.5f),
+                new(Vector3.Normalize(new Vector3(-0.1f, 1.0f, 0.3f)), HitKind: 1.0f, Distance: 1.5f),
+                new(Vector3.Normalize(new Vector3(0.4f, -0.3f, 1.0f)), HitKind: 1.0f, Distance: 2.5f),
+                new(Vector3.Normalize(new Vector3(-0.8f, 0.1f, 0.6f)), HitKind: 1.0f, Distance: 3.5f)
+            ];
+
+            Vector3[] radiance =
+            [
+                new(0.2f, 0.1f, 0.3f),
+                new(0.8f, 0.4f, 0.1f),
+                new(0.0f, 0.5f, 0.2f),
+                new(0.3f, 0.2f, 0.9f)
+            ];
+
+            Vector3 direct = BlendIrradianceTexelFromRays(texel: 17, texelsPerProbe: 8, rays, radiance);
+            Vector3 cached = BlendIrradianceTexelFromCachedRays(texel: 17, texelsPerProbe: 8, rays, radiance);
+
+            Assert.That(Vector3.Distance(direct, cached), Is.LessThan(1.0e-6f));
         }
 
         [Test]
@@ -295,6 +369,7 @@ namespace Njulf.Tests
             string trace = ReadRepoText("Njulf.Shaders", "ddgi_simple_trace.comp");
             string blend = ReadRepoText("Njulf.Shaders", "ddgi_simple_blend.comp");
             string relocate = ReadRepoText("Njulf.Shaders", "ddgi_simple_relocate_classify.comp");
+            string hitShading = ReadRepoText("Njulf.Shaders", "ddgi_hit_shading.glsl");
             string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
 
             Assert.Multiple(() =>
@@ -311,32 +386,85 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("result.visibilityMomentVariance = variance;"));
                 Assert.That(shared, Does.Contain("result.visibilityConfidence = mean > 0.0001"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_FLAG_ENABLED"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_FLAG_FOG_ENABLED"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_FLAG_PARTICLE_ENABLED"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_FLAG_FAR_SUN_SHADOW_ENABLED"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_FLAG_ROUGH_SPECULAR_ENABLED"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_FLAG_ADAPTIVE_HYSTERESIS"));
+                Assert.That(shared, Does.Contain("float EstimateFarFieldSkyVisibility(vec3 worldPos)"));
+                Assert.That(shared, Does.Contain("DDGI_INVESTIGATION_SKY_VISIBILITY_SAMPLE_COUNTER"));
+                Assert.That(shared, Does.Contain("DDGI_INVESTIGATION_SKY_VISIBILITY_ACCUM_COUNTER"));
+                Assert.That(shared, Does.Contain("vec3 SampleSimpleDdgiUnifiedIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir, bool allowFallback)"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_RAY_COUNT_SHIFT"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_MAX_RAYS_PER_PROBE = 256u"));
+                Assert.That(shared, Does.Contain("uint SimpleDdgiUpdateRayCount(SimpleDdgiProbeUpdate update, SimpleDdgiParams p)"));
+                Assert.That(shared, Does.Contain("state.luminanceChangeEma = uintBitsToFloat"));
                 Assert.That(shared, Does.Contain("SimpleDdgiBiasedSamplePosition(worldPos, safeNormal, viewDir, p)"));
                 Assert.That(shared, Does.Contain("SimpleDdgiProbeState ReadSimpleDdgiProbeState(uint bufferIndex, uint probeIndex)"));
                 Assert.That(shared, Does.Contain("SimpleDdgiProbeUpdate ReadSimpleDdgiProbeUpdate(uint bufferIndex, uint queueOffset)"));
                 Assert.That(shared, Does.Contain("vec3 SimpleDdgiProbeRelocatedPosition(uint probeIndex, SimpleDdgiVolume volume, uint localProbeIndex)"));
                 Assert.That(shared, Does.Contain("state.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE"));
                 Assert.That(trace, Does.Contain("SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, updateProbeOffset);"));
+                Assert.That(trace, Does.Contain("uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);"));
+                Assert.That(trace, Does.Contain("if (rayIndex >= activeRayCount)"));
                 Assert.That(trace, Does.Contain("vec3 probePosition = SimpleDdgiProbeRelocatedPosition(probeIndex, volume, localProbeIndex);"));
                 Assert.That(trace, Does.Contain("bool frontFace = rayQueryGetIntersectionFrontFaceEXT(query, true);"));
                 Assert.That(trace, Does.Contain("hitKind = frontFace ? 1.0 : 2.0;"));
                 Assert.That(blend, Does.Contain("SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, localProbeOffset);"));
+                Assert.That(blend, Does.Contain("SimpleDdgiAdaptiveIrradianceHysteresis"));
+                Assert.That(blend, Does.Contain("SimpleDdgiAdaptiveVisibilityHysteresis"));
+                Assert.That(blend, Does.Contain("state.luminanceChangeEma = mix"));
+                Assert.That(blend, Does.Contain("shared vec4 SharedSimpleRayRadianceDistance[256];"));
+                Assert.That(blend, Does.Contain("void LoadSimpleRayCache(SimpleDdgiParams params, uint localProbeOffset, uint activeRayCount)"));
+                Assert.That(blend, Does.Contain("barrier();"));
+                Assert.That(blend, Does.Contain("bool sharedRayCacheEnabled = (pc.Flags & SIMPLE_DDGI_BLEND_FLAG_SHARED_RAY_CACHE) != 0u;"));
                 Assert.That(blend, Does.Contain("float probeHysteresis = (update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u ? 0.0 : params.hysteresis;"));
                 Assert.That(relocate, Does.Contain("SimpleDdgiProbeState previous = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);"));
+                Assert.That(relocate, Does.Contain("uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);"));
+                Assert.That(relocate, Does.Contain("state.luminanceChangeEma = previous.luminanceChangeEma;"));
                 Assert.That(relocate, Does.Contain("bool activeProbe = backfaceRatio < SIMPLE_DDGI_INACTIVE_BACKFACE_RATIO;"));
                 Assert.That(relocate, Does.Contain("state.classification = activeProbe ? SIMPLE_DDGI_CLASSIFICATION_ACTIVE : SIMPLE_DDGI_CLASSIFICATION_INACTIVE;"));
                 Assert.That(relocate, Does.Contain("WriteRelocationClassification(probeIndex, blendedRelocation"));
                 Assert.That(shared, Does.Not.Contain("confidence chain").IgnoreCase);
                 Assert.That(shared, Does.Not.Contain("max(visibility, 0.03)"));
+                Assert.That(hitShading, Does.Contain("for (uint sourceIndex = 0u; sourceIndex < sourceCount; sourceIndex++)"));
+                Assert.That(hitShading, Does.Contain("ReadDdgiEmissiveSource(sourceIndex)"));
+                Assert.That(hitShading, Does.Not.Contain("ReadDdgiEmissiveSource(0u)"));
                 Assert.That(forward, Does.Contain("bool simpleDdgiActive = (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_ENABLED) != 0u && simpleDdgiParams.probeCount > 0u;"));
                 Assert.That(forward, Does.Contain("vec3 simpleIrradiance = SampleSimpleDdgiIrradiance(fragWorldPosition, ddgiNormal, viewDirection);"));
+                Assert.That(forward, Does.Contain("EstimateFarFieldSunShadow(worldPosition, normal, normalize(-light.Direction))"));
+                Assert.That(forward, Does.Contain("DDGI_INVESTIGATION_FAR_SUN_SHADOW_SAMPLE_COUNTER"));
+                Assert.That(forward, Does.Contain("DDGI_INVESTIGATION_ROUGH_SPECULAR_SAMPLE_COUNTER"));
+                Assert.That(forward, Does.Contain("smoothstep(0.6, 0.85, roughness)"));
+                Assert.That(forward, Does.Contain("SampleSimpleDdgiUnifiedIrradiance(fragWorldPosition, reflectionDirection, viewDirection, false)"));
                 Assert.That(forward, Does.Contain("SimpleDdgiDebugSample simpleDebug = SampleSimpleDdgiDebug(fragWorldPosition, ddgiNormal, viewDirection);"));
                 Assert.That(forward, Does.Contain("ddgiSample.visibilityMomentMean = simpleDebug.visibilityMomentMean;"));
                 Assert.That(forward, Does.Contain("ddgiSample.visibilityConfidence = simpleDebug.visibilityConfidence;"));
                 Assert.That(forward, Does.Contain("ddgiSample.cascadeIndex = float(simpleDebug.volumeIndex);"));
                 Assert.That(forward, Does.Contain("ddgiSample.minProbeSpacing = selectedSimpleVolume.spacing;"));
                 Assert.That(forward, Does.Contain("ddgiDiffuse = simpleIrradiance * albedo * max(1.0 - metallic, 0.0) / PI;"));
-                Assert.That(forward, Does.Contain("finalDiffuseIndirect = (ddgiDiffuse + diffuseIbl) * indirectAo;"));
+                Assert.That(forward, Does.Contain("finalDiffuseIndirect = ddgiDiffuse + diffuseIbl * indirectAo;"));
+                Assert.That(forward, Does.Not.Contain("finalDiffuseIndirect = (ddgiDiffuse + diffuseIbl) * indirectAo;"));
+            });
+        }
+
+        [Test]
+        public void SimpleDdgiParticipatingMediaAndParticles_UseSimpleSamplerWhenFlagged()
+        {
+            string fog = ReadRepoText("Njulf.Shaders", "fog.comp");
+            string particleVertex = ReadRepoText("Njulf.Shaders", "particle.vert");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(fog, Does.Contain("#include \"ddgi_simple_shared.glsl\""));
+                Assert.That(fog, Does.Contain("SIMPLE_DDGI_FLAG_FOG_ENABLED"));
+                Assert.That(fog, Does.Contain("SampleSimpleDdgiIrradiance(samplePosition, ambientNormal, -viewDirection)"));
+                Assert.That(fog, Does.Contain("SampleDdgiAmbientIrradiance(samplePosition, ambientNormal, 6u)"));
+                Assert.That(particleVertex, Does.Contain("#include \"ddgi_simple_shared.glsl\""));
+                Assert.That(particleVertex, Does.Contain("SIMPLE_DDGI_FLAG_PARTICLE_ENABLED"));
+                Assert.That(particleVertex, Does.Contain("SampleSimpleDdgiIrradiance(center, particleDdgiNormal, particleDdgiNormal)"));
+                Assert.That(particleVertex, Does.Contain("SampleDdgiAmbientDiffuse(center, particleDdgiNormal, particleAlbedo, 0.75, 4u)"));
             });
         }
 
@@ -360,6 +488,34 @@ namespace Njulf.Tests
             return weightSum > 0.000001f
                 ? accumulated * (MathF.PI / weightSum)
                 : Vector3.Zero;
+        }
+
+        private static Vector3 BlendIrradianceTexelFromRays(uint texel, uint texelsPerProbe, ReadOnlySpan<CpuSimpleRayResult> rays, ReadOnlySpan<Vector3> radiance)
+        {
+            uint x = texel % texelsPerProbe;
+            uint y = texel / texelsPerProbe;
+            Vector2 uv = new((x + 0.5f) / texelsPerProbe, (y + 0.5f) / texelsPerProbe);
+            Vector3 texelDirection = SimpleDdgiOctDecode(uv);
+            Vector3 accumulated = Vector3.Zero;
+            float weightSum = 0.0f;
+
+            for (int ray = 0; ray < rays.Length; ray++)
+            {
+                float weight = Math.Max(Vector3.Dot(texelDirection, Vector3.Normalize(rays[ray].Direction)), 0.0f);
+                accumulated += radiance[ray] * weight;
+                weightSum += weight;
+            }
+
+            return weightSum > 0.000001f
+                ? accumulated * (MathF.PI / weightSum)
+                : Vector3.Zero;
+        }
+
+        private static Vector3 BlendIrradianceTexelFromCachedRays(uint texel, uint texelsPerProbe, ReadOnlySpan<CpuSimpleRayResult> rays, ReadOnlySpan<Vector3> radiance)
+        {
+            var cachedRays = rays.ToArray();
+            var cachedRadiance = radiance.ToArray();
+            return BlendIrradianceTexelFromRays(texel, texelsPerProbe, cachedRays, cachedRadiance);
         }
 
         private static Vector4 SampleSyntheticAtlasBilinear(Vector3 direction, uint texelsPerProbe)
@@ -421,6 +577,23 @@ namespace Njulf.Tests
         {
             return Math.Max(trilinear * backfaceWeight * visibility, trilinear * 1.0e-5f);
         }
+
+        private static float SimpleDdgiAdaptiveIrradianceHysteresis(float probeHysteresis, float previousLuma, float currentLuma, float changeThreshold, float stepThreshold)
+        {
+            float relativeDelta = Math.Abs(currentLuma - previousLuma) / Math.Max(Math.Max(previousLuma, currentLuma), 0.01f);
+            float changeT = SmoothStep(changeThreshold, stepThreshold, relativeDelta);
+            float softHysteresis = probeHysteresis * 0.5f;
+            float stepHysteresis = Math.Min(probeHysteresis, 0.30f);
+            return Lerp(probeHysteresis, Lerp(softHysteresis, stepHysteresis, changeT), SmoothStep(changeThreshold * 0.75f, changeThreshold, relativeDelta));
+        }
+
+        private static float SmoothStep(float edge0, float edge1, float x)
+        {
+            float t = Math.Clamp((x - edge0) / Math.Max(edge1 - edge0, 0.000001f), 0.0f, 1.0f);
+            return t * t * (3.0f - 2.0f * t);
+        }
+
+        private static float Lerp(float a, float b, float t) => a + (b - a) * t;
 
         private static Vector3 SimpleDdgiBiasedSamplePosition(Vector3 worldPos, Vector3 normal, Vector3 viewDir, float normalBias, float viewBias)
         {

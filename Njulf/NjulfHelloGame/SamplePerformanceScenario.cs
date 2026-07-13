@@ -16,7 +16,9 @@ public enum SamplePerformanceScenario
     ForestFoliage,
     ReflectionHeavy,
     GiSponzaRightWallStationary,
+    GiSimpleDdgiFurnace,
     GiCornellRoom,
+    GiQualityInterior,
     GiThinWallLeakTest,
     GiMovingPointLight,
     GiMovingRigidObject,
@@ -26,6 +28,7 @@ public enum SamplePerformanceScenario
     GiLocalVolumeStreaming,
     GiFastTraversalTeleport,
     GiVerticalityRings,
+    GiInstancedCityStress,
     UploadBurst,
     CombinedWorstCase
 }

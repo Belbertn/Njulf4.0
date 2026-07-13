@@ -25,6 +25,8 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_SHADOW_COMPACTION", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_SUBMISSION_VALIDATION", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_FAR_FIELD_CLIPMAP", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_FAR_FIELD_FORCE_ALL", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_DDGI_SCHEDULER_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR", null);
@@ -152,6 +154,7 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [TestCase("gi-cornell-room", SamplePerformanceScenario.GiCornellRoom)]
+    [TestCase("gi-simple-ddgi-furnace", SamplePerformanceScenario.GiSimpleDdgiFurnace)]
     [TestCase("gi-sponza-right-wall-stationary", SamplePerformanceScenario.GiSponzaRightWallStationary)]
     [TestCase("gi-thin-wall-leak-test", SamplePerformanceScenario.GiThinWallLeakTest)]
     [TestCase("gi-moving-point-light", SamplePerformanceScenario.GiMovingPointLight)]
@@ -161,6 +164,7 @@ public sealed class SampleSmokeOptionsParserTests
     [TestCase("gi-emissive-material-room", SamplePerformanceScenario.GiEmissiveMaterialRoom)]
     [TestCase("gi-local-volume-streaming", SamplePerformanceScenario.GiLocalVolumeStreaming)]
     [TestCase("gi-fast-traversal-teleport", SamplePerformanceScenario.GiFastTraversalTeleport)]
+    [TestCase("gi-instanced-city-stress", SamplePerformanceScenario.GiInstancedCityStress)]
     public void ParsesGlobalIlluminationValidationScenarios(string value, SamplePerformanceScenario expected)
     {
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
@@ -190,7 +194,8 @@ public sealed class SampleSmokeOptionsParserTests
             SamplePerformanceScenario.GiLongCorridorOcclusion,
             SamplePerformanceScenario.GiEmissiveMaterialRoom,
             SamplePerformanceScenario.GiLocalVolumeStreaming,
-            SamplePerformanceScenario.GiFastTraversalTeleport
+            SamplePerformanceScenario.GiFastTraversalTeleport,
+            SamplePerformanceScenario.GiInstancedCityStress
         ];
         DdgiSchedulerMode[] schedulerModes =
         [
@@ -389,6 +394,7 @@ public sealed class SampleSmokeOptionsParserTests
                 Is.EquivalentTo(new[]
                 {
                     "sponza-interior",
+                    "simple-ddgi-furnace",
                     "sunlit-courtyard",
                     "colored-bounce-room",
                     "thin-wall-corridor",
@@ -404,6 +410,7 @@ public sealed class SampleSmokeOptionsParserTests
                 Is.SupersetOf(new[]
                 {
                     SamplePerformanceScenario.GiSponzaRightWallStationary,
+                    SamplePerformanceScenario.GiSimpleDdgiFurnace,
                     SamplePerformanceScenario.GiCornellRoom,
                     SamplePerformanceScenario.GiLongCorridorOcclusion,
                     SamplePerformanceScenario.GiEmissiveMaterialRoom,
@@ -665,6 +672,24 @@ public sealed class SampleSmokeOptionsParserTests
         {
             Assert.That(options.EnableAsyncCompute, Is.True);
             Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+        });
+    }
+
+    [Test]
+    public void ParsesFarFieldForceAllFlagAndDefaultsToStartupSmoke()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--far-field-force-all"
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.EnableFarFieldClipmap, Is.True);
+            Assert.That(options.EnableFarFieldForceAll, Is.True);
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+            Assert.That(options.FrameCount, Is.EqualTo(3));
+            Assert.That(options.Enabled, Is.True);
         });
     }
 

@@ -141,7 +141,7 @@ namespace Njulf.Rendering.Resources
                 CollectStaticOpaqueInstances(scene, _instanceScratch);
                 if (_instanceScratch.Count == 0)
                 {
-                    _lastFallbackReason = "No static opaque acceleration-structure instances were submitted.";
+                    _lastFallbackReason = "No opaque acceleration-structure instances were submitted.";
                     return CreateStats(false);
                 }
 

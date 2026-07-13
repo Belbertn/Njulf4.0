@@ -33,6 +33,9 @@ public static class SampleSmokeOptionsParser
         bool enableSceneGpuShadowCompaction = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_SHADOW_COMPACTION"));
         bool enableSceneSubmissionValidation = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_SUBMISSION_VALIDATION"));
         bool enableAsyncCompute = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE"));
+        bool enableFarFieldClipmap = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_FAR_FIELD_CLIPMAP"));
+        bool enableFarFieldForceAll = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_FAR_FIELD_FORCE_ALL"));
+        enableFarFieldClipmap |= enableFarFieldForceAll;
         DdgiSchedulerMode? ddgiSchedulerModeOverride = ParseDdgiSchedulerMode(Environment.GetEnvironmentVariable("NJULF_RENDERER_DDGI_SCHEDULER_MODE"));
         bool enableBenchmark = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK")) ||
             !string.IsNullOrWhiteSpace(benchmarkReportPath);
@@ -126,6 +129,13 @@ public static class SampleSmokeOptionsParser
                 case "--async-compute":
                     enableAsyncCompute = ParseBool(value);
                     break;
+                case "--far-field-clipmap":
+                    enableFarFieldClipmap = ParseBool(value);
+                    break;
+                case "--far-field-force-all":
+                    enableFarFieldForceAll = ParseBool(value);
+                    enableFarFieldClipmap |= enableFarFieldForceAll;
+                    break;
                 case "--ddgi-scheduler-mode":
                     ddgiSchedulerModeOverride = ParseDdgiSchedulerMode(value) ??
                         throw new ArgumentException("--ddgi-scheduler-mode requires a scheduler mode.");
@@ -142,6 +152,8 @@ public static class SampleSmokeOptionsParser
         if (mode == SampleSmokeMode.None && transparencyMode != TransparencyMode.SortedAlphaBlend && !smokeModeSpecified)
             mode = SampleSmokeMode.Startup;
         if (mode == SampleSmokeMode.None && enableAsyncCompute && !smokeModeSpecified)
+            mode = SampleSmokeMode.Startup;
+        if (mode == SampleSmokeMode.None && (enableFarFieldClipmap || enableFarFieldForceAll) && !smokeModeSpecified)
             mode = SampleSmokeMode.Startup;
         if (mode == SampleSmokeMode.None && ddgiSchedulerModeOverride.HasValue && !smokeModeSpecified)
             mode = SampleSmokeMode.Startup;
@@ -174,6 +186,8 @@ public static class SampleSmokeOptionsParser
             enableSceneGpuShadowCompaction,
             enableSceneSubmissionValidation,
             enableAsyncCompute,
+            enableFarFieldClipmap,
+            enableFarFieldForceAll,
             baselineSnapshotDirectory,
             ddgiSchedulerModeOverride,
             sceneKind,
@@ -197,7 +211,9 @@ public static class SampleSmokeOptionsParser
             "--scene-gpu-lod" or
             "--scene-gpu-shadow-compaction" or
             "--scene-submission-validation" or
-            "--async-compute")
+            "--async-compute" or
+            "--far-field-clipmap" or
+            "--far-field-force-all")
             return "true";
 
         if (index + 1 >= args.Length)

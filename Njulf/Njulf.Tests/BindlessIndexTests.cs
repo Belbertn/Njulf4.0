@@ -183,6 +183,9 @@ namespace Njulf.Tests
                 ["FAR_FIELD_CLIPMAP_VOXEL_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapVoxelBuffer,
                 ["FAR_FIELD_CLIPMAP_INSTANCE_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapInstanceBuffer,
                 ["FAR_FIELD_CLIPMAP_BAKE_VOXEL_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapBakeVoxelBuffer,
+                ["FAR_FIELD_CLIPMAP_DISTANCE_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapDistanceBuffer,
+                ["FAR_FIELD_CLIPMAP_JUMP_FLOOD_SCRATCH0_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapJumpFloodScratch0Buffer,
+                ["FAR_FIELD_CLIPMAP_JUMP_FLOOD_SCRATCH1_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapJumpFloodScratch1Buffer,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
@@ -468,6 +471,9 @@ namespace Njulf.Tests
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapVoxelBuffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapVoxelBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapInstanceBuffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapInstanceBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapBakeVoxelBuffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapBakeVoxelBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapDistanceBuffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapDistanceBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapJumpFloodScratch0Buffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapJumpFloodScratch0Buffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapJumpFloodScratch1Buffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapJumpFloodScratch1Buffer)));
             });
         }
 
@@ -630,6 +636,9 @@ namespace Njulf.Tests
             yield return BindlessIndex.FarFieldClipmapVoxelBuffer;
             yield return BindlessIndex.FarFieldClipmapInstanceBuffer;
             yield return BindlessIndex.FarFieldClipmapBakeVoxelBuffer;
+            yield return BindlessIndex.FarFieldClipmapDistanceBuffer;
+            yield return BindlessIndex.FarFieldClipmapJumpFloodScratch0Buffer;
+            yield return BindlessIndex.FarFieldClipmapJumpFloodScratch1Buffer;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;

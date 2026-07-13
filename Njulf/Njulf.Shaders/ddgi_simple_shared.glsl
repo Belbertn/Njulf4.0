@@ -1,12 +1,21 @@
 #ifndef NJULF_DDGI_SIMPLE_SHARED_GLSL
 #define NJULF_DDGI_SIMPLE_SHARED_GLSL
 
+#include "farfield_clipmap.glsl"
+
 const float SIMPLE_DDGI_PI = 3.14159265359;
 const uint SIMPLE_DDGI_FLAG_ENABLED = 1u << 0;
 const uint SIMPLE_DDGI_FLAG_FAR_FIELD_ENABLED = 1u << 1;
 const uint SIMPLE_DDGI_FLAG_FAR_FIELD_FORCE_ALL = 1u << 2;
+const uint SIMPLE_DDGI_FLAG_FOG_ENABLED = 1u << 3;
+const uint SIMPLE_DDGI_FLAG_PARTICLE_ENABLED = 1u << 4;
+const uint SIMPLE_DDGI_FLAG_ADAPTIVE_HYSTERESIS = 1u << 5;
+const uint SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED = 1u << 6;
+const uint SIMPLE_DDGI_FLAG_FAR_SUN_SHADOW_ENABLED = 1u << 7;
+const uint SIMPLE_DDGI_FLAG_ROUGH_SPECULAR_ENABLED = 1u << 8;
 const uint SIMPLE_DDGI_IRRADIANCE_TEXELS = 8u;
 const uint SIMPLE_DDGI_VISIBILITY_TEXELS = 16u;
+const uint SIMPLE_DDGI_MAX_RAYS_PER_PROBE = 256u;
 const uint SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS = 8u;
 const uint SIMPLE_DDGI_HEADER_WORDS = 40u;
 const uint SIMPLE_DDGI_VOLUME_STRIDE_WORDS = 24u;
@@ -20,6 +29,8 @@ const uint SIMPLE_DDGI_RELOCATION_CLASSIFICATION_STRIDE_WORDS = 12u;
 const uint SIMPLE_DDGI_PROBE_FLAG_FRESH = 1u << 0;
 const uint SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED = 1u << 1;
 const uint SIMPLE_DDGI_PROBE_FLAG_INACTIVE = 1u << 2;
+const uint SIMPLE_DDGI_PROBE_FLAG_RAY_COUNT_SHIFT = 16u;
+const uint SIMPLE_DDGI_PROBE_FLAG_RAY_COUNT_MASK = 0xffff0000u;
 const uint SIMPLE_DDGI_CLASSIFICATION_ACTIVE = 0u;
 const uint SIMPLE_DDGI_CLASSIFICATION_INACTIVE = 1u;
 
@@ -48,6 +59,8 @@ struct SimpleDdgiParams
     vec4 rayRotation;
     float normalBias;
     float viewBias;
+    float hysteresisChangeThreshold;
+    float hysteresisStepThreshold;
     uint volumeCount;
 };
 
@@ -86,6 +99,7 @@ struct SimpleDdgiProbeState
     uint flags;
     uint age;
     uint classification;
+    float luminanceChangeEma;
 };
 
 struct SimpleDdgiProbeUpdate
@@ -110,6 +124,7 @@ SimpleDdgiProbeState ReadSimpleDdgiProbeState(uint bufferIndex, uint probeIndex)
     state.flags = ReadStorageWord(bufferIndex, baseWord + 4u);
     state.age = ReadStorageWord(bufferIndex, baseWord + 5u);
     state.classification = ReadStorageWord(bufferIndex, baseWord + 6u);
+    state.luminanceChangeEma = uintBitsToFloat(ReadStorageWord(bufferIndex, baseWord + 7u));
     return state;
 }
 
@@ -120,7 +135,7 @@ void WriteSimpleDdgiProbeState(uint bufferIndex, uint probeIndex, SimpleDdgiProb
     WriteStorageWord(bufferIndex, baseWord + 4u, state.flags);
     WriteStorageWord(bufferIndex, baseWord + 5u, state.age);
     WriteStorageWord(bufferIndex, baseWord + 6u, state.classification);
-    WriteStorageWord(bufferIndex, baseWord + 7u, 0u);
+    WriteStorageWord(bufferIndex, baseWord + 7u, floatBitsToUint(max(state.luminanceChangeEma, 0.0)));
 }
 
 SimpleDdgiProbeUpdate ReadSimpleDdgiProbeUpdate(uint bufferIndex, uint queueOffset)
@@ -131,6 +146,12 @@ SimpleDdgiProbeUpdate ReadSimpleDdgiProbeUpdate(uint bufferIndex, uint queueOffs
     update.volumeIndex = ReadStorageWord(bufferIndex, baseWord + 1u);
     update.flags = ReadStorageWord(bufferIndex, baseWord + 2u);
     return update;
+}
+
+uint SimpleDdgiUpdateRayCount(SimpleDdgiProbeUpdate update, SimpleDdgiParams p)
+{
+    uint packed = (update.flags & SIMPLE_DDGI_PROBE_FLAG_RAY_COUNT_MASK) >> SIMPLE_DDGI_PROBE_FLAG_RAY_COUNT_SHIFT;
+    return clamp(packed == 0u ? p.raysPerProbe : packed, 1u, min(p.raysPerProbe, SIMPLE_DDGI_MAX_RAYS_PER_PROBE));
 }
 
 SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
@@ -169,6 +190,8 @@ SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
     p.rayRotation = dot(rotation, rotation) > 0.000001 ? normalize(rotation) : vec4(0.0, 0.0, 0.0, 1.0);
     p.normalBias = max(bias.x, 0.0);
     p.viewBias = max(bias.y, 0.0);
+    p.hysteresisChangeThreshold = max(bias.z, 0.001);
+    p.hysteresisStepThreshold = max(max(bias.w, 0.001), p.hysteresisChangeThreshold);
     p.volumeCount = min(uint(max(max(reserved.x, updateRange.z), 0.0)), SIMPLE_DDGI_MAX_VOLUME_COUNT);
     return p;
 }
@@ -504,6 +527,91 @@ vec3 SimpleDdgiEnvironmentIrradianceFallback(vec3 safeNormal, SimpleDdgiParams p
     return max(p.environmentRadiance, vec3(0.0)) * p.environmentIntensity * skyWeight;
 }
 
+float EstimateFarFieldSkyVisibility(vec3 worldPos)
+{
+    FarFieldClipmapParams farField = ReadFarFieldClipmapParams(uint(FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX));
+    if (!farField.enabled)
+        return 1.0;
+
+    const vec3 coneDirections[3] = vec3[](
+        vec3(0.0, 1.0, 0.0),
+        normalize(vec3(0.70710678, 0.70710678, 0.0)),
+        normalize(vec3(-0.5, 0.70710678, 0.5))
+    );
+
+    uint coneCount = 3u;
+    float maxDistance = max(farField.extent, farField.startDistance + farField.voxelSize);
+    float visibility = 0.0;
+    for (uint i = 0u; i < coneCount; i++)
+    {
+        float hitT;
+        vec3 hitNormal;
+        vec3 hitAlbedo;
+        bool stepExhausted;
+        uint visitedSteps;
+        bool blocked = TraceFarFieldClipmapDetailed(
+            worldPos,
+            coneDirections[i],
+            farField.voxelSize * 0.5,
+            maxDistance,
+            hitT,
+            hitNormal,
+            hitAlbedo,
+            stepExhausted,
+            visitedSteps);
+        visibility += blocked ? 0.0 : 1.0;
+    }
+
+    float normalizedVisibility = clamp(visibility / float(coneCount), 0.0, 1.0);
+    SimpleDdgiParams simpleParams = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    uint diagnosticFrame = simpleParams.frameIndex % uint(FRAMES_IN_FLIGHT);
+    AddRendererDiagnostic(diagnosticFrame, DDGI_INVESTIGATION_SKY_VISIBILITY_SAMPLE_COUNTER, 1u);
+    AddRendererDiagnostic(
+        diagnosticFrame,
+        DDGI_INVESTIGATION_SKY_VISIBILITY_ACCUM_COUNTER,
+        uint(clamp(normalizedVisibility, 0.0, 16.0) * 1024.0 + 0.5));
+    return normalizedVisibility;
+}
+
+vec3 SampleSimpleDdgiUnifiedIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir, bool allowFallback)
+{
+    SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    if ((p.flags & SIMPLE_DDGI_FLAG_ENABLED) == 0u || p.probeCount == 0u || p.volumeCount == 0u)
+        return vec3(0.0);
+
+    vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
+    vec3 biasedWorldPos = SimpleDdgiBiasedSamplePosition(worldPos, safeNormal, viewDir, p);
+    uint selectedVolumeIndex;
+    SimpleDdgiVolume selectedVolume;
+    float edgeWeight;
+    if (!SelectSimpleDdgiVolume(p, biasedWorldPos, selectedVolumeIndex, selectedVolume, edgeWeight))
+    {
+        vec3 fallback = allowFallback ? SimpleDdgiEnvironmentIrradianceFallback(safeNormal, p) : vec3(0.0);
+        if (allowFallback && (p.flags & SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u)
+            fallback *= EstimateFarFieldSkyVisibility(biasedWorldPos);
+        return fallback * p.indirectIntensity;
+    }
+
+    vec3 selectedIrradiance = SampleSimpleDdgiVolumeIrradiance(p, selectedVolume, biasedWorldPos, safeNormal);
+    if (edgeWeight >= 0.999)
+        return selectedIrradiance * p.indirectIntensity;
+
+    for (uint nextVolumeIndex = selectedVolumeIndex + 1u; nextVolumeIndex < p.volumeCount; nextVolumeIndex++)
+    {
+        SimpleDdgiVolume nextVolume = ReadSimpleDdgiVolume(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX), nextVolumeIndex);
+        if (!SimpleDdgiContains(nextVolume, biasedWorldPos))
+            continue;
+
+        vec3 nextIrradiance = SampleSimpleDdgiVolumeIrradiance(p, nextVolume, biasedWorldPos, safeNormal);
+        return mix(nextIrradiance, selectedIrradiance, edgeWeight) * p.indirectIntensity;
+    }
+
+    vec3 fallbackIrradiance = allowFallback ? SimpleDdgiEnvironmentIrradianceFallback(safeNormal, p) : vec3(0.0);
+    if (allowFallback && (p.flags & SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u)
+        fallbackIrradiance *= EstimateFarFieldSkyVisibility(biasedWorldPos);
+    return mix(fallbackIrradiance, selectedIrradiance, edgeWeight) * p.indirectIntensity;
+}
+
 SimpleDdgiDebugSample SampleSimpleDdgiDebug(vec3 worldPos, vec3 normal, vec3 viewDir)
 {
     SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
@@ -544,34 +652,7 @@ SimpleDdgiDebugSample SampleSimpleDdgiDebug(vec3 worldPos, vec3 normal, vec3 vie
 
 vec3 SampleSimpleDdgiIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir)
 {
-    SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
-    if ((p.flags & SIMPLE_DDGI_FLAG_ENABLED) == 0u || p.probeCount == 0u || p.volumeCount == 0u)
-        return vec3(0.0);
-
-    vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
-    vec3 biasedWorldPos = SimpleDdgiBiasedSamplePosition(worldPos, safeNormal, viewDir, p);
-    uint selectedVolumeIndex;
-    SimpleDdgiVolume selectedVolume;
-    float edgeWeight;
-    if (!SelectSimpleDdgiVolume(p, biasedWorldPos, selectedVolumeIndex, selectedVolume, edgeWeight))
-        return SimpleDdgiEnvironmentIrradianceFallback(safeNormal, p) * p.indirectIntensity;
-
-    vec3 selectedIrradiance = SampleSimpleDdgiVolumeIrradiance(p, selectedVolume, biasedWorldPos, safeNormal);
-    if (edgeWeight >= 0.999)
-        return selectedIrradiance * p.indirectIntensity;
-
-    for (uint nextVolumeIndex = selectedVolumeIndex + 1u; nextVolumeIndex < p.volumeCount; nextVolumeIndex++)
-    {
-        SimpleDdgiVolume nextVolume = ReadSimpleDdgiVolume(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX), nextVolumeIndex);
-        if (!SimpleDdgiContains(nextVolume, biasedWorldPos))
-            continue;
-
-        vec3 nextIrradiance = SampleSimpleDdgiVolumeIrradiance(p, nextVolume, biasedWorldPos, safeNormal);
-        return mix(nextIrradiance, selectedIrradiance, edgeWeight) * p.indirectIntensity;
-    }
-
-    vec3 fallbackIrradiance = SimpleDdgiEnvironmentIrradianceFallback(safeNormal, p);
-    return mix(fallbackIrradiance, selectedIrradiance, edgeWeight) * p.indirectIntensity;
+    return SampleSimpleDdgiUnifiedIrradiance(worldPos, normal, viewDir, true);
 }
 
 #endif

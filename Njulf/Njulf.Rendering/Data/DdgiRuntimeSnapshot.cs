@@ -216,7 +216,18 @@ namespace Njulf.Rendering.Data
         uint SimpleTraceEmissiveHitCount,
         uint SimpleTraceFarFieldHitCount,
         uint SimpleTraceFarFieldMissCount,
-        uint SimpleTraceTlasUnavailableFrameCount)
+        uint SimpleTraceTlasUnavailableFrameCount,
+        uint SkyVisibilitySampleCount,
+        float SkyVisibilityAverage,
+        uint FarSunShadowSampleCount,
+        uint FarSunShadowOccludedCount,
+        uint RoughSpecularSampleCount,
+        uint RoughSpecularNonzeroCount,
+        uint FarFieldStepBucket0Count,
+        uint FarFieldStepBucket1Count,
+        uint FarFieldStepBucket2Count,
+        uint FarFieldStepBucket3Count,
+        uint FarFieldStepBucket4Count)
     {
         public static DdgiInvestigationCounters Empty { get; } = default;
     }

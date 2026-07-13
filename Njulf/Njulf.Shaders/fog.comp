@@ -3,6 +3,7 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 
 #include "common.glsl"
+#include "ddgi_simple_shared.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -104,6 +105,15 @@ vec3 ResolveDdgiFogAmbient(vec3 cameraPosition, vec3 worldPosition, vec3 viewDir
     vec3 ambientNormal = abs(viewDirection.y) < 0.95
         ? normalize(vec3(-viewDirection.x, 0.35, -viewDirection.z))
         : vec3(0.0, 1.0, 0.0);
+    SimpleDdgiParams simpleParams = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    if ((simpleParams.flags & (SIMPLE_DDGI_FLAG_ENABLED | SIMPLE_DDGI_FLAG_FOG_ENABLED)) ==
+        (SIMPLE_DDGI_FLAG_ENABLED | SIMPLE_DDGI_FLAG_FOG_ENABLED) &&
+        simpleParams.probeCount > 0u)
+    {
+        vec3 simpleIrradiance = SampleSimpleDdgiIrradiance(samplePosition, ambientNormal, -viewDirection);
+        return simpleIrradiance * fogFactor * 0.18;
+    }
+
     vec4 irradiance = SampleDdgiAmbientIrradiance(samplePosition, ambientNormal, 6u);
     return irradiance.rgb * irradiance.a * fogFactor * 0.18;
 }

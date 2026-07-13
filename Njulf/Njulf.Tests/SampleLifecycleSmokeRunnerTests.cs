@@ -27,6 +27,8 @@ public sealed class SampleLifecycleSmokeRunnerTests
             EnableSceneGpuShadowCompaction: false,
             EnableSceneSubmissionValidation: false,
             EnableAsyncCompute: false,
+            EnableFarFieldClipmap: false,
+            EnableFarFieldForceAll: false,
             BaselineSnapshotDirectory: null);
         var runner = new SampleLifecycleSmokeRunner(options, (_, _) => { }, () => { }, () => { });
 
@@ -60,6 +62,8 @@ public sealed class SampleLifecycleSmokeRunnerTests
             EnableSceneGpuShadowCompaction: false,
             EnableSceneSubmissionValidation: false,
             EnableAsyncCompute: false,
+            EnableFarFieldClipmap: false,
+            EnableFarFieldForceAll: false,
             BaselineSnapshotDirectory: null);
         bool invoked = false;
         var runner = new SampleLifecycleSmokeRunner(

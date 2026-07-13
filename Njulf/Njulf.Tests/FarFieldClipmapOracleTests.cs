@@ -57,6 +57,36 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void JumpFloodDistanceField_MatchesAnalyticBoxSdfWithinVoxelTolerance()
+        {
+            var grid = new OccupancyGrid(new Vector3(0.0f), voxelSize: 1.0f, new Vector3I(32, 32, 32));
+            Vector3I boxMin = new(10, 11, 12);
+            Vector3I boxMaxExclusive = new(15, 17, 16);
+            for (int z = boxMin.Z; z < boxMaxExclusive.Z; z++)
+            for (int y = boxMin.Y; y < boxMaxExclusive.Y; y++)
+            for (int x = boxMin.X; x < boxMaxExclusive.X; x++)
+                grid.Set(x, y, z, true);
+
+            ushort[] distances = BuildJumpFloodDistanceField(grid);
+            Vector3I[] samples =
+            [
+                new(9, 13, 14),
+                new(16, 13, 14),
+                new(9, 10, 11),
+                new(4, 13, 14),
+                new(20, 20, 20),
+                new(12, 14, 13)
+            ];
+
+            foreach (Vector3I sample in samples)
+            {
+                float sampledDistance = DecodeTraceDistance(grid, distances, sample);
+                float analyticDistance = AnalyticBoxDistance(sample, boxMin, boxMaxExclusive);
+                Assert.That(sampledDistance, Is.EqualTo(analyticDistance).Within(0.30f), sample.ToString());
+            }
+        }
+
+        [Test]
         public void SimpleDdgiAndFarFieldStructLayouts_AreStableForShaderInterop()
         {
             Assert.Multiple(() =>
@@ -122,11 +152,16 @@ namespace Njulf.Tests
             {
                 Assert.That(clipmap, Does.Contain("bool TraceFarFieldClipmap("));
                 Assert.That(clipmap, Does.Contain("bool TraceFarFieldClipmapDetailed("));
+                Assert.That(clipmap, Does.Contain("bool TraceFarFieldClipmapSphereMarch("));
+                Assert.That(clipmap, Does.Contain("ReadFarFieldDistanceVoxels"));
                 Assert.That(clipmap, Does.Contain("out bool stepExhausted"));
                 Assert.That(clipmap, Does.Contain("visitedSteps = stepIndex + 1u;"));
                 Assert.That(clipmap, Does.Contain("uint voxelBufferIndex;"));
+                Assert.That(clipmap, Does.Contain("uint distanceBufferIndex;"));
                 Assert.That(clipmap, Does.Contain("p.voxelBufferIndex = uint(max(diagnostics.x, 0.0));"));
+                Assert.That(clipmap, Does.Contain("p.distanceBufferIndex = uint(max(jumpFlood.x, 0.0));"));
                 Assert.That(clipmap, Does.Contain("ReadStorageWord(p.voxelBufferIndex, FarFieldVoxelIndex(voxel, p))"));
+                string jumpFlood = ReadRepoText("Njulf.Shaders", "farfield_jumpflood.comp");
                 Assert.That(voxelize, Does.Contain("const uint FARFIELD_VOXELIZE_MODE_TRIANGLES = 1u;"));
                 Assert.That(voxelize, Does.Contain("const uint FARFIELD_VOXELIZE_MODE_PUBLISH = 2u;"));
                 Assert.That(voxelize, Does.Contain("uint CurrentFrameIndex;"));
@@ -139,16 +174,24 @@ namespace Njulf.Tests
                 Assert.That(common, Does.Contain("const uint FAR_FIELD_STEP_EXHAUSTED_COUNTER = FAR_FIELD_COUNTER_BASE + 2u;"));
                 Assert.That(common, Does.Contain("const uint FAR_FIELD_BAKED_TRIANGLE_COUNTER = FAR_FIELD_COUNTER_BASE + 3u;"));
                 Assert.That(common, Does.Contain("const uint FAR_FIELD_OCCUPIED_VOXEL_WRITE_COUNTER = FAR_FIELD_COUNTER_BASE + 4u;"));
+                Assert.That(common, Does.Contain("const uint FAR_FIELD_STEP_BUCKET_4_COUNTER = FAR_FIELD_COUNTER_BASE + 9u;"));
                 Assert.That(simpleTrace, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_RAY_COUNTER, 1u);"));
                 Assert.That(simpleTrace, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_HIT_COUNTER, 1u);"));
                 Assert.That(simpleTrace, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_STEP_EXHAUSTED_COUNTER, 1u);"));
+                Assert.That(simpleTrace, Does.Contain("farFieldOnlyRing = volume.spacing >= 15.999;"));
+                Assert.That(simpleTrace, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, stepBucket, 1u);"));
+                Assert.That(jumpFlood, Does.Contain("FARFIELD_JUMP_FLOOD_MODE_PROPAGATE"));
+                Assert.That(jumpFlood, Does.Contain("WritePackedDistance(dispatchIndex, distance0, distance1);"));
+                Assert.That(jumpFlood, Does.Contain("WriteStorageFloat(pc.ParamsBufferIndex, 23u, 1.0);"));
                 Assert.That(voxelize, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_BAKED_TRIANGLE_COUNTER, 1u);"));
                 Assert.That(voxelize, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_OCCUPIED_VOXEL_WRITE_COUNTER, 1u);"));
                 Assert.That(renderer, Does.Contain("public const int FarFieldCounterBase = DdgiTraceRingMismatchSampleBase + DdgiTraceRingMismatchSampleCount;"));
-                Assert.That(renderer, Does.Contain("public const int FarFieldCounterCount = 5;"));
+                Assert.That(renderer, Does.Contain("public const int FarFieldCounterCount = 10;"));
                 Assert.That(bakePass, Does.Contain("CurrentFrameIndex = sceneData.CurrentFrameIndex"));
                 Assert.That(bakePass, Does.Contain("private const uint VoxelizeModePublish = 2;"));
+                Assert.That(bakePass, Does.Contain("private const uint JumpFloodModePropagate = 1;"));
                 Assert.That(bakePass, Does.Contain("uint bakeVoxelBufferIndex = checked((uint)_manager.BakeVoxelBufferIndex);"));
+                Assert.That(bakePass, Does.Contain("BuildJumpFloodDistanceField(cmd, sceneData, resolution, bakeVoxelBufferIndex, voxelGroups);"));
                 Assert.That(bakePass, Does.Contain("Mode = VoxelizeModePublish"));
                 Assert.That(bakePass, Does.Contain("_manager.MarkBakePublished();"));
             });
@@ -272,8 +315,11 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(renderer, Does.Contain("_farFieldClipmapManager!.Upload(scene, camera.Position, _stagingRing, _currentCommandBuffer);"));
-                Assert.That(renderer, Does.Contain("_simpleDdgiVolumeManager?.Upload(scene, camera.Position, _stagingRing, _currentCommandBuffer, _currentFrame);"));
-                Assert.That(simpleManager, Does.Contain("public void Upload(Scene scene, Vector3 cameraPosition, StagingRing stagingRing, CommandBuffer commandBuffer, int frameIndex)"));
+                Assert.That(renderer, Does.Contain("SimpleDdgiDirtySignature simpleDdgiDirtySignature = CreateSimpleDdgiDirtySignature(scene, lightSnapshot, _ddgiEmissiveSourceRevision);"));
+                Assert.That(renderer, Does.Contain("simpleDdgiDirtySignature.Signature"));
+                Assert.That(renderer, Does.Contain("simpleDdgiDirtySignature.ReasonFlags"));
+                Assert.That(simpleManager, Does.Contain("ulong lightingSignature,"));
+                Assert.That(simpleManager, Does.Contain("uint dirtyReasonFlags"));
                 Assert.That(simpleManager, Does.Contain("ResolveSceneClampedOrigin(sceneBounds.Min, sceneBounds.Max, latticeSize, spacing, cameraPosition"));
                 Assert.That(simpleManager, Does.Contain("if (_recenteredThisFrame)"));
                 Assert.That(simpleManager, Does.Contain("PreserveScrolledAtlasData(commandBuffer);"));
@@ -296,8 +342,11 @@ namespace Njulf.Tests
                 Assert.That(simpleManager, Does.Contain("MathF.Floor(value / s) * s"));
                 Assert.That(farFieldManager, Does.Contain("public void Upload(Scene scene, Vector3 cameraPosition, StagingRing stagingRing, CommandBuffer commandBuffer)"));
                 Assert.That(farFieldManager, Does.Contain("public int BakeVoxelBufferIndex => _bakeVoxelBufferIndex;"));
+                Assert.That(farFieldManager, Does.Contain("public int DistanceBufferIndex => BindlessIndex.FarFieldClipmapDistanceBuffer;"));
+                Assert.That(farFieldManager, Does.Contain("Far Field Clipmap Distance Field R16"));
                 Assert.That(farFieldManager, Does.Contain("public void MarkBakePublished()"));
                 Assert.That(farFieldManager, Does.Contain("(_activeVoxelBufferIndex, _bakeVoxelBufferIndex) = (_bakeVoxelBufferIndex, _activeVoxelBufferIndex);"));
+                Assert.That(farFieldManager, Does.Contain("_distanceFieldValid = true;"));
                 Assert.That(farFieldManager, Does.Contain("ResolveSceneClampedOrigin(bounds.Min, bounds.Max, cubicExtent, voxelSize, cameraPosition"));
                 Assert.That(farFieldManager, Does.Contain("if (recentered)"));
                 Assert.That(farFieldManager, Does.Contain("_bakePending = true;"));
@@ -387,6 +436,109 @@ namespace Njulf.Tests
         private static float InvDirComponent(float value)
         {
             return Math.Abs(value) > 0.000001f ? 1.0f / value : 1.0e30f;
+        }
+
+        private static ushort[] BuildJumpFloodDistanceField(OccupancyGrid grid)
+        {
+            int count = grid.Resolution.X * grid.Resolution.Y * grid.Resolution.Z;
+            Vector3I?[] source = new Vector3I?[count];
+            Vector3I?[] dest = new Vector3I?[count];
+            for (int z = 0; z < grid.Resolution.Z; z++)
+            for (int y = 0; y < grid.Resolution.Y; y++)
+            for (int x = 0; x < grid.Resolution.X; x++)
+            {
+                int index = Linear(grid, x, y, z);
+                if (grid.Get(x, y, z))
+                    source[index] = dest[index] = new Vector3I(x, y, z);
+            }
+
+            for (int stride = HighestPowerOfTwoLessThanOrEqualTo(Math.Max(Math.Max(grid.Resolution.X, grid.Resolution.Y), grid.Resolution.Z)) >> 1; stride >= 1; stride >>= 1)
+            {
+                for (int z = 0; z < grid.Resolution.Z; z++)
+                for (int y = 0; y < grid.Resolution.Y; y++)
+                for (int x = 0; x < grid.Resolution.X; x++)
+                {
+                    Vector3I voxel = new(x, y, z);
+                    Vector3I? best = source[Linear(grid, x, y, z)];
+                    float bestDistance2 = SeedDistance2(voxel, best);
+                    for (int dz = -1; dz <= 1; dz++)
+                    for (int dy = -1; dy <= 1; dy++)
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        Vector3I neighbor = new(x + dx * stride, y + dy * stride, z + dz * stride);
+                        if (!grid.Inside(neighbor))
+                            continue;
+                        Vector3I? candidate = source[Linear(grid, neighbor.X, neighbor.Y, neighbor.Z)];
+                        float candidateDistance2 = SeedDistance2(voxel, candidate);
+                        if (candidateDistance2 < bestDistance2)
+                        {
+                            bestDistance2 = candidateDistance2;
+                            best = candidate;
+                        }
+                    }
+
+                    dest[Linear(grid, x, y, z)] = best;
+                }
+
+                (source, dest) = (dest, source);
+            }
+
+            ushort[] distances = new ushort[count];
+            for (int z = 0; z < grid.Resolution.Z; z++)
+            for (int y = 0; y < grid.Resolution.Y; y++)
+            for (int x = 0; x < grid.Resolution.X; x++)
+            {
+                Vector3I voxel = new(x, y, z);
+                Vector3I? seed = source[Linear(grid, x, y, z)];
+                distances[Linear(grid, x, y, z)] = seed.HasValue
+                    ? (ushort)Math.Clamp(MathF.Round(SeedBoxDistance(voxel, seed.Value) * 256.0f), 0.0f, 65535.0f)
+                    : ushort.MaxValue;
+            }
+
+            return distances;
+        }
+
+        private static float DecodeTraceDistance(OccupancyGrid grid, ushort[] distances, Vector3I voxel)
+        {
+            float distanceVoxels = distances[Linear(grid, voxel.X, voxel.Y, voxel.Z)] / 256.0f;
+            return distanceVoxels * grid.VoxelSize;
+        }
+
+        private static float AnalyticBoxDistance(Vector3I voxel, Vector3I boxMin, Vector3I boxMaxExclusive)
+        {
+            Vector3 p = new(voxel.X + 0.5f, voxel.Y + 0.5f, voxel.Z + 0.5f);
+            Vector3 min = new(boxMin.X, boxMin.Y, boxMin.Z);
+            Vector3 max = new(boxMaxExclusive.X, boxMaxExclusive.Y, boxMaxExclusive.Z);
+            Vector3 d = Vector3.Max(Vector3.Max(min - p, p - max), Vector3.Zero);
+            return d.Length();
+        }
+
+        private static float SeedDistance2(Vector3I voxel, Vector3I? seed)
+        {
+            if (!seed.HasValue)
+                return float.PositiveInfinity;
+            Vector3I s = seed.Value;
+            int dx = voxel.X - s.X;
+            int dy = voxel.Y - s.Y;
+            int dz = voxel.Z - s.Z;
+            return dx * dx + dy * dy + dz * dz;
+        }
+
+        private static float SeedBoxDistance(Vector3I voxel, Vector3I seed)
+        {
+            Vector3 d = Vector3.Abs(new Vector3(voxel.X - seed.X, voxel.Y - seed.Y, voxel.Z - seed.Z)) - new Vector3(0.5f);
+            return Vector3.Max(d, Vector3.Zero).Length();
+        }
+
+        private static int Linear(OccupancyGrid grid, int x, int y, int z) =>
+            x + y * grid.Resolution.X + z * grid.Resolution.X * grid.Resolution.Y;
+
+        private static int HighestPowerOfTwoLessThanOrEqualTo(int value)
+        {
+            int result = 1;
+            while ((result << 1) <= value)
+                result <<= 1;
+            return result;
         }
 
         private static Vector3I WorldToVoxel(OccupancyGrid grid, Vector3 worldPosition)
@@ -533,6 +685,8 @@ namespace Njulf.Tests
             {
                 return new Vector3I(left.X - right.X, left.Y - right.Y, left.Z - right.Z);
             }
+
+            public override string ToString() => $"({X}, {Y}, {Z})";
         }
     }
 }

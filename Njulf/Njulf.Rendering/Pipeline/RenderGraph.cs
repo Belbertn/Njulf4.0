@@ -327,9 +327,38 @@ namespace Njulf.Rendering.Pipeline
             bool useSecondaryCommandBuffers = false)
         {
             ResetBarrierPlanning(sceneData);
+            ExecuteSelected(
+                cmd,
+                frameIndex,
+                sceneData,
+                static _ => true,
+                timestamps,
+                commandBuffers,
+                useSecondaryCommandBuffers);
+        }
+
+        public void BeginSplitExecution(SceneRenderingData sceneData)
+        {
+            ResetBarrierPlanning(sceneData);
+        }
+
+        public void ExecuteSelected(
+            CommandBuffer cmd,
+            int frameIndex,
+            SceneRenderingData sceneData,
+            Func<string, bool> includePass,
+            GpuTimestampRecorder? timestamps = null,
+            CommandBufferManager? commandBuffers = null,
+            bool useSecondaryCommandBuffers = false)
+        {
+            if (includePass == null)
+                throw new ArgumentNullException(nameof(includePass));
 
             foreach (var pass in _passes)
             {
+                if (!includePass(pass.Name))
+                    continue;
+
                 if (!RenderFeatureIsolationPolicy.ShouldExecutePass(sceneData.ActiveFeatureIsolation, pass.Name))
                 {
                     SetPassRecordMicroseconds(sceneData, pass.Name, 0);

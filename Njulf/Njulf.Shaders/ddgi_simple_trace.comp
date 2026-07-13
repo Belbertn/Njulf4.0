@@ -63,6 +63,10 @@ void main()
     uint updateProbeOffset = globalRay / params.raysPerProbe;
     uint rayIndex = globalRay - updateProbeOffset * params.raysPerProbe;
     SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, updateProbeOffset);
+    uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
+    if (rayIndex >= activeRayCount)
+        return;
+
     uint probeIndex = update.probeIndex;
     if (probeIndex >= params.probeCount)
         return;
@@ -72,21 +76,25 @@ void main()
     if (!ResolveSimpleDdgiProbeVolume(probeIndex, params, volume, localProbeIndex))
         return;
     vec3 probePosition = SimpleDdgiProbeRelocatedPosition(probeIndex, volume, localProbeIndex);
-    vec3 direction = SimpleDdgiFibonacciDirection(rayIndex, params.raysPerProbe, params.rayRotation);
+    vec3 direction = SimpleDdgiFibonacciDirection(rayIndex, activeRayCount, params.rayRotation);
     float maxDistance = max(volume.spacing * float(max(max(volume.gridCount.x, volume.gridCount.y), volume.gridCount.z)), volume.spacing);
     vec3 radiance = SampleDdgiEnvironmentMissRadianceWithFallback(direction, params.environmentRadiance);
     float hitDistance = maxDistance;
     float hitKind = 0.0;
+    bool farFieldOnlyRing = volume.spacing >= 15.999;
+    float farFieldStartDistance = farFieldOnlyRing ? 0.0 : params.farFieldStartDistance;
+    bool attemptedFarField = false;
 
     if (((pc.Flags & SIMPLE_DDGI_FLAG_FAR_FIELD_ENABLED) != 0u) &&
-        (((pc.Flags & SIMPLE_DDGI_FLAG_FAR_FIELD_FORCE_ALL) != 0u) || maxDistance > params.farFieldStartDistance))
+        (((pc.Flags & SIMPLE_DDGI_FLAG_FAR_FIELD_FORCE_ALL) != 0u) || farFieldOnlyRing || maxDistance > farFieldStartDistance))
     {
+        attemptedFarField = true;
         AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_RAY_COUNTER, 1u);
         vec3 farNormal;
         vec3 farAlbedo;
         bool farStepExhausted;
         uint farVisitedSteps;
-        if (TraceFarFieldClipmapDetailed(probePosition, direction, params.farFieldStartDistance, maxDistance, hitDistance, farNormal, farAlbedo, farStepExhausted, farVisitedSteps))
+        if (TraceFarFieldClipmapDetailed(probePosition, direction, farFieldStartDistance, maxDistance, hitDistance, farNormal, farAlbedo, farStepExhausted, farVisitedSteps))
         {
             AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_HIT_COUNTER, 1u);
             AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_FAR_FIELD_HIT_COUNTER, 1u);
@@ -103,9 +111,20 @@ void main()
 
         if (hitKind < 0.5)
             AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_FAR_FIELD_MISS_COUNTER, 1u);
+
+        uint stepBucket = farVisitedSteps <= 4u
+            ? FAR_FIELD_STEP_BUCKET_0_COUNTER
+            : (farVisitedSteps <= 8u
+                ? FAR_FIELD_STEP_BUCKET_1_COUNTER
+                : (farVisitedSteps <= 16u
+                    ? FAR_FIELD_STEP_BUCKET_2_COUNTER
+                    : (farVisitedSteps <= 32u
+                        ? FAR_FIELD_STEP_BUCKET_3_COUNTER
+                        : FAR_FIELD_STEP_BUCKET_4_COUNTER)));
+        AddRendererDiagnostic(pc.CurrentFrameIndex, stepBucket, 1u);
     }
 
-    if (hitKind < 0.5)
+    if (hitKind < 0.5 && !(farFieldOnlyRing && attemptedFarField))
     {
         rayQueryEXT query;
         rayQueryInitializeEXT(query, SceneTlas, gl_RayFlagsOpaqueEXT, 0xff, probePosition, 0.02, direction, maxDistance);

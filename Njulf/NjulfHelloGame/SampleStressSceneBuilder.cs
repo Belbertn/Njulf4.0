@@ -32,6 +32,7 @@ internal sealed class SampleStressSceneBuilder
     private readonly List<FoliagePatch> _foliagePatches = new();
     private readonly List<FoliagePrototype> _foliagePrototypes = new();
     private readonly List<GlobalIlluminationProbeVolume> _giProbeVolumes = new();
+    private readonly List<ParticleEffectInstance> _particleEffects = new();
     private readonly List<IUpdateable> _updateables = new();
     private readonly List<RenderObject> _hiddenRenderObjects = new();
     private readonly FoliageManager _foliageManager = new();
@@ -78,7 +79,9 @@ internal sealed class SampleStressSceneBuilder
             SamplePerformanceScenario.GiSponzaRightWallStationary => ValidationSummary(
                 SamplePerformanceScenario.GiSponzaRightWallStationary,
                 "Sponza Plaza right-wall fixed-camera GI baseline"),
+            SamplePerformanceScenario.GiSimpleDdgiFurnace => BuildGiSimpleDdgiFurnace(),
             SamplePerformanceScenario.GiCornellRoom => BuildGiCornellRoom(),
+            SamplePerformanceScenario.GiQualityInterior => BuildGiQualityInterior(),
             SamplePerformanceScenario.GiThinWallLeakTest => BuildGiThinWallLeakTest(),
             SamplePerformanceScenario.GiMovingPointLight => BuildGiMovingPointLight(),
             SamplePerformanceScenario.GiMovingRigidObject => BuildGiMovingRigidObject(),
@@ -88,6 +91,7 @@ internal sealed class SampleStressSceneBuilder
             SamplePerformanceScenario.GiLocalVolumeStreaming => BuildGiLocalVolumeStreaming(),
             SamplePerformanceScenario.GiFastTraversalTeleport => BuildGiFastTraversalTeleport(),
             SamplePerformanceScenario.GiVerticalityRings => BuildGiVerticalityRings(),
+            SamplePerformanceScenario.GiInstancedCityStress => BuildGiInstancedCityStress(),
             SamplePerformanceScenario.UploadBurst => BuildUploadBurst(),
             SamplePerformanceScenario.CombinedWorstCase => BuildCombinedWorstCase(),
             _ => new SamplePerformanceScenarioSummary(SamplePerformanceScenario.Normal, 0, _lightManager.LightCount, 0, 0, 0, "Normal sample scene")
@@ -691,6 +695,114 @@ internal sealed class SampleStressSceneBuilder
         return ValidationSummary(SamplePerformanceScenario.GiCornellRoom, "Cornell-style colored-wall bounce room");
     }
 
+    private SamplePerformanceScenarioSummary BuildGiSimpleDdgiFurnace()
+    {
+        HideBaseRenderObjects();
+        _lightManager.ClearLights();
+
+        const float albedo = 0.5f;
+        const float emittedRadiance = 0.25f;
+        MaterialHandle furnaceMaterial = RegisterValidationMaterial(
+            new CoreVector3(albedo, albedo, albedo),
+            roughness: 0.95f,
+            emissive: new CoreVector3(emittedRadiance, emittedRadiance, emittedRadiance));
+        AddValidationRoom(
+            "GI.SimpleDdgiFurnace",
+            centerZ: -5.5f,
+            width: 5.0f,
+            height: 3.5f,
+            depth: 5.0f,
+            furnaceMaterial,
+            furnaceMaterial,
+            furnaceMaterial,
+            includeFrontWall: true);
+
+        return ValidationSummary(
+            SamplePerformanceScenario.GiSimpleDdgiFurnace,
+            "Closed uniform-emissive diffuse furnace for Simple DDGI energy conservation");
+    }
+
+    private SamplePerformanceScenarioSummary BuildGiQualityInterior()
+    {
+        BuildGiCornellRoom(includePointLight: true);
+
+        MaterialHandle glassMaterial = RegisterValidationTransparentMaterial(
+            new CoreVector3(0.55f, 0.78f, 0.95f),
+            roughness: 0.18f,
+            alpha: 0.34f);
+        MaterialHandle glossyMaterial = RegisterValidationMaterial(
+            new CoreVector3(0.46f, 0.49f, 0.52f),
+            roughness: 0.68f);
+        MaterialHandle exteriorMarker = RegisterValidationLightMarkerMaterial(
+            new CoreVector3(1.0f, 0.92f, 0.68f),
+            roughness: 0.25f,
+            emissive: new CoreVector3(4.0f, 3.0f, 1.4f));
+
+        AddValidationWall(
+            "GI.QualityInterior.GlassPane.Center",
+            glassMaterial,
+            new CoreVector3(0.0f, 1.55f, -4.05f),
+            CoreMatrix4x4.Identity,
+            new CoreVector3(1.45f, 1.7f, 1.0f));
+        AddValidationWall(
+            "GI.QualityInterior.GlassPane.Side",
+            glassMaterial,
+            new CoreVector3(1.95f, 1.35f, -5.25f),
+            CoreMatrix4x4.CreateRotationY(-MathF.PI * 0.5f),
+            new CoreVector3(1.35f, 1.35f, 1.0f));
+        AddValidationBox(
+            "GI.QualityInterior.RoughSpecularBlock",
+            glossyMaterial,
+            new CoreVector3(0.55f, 0.38f, -6.65f),
+            new CoreVector3(0.9f, 0.76f, 0.9f),
+            rotationY: -0.22f);
+        AddValidationBillboard(
+            "GI.QualityInterior.ExteriorSunPatch",
+            exteriorMarker,
+            new CoreVector3(-0.95f, 2.45f, -2.35f),
+            CoreMatrix4x4.CreateRotationX(MathF.PI * 0.5f),
+            size: 1.1f);
+
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Directional,
+            Direction = System.Numerics.Vector3.Normalize(new System.Numerics.Vector3(0.35f, -0.68f, -0.64f)),
+            Color = new System.Numerics.Vector3(1.0f, 0.92f, 0.78f),
+            Intensity = 3.8f,
+            CastsShadows = true,
+            ShadowStrength = 0.82f,
+            ShadowPriority = 9
+        });
+
+        foreach (ParticleEffectInstance effect in SampleVfxEffects.Configure(_scene))
+        {
+            effect.WorldMatrix *= CoreMatrix4x4.CreateTranslation(new CoreVector3(0.0f, 0.0f, -5.5f));
+            _particleEffects.Add(effect);
+        }
+
+        var probe = new ReflectionProbe
+        {
+            Name = "GI.QualityInterior.ReflectionProbe",
+            Position = new CoreVector3(0.0f, 1.65f, -5.4f),
+            BoxExtents = new CoreVector3(3.3f, 2.2f, 3.2f),
+            BlendDistance = 0.65f,
+            Intensity = 1.0f,
+            Priority = 20
+        };
+        _scene.Add(probe);
+        _probes.Add(probe);
+        AddValidationProbeVolume("GI.QualityInterior.DDGI", new CoreVector3(-3.25f, -0.15f, -8.75f), new CoreVector3(6.5f, 4.4f, 6.5f), 9, 5, 9);
+
+        return new SamplePerformanceScenarioSummary(
+            SamplePerformanceScenario.GiQualityInterior,
+            _objects.Count,
+            _lightManager.LightCount,
+            0,
+            2,
+            _probes.Count,
+            "Interior GI quality fixture with transparent panes, fog/particles, rough-specular fallback, and reflection probe recapture coverage");
+    }
+
     private SamplePerformanceScenarioSummary BuildGiThinWallLeakTest()
     {
         HideBaseRenderObjects();
@@ -780,6 +892,79 @@ internal sealed class SampleStressSceneBuilder
         });
 
         return ValidationSummary(SamplePerformanceScenario.GiVerticalityRings, "Tall tower and distant large occluders for rings-only DDGI vertical coverage");
+    }
+
+    private SamplePerformanceScenarioSummary BuildGiInstancedCityStress()
+    {
+        HideBaseRenderObjects();
+        _lightManager.ClearLights();
+
+        MaterialHandle groundMaterial = RegisterValidationMaterial(new CoreVector3(0.36f, 0.39f, 0.38f), roughness: 0.92f);
+        MaterialHandle concreteMaterial = RegisterValidationMaterial(new CoreVector3(0.55f, 0.56f, 0.58f), roughness: 0.86f);
+        MaterialHandle brickMaterial = RegisterValidationMaterial(new CoreVector3(0.50f, 0.30f, 0.24f), roughness: 0.88f);
+        MaterialHandle glassMaterial = RegisterValidationMaterial(new CoreVector3(0.24f, 0.34f, 0.42f), roughness: 0.42f);
+        MaterialHandle warmMarkerMaterial = RegisterValidationLightMarkerMaterial(
+            new CoreVector3(1.0f, 0.72f, 0.42f),
+            roughness: 0.24f,
+            emissive: new CoreVector3(1.6f, 0.7f, 0.25f));
+
+        AddObject(
+            GetGroundPlaneMesh(),
+            groundMaterial,
+            "GI.CityStress.Ground",
+            CoreMatrix4x4.CreateScale(new CoreVector3(48.0f, 1.0f, 72.0f)));
+
+        MaterialHandle[] materials = [concreteMaterial, brickMaterial, glassMaterial];
+        int objectIndex = 0;
+        for (int block = 0; block < 10; block++)
+        {
+            float blockX = (block % 5 - 2) * 18.0f;
+            float blockZ = -24.0f - (block / 5) * 24.0f;
+            for (int building = 0; building < 6; building++)
+            {
+                float localX = (building % 3 - 1) * 4.8f;
+                float localZ = (building / 3 - 0.5f) * 7.0f;
+                float height = 5.0f + ((block * 3 + building * 5) % 9) * 1.75f;
+                float width = 2.4f + (building % 2) * 1.1f;
+                float depth = 3.0f + ((block + building) % 3) * 0.8f;
+                AddValidationSolidBox(
+                    $"GI.CityStress.Building.{objectIndex++}",
+                    materials[(block + building) % materials.Length],
+                    new CoreVector3(blockX + localX, height * 0.5f, blockZ + localZ),
+                    new CoreVector3(width, height, depth));
+            }
+        }
+
+        AddValidationBillboard(
+            "GI.CityStress.WarmMarker",
+            warmMarkerMaterial,
+            new CoreVector3(-18.0f, 14.0f, -22.0f),
+            CoreMatrix4x4.CreateRotationX(MathF.PI * 0.5f),
+            size: 2.4f);
+
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Directional,
+            Direction = new System.Numerics.Vector3(0.42f, -0.78f, 0.46f),
+            Color = new System.Numerics.Vector3(1.0f, 0.92f, 0.80f),
+            Intensity = 3.2f,
+            CastsShadows = true,
+            ShadowStrength = 0.82f,
+            ShadowPriority = 9
+        });
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(-18.0f, 14.0f, -22.0f),
+            Color = new System.Numerics.Vector3(1.0f, 0.68f, 0.38f),
+            Intensity = 42.0f,
+            Range = 36.0f,
+            CastsShadows = true,
+            ShadowStrength = 0.5f,
+            ShadowPriority = 7
+        });
+
+        return ValidationSummary(SamplePerformanceScenario.GiInstancedCityStress, "Instanced city stress variant with 10 repeated TLAS building blocks for far-field scalability");
     }
 
     private SamplePerformanceScenarioSummary BuildGiMovingPointLight()
@@ -1282,6 +1467,25 @@ internal sealed class SampleStressSceneBuilder
         return _materialManager.RegisterMaterial(material);
     }
 
+    private MaterialHandle RegisterValidationTransparentMaterial(CoreVector3 albedo, float roughness, float alpha)
+    {
+        GPUMaterialData material = CreateMaterial(997, alpha: Math.Clamp(alpha, 0.05f, 0.95f));
+        material.Albedo = new CoreVector4(albedo, Math.Clamp(alpha, 0.05f, 0.95f));
+        material.MetallicRoughnessAO = new CoreVector4(0.0f, Math.Clamp(roughness, 0.04f, 1.0f), 1.0f, 0.0f);
+        material.NormalScaleBias = new CoreVector4(
+            material.NormalScaleBias.X,
+            MaterialRenderMode.Blend.ToGpuAlphaModeCode(),
+            material.NormalScaleBias.Z,
+            1.0f);
+        return _materialManager.RegisterMaterial(
+            material,
+            new MaterialRenderMetadata
+            {
+                BlendMode = MaterialBlendMode.AlphaBlend,
+                SurfaceFlags = MaterialSurfaceFlags.DoubleSided | MaterialSurfaceFlags.ReceivesShadows
+            });
+    }
+
     private MaterialHandle RegisterValidationLightMarkerMaterial(CoreVector3 albedo, float roughness, CoreVector3 emissive)
     {
         GPUMaterialData material = CreateMaterial(997, alpha: 1.0f);
@@ -1334,6 +1538,8 @@ internal sealed class SampleStressSceneBuilder
             _scene.Remove(prototype);
         foreach (GlobalIlluminationProbeVolume volume in _giProbeVolumes)
             _scene.Remove(volume);
+        foreach (ParticleEffectInstance effect in _particleEffects)
+            _scene.Remove(effect);
         foreach (IUpdateable updateable in _updateables)
             _scene.Remove(updateable);
 
@@ -1343,6 +1549,7 @@ internal sealed class SampleStressSceneBuilder
         _foliagePatches.Clear();
         _foliagePrototypes.Clear();
         _giProbeVolumes.Clear();
+        _particleEffects.Clear();
         _updateables.Clear();
 
         foreach (RenderObject renderObject in _hiddenRenderObjects)

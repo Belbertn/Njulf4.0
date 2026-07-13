@@ -95,6 +95,8 @@ namespace Njulf.Rendering.Pipeline
         private const uint EnabledFlag = 1u << 0;
         private const uint FarFieldEnabledFlag = 1u << 1;
         private const uint FarFieldForceAllFlag = 1u << 2;
+        private const uint SharedMemoryBlendEnabledFlag = 1u << 3;
+        private const uint ClassificationSchedulingEnabledFlag = 1u << 4;
 
         private readonly string _shaderName;
         private readonly RenderSettings _settings;
@@ -193,7 +195,7 @@ namespace Njulf.Rendering.Pipeline
                 &pushConstants);
 
             _context.Api.CmdDispatch(cmd, CalculateGroupCount(sceneData), 1, 1);
-            InsertWriteBarrier(cmd);
+            InsertWriteBarrier(cmd, sceneData.DdgiAsyncComputeEnabled != 0);
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
@@ -249,6 +251,10 @@ namespace Njulf.Rendering.Pipeline
                 flags |= FarFieldEnabledFlag;
             if (gi.FarFieldForceAll)
                 flags |= FarFieldForceAllFlag;
+            if (gi.SimpleDdgiSharedMemoryBlendEnabled)
+                flags |= SharedMemoryBlendEnabledFlag;
+            if (gi.SimpleDdgiClassificationSchedulingEnabled)
+                flags |= ClassificationSchedulingEnabledFlag;
 
             return new GPUSimpleDdgiPushConstants
             {
@@ -433,15 +439,21 @@ namespace Njulf.Rendering.Pipeline
             _boundTlas = tlas;
         }
 
-        private void InsertWriteBarrier(CommandBuffer cmd)
+        private void InsertWriteBarrier(CommandBuffer cmd, bool asyncComputeQueue)
         {
+            PipelineStageFlags2 destinationStage = asyncComputeQueue
+                ? PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TransferBit
+                : BarrierDestinationStage;
+            AccessFlags2 destinationAccess = asyncComputeQueue
+                ? AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit | AccessFlags2.TransferReadBit
+                : BarrierDestinationAccess;
             var memoryBarrier = new MemoryBarrier2
             {
                 SType = StructureType.MemoryBarrier2,
                 SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
                 SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
-                DstStageMask = BarrierDestinationStage,
-                DstAccessMask = BarrierDestinationAccess
+                DstStageMask = destinationStage,
+                DstAccessMask = destinationAccess
             };
             var dependencyInfo = new DependencyInfo
             {

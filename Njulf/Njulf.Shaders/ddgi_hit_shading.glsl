@@ -350,22 +350,30 @@ vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(vec3 worldPosition, vec3 n
     if (pc.EmissiveSourceCount == 0u)
         return vec3(0.0);
 
-    GPUDdgiEmissiveSource source = ReadDdgiEmissiveSource(0u);
-    vec3 toSource = source.CenterRadius.xyz - worldPosition;
-    float distanceToSource = length(toSource);
-    float radius = max(source.CenterRadius.w, 0.001);
-    if (distanceToSource >= radius)
-        return vec3(0.0);
+    const uint MaxEvaluatedEmissiveSources = 64u;
+    uint sourceCount = min(pc.EmissiveSourceCount, MaxEvaluatedEmissiveSources);
+    vec3 diffuseRadiance = vec3(0.0);
+    for (uint sourceIndex = 0u; sourceIndex < sourceCount; sourceIndex++)
+    {
+        GPUDdgiEmissiveSource source = ReadDdgiEmissiveSource(sourceIndex);
+        vec3 toSource = source.CenterRadius.xyz - worldPosition;
+        float distanceToSource = length(toSource);
+        float radius = max(source.CenterRadius.w, 0.001);
+        if (distanceToSource >= radius)
+            continue;
 
-    vec3 lightDirection = toSource / max(distanceToSource, 0.0001);
-    float nDotL = max(dot(normal, lightDirection), 0.0);
-    if (nDotL <= 0.0)
-        return vec3(0.0);
+        vec3 lightDirection = toSource / max(distanceToSource, 0.0001);
+        float nDotL = max(dot(normal, lightDirection), 0.0);
+        if (nDotL <= 0.0)
+            continue;
 
-    float radiusAttenuation = 1.0 - distanceToSource / radius;
-    radiusAttenuation *= radiusAttenuation;
-    vec3 sourceRadiance = max(source.RadianceImportance.rgb, vec3(0.0));
-    return sourceRadiance * nDotL * radiusAttenuation * (albedo / PI);
+        float radiusAttenuation = 1.0 - distanceToSource / radius;
+        radiusAttenuation *= radiusAttenuation;
+        vec3 sourceRadiance = max(source.RadianceImportance.rgb, vec3(0.0));
+        diffuseRadiance += sourceRadiance * nDotL * radiusAttenuation * (albedo / PI);
+    }
+
+    return diffuseRadiance;
 }
 
 vec3 EvaluateDirectDiffuseRadianceAtHit(vec3 worldPosition, vec3 normal, vec3 albedo, out vec3 directNoShadowDiffuse)

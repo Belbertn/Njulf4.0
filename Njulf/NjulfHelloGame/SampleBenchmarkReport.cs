@@ -26,6 +26,8 @@ public sealed record SampleBenchmarkReport(
     RendererDiagnostics LastDiagnostics)
 {
     public SampleDdgiProductionGateReport? DdgiProductionGate { get; init; }
+    public IReadOnlyList<SampleGiAccuracyOracleResult> AccuracyOracleResults { get; init; } =
+        Array.Empty<SampleGiAccuracyOracleResult>();
 }
 
 public sealed record SampleBenchmarkTimingStats(

@@ -26,9 +26,9 @@ namespace Njulf.Rendering.Resources
         public const int DdgiTraceRingMismatchSampleBase = DdgiBlendEnergyCounterBase + DdgiBlendEnergyCounterCount;
         public const int DdgiTraceRingMismatchSampleCount = 20;
         public const int FarFieldCounterBase = DdgiTraceRingMismatchSampleBase + DdgiTraceRingMismatchSampleCount;
-        public const int FarFieldCounterCount = 5;
+        public const int FarFieldCounterCount = 10;
         public const int DdgiInvestigationCounterBase = FarFieldCounterBase + FarFieldCounterCount;
-        public const int DdgiInvestigationCounterCount = 30;
+        public const int DdgiInvestigationCounterCount = 36;
         public const int CounterCount = MeshletCounterCount + DdgiForwardEstimateCounterCount + DdgiTraceEnergyCounterCount + DdgiTraceEarlyOutCounterCount + DdgiBlendEnergyCounterCount + DdgiTraceRingMismatchSampleCount + FarFieldCounterCount + DdgiInvestigationCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
@@ -110,6 +110,7 @@ namespace Njulf.Rendering.Resources
             uint traceRingMismatchCorrectedCount = counters[DdgiTraceRingMismatchSampleBase + 19];
             uint ddgiInvestigationSampleCount = counters[DdgiInvestigationCounterBase + 0];
             uint simpleVisibilitySampleCount = ddgiInvestigationSampleCount;
+            uint skyVisibilitySampleCount = counters[DdgiInvestigationCounterBase + 30];
             bool investigationValid = false;
             for (int i = 0; i < DdgiInvestigationCounterCount; i++)
             {
@@ -122,6 +123,7 @@ namespace Njulf.Rendering.Resources
 
             float invInvestigationSampleCount = ddgiInvestigationSampleCount > 0 ? 1.0f / ddgiInvestigationSampleCount : 0.0f;
             float invSimpleVisibilitySampleCount = simpleVisibilitySampleCount > 0 ? 1.0f / simpleVisibilitySampleCount : 0.0f;
+            float invSkyVisibilitySampleCount = skyVisibilitySampleCount > 0 ? 1.0f / skyVisibilitySampleCount : 0.0f;
             _lastCompletedDdgiInvestigationCounters[frameIndex] = investigationValid
                 ? new DdgiInvestigationCounters(
                     ReadbackValid: 1,
@@ -154,7 +156,18 @@ namespace Njulf.Rendering.Resources
                     SimpleTraceEmissiveHitCount: counters[DdgiInvestigationCounterBase + 26],
                     SimpleTraceFarFieldHitCount: counters[DdgiInvestigationCounterBase + 27],
                     SimpleTraceFarFieldMissCount: counters[DdgiInvestigationCounterBase + 28],
-                    SimpleTraceTlasUnavailableFrameCount: counters[DdgiInvestigationCounterBase + 29])
+                    SimpleTraceTlasUnavailableFrameCount: counters[DdgiInvestigationCounterBase + 29],
+                    SkyVisibilitySampleCount: skyVisibilitySampleCount,
+                    SkyVisibilityAverage: counters[DdgiInvestigationCounterBase + 31] / DdgiForwardEstimateWeightScale * invSkyVisibilitySampleCount,
+                    FarSunShadowSampleCount: counters[DdgiInvestigationCounterBase + 32],
+                    FarSunShadowOccludedCount: counters[DdgiInvestigationCounterBase + 33],
+                    RoughSpecularSampleCount: counters[DdgiInvestigationCounterBase + 34],
+                    RoughSpecularNonzeroCount: counters[DdgiInvestigationCounterBase + 35],
+                    FarFieldStepBucket0Count: counters[FarFieldCounterBase + 5],
+                    FarFieldStepBucket1Count: counters[FarFieldCounterBase + 6],
+                    FarFieldStepBucket2Count: counters[FarFieldCounterBase + 7],
+                    FarFieldStepBucket3Count: counters[FarFieldCounterBase + 8],
+                    FarFieldStepBucket4Count: counters[FarFieldCounterBase + 9])
                 : DdgiInvestigationCounters.Empty;
             if (sampleCount > 0 ||
                 visibilityMomentSampleCount > 0 ||

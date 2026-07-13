@@ -408,7 +408,9 @@ namespace Njulf.Rendering.Data
         DdgiFinalDiffuse = 40,
         DdgiConfidenceBypass = 41,
         FarFieldOccupancySlice = 42,
-        FarFieldTraceResult = 43
+        FarFieldTraceResult = 43,
+        FarFieldSkyVisibility = 44,
+        FarFieldSunShadow = 45
     }
 
     public enum AntiAliasingMode : uint
@@ -1476,7 +1478,13 @@ namespace Njulf.Rendering.Data
         private int _simpleDdgiRingGridSizeY = 12;
         private int _simpleDdgiRingGridSizeZ = 24;
         private int _simpleDdgiRaysPerProbe = 128;
+        private int _simpleDdgiMaintenanceRaysPerProbe = 32;
         private float _simpleDdgiHysteresis = 0.97f;
+        private float _simpleDdgiHysteresisChangeThreshold = 0.25f;
+        private float _simpleDdgiHysteresisStepThreshold = 0.80f;
+        private int _simpleDdgiLightingDirtyFrameCount = 30;
+        private int _simpleDdgiStableMaintenanceUpdateCount = 3;
+        private float _simpleDdgiStableMaintenanceEmaThreshold = 0.03f;
         private float _simpleDdgiNormalBias = 0.1f;
         private float _simpleDdgiViewBias = 0.3f;
         private int _simpleDdgiProbeUpdatesPerFrame = 2_048;
@@ -1520,6 +1528,18 @@ namespace Njulf.Rendering.Data
         public bool DdgiThinWallPolicyEnabled { get; set; } = true;
         public bool DdgiRoomSpacingScaledBiasEnabled { get; set; } = true;
         public bool DdgiSimpleEnabled { get; set; }
+        public bool SimpleDdgiSharedMemoryBlendEnabled { get; set; } = true;
+        public bool SimpleDdgiClassificationSchedulingEnabled { get; set; } = true;
+        public bool SimpleDdgiClassificationReadbackEnabled { get; set; } = true;
+        public bool SimpleDdgiAdaptiveHysteresisEnabled { get; set; } = true;
+        public bool SimpleDdgiLightingDirtyBoostEnabled { get; set; } = true;
+        public bool SimpleDdgiDynamicGeometryDirtyBoostEnabled { get; set; } = true;
+        public bool SimpleDdgiAdaptiveRaysEnabled { get; set; } = true;
+        public bool SimpleDdgiFogEnabled { get; set; } = true;
+        public bool SimpleDdgiParticlesEnabled { get; set; } = true;
+        public bool SimpleDdgiRoughSpecularEnabled { get; set; } = true;
+        public bool FarFieldSkyVisibilityEnabled { get; set; } = true;
+        public bool FarFieldSunShadowEnabled { get; set; } = true;
         public bool FarFieldClipmapEnabled { get; set; }
         public bool FarFieldForceAll { get; set; }
         public IList<SimpleDdgiAuthoredVolume> SimpleDdgiAuthoredVolumes { get; } = new List<SimpleDdgiAuthoredVolume>();
@@ -1572,10 +1592,46 @@ namespace Njulf.Rendering.Data
             set => _simpleDdgiRaysPerProbe = Clamp(value, 1, MaxSimpleDdgiRaysPerProbe);
         }
 
+        public int SimpleDdgiMaintenanceRaysPerProbe
+        {
+            get => Math.Min(_simpleDdgiMaintenanceRaysPerProbe, _simpleDdgiRaysPerProbe);
+            set => _simpleDdgiMaintenanceRaysPerProbe = Clamp(value, 1, MaxSimpleDdgiRaysPerProbe);
+        }
+
         public float SimpleDdgiHysteresis
         {
             get => _simpleDdgiHysteresis;
             set => _simpleDdgiHysteresis = Clamp(value, 0.0f, 0.995f);
+        }
+
+        public float SimpleDdgiHysteresisChangeThreshold
+        {
+            get => _simpleDdgiHysteresisChangeThreshold;
+            set => _simpleDdgiHysteresisChangeThreshold = Clamp(value, 0.001f, 4.0f);
+        }
+
+        public float SimpleDdgiHysteresisStepThreshold
+        {
+            get => Math.Max(_simpleDdgiHysteresisStepThreshold, _simpleDdgiHysteresisChangeThreshold);
+            set => _simpleDdgiHysteresisStepThreshold = Clamp(value, 0.001f, 8.0f);
+        }
+
+        public int SimpleDdgiLightingDirtyFrameCount
+        {
+            get => _simpleDdgiLightingDirtyFrameCount;
+            set => _simpleDdgiLightingDirtyFrameCount = Clamp(value, 0, 300);
+        }
+
+        public int SimpleDdgiStableMaintenanceUpdateCount
+        {
+            get => _simpleDdgiStableMaintenanceUpdateCount;
+            set => _simpleDdgiStableMaintenanceUpdateCount = Clamp(value, 1, 64);
+        }
+
+        public float SimpleDdgiStableMaintenanceEmaThreshold
+        {
+            get => _simpleDdgiStableMaintenanceEmaThreshold;
+            set => _simpleDdgiStableMaintenanceEmaThreshold = Clamp(value, 0.0f, 1.0f);
         }
 
         public float SimpleDdgiNormalBias
@@ -3090,6 +3146,16 @@ namespace Njulf.Rendering.Data
             public bool DdgiRoomSpacingScaledBiasEnabled { get; init; } = true;
             public bool DdgiSimpleEnabled { get; init; }
             public SimpleDdgiAuthoredVolume[] SimpleDdgiAuthoredVolumes { get; init; } = Array.Empty<SimpleDdgiAuthoredVolume>();
+            public bool SimpleDdgiSharedMemoryBlendEnabled { get; init; } = true;
+            public bool SimpleDdgiClassificationSchedulingEnabled { get; init; } = true;
+            public bool SimpleDdgiClassificationReadbackEnabled { get; init; } = true;
+            public bool SimpleDdgiAdaptiveHysteresisEnabled { get; init; } = true;
+            public bool SimpleDdgiLightingDirtyBoostEnabled { get; init; } = true;
+            public bool SimpleDdgiDynamicGeometryDirtyBoostEnabled { get; init; } = true;
+            public bool SimpleDdgiAdaptiveRaysEnabled { get; init; } = true;
+            public bool SimpleDdgiFogEnabled { get; init; } = true;
+            public bool SimpleDdgiParticlesEnabled { get; init; } = true;
+            public bool SimpleDdgiRoughSpecularEnabled { get; init; } = true;
             public float SimpleDdgiProbeSpacing { get; init; } = 1.25f;
             public int SimpleDdgiRingCount { get; init; } = 3;
             public float SimpleDdgiRingBaseSpacing { get; init; } = 1.0f;
@@ -3098,9 +3164,17 @@ namespace Njulf.Rendering.Data
             public int SimpleDdgiRingGridSizeY { get; init; } = 12;
             public int SimpleDdgiRingGridSizeZ { get; init; } = 24;
             public int SimpleDdgiRaysPerProbe { get; init; } = 128;
+            public int SimpleDdgiMaintenanceRaysPerProbe { get; init; } = 32;
             public float SimpleDdgiHysteresis { get; init; } = 0.97f;
+            public float SimpleDdgiHysteresisChangeThreshold { get; init; } = 0.25f;
+            public float SimpleDdgiHysteresisStepThreshold { get; init; } = 0.80f;
+            public int SimpleDdgiLightingDirtyFrameCount { get; init; } = 30;
+            public int SimpleDdgiStableMaintenanceUpdateCount { get; init; } = 3;
+            public float SimpleDdgiStableMaintenanceEmaThreshold { get; init; } = 0.03f;
             public int SimpleDdgiProbeUpdatesPerFrame { get; init; } = 2_048;
             public bool FarFieldClipmapEnabled { get; init; }
+            public bool FarFieldSkyVisibilityEnabled { get; init; } = true;
+            public bool FarFieldSunShadowEnabled { get; init; } = true;
             public int FarFieldClipmapResolution { get; init; } = 128;
             public float FarFieldStartDistance { get; init; } = 12.0f;
             public int FarFieldMaxTraceSteps { get; init; } = 256;
@@ -3208,6 +3282,16 @@ namespace Njulf.Rendering.Data
                     DdgiRoomSpacingScaledBiasEnabled = settings.DdgiRoomSpacingScaledBiasEnabled,
                     DdgiSimpleEnabled = settings.DdgiSimpleEnabled,
                     SimpleDdgiAuthoredVolumes = settings.SimpleDdgiAuthoredVolumes.Take(GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount).ToArray(),
+                    SimpleDdgiSharedMemoryBlendEnabled = settings.SimpleDdgiSharedMemoryBlendEnabled,
+                    SimpleDdgiClassificationSchedulingEnabled = settings.SimpleDdgiClassificationSchedulingEnabled,
+                    SimpleDdgiClassificationReadbackEnabled = settings.SimpleDdgiClassificationReadbackEnabled,
+                    SimpleDdgiAdaptiveHysteresisEnabled = settings.SimpleDdgiAdaptiveHysteresisEnabled,
+                    SimpleDdgiLightingDirtyBoostEnabled = settings.SimpleDdgiLightingDirtyBoostEnabled,
+                    SimpleDdgiDynamicGeometryDirtyBoostEnabled = settings.SimpleDdgiDynamicGeometryDirtyBoostEnabled,
+                    SimpleDdgiAdaptiveRaysEnabled = settings.SimpleDdgiAdaptiveRaysEnabled,
+                    SimpleDdgiFogEnabled = settings.SimpleDdgiFogEnabled,
+                    SimpleDdgiParticlesEnabled = settings.SimpleDdgiParticlesEnabled,
+                    SimpleDdgiRoughSpecularEnabled = settings.SimpleDdgiRoughSpecularEnabled,
                     SimpleDdgiProbeSpacing = settings.SimpleDdgiProbeSpacing,
                     SimpleDdgiRingCount = settings.SimpleDdgiRingCount,
                     SimpleDdgiRingBaseSpacing = settings.SimpleDdgiRingBaseSpacing,
@@ -3216,9 +3300,17 @@ namespace Njulf.Rendering.Data
                     SimpleDdgiRingGridSizeY = settings.SimpleDdgiRingGridSizeY,
                     SimpleDdgiRingGridSizeZ = settings.SimpleDdgiRingGridSizeZ,
                     SimpleDdgiRaysPerProbe = settings.SimpleDdgiRaysPerProbe,
+                    SimpleDdgiMaintenanceRaysPerProbe = settings.SimpleDdgiMaintenanceRaysPerProbe,
                     SimpleDdgiHysteresis = settings.SimpleDdgiHysteresis,
+                    SimpleDdgiHysteresisChangeThreshold = settings.SimpleDdgiHysteresisChangeThreshold,
+                    SimpleDdgiHysteresisStepThreshold = settings.SimpleDdgiHysteresisStepThreshold,
+                    SimpleDdgiLightingDirtyFrameCount = settings.SimpleDdgiLightingDirtyFrameCount,
+                    SimpleDdgiStableMaintenanceUpdateCount = settings.SimpleDdgiStableMaintenanceUpdateCount,
+                    SimpleDdgiStableMaintenanceEmaThreshold = settings.SimpleDdgiStableMaintenanceEmaThreshold,
                     SimpleDdgiProbeUpdatesPerFrame = settings.SimpleDdgiProbeUpdatesPerFrame,
                     FarFieldClipmapEnabled = settings.FarFieldClipmapEnabled,
+                    FarFieldSkyVisibilityEnabled = settings.FarFieldSkyVisibilityEnabled,
+                    FarFieldSunShadowEnabled = settings.FarFieldSunShadowEnabled,
                     FarFieldClipmapResolution = settings.FarFieldClipmapResolution,
                     FarFieldStartDistance = settings.FarFieldStartDistance,
                     FarFieldMaxTraceSteps = settings.FarFieldMaxTraceSteps,
@@ -3328,6 +3420,16 @@ namespace Njulf.Rendering.Data
                 settings.SimpleDdgiAuthoredVolumes.Clear();
                 foreach (SimpleDdgiAuthoredVolume authoredVolume in SimpleDdgiAuthoredVolumes.Take(GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount))
                     settings.SimpleDdgiAuthoredVolumes.Add(authoredVolume);
+                settings.SimpleDdgiSharedMemoryBlendEnabled = SimpleDdgiSharedMemoryBlendEnabled;
+                settings.SimpleDdgiClassificationSchedulingEnabled = SimpleDdgiClassificationSchedulingEnabled;
+                settings.SimpleDdgiClassificationReadbackEnabled = SimpleDdgiClassificationReadbackEnabled;
+                settings.SimpleDdgiAdaptiveHysteresisEnabled = SimpleDdgiAdaptiveHysteresisEnabled;
+                settings.SimpleDdgiLightingDirtyBoostEnabled = SimpleDdgiLightingDirtyBoostEnabled;
+                settings.SimpleDdgiDynamicGeometryDirtyBoostEnabled = SimpleDdgiDynamicGeometryDirtyBoostEnabled;
+                settings.SimpleDdgiAdaptiveRaysEnabled = SimpleDdgiAdaptiveRaysEnabled;
+                settings.SimpleDdgiFogEnabled = SimpleDdgiFogEnabled;
+                settings.SimpleDdgiParticlesEnabled = SimpleDdgiParticlesEnabled;
+                settings.SimpleDdgiRoughSpecularEnabled = SimpleDdgiRoughSpecularEnabled;
                 settings.SimpleDdgiProbeSpacing = SimpleDdgiProbeSpacing;
                 settings.SimpleDdgiRingCount = SimpleDdgiRingCount;
                 settings.SimpleDdgiRingBaseSpacing = SimpleDdgiRingBaseSpacing;
@@ -3336,9 +3438,17 @@ namespace Njulf.Rendering.Data
                 settings.SimpleDdgiRingGridSizeY = SimpleDdgiRingGridSizeY;
                 settings.SimpleDdgiRingGridSizeZ = SimpleDdgiRingGridSizeZ;
                 settings.SimpleDdgiRaysPerProbe = SimpleDdgiRaysPerProbe;
+                settings.SimpleDdgiMaintenanceRaysPerProbe = SimpleDdgiMaintenanceRaysPerProbe;
                 settings.SimpleDdgiHysteresis = SimpleDdgiHysteresis;
+                settings.SimpleDdgiHysteresisChangeThreshold = SimpleDdgiHysteresisChangeThreshold;
+                settings.SimpleDdgiHysteresisStepThreshold = SimpleDdgiHysteresisStepThreshold;
+                settings.SimpleDdgiLightingDirtyFrameCount = SimpleDdgiLightingDirtyFrameCount;
+                settings.SimpleDdgiStableMaintenanceUpdateCount = SimpleDdgiStableMaintenanceUpdateCount;
+                settings.SimpleDdgiStableMaintenanceEmaThreshold = SimpleDdgiStableMaintenanceEmaThreshold;
                 settings.SimpleDdgiProbeUpdatesPerFrame = SimpleDdgiProbeUpdatesPerFrame;
                 settings.FarFieldClipmapEnabled = FarFieldClipmapEnabled;
+                settings.FarFieldSkyVisibilityEnabled = FarFieldSkyVisibilityEnabled;
+                settings.FarFieldSunShadowEnabled = FarFieldSunShadowEnabled;
                 settings.FarFieldClipmapResolution = FarFieldClipmapResolution;
                 settings.FarFieldStartDistance = FarFieldStartDistance;
                 settings.FarFieldMaxTraceSteps = FarFieldMaxTraceSteps;

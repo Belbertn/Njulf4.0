@@ -129,6 +129,7 @@ internal sealed class HelloGame : Game
             SamplePerformanceScenarioSummary summary = _performanceScenarioRunner.Apply(startupScenario);
             SampleGlobalIlluminationValidation.ConfigureRenderSettings(renderer.Settings, startupScenario);
             SampleGlobalIlluminationValidation.ConfigureSchedulerMode(renderer.Settings, _smokeOptions.DdgiSchedulerModeOverride);
+            ApplySmokeRenderSettings(renderer);
             Console.WriteLine(
                 $"Applied startup scenario: {summary.Scenario} " +
                 $"objects={summary.ObjectCount}, lights={summary.LightCount}, materials={summary.MaterialCount}, notes={summary.Notes}");
@@ -171,6 +172,7 @@ internal sealed class HelloGame : Game
                 _performanceScenarioRunner.Apply(reloadScenario);
                 SampleGlobalIlluminationValidation.ConfigureRenderSettings(renderer.Settings, reloadScenario);
                 SampleGlobalIlluminationValidation.ConfigureSchedulerMode(renderer.Settings, _smokeOptions.DdgiSchedulerModeOverride);
+                ApplySmokeRenderSettings(renderer);
             }
         });
         _smokeRunner = new SampleLifecycleSmokeRunner(
@@ -230,6 +232,10 @@ internal sealed class HelloGame : Game
             renderer.Settings.SceneSubmission.ValidationCompareCpuGpuLists = true;
         if (_smokeOptions.EnableAsyncCompute)
             renderer.Settings.AsyncCompute.Enabled = true;
+        if (_smokeOptions.EnableFarFieldClipmap)
+            renderer.Settings.GlobalIllumination.FarFieldClipmapEnabled = true;
+        if (_smokeOptions.EnableFarFieldForceAll)
+            renderer.Settings.GlobalIllumination.FarFieldForceAll = true;
 
         SampleGlobalIlluminationValidation.ConfigureSchedulerMode(renderer.Settings, _smokeOptions.DdgiSchedulerModeOverride);
         renderer.Settings.Transparency.Mode = _smokeOptions.TransparencyMode;
@@ -674,6 +680,7 @@ internal sealed class HelloGame : Game
         {
             SamplePerformanceScenario.ForestFoliage => SamplePerformanceScenario.ForestFoliage,
             SamplePerformanceScenario.GiSponzaRightWallStationary => SamplePerformanceScenario.GiSponzaRightWallStationary,
+            SamplePerformanceScenario.GiQualityInterior => SamplePerformanceScenario.GiQualityInterior,
             _ => SamplePerformanceScenario.Normal
         };
     }
@@ -684,6 +691,7 @@ internal sealed class HelloGame : Game
         {
             SamplePerformanceScenario.ForestFoliage => ("forest-foliage", "Baseline forest foliage snapshot"),
             SamplePerformanceScenario.GiSponzaRightWallStationary => ("gi-sponza-right-wall-stationary", "Baseline Sponza right-wall GI snapshot"),
+            SamplePerformanceScenario.GiQualityInterior => ("gi-quality-interior", "Baseline GI quality interior snapshot"),
             _ => ("normal-sponza-interior", "Baseline normal Sponza/interior snapshot")
         };
     }

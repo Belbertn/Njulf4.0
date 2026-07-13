@@ -51,9 +51,12 @@ namespace Njulf.Rendering.Core
         
         private uint _graphicsQueueFamilyIndex;
         private uint _transferQueueFamilyIndex;
+        private uint _computeQueueFamilyIndex;
         private Queue _graphicsQueue;
         private Queue _transferQueue;
+        private Queue _computeQueue;
         private bool _hasDedicatedTransferQueue;
+        private bool _hasDedicatedComputeQueue;
         private float _timestampPeriodNanoseconds;
         private bool _timestampComputeAndGraphicsSupported;
         private bool _memoryBudgetExtensionEnabled;
@@ -83,9 +86,12 @@ namespace Njulf.Rendering.Core
         public GpuAllocator.Allocator* Allocator => _allocator;
         public uint GraphicsQueueFamilyIndex => _graphicsQueueFamilyIndex;
         public uint TransferQueueFamilyIndex => _transferQueueFamilyIndex;
+        public uint ComputeQueueFamilyIndex => _computeQueueFamilyIndex;
         public Queue GraphicsQueue => _graphicsQueue;
         public Queue TransferQueue => _transferQueue;
+        public Queue ComputeQueue => _computeQueue;
         public bool HasDedicatedTransferQueue => _hasDedicatedTransferQueue;
+        public bool HasDedicatedComputeQueue => _hasDedicatedComputeQueue;
         public float TimestampPeriodNanoseconds => _timestampPeriodNanoseconds;
         public bool TimestampComputeAndGraphicsSupported => _timestampComputeAndGraphicsSupported;
         public bool MemoryBudgetExtensionEnabled => _memoryBudgetExtensionEnabled;
@@ -302,6 +308,7 @@ namespace Njulf.Rendering.Core
             DeviceRequirementReport? bestRejectedDevice = null;
             uint graphicsFamily = uint.MaxValue;
             uint transferFamily = uint.MaxValue;
+            uint computeFamily = uint.MaxValue;
             bool memoryBudgetExtensionEnabled = false;
             bool imageCompressionControlEnabled = false;
             bool rayQuerySupported = false;
@@ -345,27 +352,44 @@ namespace Njulf.Rendering.Core
                 
                 uint graphicsIndex = uint.MaxValue;
                 uint transferIndex = uint.MaxValue;
+                uint computeIndex = uint.MaxValue;
                 
                 for (uint i = 0; i < queueFamilyCount; i++)
                 {
-                    if ((queueFamilies[i].QueueFlags & QueueFlags.GraphicsBit) != 0)
+                    QueueFlags flags = queueFamilies[i].QueueFlags;
+                    if ((flags & QueueFlags.GraphicsBit) != 0)
                     {
                         if (graphicsIndex == uint.MaxValue)
                             graphicsIndex = i;
-                        if ((queueFamilies[i].QueueFlags & QueueFlags.TransferBit) != 0 &&
+                        if ((flags & QueueFlags.TransferBit) != 0 &&
                             transferIndex == uint.MaxValue)
                             transferIndex = i;
                     }
-                    else if ((queueFamilies[i].QueueFlags & QueueFlags.TransferBit) != 0 &&
+                    else if ((flags & QueueFlags.TransferBit) != 0 &&
                              transferIndex == uint.MaxValue)
                     {
                         transferIndex = i;
+                    }
+
+                    if ((flags & QueueFlags.ComputeBit) != 0)
+                    {
+                        bool dedicatedCompute = (flags & QueueFlags.GraphicsBit) == 0;
+                        if (dedicatedCompute)
+                        {
+                            computeIndex = i;
+                        }
+                        else if (computeIndex == uint.MaxValue)
+                        {
+                            computeIndex = i;
+                        }
                     }
                 }
                 
                 var missingQueues = new List<string>();
                 if (graphicsIndex == uint.MaxValue)
                     missingQueues.Add("graphics");
+                if (computeIndex == uint.MaxValue)
+                    missingQueues.Add("compute");
                 if (_requirementOverride.MissingQueueFamilies.Count > 0)
                     missingQueues.AddRange(_requirementOverride.MissingQueueFamilies);
 
@@ -388,9 +412,15 @@ namespace Njulf.Rendering.Core
                 
                 bool candidateHasDedicatedTransferQueue = transferIndex != graphicsIndex;
                 bool selectedHasDedicatedTransferQueue = transferFamily != graphicsFamily;
+                bool candidateHasDedicatedComputeQueue = computeIndex != graphicsIndex;
+                bool selectedHasDedicatedComputeQueue = computeFamily != graphicsFamily;
                 bool shouldSelectDevice = selectedDevice == null ||
                     (requirements.RayQuerySupported && !rayQuerySupported) ||
                     (requirements.RayQuerySupported == rayQuerySupported &&
+                     candidateHasDedicatedComputeQueue &&
+                     !selectedHasDedicatedComputeQueue) ||
+                    (requirements.RayQuerySupported == rayQuerySupported &&
+                     candidateHasDedicatedComputeQueue == selectedHasDedicatedComputeQueue &&
                      candidateHasDedicatedTransferQueue &&
                      !selectedHasDedicatedTransferQueue);
 
@@ -399,6 +429,7 @@ namespace Njulf.Rendering.Core
                     selectedDevice = device;
                     graphicsFamily = graphicsIndex;
                     transferFamily = transferIndex;
+                    computeFamily = computeIndex;
                     memoryBudgetExtensionEnabled = requirements.MemoryBudgetExtensionAvailable;
                     imageCompressionControlEnabled = requirements.ImageCompressionControlAvailable;
                     rayQuerySupported = requirements.RayQuerySupported;
@@ -420,7 +451,9 @@ namespace Njulf.Rendering.Core
             _physicalDevice = selectedDevice.Value;
             _graphicsQueueFamilyIndex = graphicsFamily;
             _transferQueueFamilyIndex = transferFamily;
+            _computeQueueFamilyIndex = computeFamily;
             _hasDedicatedTransferQueue = graphicsFamily != transferFamily;
+            _hasDedicatedComputeQueue = graphicsFamily != computeFamily;
             _memoryBudgetExtensionEnabled = memoryBudgetExtensionEnabled;
             _imageCompressionControlEnabled = imageCompressionControlEnabled;
             _rayQuerySupported = rayQuerySupported;
@@ -478,6 +511,11 @@ namespace Njulf.Rendering.Core
             {
                 SType = StructureType.PhysicalDeviceSynchronization2Features
             };
+
+            var timelineSemaphoreFeatures = new PhysicalDeviceTimelineSemaphoreFeatures
+            {
+                SType = StructureType.PhysicalDeviceTimelineSemaphoreFeatures
+            };
             
             var bufferDeviceAddressFeatures = new PhysicalDeviceBufferDeviceAddressFeatures
             {
@@ -526,7 +564,8 @@ namespace Njulf.Rendering.Core
             // Chain all features
             descriptorIndexingFeatures.PNext = &bufferDeviceAddressFeatures;
             bufferDeviceAddressFeatures.PNext = &sync2Features;
-            sync2Features.PNext = &dynamicRenderingFeatures;
+            sync2Features.PNext = &timelineSemaphoreFeatures;
+            timelineSemaphoreFeatures.PNext = &dynamicRenderingFeatures;
             dynamicRenderingFeatures.PNext = &meshShaderFeatures;
             meshShaderFeatures.PNext = &maintenance4Features;
             maintenance4Features.PNext = &shaderDemoteFeatures;
@@ -559,6 +598,8 @@ namespace Njulf.Rendering.Core
                 missingFeatures.Add("dynamicRendering");
             if (!sync2Features.Synchronization2)
                 missingFeatures.Add("synchronization2");
+            if (!timelineSemaphoreFeatures.TimelineSemaphore)
+                missingFeatures.Add("timelineSemaphore");
             if (!bufferDeviceAddressFeatures.BufferDeviceAddress)
                 missingFeatures.Add("bufferDeviceAddress");
             if (!maintenance4Features.Maintenance4)
@@ -736,6 +777,18 @@ namespace Njulf.Rendering.Core
                 };
                 queueCreateInfos.Add(transferQueueInfo);
             }
+
+            if (_hasDedicatedComputeQueue && _computeQueueFamilyIndex != _transferQueueFamilyIndex)
+            {
+                var computeQueueInfo = new DeviceQueueCreateInfo
+                {
+                    SType = StructureType.DeviceQueueCreateInfo,
+                    QueueFamilyIndex = _computeQueueFamilyIndex,
+                    QueueCount = 1,
+                    PQueuePriorities = queuePriorities
+                };
+                queueCreateInfos.Add(computeQueueInfo);
+            }
             
             // Device features chain
             var deviceFeatures2 = new PhysicalDeviceFeatures2
@@ -768,6 +821,12 @@ namespace Njulf.Rendering.Core
             {
                 SType = StructureType.PhysicalDeviceSynchronization2Features,
                 Synchronization2 = true
+            };
+
+            var timelineSemaphoreFeatures = new PhysicalDeviceTimelineSemaphoreFeatures
+            {
+                SType = StructureType.PhysicalDeviceTimelineSemaphoreFeatures,
+                TimelineSemaphore = true
             };
             
             var bufferDeviceAddressFeatures = new PhysicalDeviceBufferDeviceAddressFeatures
@@ -822,7 +881,8 @@ namespace Njulf.Rendering.Core
             // Chain: descriptorIndexing -> bufferDeviceAddress -> sync2 -> dynamicRendering -> meshShader -> maintenance4 -> shaderDemote
             descriptorIndexingFeatures.PNext = &bufferDeviceAddressFeatures;
             bufferDeviceAddressFeatures.PNext = &sync2Features;
-            sync2Features.PNext = &dynamicRenderingFeatures;
+            sync2Features.PNext = &timelineSemaphoreFeatures;
+            timelineSemaphoreFeatures.PNext = &dynamicRenderingFeatures;
             dynamicRenderingFeatures.PNext = &meshShaderFeatures;
             meshShaderFeatures.PNext = &maintenance4Features;
             maintenance4Features.PNext = &shaderDemoteFeatures;
@@ -887,6 +947,11 @@ namespace Njulf.Rendering.Core
                     _vk.GetDeviceQueue(_device, _transferQueueFamilyIndex, 0, out _transferQueue);
                 else
                     _transferQueue = _graphicsQueue;
+
+                if (_hasDedicatedComputeQueue)
+                    _vk.GetDeviceQueue(_device, _computeQueueFamilyIndex, 0, out _computeQueue);
+                else
+                    _computeQueue = _graphicsQueue;
                 
                 System.Diagnostics.Debug.WriteLine("Logical device created with required features.");
             }

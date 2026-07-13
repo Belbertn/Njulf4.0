@@ -18,6 +18,9 @@ namespace Njulf.Rendering.Pipeline
         private const uint VoxelizeModeClear = 0;
         private const uint VoxelizeModeTriangles = 1;
         private const uint VoxelizeModePublish = 2;
+        private const uint JumpFloodModeSeed = 0;
+        private const uint JumpFloodModePropagate = 1;
+        private const uint JumpFloodModePublish = 2;
 
         private readonly RenderSettings _settings;
         private readonly FarFieldClipmapManager _manager;
@@ -26,6 +29,7 @@ namespace Njulf.Rendering.Pipeline
         private PipelineLayout _pipelineLayout;
         private PipelineCache _pipelineCache;
         private VkPipeline _pipeline;
+        private VkPipeline _jumpFloodPipeline;
 
         public FarFieldClipmapBakePass(
             VulkanContext context,
@@ -50,11 +54,13 @@ namespace Njulf.Rendering.Pipeline
             CreatePipelineCache();
             CreatePipelineLayout();
             _pipeline = CreatePipeline();
+            _jumpFloodPipeline = CreateJumpFloodPipeline();
         }
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             return _pipeline.Handle != 0 &&
+                   _jumpFloodPipeline.Handle != 0 &&
                    _settings.GlobalIllumination.FarFieldClipmapEnabled &&
                    _settings.GlobalIllumination.EffectiveUseSimpleDdgi &&
                    _manager.BakePending;
@@ -104,6 +110,8 @@ namespace Njulf.Rendering.Pipeline
             }
 
             InsertComputeBarrier(cmd);
+            BuildJumpFloodDistanceField(cmd, sceneData, resolution, bakeVoxelBufferIndex, voxelGroups);
+
             Push(cmd, new GPUFarFieldVoxelizePushConstants
             {
                 ParamsBufferIndex = BindlessIndex.FarFieldClipmapParamsBuffer,
@@ -127,6 +135,12 @@ namespace Njulf.Rendering.Pipeline
             {
                 _context.Api.DestroyPipeline(_context.Device, _pipeline, null);
                 _pipeline = default;
+            }
+
+            if (_jumpFloodPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _jumpFloodPipeline, null);
+                _jumpFloodPipeline = default;
             }
 
             if (_pipelineLayout.Handle != 0)
@@ -224,6 +238,108 @@ namespace Njulf.Rendering.Pipeline
                 if (shaderModule.Handle != 0)
                     _context.Api.DestroyShaderModule(_context.Device, shaderModule, null);
             }
+        }
+
+        private VkPipeline CreateJumpFloodPipeline()
+        {
+            ShaderModule shaderModule = default;
+            try
+            {
+                shaderModule = ShaderModuleLoader.Load(_context, "farfield_jumpflood.comp.spv");
+                var stage = new PipelineShaderStageCreateInfo
+                {
+                    SType = StructureType.PipelineShaderStageCreateInfo,
+                    Stage = ShaderStageFlags.ComputeBit,
+                    Module = shaderModule,
+                    PName = (byte*)_entryPointName
+                };
+
+                var pipelineInfo = new ComputePipelineCreateInfo
+                {
+                    SType = StructureType.ComputePipelineCreateInfo,
+                    Stage = stage,
+                    Layout = _pipelineLayout,
+                    BasePipelineIndex = -1
+                };
+
+                Result result = _context.Api.CreateComputePipelines(_context.Device, _pipelineCache, 1, &pipelineInfo, null, out VkPipeline pipeline);
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to create far-field jump-flood compute pipeline", result);
+                return pipeline;
+            }
+            finally
+            {
+                if (shaderModule.Handle != 0)
+                    _context.Api.DestroyShaderModule(_context.Device, shaderModule, null);
+            }
+        }
+
+        private void BuildJumpFloodDistanceField(CommandBuffer cmd, SceneRenderingData sceneData, int resolution, uint voxelBufferIndex, uint voxelGroups)
+        {
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _jumpFloodPipeline);
+            BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
+
+            uint scratch0 = checked((uint)_manager.JumpFloodScratch0BufferIndex);
+            uint scratch1 = checked((uint)_manager.JumpFloodScratch1BufferIndex);
+            uint distanceBuffer = checked((uint)_manager.DistanceBufferIndex);
+
+            Push(cmd, new GPUFarFieldVoxelizePushConstants
+            {
+                ParamsBufferIndex = BindlessIndex.FarFieldClipmapParamsBuffer,
+                VoxelBufferIndex = voxelBufferIndex,
+                InstanceBufferIndex = scratch0,
+                InstanceIndex = scratch1,
+                Mode = JumpFloodModeSeed,
+                MaterialTextureMaxCascade = distanceBuffer,
+                CurrentFrameIndex = sceneData.CurrentFrameIndex
+            });
+            _context.Api.CmdDispatch(cmd, voxelGroups, 1, 1);
+            InsertComputeBarrier(cmd);
+
+            uint source = scratch0;
+            uint dest = scratch1;
+            for (uint stride = HighestPowerOfTwoLessThanOrEqualTo((uint)Math.Max(1, resolution)) >> 1; stride >= 1; stride >>= 1)
+            {
+                Push(cmd, new GPUFarFieldVoxelizePushConstants
+                {
+                    ParamsBufferIndex = BindlessIndex.FarFieldClipmapParamsBuffer,
+                    VoxelBufferIndex = voxelBufferIndex,
+                    InstanceBufferIndex = source,
+                    InstanceIndex = dest,
+                    Mode = JumpFloodModePropagate,
+                    TriangleCount = stride,
+                    MaterialTextureMaxCascade = distanceBuffer,
+                    CurrentFrameIndex = sceneData.CurrentFrameIndex
+                });
+                _context.Api.CmdDispatch(cmd, voxelGroups, 1, 1);
+                InsertComputeBarrier(cmd);
+                (source, dest) = (dest, source);
+            }
+
+            uint packedDistanceGroups = checked((uint)Math.Max(1, (((resolution * resolution * resolution) + 1) / 2 + 63) / 64));
+            Push(cmd, new GPUFarFieldVoxelizePushConstants
+            {
+                ParamsBufferIndex = BindlessIndex.FarFieldClipmapParamsBuffer,
+                VoxelBufferIndex = voxelBufferIndex,
+                InstanceBufferIndex = source,
+                InstanceIndex = dest,
+                Mode = JumpFloodModePublish,
+                MaterialTextureMaxCascade = distanceBuffer,
+                CurrentFrameIndex = sceneData.CurrentFrameIndex
+            });
+            _context.Api.CmdDispatch(cmd, packedDistanceGroups, 1, 1);
+            InsertComputeBarrier(cmd);
+
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
+            BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
+        }
+
+        private static uint HighestPowerOfTwoLessThanOrEqualTo(uint value)
+        {
+            uint result = 1;
+            while ((result << 1) <= value)
+                result <<= 1;
+            return result;
         }
 
         private void InsertComputeBarrier(CommandBuffer cmd)

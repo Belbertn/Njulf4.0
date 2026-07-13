@@ -34,9 +34,9 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterBase + RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase + RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.FarFieldCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleBase + RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleCount));
-                Assert.That(RendererDiagnosticsBuffer.FarFieldCounterCount, Is.EqualTo(5));
+                Assert.That(RendererDiagnosticsBuffer.FarFieldCounterCount, Is.EqualTo(10));
                 Assert.That(RendererDiagnosticsBuffer.DdgiInvestigationCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.FarFieldCounterBase + RendererDiagnosticsBuffer.FarFieldCounterCount));
-                Assert.That(RendererDiagnosticsBuffer.DdgiInvestigationCounterCount, Is.EqualTo(30));
+                Assert.That(RendererDiagnosticsBuffer.DdgiInvestigationCounterCount, Is.EqualTo(36));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(RendererDiagnosticsBuffer.MeshletCounterCount + RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount + RendererDiagnosticsBuffer.DdgiTraceEnergyCounterCount + RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterCount + RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount + RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleCount + RendererDiagnosticsBuffer.FarFieldCounterCount + RendererDiagnosticsBuffer.DdgiInvestigationCounterCount));
                 Assert.That(settings.Debug.SelectedObjectIndex, Is.EqualTo(-1));
                 Assert.That(settings.Debug.MaxDebugLineSegments, Is.EqualTo(DebugDrawList.DefaultMaxLineSegments));
@@ -202,6 +202,32 @@ namespace Njulf.Tests
                 Assert.That(controller, Does.Contain("_requestDiagnosticScreenshotCapture?.Invoke(screenshotPath)"));
                 Assert.That(controller, Does.Contain("Diagnostic snapshot requested: cpuSnapshots=on"));
                 Assert.That(reference, Does.Contain("`Ctrl+Keypad0` | Store diagnostic output JSON and a window screenshot in `DiagnosticSnapshots`"));
+            });
+        }
+
+        [Test]
+        public void GlobalIlluminationQualityFeatureSwitches_DefaultOnAndDebugIdsStayMapped()
+        {
+            var settings = new RenderSettings();
+            string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
+            string reflectionProbeManager = ReadRepoText("Njulf.Rendering", "Resources", "ReflectionProbeManager.cs");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.GlobalIllumination.SimpleDdgiFogEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.SimpleDdgiParticlesEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.SimpleDdgiRoughSpecularEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.FarFieldSkyVisibilityEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.FarFieldSunShadowEnabled, Is.True);
+                Assert.That((uint)GlobalIlluminationDebugView.FarFieldSkyVisibility, Is.EqualTo(44u));
+                Assert.That((uint)GlobalIlluminationDebugView.FarFieldSunShadow, Is.EqualTo(45u));
+                Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.FarFieldSkyVisibility => 122u"));
+                Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.FarFieldSunShadow => 123u"));
+                Assert.That(renderer, Does.Contain("ScheduleReflectionProbeRecapturesFromGi(sceneData, ddgiActive, simpleDdgiActive);"));
+                Assert.That(renderer, Does.Contain("_reflectionProbeManager.RequestRecaptureAll(\"ddgi-ready\")"));
+                Assert.That(renderer, Does.Contain("_reflectionProbeManager.RequestRecaptureAll(\"simple-ddgi-dirty\")"));
+                Assert.That(reflectionProbeManager, Does.Contain("public void RequestRecaptureAll(string reason)"));
+                Assert.That(reflectionProbeManager, Does.Contain("DrainCaptureQueue();"));
             });
         }
 

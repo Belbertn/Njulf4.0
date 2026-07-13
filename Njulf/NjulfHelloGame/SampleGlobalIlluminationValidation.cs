@@ -5,8 +5,14 @@ namespace NjulfHelloGame;
 
 public static class SampleGlobalIlluminationValidation
 {
+    public const float SimpleDdgiFurnaceAlbedo = 0.5f;
+    public const float SimpleDdgiFurnaceEmittedRadiance = 0.25f;
+    public const float SimpleDdgiFurnaceExpectedIrradianceLuminance =
+        MathF.PI * SimpleDdgiFurnaceEmittedRadiance / (1.0f - SimpleDdgiFurnaceAlbedo);
+
     public static IReadOnlyList<SampleGiProductionScene> Phase7ProductionScenes { get; } =
     [
+        new("simple-ddgi-furnace", SamplePerformanceScenario.GiSimpleDdgiFurnace, "Closed furnace energy conservation", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: false),
         new("sponza-interior", SamplePerformanceScenario.GiSponzaRightWallStationary, "Sponza interior bounce and support coverage", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: false),
         new("sunlit-courtyard", SamplePerformanceScenario.GiSponzaRightWallStationary, "Sunlit courtyard direct-plus-DDGI energy balance", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: false),
         new("colored-bounce-room", SamplePerformanceScenario.GiCornellRoom, "Enclosed colored-bounce room without hidden intensity compensation", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: false),
@@ -25,6 +31,50 @@ public static class SampleGlobalIlluminationValidation
         new(DdgiQualityTier.DdgiMedium, SampleDdgiProductionGate.DdgiMediumUpdateP95BudgetMilliseconds, 128UL * 1024UL * 1024UL, ReferenceTier: false),
         new(DdgiQualityTier.DdgiHigh, SampleDdgiProductionGate.DdgiHighUpdateP95BudgetMilliseconds, 192UL * 1024UL * 1024UL, ReferenceTier: false),
         new(DdgiQualityTier.DdgiUltra, SampleDdgiProductionGate.DdgiUltraUpdateP95BudgetMilliseconds, 384UL * 1024UL * 1024UL, ReferenceTier: true)
+    ];
+
+    public static IReadOnlyList<SampleGiAccuracyOracle> AccuracyOracles { get; } =
+    [
+        new(
+            "simple-ddgi-furnace",
+            SamplePerformanceScenario.GiSimpleDdgiFurnace,
+            "Closed diffuse room with uniform steady-state irradiance; sampled irradiance luminance must remain within 5 percent of the recorded analytic/reference constant.",
+            Metric: "SimpleDdgiAverageSampledIrradianceLuminance",
+            ReferenceValue: SimpleDdgiFurnaceExpectedIrradianceLuminance,
+            MaximumRelativeError: 0.05f,
+            MaximumLatencyFrames: null),
+        new(
+            "simple-ddgi-light-toggle",
+            SamplePerformanceScenario.GiMovingPointLight,
+            "Point-light toggle/move response; sampled luminance must reach 90 percent of the new steady state within 0.25 seconds at 60 fps.",
+            Metric: "SimpleDdgiAverageSampledIrradianceLuminance",
+            ReferenceValue: null,
+            MaximumRelativeError: 0.05f,
+            MaximumLatencyFrames: 15),
+        new(
+            "simple-ddgi-cornell-reference",
+            SamplePerformanceScenario.GiCornellRoom,
+            "Static Cornell reference; sampled luminance must remain within 2 percent of the phase-0 table after later feature phases.",
+            Metric: "SimpleDdgiAverageSampledIrradianceLuminance",
+            ReferenceValue: null,
+            MaximumRelativeError: 0.02f,
+            MaximumLatencyFrames: null),
+        new(
+            "simple-ddgi-emissive-panel",
+            SamplePerformanceScenario.GiEmissiveMaterialRoom,
+            "Warm/cool emissive panels; both uploaded emissive sources must affect sampled irradiance and panel toggles must meet the light-toggle latency gate.",
+            Metric: "DdgiSimpleTraceEmissiveHitCount",
+            ReferenceValue: null,
+            MaximumRelativeError: 0.10f,
+            MaximumLatencyFrames: 15),
+        new(
+            "simple-ddgi-moving-occluder",
+            SamplePerformanceScenario.GiMovingRigidObject,
+            "Moving rigid box; indirect shadowing must follow TLAS transform updates without residual old-position ghosting after convergence.",
+            Metric: "SimpleDdgiAverageVisibility",
+            ReferenceValue: null,
+            MaximumRelativeError: 0.05f,
+            MaximumLatencyFrames: 18)
     ];
 
     public static IReadOnlyList<SampleGiValidationMetric> Phase9RegressionMetrics { get; } =
@@ -268,7 +318,9 @@ public static class SampleGlobalIlluminationValidation
     public static bool IsValidationScenario(SamplePerformanceScenario scenario)
     {
         return scenario is SamplePerformanceScenario.GiSponzaRightWallStationary
+            or SamplePerformanceScenario.GiSimpleDdgiFurnace
             or SamplePerformanceScenario.GiCornellRoom
+            or SamplePerformanceScenario.GiQualityInterior
             or SamplePerformanceScenario.GiThinWallLeakTest
             or SamplePerformanceScenario.GiMovingPointLight
             or SamplePerformanceScenario.GiMovingRigidObject
@@ -278,6 +330,7 @@ public static class SampleGlobalIlluminationValidation
             or SamplePerformanceScenario.GiLocalVolumeStreaming
             or SamplePerformanceScenario.GiFastTraversalTeleport
             or SamplePerformanceScenario.GiVerticalityRings
+            or SamplePerformanceScenario.GiInstancedCityStress
             or SamplePerformanceScenario.ForestFoliage;
     }
 
@@ -334,7 +387,7 @@ public static class SampleGlobalIlluminationValidation
         gi.TemporalEnabled = false;
         gi.DenoiserEnabled = false;
 
-        if (scenario == SamplePerformanceScenario.GiCornellRoom)
+        if (scenario is SamplePerformanceScenario.GiCornellRoom or SamplePerformanceScenario.GiSimpleDdgiFurnace)
         {
             settings.Exposure = 0.85f;
             gi.IndirectIntensity = 0.85f;
@@ -348,6 +401,32 @@ public static class SampleGlobalIlluminationValidation
                 new Vector3(3.25f, 4.25f, -2.25f),
                 0.75f));
         }
+        else if (scenario == SamplePerformanceScenario.GiQualityInterior)
+        {
+            settings.Exposure = 0.82f;
+            settings.Fog.Enabled = true;
+            settings.Fog.Density = 0.018f;
+            settings.Fog.StartDistance = 1.0f;
+            settings.Fog.EndDistance = 34.0f;
+            settings.Fog.MaxOpacity = 0.38f;
+            settings.Particles.Enabled = true;
+            settings.Particles.SimulationMode = ParticleSimulationMode.Cpu;
+            settings.Reflections.Enabled = true;
+            settings.Reflections.Mode = ReflectionMode.StaticProbes;
+            settings.Reflections.CaptureOnLoad = true;
+            settings.Reflections.MaxProbeCapturesPerFrame = 2;
+            gi.FarFieldClipmapEnabled = true;
+            gi.FarFieldSkyVisibilityEnabled = true;
+            gi.FarFieldSunShadowEnabled = true;
+            gi.SimpleDdgiFogEnabled = true;
+            gi.SimpleDdgiParticlesEnabled = true;
+            gi.SimpleDdgiRoughSpecularEnabled = true;
+            gi.EnvironmentFallbackIntensity = 0.18f;
+            gi.SimpleDdgiAuthoredVolumes.Add(new SimpleDdgiAuthoredVolume(
+                new Vector3(-3.25f, -0.15f, -8.75f),
+                new Vector3(3.25f, 4.25f, -2.25f),
+                0.75f));
+        }
         else if (scenario == SamplePerformanceScenario.GiVerticalityRings)
         {
             gi.SimpleDdgiAuthoredVolumes.Clear();
@@ -356,6 +435,19 @@ public static class SampleGlobalIlluminationValidation
             gi.SimpleDdgiRingGridSizeY = 16;
             settings.Environment.Enabled = true;
             settings.Environment.DiffuseIntensity = 0.25f;
+        }
+        else if (scenario == SamplePerformanceScenario.GiInstancedCityStress)
+        {
+            gi.SimpleDdgiAuthoredVolumes.Clear();
+            gi.IndirectIntensity = 1.15f;
+            gi.EnvironmentFallbackIntensity = 0.30f;
+            gi.SimpleDdgiRingGridSizeX = 32;
+            gi.SimpleDdgiRingGridSizeZ = 32;
+            gi.SimpleDdgiRingGridSizeY = 14;
+            gi.SimpleDdgiProbeUpdatesPerFrame = 3_072;
+            gi.FarFieldStartDistance = 12.0f;
+            settings.Environment.Enabled = true;
+            settings.Environment.DiffuseIntensity = 0.22f;
         }
     }
 
@@ -393,6 +485,15 @@ public sealed record SampleGiPerformanceTarget(
     double UpdateP95BudgetMilliseconds,
     ulong AtlasMemoryBudgetBytes,
     bool ReferenceTier);
+
+public sealed record SampleGiAccuracyOracle(
+    string Name,
+    SamplePerformanceScenario Scenario,
+    string Description,
+    string Metric,
+    float? ReferenceValue,
+    float MaximumRelativeError,
+    int? MaximumLatencyFrames);
 
 public sealed record SampleGiRegressionComparison(
     string Name,

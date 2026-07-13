@@ -302,6 +302,8 @@ namespace Njulf.Rendering.Data
         public int GraphExecutedBarrierCount { get; set; }
         public int GraphQueueOwnershipTransitionCount { get; set; }
         public string GraphBarrierSummary { get; set; } = string.Empty;
+        public int AsyncComputeOwnershipTransferCount { get; set; }
+        public long AsyncComputeEstimatedOverlapMicroseconds { get; set; }
         public long CpuPrimaryCommandRecordMicroseconds { get; set; }
         public long CpuSecondaryCommandRecordMicroseconds { get; set; }
         public long GpuDepthPrePassMicroseconds { get; set; }
@@ -664,6 +666,15 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiProbeCount { get; set; }
         public int SimpleDdgiProbesUpdated { get; set; }
         public ulong SimpleDdgiRaysPerFrame { get; set; }
+        public int SimpleDdgiInactiveProbeCount { get; set; }
+        public int SimpleDdgiInactiveProbeSkipCount { get; set; }
+        public ulong SimpleDdgiSavedRaysPerFrame { get; set; }
+        public int SimpleDdgiLightingDirtyFrames { get; set; }
+        public int SimpleDdgiLightingDirtyBoostedCapacity { get; set; }
+        public uint SimpleDdgiDirtyReasonFlags { get; set; }
+        public int SimpleDdgiFullRayProbeUpdateCount { get; set; }
+        public int SimpleDdgiMaintenanceRayProbeUpdateCount { get; set; }
+        public ulong SimpleDdgiAdaptiveRaySavedRaysPerFrame { get; set; }
         public ulong SimpleDdgiAtlasBytes { get; set; }
         public int SimpleDdgiRecentered { get; set; }
         public int SimpleDdgiAtlasPreservedOnRecenter { get; set; }
@@ -719,6 +730,17 @@ namespace Njulf.Rendering.Data
         public uint DdgiSimpleTraceFarFieldHitCount { get; set; }
         public uint DdgiSimpleTraceFarFieldMissCount { get; set; }
         public uint DdgiSimpleTraceTlasUnavailableFrameCount { get; set; }
+        public uint SimpleDdgiSkyVisibilitySampleCount { get; set; }
+        public float SimpleDdgiAverageSkyVisibility { get; set; }
+        public uint FarFieldSunShadowSampleCount { get; set; }
+        public uint FarFieldSunShadowOccludedCount { get; set; }
+        public uint SimpleDdgiRoughSpecularSampleCount { get; set; }
+        public uint SimpleDdgiRoughSpecularNonzeroCount { get; set; }
+        public uint DdgiSimpleTraceFarFieldStepBucket0Count { get; set; }
+        public uint DdgiSimpleTraceFarFieldStepBucket1Count { get; set; }
+        public uint DdgiSimpleTraceFarFieldStepBucket2Count { get; set; }
+        public uint DdgiSimpleTraceFarFieldStepBucket3Count { get; set; }
+        public uint DdgiSimpleTraceFarFieldStepBucket4Count { get; set; }
         public int DdgiBlackFrameSuspect { get; set; }
         public int DdgiBlackFrameAfterRecenter { get; set; }
         public int DdgiBlackFrameAfterAtlasClear { get; set; }
@@ -1216,6 +1238,8 @@ namespace Njulf.Rendering.Data
             GraphExecutedBarrierCount = 0;
             GraphQueueOwnershipTransitionCount = 0;
             GraphBarrierSummary = string.Empty;
+            AsyncComputeOwnershipTransferCount = 0;
+            AsyncComputeEstimatedOverlapMicroseconds = 0;
             CpuPrimaryCommandRecordMicroseconds = 0;
             CpuSecondaryCommandRecordMicroseconds = 0;
             GpuDepthPrePassMicroseconds = 0;
@@ -1646,6 +1670,15 @@ namespace Njulf.Rendering.Data
             SimpleDdgiProbeCount = 0;
             SimpleDdgiProbesUpdated = 0;
             SimpleDdgiRaysPerFrame = 0;
+            SimpleDdgiInactiveProbeCount = 0;
+            SimpleDdgiInactiveProbeSkipCount = 0;
+            SimpleDdgiSavedRaysPerFrame = 0;
+            SimpleDdgiLightingDirtyFrames = 0;
+            SimpleDdgiLightingDirtyBoostedCapacity = 0;
+            SimpleDdgiDirtyReasonFlags = 0;
+            SimpleDdgiFullRayProbeUpdateCount = 0;
+            SimpleDdgiMaintenanceRayProbeUpdateCount = 0;
+            SimpleDdgiAdaptiveRaySavedRaysPerFrame = 0;
             SimpleDdgiAtlasBytes = 0;
             SimpleDdgiRecentered = 0;
             SimpleDdgiAtlasPreservedOnRecenter = 0;
@@ -1701,6 +1734,17 @@ namespace Njulf.Rendering.Data
             DdgiSimpleTraceFarFieldHitCount = 0;
             DdgiSimpleTraceFarFieldMissCount = 0;
             DdgiSimpleTraceTlasUnavailableFrameCount = 0;
+            SimpleDdgiSkyVisibilitySampleCount = 0;
+            SimpleDdgiAverageSkyVisibility = 0;
+            FarFieldSunShadowSampleCount = 0;
+            FarFieldSunShadowOccludedCount = 0;
+            SimpleDdgiRoughSpecularSampleCount = 0;
+            SimpleDdgiRoughSpecularNonzeroCount = 0;
+            DdgiSimpleTraceFarFieldStepBucket0Count = 0;
+            DdgiSimpleTraceFarFieldStepBucket1Count = 0;
+            DdgiSimpleTraceFarFieldStepBucket2Count = 0;
+            DdgiSimpleTraceFarFieldStepBucket3Count = 0;
+            DdgiSimpleTraceFarFieldStepBucket4Count = 0;
             DdgiBlackFrameSuspect = 0;
             DdgiBlackFrameAfterRecenter = 0;
             DdgiBlackFrameAfterAtlasClear = 0;

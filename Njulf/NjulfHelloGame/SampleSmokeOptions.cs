@@ -20,6 +20,8 @@ public sealed record SampleSmokeOptions(
     bool EnableSceneGpuShadowCompaction,
     bool EnableSceneSubmissionValidation,
     bool EnableAsyncCompute,
+    bool EnableFarFieldClipmap,
+    bool EnableFarFieldForceAll,
     string? BaselineSnapshotDirectory,
     DdgiSchedulerMode? DdgiSchedulerModeOverride = null,
     SampleSceneKind SceneKind = SampleSceneKind.GlobalIlluminationTest,
@@ -35,6 +37,8 @@ public sealed record SampleSmokeOptions(
         PerformanceScenario != SamplePerformanceScenario.Normal ||
         TransparencyMode != Njulf.Rendering.Data.TransparencyMode.SortedAlphaBlend ||
         EnableAsyncCompute ||
+        EnableFarFieldClipmap ||
+        EnableFarFieldForceAll ||
         DdgiSchedulerModeOverride.HasValue ||
         !string.IsNullOrWhiteSpace(BaselineSnapshotDirectory) ||
         Benchmark.Enabled;

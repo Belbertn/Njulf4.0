@@ -18,6 +18,14 @@ public static class SampleDdgiBenchmarkSuite
             SamplePerformanceScenario.GiCornellRoom,
             "Closed room with colored bounce, default camera-relative DDGI clipmaps, and shadowed point light."),
         new(
+            "ddgi-quality-interior",
+            SamplePerformanceScenario.GiQualityInterior,
+            "Interior GI quality fixture with transparent panes, fog, particles, rough-specular DDGI, sky fallback, and far sun shadows."),
+        new(
+            "simple-ddgi-furnace",
+            SamplePerformanceScenario.GiSimpleDdgiFurnace,
+            "Closed uniform-emissive diffuse furnace for Simple DDGI analytic energy validation."),
+        new(
             "ddgi-open-sky-ground",
             SamplePerformanceScenario.GiSponzaRightWallStationary,
             "Phase 10 open sky box with diffuse ground for stable sunlit and shadowed indirect luminance metrics."),
@@ -49,6 +57,10 @@ public static class SampleDdgiBenchmarkSuite
             "ddgi-verticality-rings",
             SamplePerformanceScenario.GiVerticalityRings,
             "Rings-only tall-world scene with tower and distant large occluders for vertical coverage."),
+        new(
+            "ddgi-instanced-city-stress",
+            SamplePerformanceScenario.GiInstancedCityStress,
+            "Instanced city stress scene for TLAS growth and far-field trace scalability."),
         new(
             "ddgi-thin-wall",
             SamplePerformanceScenario.GiThinWallLeakTest,

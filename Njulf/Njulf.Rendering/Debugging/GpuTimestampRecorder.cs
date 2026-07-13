@@ -13,9 +13,12 @@ namespace Njulf.Rendering.Debug
         private const int QueryCount = MaxPassesPerFrame * QueriesPerPass;
 
         private readonly VulkanContext _context;
-        private readonly QueryPool[] _queryPools = new QueryPool[FramesInFlight];
+        private readonly QueryPool[] _graphicsQueryPools = new QueryPool[FramesInFlight];
+        private readonly QueryPool[] _computeQueryPools = new QueryPool[FramesInFlight];
         private readonly List<PassQuery>[] _passQueries = new List<PassQuery>[FramesInFlight];
         private readonly List<int>[] _activePassQueries = new List<int>[FramesInFlight];
+        private readonly int[] _graphicsPassQueryCounts = new int[FramesInFlight];
+        private readonly int[] _computePassQueryCounts = new int[FramesInFlight];
         private readonly FrameTimingSnapshot[] _completedSnapshots = new FrameTimingSnapshot[FramesInFlight];
         private readonly bool[] _framePending = new bool[FramesInFlight];
         private bool _disposed;
@@ -47,11 +50,17 @@ namespace Njulf.Rendering.Debug
                     QueryCount = QueryCount
                 };
 
-                Result result = _context.Api.CreateQueryPool(_context.Device, &createInfo, null, out _queryPools[i]);
+                Result result = _context.Api.CreateQueryPool(_context.Device, &createInfo, null, out _graphicsQueryPools[i]);
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create GPU timestamp query pool.", result);
 
-                _context.SetDebugName(_queryPools[i].Handle, ObjectType.QueryPool, $"GPU Timestamp Query Pool Frame {i}");
+                _context.SetDebugName(_graphicsQueryPools[i].Handle, ObjectType.QueryPool, $"GPU Graphics Timestamp Query Pool Frame {i}");
+
+                result = _context.Api.CreateQueryPool(_context.Device, &createInfo, null, out _computeQueryPools[i]);
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to create GPU compute timestamp query pool.", result);
+
+                _context.SetDebugName(_computeQueryPools[i].Handle, ObjectType.QueryPool, $"GPU Compute Timestamp Query Pool Frame {i}");
             }
         }
 
@@ -72,8 +81,9 @@ namespace Njulf.Rendering.Debug
                 return;
             }
 
-            int usedQueryCount = _passQueries[frameIndex].Count * QueriesPerPass;
-            if (usedQueryCount == 0)
+            int graphicsUsedQueryCount = _graphicsPassQueryCounts[frameIndex] * QueriesPerPass;
+            int computeUsedQueryCount = _computePassQueryCounts[frameIndex] * QueriesPerPass;
+            if (graphicsUsedQueryCount == 0 && computeUsedQueryCount == 0)
             {
                 _completedSnapshots[frameIndex] = FrameTimingSnapshot.Empty;
                 LastCompletedSnapshot = FrameTimingSnapshot.Empty;
@@ -81,18 +91,10 @@ namespace Njulf.Rendering.Debug
                 return;
             }
 
-            ulong* timestamps = stackalloc ulong[QueryCount];
-            Result result = _context.Api.GetQueryPoolResults(
-                _context.Device,
-                _queryPools[frameIndex],
-                0,
-                checked((uint)usedQueryCount),
-                (nuint)(usedQueryCount * sizeof(ulong)),
-                timestamps,
-                sizeof(ulong),
-                QueryResultFlags.Result64Bit);
-
-            if (result != Result.Success)
+            ulong* graphicsTimestamps = stackalloc ulong[QueryCount];
+            ulong* computeTimestamps = stackalloc ulong[QueryCount];
+            if (!TryReadQueryPool(_graphicsQueryPools[frameIndex], graphicsUsedQueryCount, graphicsTimestamps) ||
+                !TryReadQueryPool(_computeQueryPools[frameIndex], computeUsedQueryCount, computeTimestamps))
             {
                 LastCompletedSnapshot = FrameTimingSnapshot.Empty;
                 _completedSnapshots[frameIndex] = FrameTimingSnapshot.Empty;
@@ -103,6 +105,7 @@ namespace Njulf.Rendering.Debug
             var timings = new List<PassTiming>(_passQueries[frameIndex].Count);
             foreach (PassQuery passQuery in _passQueries[frameIndex])
             {
+                ulong* timestamps = passQuery.Queue == TimestampQueue.Compute ? computeTimestamps : graphicsTimestamps;
                 ulong start = timestamps[passQuery.StartQuery];
                 ulong end = timestamps[passQuery.EndQuery];
                 long gpuMicroseconds = FrameTimingSnapshot.ConvertTimestampDeltaToMicroseconds(
@@ -124,27 +127,49 @@ namespace Njulf.Rendering.Debug
             PendingThisFrame = false;
             _passQueries[frameIndex].Clear();
             _activePassQueries[frameIndex].Clear();
+            _graphicsPassQueryCounts[frameIndex] = 0;
+            _computePassQueryCounts[frameIndex] = 0;
 
             if (!EnabledThisFrame)
                 return;
 
-            _context.Api.CmdResetQueryPool(commandBuffer, _queryPools[frameIndex], 0, QueryCount);
+            _context.Api.CmdResetQueryPool(commandBuffer, _graphicsQueryPools[frameIndex], 0, QueryCount);
+            _context.Api.CmdResetQueryPool(commandBuffer, _computeQueryPools[frameIndex], 0, QueryCount);
             PendingThisFrame = true;
             _framePending[frameIndex] = true;
         }
 
         public void BeginPass(CommandBuffer commandBuffer, int frameIndex, string passName)
         {
+            BeginPass(commandBuffer, frameIndex, passName, TimestampQueue.Graphics);
+        }
+
+        public void BeginComputePass(CommandBuffer commandBuffer, int frameIndex, string passName)
+        {
+            BeginPass(commandBuffer, frameIndex, passName, TimestampQueue.Compute);
+        }
+
+        private void BeginPass(CommandBuffer commandBuffer, int frameIndex, string passName, TimestampQueue queue)
+        {
             if (!EnabledThisFrame)
                 return;
             ValidateFrameIndex(frameIndex);
-            if (_passQueries[frameIndex].Count >= MaxPassesPerFrame)
+            int passQueryIndex = queue == TimestampQueue.Compute
+                ? _computePassQueryCounts[frameIndex]
+                : _graphicsPassQueryCounts[frameIndex];
+            if (passQueryIndex >= MaxPassesPerFrame)
                 return;
 
-            uint query = checked((uint)(_passQueries[frameIndex].Count * QueriesPerPass));
-            _passQueries[frameIndex].Add(new PassQuery(passName, query, query + 1));
+            uint query = checked((uint)(passQueryIndex * QueriesPerPass));
+            if (queue == TimestampQueue.Compute)
+                _computePassQueryCounts[frameIndex]++;
+            else
+                _graphicsPassQueryCounts[frameIndex]++;
+
+            _passQueries[frameIndex].Add(new PassQuery(passName, query, query + 1, queue));
             _activePassQueries[frameIndex].Add(_passQueries[frameIndex].Count - 1);
-            _context.Api.CmdWriteTimestamp2(commandBuffer, PipelineStageFlags2.TopOfPipeBit, _queryPools[frameIndex], query);
+            QueryPool queryPool = queue == TimestampQueue.Compute ? _computeQueryPools[frameIndex] : _graphicsQueryPools[frameIndex];
+            _context.Api.CmdWriteTimestamp2(commandBuffer, PipelineStageFlags2.TopOfPipeBit, queryPool, query);
         }
 
         public void EndPass(CommandBuffer commandBuffer, int frameIndex)
@@ -158,7 +183,8 @@ namespace Njulf.Rendering.Debug
             int stackIndex = _activePassQueries[frameIndex].Count - 1;
             PassQuery passQuery = _passQueries[frameIndex][_activePassQueries[frameIndex][stackIndex]];
             _activePassQueries[frameIndex].RemoveAt(stackIndex);
-            _context.Api.CmdWriteTimestamp2(commandBuffer, PipelineStageFlags2.BottomOfPipeBit, _queryPools[frameIndex], passQuery.EndQuery);
+            QueryPool queryPool = passQuery.Queue == TimestampQueue.Compute ? _computeQueryPools[frameIndex] : _graphicsQueryPools[frameIndex];
+            _context.Api.CmdWriteTimestamp2(commandBuffer, PipelineStageFlags2.BottomOfPipeBit, queryPool, passQuery.EndQuery);
         }
 
         public void Dispose()
@@ -170,11 +196,30 @@ namespace Njulf.Rendering.Debug
             if (!Supported)
                 return;
 
-            for (int i = 0; i < _queryPools.Length; i++)
+            for (int i = 0; i < _graphicsQueryPools.Length; i++)
             {
-                if (_queryPools[i].Handle != 0)
-                    _context.Api.DestroyQueryPool(_context.Device, _queryPools[i], null);
+                if (_graphicsQueryPools[i].Handle != 0)
+                    _context.Api.DestroyQueryPool(_context.Device, _graphicsQueryPools[i], null);
+                if (_computeQueryPools[i].Handle != 0)
+                    _context.Api.DestroyQueryPool(_context.Device, _computeQueryPools[i], null);
             }
+        }
+
+        private bool TryReadQueryPool(QueryPool queryPool, int usedQueryCount, ulong* timestamps)
+        {
+            if (usedQueryCount == 0)
+                return true;
+
+            Result result = _context.Api.GetQueryPoolResults(
+                _context.Device,
+                queryPool,
+                0,
+                checked((uint)usedQueryCount),
+                (nuint)(usedQueryCount * sizeof(ulong)),
+                timestamps,
+                sizeof(ulong),
+                QueryResultFlags.Result64Bit);
+            return result == Result.Success;
         }
 
         private static void ValidateFrameIndex(int frameIndex)
@@ -183,6 +228,12 @@ namespace Njulf.Rendering.Debug
                 throw new ArgumentOutOfRangeException(nameof(frameIndex));
         }
 
-        private readonly record struct PassQuery(string Name, uint StartQuery, uint EndQuery);
+        private enum TimestampQueue
+        {
+            Graphics,
+            Compute
+        }
+
+        private readonly record struct PassQuery(string Name, uint StartQuery, uint EndQuery, TimestampQueue Queue);
     }
 }

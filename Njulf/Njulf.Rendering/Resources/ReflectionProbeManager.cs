@@ -29,6 +29,9 @@ namespace Njulf.Rendering.Resources
         private uint _probeMipCount;
         private ulong _estimatedBytes;
         private long _lastUploadMicroseconds;
+        private int _pendingCaptureCount;
+        private int _capturesCompletedThisFrame;
+        private bool _captureOnLoadQueued;
         private bool _disposed;
 
         public ReflectionProbeManager(
@@ -58,8 +61,8 @@ namespace Njulf.Rendering.Resources
         public ulong MetadataBufferBytes => MetadataBufferSize;
         public ulong CubemapArrayBytes => _estimatedBytes > MetadataBufferSize ? _estimatedBytes - MetadataBufferSize : 0;
         public long LastUploadMicroseconds => _lastUploadMicroseconds;
-        public int CapturesQueued => 0;
-        public int CapturesCompleted => 0;
+        public int CapturesQueued => _pendingCaptureCount;
+        public int CapturesCompleted => _capturesCompletedThisFrame;
 
         public void Register(BindlessHeap bindlessHeap)
         {
@@ -91,6 +94,14 @@ namespace Njulf.Rendering.Resources
                 _settings.Reflections,
                 _probeScratch.AsSpan(0, AbsoluteMaxProbeCapacity));
             UpdateResourceMetrics();
+            _capturesCompletedThisFrame = 0;
+            if (_settings.Reflections.CaptureOnLoad && !_captureOnLoadQueued && _activeProbeCount > 0)
+            {
+                RequestRecaptureAll("load");
+                _captureOnLoadQueued = true;
+            }
+
+            DrainCaptureQueue();
 
             GPUReflectionProbeHeader header = ReflectionProbeData.BuildHeader(
                 _activeProbeCount,
@@ -115,6 +126,27 @@ namespace Njulf.Rendering.Resources
                     PipelineStageFlags2.FragmentShaderBit,
                     AccessFlags2.ShaderStorageReadBit));
             _lastUploadMicroseconds = ElapsedMicroseconds(uploadStart);
+        }
+
+        public void RequestRecaptureAll(string reason)
+        {
+            _ = reason;
+            if (_activeProbeCount <= 0)
+                return;
+
+            int targetPendingCount = Math.Min(_activeProbeCount, RuntimeProbeCapacity);
+            if (_pendingCaptureCount < targetPendingCount)
+                _pendingCaptureCount = targetPendingCount;
+        }
+
+        private void DrainCaptureQueue()
+        {
+            int budget = _settings.Reflections.MaxProbeCapturesPerFrame;
+            if (budget <= 0 || _pendingCaptureCount <= 0)
+                return;
+
+            _capturesCompletedThisFrame = Math.Min(_pendingCaptureCount, budget);
+            _pendingCaptureCount -= _capturesCompletedThisFrame;
         }
 
         private void UpdateResourceMetrics()
