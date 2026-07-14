@@ -13,6 +13,17 @@
 #define DDGI_HIT_DIRECT_LIGHT_CAP pc.MaxShadedLights
 #endif
 
+// The Simple DDGI update queue carries a quality profile per probe update.  The
+// hit shader is also shared by other GI paths, so leave the push-constant
+// defaults intact unless the caller explicitly supplies per-update values.
+#ifndef DDGI_HIT_MAX_SHADED_LIGHTS
+#define DDGI_HIT_MAX_SHADED_LIGHTS pc.MaxShadedLights
+#endif
+
+#ifndef DDGI_HIT_MATERIAL_TEXTURE_MAX_CASCADE
+#define DDGI_HIT_MATERIAL_TEXTURE_MAX_CASCADE pc.MaterialTextureMaxCascade
+#endif
+
 vec4 SampleDdgiMaterialTexture(int textureIndex, vec2 uv, float lod, vec4 fallback)
 {
     bool valid = textureIndex >= FIRST_TEXTURE_INDEX && textureIndex < FIRST_TEXTURE_INDEX + MAX_TEXTURES;
@@ -27,8 +38,8 @@ bool ShouldSampleDdgiMaterialTextures(uint volumeCascadeIndex)
     if (volumeCascadeIndex == DDGI_AUTHORED_VOLUME_CASCADE)
         return true;
 
-    return pc.MaterialTextureMaxCascade < DDGI_MATERIAL_TEXTURE_DISABLED_CASCADE &&
-        volumeCascadeIndex <= pc.MaterialTextureMaxCascade;
+    return DDGI_HIT_MATERIAL_TEXTURE_MAX_CASCADE < DDGI_MATERIAL_TEXTURE_DISABLED_CASCADE &&
+        volumeCascadeIndex <= DDGI_HIT_MATERIAL_TEXTURE_MAX_CASCADE;
 }
 
 bool ShouldUseCompactDdgiMaterial(uint volumeCascadeIndex)
@@ -382,7 +393,7 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(vec3 worldPosition, vec3 normal, vec3 al
     directNoShadowDiffuse = vec3(0.0);
 
 #if DDGI_HIT_USE_SELECTED_LIGHTS
-    uint selectedLightCapacity = min(pc.MaxShadedLights, DDGI_MAX_SELECTED_HIT_LIGHTS);
+    uint selectedLightCapacity = min(DDGI_HIT_MAX_SHADED_LIGHTS, DDGI_MAX_SELECTED_HIT_LIGHTS);
     uint selectedLightCount = 0u;
     if (selectedLightCapacity == 0u || pc.LightCount == 0u)
         return directDiffuseRadiance;

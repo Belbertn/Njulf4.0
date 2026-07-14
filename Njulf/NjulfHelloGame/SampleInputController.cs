@@ -1925,19 +1925,19 @@ internal sealed class SampleInputController
         return view switch
         {
             GlobalIlluminationDebugView.DdgiSupportCoverage =>
-                "cyan border; grayscale support. Black means no accepted active probes.",
+                "cyan border; grayscale valid probe-data support. Black means no accepted active probes.",
             GlobalIlluminationDebugView.DdgiDataConfidence =>
-                "blue border; grayscale atlas/data confidence. Black means alpha/quality is zero.",
+                "blue border; grayscale directional support for structured gather (atlas/data confidence for legacy).",
             GlobalIlluminationDebugView.DdgiConfidenceChain =>
-                "blue border; RGB = irradiance alpha / quality / visibility confidence.",
+                "blue border; structured RGB = valid / directional / visibility support (legacy = alpha / quality / visibility).",
             GlobalIlluminationDebugView.DdgiSampledIrradiance =>
                 "orange border; sampled DDGI irradiance before albedo and metallic.",
             GlobalIlluminationDebugView.DdgiFinalDiffuse =>
-                "orange border; DDGI diffuse after albedo and metallic, before hybrid fallback.",
+                "orange border; owned DDGI diffuse after albedo and metallic, before environment fallback.",
             GlobalIlluminationDebugView.DdgiConfidenceBypass =>
                 "blue border; final DDGI with confidence suppression bypassed but visibility and leak attenuation retained.",
             GlobalIlluminationDebugView.DdgiSuppressionMask =>
-                "cyan border; RGB = support / leak attenuation / data confidence.",
+                "cyan border; structured RGB = valid / directional / visibility support.",
             GlobalIlluminationDebugView.DdgiGatherClipmap =>
                 "magenta border; hashed color = selected primary clipmap volume.",
             GlobalIlluminationDebugView.DdgiGatherBlendWeight =>

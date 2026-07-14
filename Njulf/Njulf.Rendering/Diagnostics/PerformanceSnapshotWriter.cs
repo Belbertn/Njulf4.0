@@ -6,6 +6,34 @@ using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Diagnostics
 {
+    /// <summary>
+    /// Immutable context required to compare captures meaningfully. This is deliberately
+    /// separate from the frame diagnostics so snapshot consumers can reject incompatible
+    /// hardware, resolution, scene, or feature configurations before comparing timings.
+    /// </summary>
+    public sealed record PerformanceCaptureMetadata(
+        string GpuDeviceName,
+        string DriverVersion,
+        uint RenderWidth,
+        uint RenderHeight,
+        RenderQualityPreset QualityPreset,
+        ulong SceneContentRevision,
+        string DebugState,
+        IReadOnlyList<string> FeatureFlags,
+        string GiTimingCoverage)
+    {
+        public static PerformanceCaptureMetadata Unknown { get; } = new(
+            "unknown-device",
+            "unknown-driver",
+            0,
+            0,
+            RenderQualityPreset.DdgiHigh,
+            0,
+            "unknown",
+            Array.Empty<string>(),
+            "unavailable");
+    }
+
     public sealed record PerformanceSnapshot(
         DateTimeOffset CapturedAt,
         RenderBudgetProfile Profile,
@@ -13,7 +41,17 @@ namespace Njulf.Rendering.Diagnostics
         PerformanceFoliageSnapshot Foliage,
         PerformanceGlobalIlluminationSnapshot GlobalIllumination,
         IReadOnlyList<string> Warnings,
-        RenderBudgetSnapshot Budget);
+        RenderBudgetSnapshot Budget)
+    {
+        /// <summary>
+        /// Increment when changing the persisted performance-capture contract in an
+        /// incompatible way. Version 2 adds explicit capture metadata and GI timing coverage.
+        /// </summary>
+        public const int CurrentSchemaVersion = 2;
+
+        public int SchemaVersion { get; init; } = CurrentSchemaVersion;
+        public PerformanceCaptureMetadata Capture { get; init; } = PerformanceCaptureMetadata.Unknown;
+    }
 
     public sealed record PerformanceFoliageSnapshot(
         int PatchCount,
@@ -57,6 +95,12 @@ namespace Njulf.Rendering.Diagnostics
         int SimpleDdgiMaintenanceRayProbeUpdateCount,
         ulong SimpleDdgiAdaptiveRaySavedRaysPerFrame,
         ulong SimpleDdgiAtlasBytes,
+        bool SimpleDdgiSampledAtlasRequested,
+        bool SimpleDdgiSampledAtlasActive,
+        int SimpleDdgiSampledAtlasGroupCount,
+        int SimpleDdgiSampledAtlasLayersPerTexture,
+        ulong SimpleDdgiSampledAtlasImageBytes,
+        string SimpleDdgiSampledAtlasFallbackReason,
         long GpuSimpleDdgiTraceMicroseconds,
         long GpuSimpleDdgiBlendMicroseconds,
         uint SsgiWidth,
@@ -210,6 +254,8 @@ namespace Njulf.Rendering.Diagnostics
         ulong AccelerationStructureInstanceUploadBytes,
         ulong AccelerationStructureRayQueryMetadataUploadBytes,
         long CpuRecordMicroseconds,
+        long CpuRecordP95Microseconds,
+        int CpuTimingSampleCount,
         long CpuDdgiSchedulerMicroseconds,
         long CpuDdgiSchedulerP95Microseconds,
         long CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds,
@@ -256,22 +302,30 @@ namespace Njulf.Rendering.Diagnostics
                 throw new ArgumentNullException(nameof(budget));
 
             Directory.CreateDirectory(directory);
-            string path = Path.Combine(directory, $"performance-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.json");
-            var capturedAt = DateTimeOffset.Now;
+            DateTimeOffset capturedAt = DateTimeOffset.UtcNow;
+            string path = Path.Combine(
+                directory,
+                $"performance-{capturedAt:yyyyMMdd-HHmmss-fffffff}-{Guid.NewGuid():N}.json");
             var snapshot = new PerformanceSnapshot(
                 capturedAt,
                 budget.Profile,
                 diagnostics,
                 CreateFoliageSnapshot(diagnostics),
                 CreateGlobalIlluminationSnapshot(diagnostics),
-                CreateWarnings(diagnostics),
-                budget);
+                CreateWarnings(diagnostics, budget.Profile),
+                budget)
+            {
+                SchemaVersion = PerformanceSnapshot.CurrentSchemaVersion,
+                Capture = CreateCaptureMetadata(diagnostics)
+            };
             string json = JsonSerializer.Serialize(snapshot, SerializerOptions);
             File.WriteAllText(path, json);
             return path;
         }
 
-        private static IReadOnlyList<string> CreateWarnings(RendererDiagnostics diagnostics)
+        private static IReadOnlyList<string> CreateWarnings(
+            RendererDiagnostics diagnostics,
+            RenderBudgetProfile profile)
         {
             var warnings = new List<string>(4);
             if (diagnostics.HiZEnabled != 0 && diagnostics.HiZConsumerCount == 0)
@@ -297,7 +351,135 @@ namespace Njulf.Rendering.Diagnostics
             {
                 warnings.Add("DDGI total memory exceeds the configured tier budget.");
             }
+            bool forwardGiRequired = diagnostics.GlobalIlluminationDdgiActive != 0 ||
+                diagnostics.SimpleDdgiActive != 0;
+            if (forwardGiRequired && diagnostics.GpuForwardGiGatherTimingCoverage == 0)
+                warnings.Add("Forward GI gather timing is unavailable; total GI GPU cost is not release-gate ready.");
+            if (diagnostics.GlobalIlluminationEnabled != 0 &&
+                diagnostics.GlobalIlluminationCpuTimingSampleCount > 0 &&
+                diagnostics.CpuGlobalIlluminationRecordP95Microseconds >
+                    profile.GlobalIlluminationCpuBudgetMilliseconds * 1000.0)
+            {
+                warnings.Add("GI CPU scheduling and upload P95 exceeds the configured tier budget.");
+            }
+            if (diagnostics.SimpleDdgiSampledAtlasRequested != 0 &&
+                diagnostics.SimpleDdgiSampledAtlasActive == 0 &&
+                !string.IsNullOrWhiteSpace(diagnostics.SimpleDdgiSampledAtlasFallbackReason))
+            {
+                warnings.Add("Sampled Simple DDGI atlas fell back to the canonical SSBO path: " +
+                    diagnostics.SimpleDdgiSampledAtlasFallbackReason);
+            }
+            if (diagnostics.DdgiDetailedCountersEnabled != 0 &&
+                diagnostics.DdgiInvestigationCountersReadbackValid == 0)
+            {
+                warnings.Add("Detailed GI counter readback is unavailable; counter-based quality diagnostics are unavailable.");
+            }
+            if (diagnostics.SimpleDdgiDirtyFirstUpdateLatencySampleCount > 0 &&
+                diagnostics.SimpleDdgiDirtyFirstUpdateLatencyP95Frames > 1)
+            {
+                warnings.Add("Simple DDGI dirty-to-first-update P95 exceeds the one-frame response target.");
+            }
+            if (diagnostics.SimpleDdgiDirtyConvergenceLatencySampleCount > 0 &&
+                diagnostics.SimpleDdgiDirtyConvergenceLatencyP95Frames > 8)
+            {
+                warnings.Add("Simple DDGI dirty-to-convergence P95 exceeds the eight-frame target.");
+            }
+            if (diagnostics.StreamedGiAccelerationStructuresFeatureEnabled != 0 &&
+                diagnostics.AccelerationStructureMemoryBudgetBytes > 0UL &&
+                diagnostics.AccelerationStructureResidentBytes > diagnostics.AccelerationStructureMemoryBudgetBytes)
+            {
+                warnings.Add("Resident GI acceleration structures exceed the configured hard memory limit.");
+            }
+            if (diagnostics.AccelerationStructureBlasBudgetRejectedCount > 0)
+                warnings.Add("GI acceleration-structure residency rejected BLAS allocation under the active budget.");
+            if (diagnostics.FarFieldPagedMode != 0 &&
+                diagnostics.FarFieldMemoryBudgetBytes > 0UL &&
+                diagnostics.FarFieldCacheBytes > diagnostics.FarFieldMemoryBudgetBytes)
+            {
+                warnings.Add("Far-field page cache exceeds the configured hard memory limit.");
+            }
+            if (diagnostics.DdgiBlackFrameSuspect != 0)
+                warnings.Add("DDGI black-frame suspect was reported; inspect support and environment-fallback diagnostics.");
             return warnings;
+        }
+
+        private static PerformanceCaptureMetadata CreateCaptureMetadata(RendererDiagnostics diagnostics)
+        {
+            return new PerformanceCaptureMetadata(
+                string.IsNullOrWhiteSpace(diagnostics.CaptureGpuDeviceName)
+                    ? "unknown-device"
+                    : diagnostics.CaptureGpuDeviceName,
+                string.IsNullOrWhiteSpace(diagnostics.CaptureGpuDriverVersion)
+                    ? "unknown-driver"
+                    : diagnostics.CaptureGpuDriverVersion,
+                diagnostics.CaptureRenderWidth,
+                diagnostics.CaptureRenderHeight,
+                diagnostics.ActiveQualityPreset,
+                diagnostics.CaptureSceneContentRevision,
+                CreateDebugState(diagnostics),
+                CreateFeatureFlags(diagnostics),
+                CreateGiTimingCoverage(diagnostics));
+        }
+
+        private static string CreateDebugState(RendererDiagnostics diagnostics)
+        {
+            return $"gi={diagnostics.GlobalIlluminationDebugView}; " +
+                   $"featureIsolation={diagnostics.ActiveFeatureIsolation}; " +
+                   $"validation={diagnostics.ValidationMode}; " +
+                   $"gpuTiming={(diagnostics.GpuTimingValid != 0 ? "available" : "unavailable")}";
+        }
+
+        private static IReadOnlyList<string> CreateFeatureFlags(RendererDiagnostics diagnostics)
+        {
+            var flags = new List<string>(12);
+            if (diagnostics.GlobalIlluminationSsgiActive != 0)
+                flags.Add("ssgi");
+            if (diagnostics.GlobalIlluminationDdgiActive != 0)
+                flags.Add("ddgi");
+            if (diagnostics.SimpleDdgiActive != 0)
+                flags.Add("simple-ddgi");
+            if (diagnostics.GlobalIlluminationRayQueryActive != 0)
+                flags.Add("ray-query");
+            if (diagnostics.SimpleDdgiStructuredGatherEnabled != 0)
+                flags.Add("structured-gather");
+            if (diagnostics.SimpleDdgiReducedBlendEnabled != 0)
+                flags.Add("reduced-blend");
+            if (diagnostics.SimpleDdgiSampledAtlasActive != 0)
+                flags.Add("sampled-atlas");
+            if (diagnostics.SimpleDdgiToroidalScrollingEnabled != 0)
+                flags.Add("toroidal-scrolling");
+            if (diagnostics.SimpleDdgiRegionalInvalidationEnabled != 0)
+                flags.Add("regional-invalidation");
+            if (diagnostics.FarFieldPagedFeatureEnabled != 0)
+                flags.Add("paged-far-field");
+            if (diagnostics.StreamedGiAccelerationStructuresFeatureEnabled != 0)
+                flags.Add("streamed-gi-acceleration-structures");
+            if (diagnostics.DdgiDetailedCountersEnabled != 0)
+                flags.Add("detailed-gi-counters");
+            if (diagnostics.AsyncComputeEnabled != 0)
+                flags.Add("async-compute");
+            if (flags.Count == 0)
+                flags.Add("none");
+            return flags;
+        }
+
+        private static string CreateGiTimingCoverage(RendererDiagnostics diagnostics)
+        {
+            if (diagnostics.GlobalIlluminationEnabled == 0)
+                return "inactive";
+
+            var scopes = new List<string>(5)
+            {
+                diagnostics.GpuTimingValid != 0 ? "update=available" : "update=unavailable",
+                diagnostics.GpuForwardGiGatherTimingCoverage != 0
+                    ? "forward-gather=inclusive-forward-draw"
+                    : "forward-gather=unavailable",
+                diagnostics.GpuFarFieldUpdateTimingValid != 0
+                    ? "far-field-update=available"
+                    : "far-field-update=unavailable",
+                "acceleration-structures=separate-blas-tlas-scopes"
+            };
+            return string.Join("; ", scopes);
         }
 
         private static PerformanceFoliageSnapshot CreateFoliageSnapshot(RendererDiagnostics diagnostics)
@@ -354,14 +536,25 @@ namespace Njulf.Rendering.Diagnostics
 
         private static PerformanceGlobalIlluminationSnapshot CreateGlobalIlluminationSnapshot(RendererDiagnostics diagnostics)
         {
-            long cpuRecordMicroseconds = diagnostics.CpuSsgiRecordMicroseconds + diagnostics.CpuDdgiRecordMicroseconds;
+            long cpuRecordMicroseconds = diagnostics.GlobalIlluminationCpuTimingSampleCount > 0
+                ? diagnostics.CpuGlobalIlluminationRecordMicroseconds
+                : diagnostics.CpuSsgiRecordMicroseconds +
+                  diagnostics.CpuDdgiRecordMicroseconds +
+                  diagnostics.CpuDdgiSchedulerMicroseconds +
+                  diagnostics.CpuSimpleDdgiRecordMicroseconds +
+                  diagnostics.CpuFarFieldRecordMicroseconds +
+                  diagnostics.CpuAccelerationStructureBuildMicroseconds;
             long gpuMicroseconds = diagnostics.GpuSsgiTraceMicroseconds +
                 diagnostics.GpuSsgiTemporalMicroseconds +
                 diagnostics.GpuSsgiDenoiseMicroseconds +
                 diagnostics.GpuDdgiUpdateMicroseconds +
                 diagnostics.GpuGiCompositeMicroseconds +
+                diagnostics.GpuFarFieldUpdateMicroseconds +
                 diagnostics.GpuAccelerationStructureBlasMicroseconds +
-                diagnostics.GpuAccelerationStructureTlasMicroseconds;
+                diagnostics.GpuAccelerationStructureTlasMicroseconds +
+                (diagnostics.GpuForwardGiGatherTimingCoverage != 0
+                    ? diagnostics.GpuForwardGiGatherMicroseconds
+                    : 0);
             ulong memoryBytes = diagnostics.GlobalIlluminationRenderTargetBytes +
                 diagnostics.DdgiTextureBytes +
                 diagnostics.DdgiBufferBytes +
@@ -390,6 +583,12 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.SimpleDdgiMaintenanceRayProbeUpdateCount,
                 diagnostics.SimpleDdgiAdaptiveRaySavedRaysPerFrame,
                 diagnostics.SimpleDdgiAtlasBytes,
+                diagnostics.SimpleDdgiSampledAtlasRequested != 0,
+                diagnostics.SimpleDdgiSampledAtlasActive != 0,
+                diagnostics.SimpleDdgiSampledAtlasGroupCount,
+                diagnostics.SimpleDdgiSampledAtlasLayersPerTexture,
+                diagnostics.SimpleDdgiSampledAtlasImageBytes,
+                diagnostics.SimpleDdgiSampledAtlasFallbackReason,
                 diagnostics.GpuSimpleDdgiTraceMicroseconds,
                 diagnostics.GpuSimpleDdgiBlendMicroseconds,
                 diagnostics.SsgiWidth,
@@ -543,6 +742,8 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.AccelerationStructureInstanceUploadBytes,
                 diagnostics.AccelerationStructureRayQueryMetadataUploadBytes,
                 cpuRecordMicroseconds,
+                diagnostics.CpuGlobalIlluminationRecordP95Microseconds,
+                diagnostics.GlobalIlluminationCpuTimingSampleCount,
                 diagnostics.CpuDdgiSchedulerMicroseconds,
                 diagnostics.CpuDdgiSchedulerP95Microseconds,
                 diagnostics.CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds,

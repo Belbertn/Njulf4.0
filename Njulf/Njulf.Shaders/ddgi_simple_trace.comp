@@ -42,7 +42,14 @@ const float DDGI_DIRECTIONAL_SHADOW_RAY_DISTANCE = 256.0;
 
 #define DDGI_HIT_USE_SELECTED_LIGHTS 0
 #define DDGI_HIT_ENABLE_ENVIRONMENT_WRAPPER 0
-#define DDGI_HIT_DIRECT_LIGHT_CAP pc.MaxShadedLights
+// These private values are written once per queued probe update below.  Keeping
+// the shared hit-shading policy behind macros avoids cloning the material and
+// direct-light logic while allowing the scheduler to cap far-ring work.
+uint simpleDdgiCurrentMaxShadedLights;
+uint simpleDdgiCurrentMaterialTextureMaxCascade;
+#define DDGI_HIT_DIRECT_LIGHT_CAP simpleDdgiCurrentMaxShadedLights
+#define DDGI_HIT_MAX_SHADED_LIGHTS simpleDdgiCurrentMaxShadedLights
+#define DDGI_HIT_MATERIAL_TEXTURE_MAX_CASCADE simpleDdgiCurrentMaterialTextureMaxCascade
 #include "ddgi_hit_shading.glsl"
 
 void WriteSimpleRayResult(uint rayResultIndex, vec3 radiance, float distance, vec3 direction, float hitKind)
@@ -51,6 +58,11 @@ void WriteSimpleRayResult(uint rayResultIndex, vec3 radiance, float distance, ve
     WriteStorageVec4(pc.RayResultScratchBufferIndex, baseWord + 0u, vec4(clamp(radiance, vec3(0.0), vec3(65504.0)), distance));
     WriteStorageVec4(pc.RayResultScratchBufferIndex, baseWord + 4u, vec4(direction, hitKind));
 }
+
+// All calls below are in main(), where params is the authoritative uploaded
+// simple-DDGI state.  Remapping the counter helper here keeps disabled captures
+// free of the otherwise high-contention per-ray atomic operations.
+#define AddRendererDiagnostic(frameIndex, counterIndex, value) AddSimpleDdgiDiagnostic(params, frameIndex, counterIndex, value)
 
 void main()
 {
@@ -75,26 +87,92 @@ void main()
     uint localProbeIndex;
     if (!ResolveSimpleDdgiProbeVolume(probeIndex, params, volume, localProbeIndex))
         return;
-    vec3 probePosition = SimpleDdgiProbeRelocatedPosition(probeIndex, volume, localProbeIndex);
-    vec3 direction = SimpleDdgiFibonacciDirection(rayIndex, activeRayCount, params.rayRotation);
+    SimpleDdgiProbeState probeState = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
+    if (!SimpleDdgiUpdateMatchesProbeGeneration(update, probeState))
+        return;
+    uint volumeCascade = SimpleDdgiVolumeQualityCascade(volume);
+    int materialTextureMaxCascade = SimpleDdgiUpdateMaterialTextureMaxCascade(update);
+    simpleDdgiCurrentMaterialTextureMaxCascade = materialTextureMaxCascade < 0
+        ? DDGI_MATERIAL_TEXTURE_DISABLED_CASCADE
+        : uint(materialTextureMaxCascade);
+    simpleDdgiCurrentMaxShadedLights = SimpleDdgiUpdateMaxShadedLights(update, pc.MaxShadedLights);
+    vec3 probePosition = SimpleDdgiProbeLogicalPosition(volume, localProbeIndex) + probeState.relocation;
+    // Maintenance rays are a stratified subset of the full sequence.  This keeps
+    // the estimator's directional support stable when the scheduler changes tier.
+    uint directionRayIndex = activeRayCount < params.raysPerProbe
+        ? rayIndex * params.raysPerProbe / activeRayCount
+        : rayIndex;
+    vec3 direction = SimpleDdgiFibonacciDirection(directionRayIndex, params.raysPerProbe, params.rayRotation);
     float maxDistance = max(volume.spacing * float(max(max(volume.gridCount.x, volume.gridCount.y), volume.gridCount.z)), volume.spacing);
+    // A valid probe owns its complete low-frequency field, including environment
+    // misses.  Forward composition evaluates diffuse IBL only for probe ownership
+    // gaps, so sky energy is represented exactly once.
     vec3 radiance = SampleDdgiEnvironmentMissRadianceWithFallback(direction, params.environmentRadiance);
     float hitDistance = maxDistance;
     float hitKind = 0.0;
     bool farFieldOnlyRing = volume.spacing >= 15.999;
-    float farFieldStartDistance = farFieldOnlyRing ? 0.0 : params.farFieldStartDistance;
-    bool attemptedFarField = false;
+    bool farFieldEnabled = (pc.Flags & SIMPLE_DDGI_FLAG_FAR_FIELD_ENABLED) != 0u;
+    // A detailed near segment is authoritative.  The coarse far field begins only
+    // after it, so a coarse voxel can never suppress closer TLAS geometry.
+    float nearTlasMaxDistance = farFieldEnabled
+        ? min(maxDistance, max(params.farFieldStartDistance, volume.spacing))
+        : maxDistance;
 
-    if (((pc.Flags & SIMPLE_DDGI_FLAG_FAR_FIELD_ENABLED) != 0u) &&
-        (((pc.Flags & SIMPLE_DDGI_FLAG_FAR_FIELD_FORCE_ALL) != 0u) || farFieldOnlyRing || maxDistance > farFieldStartDistance))
+    if (nearTlasMaxDistance > DDGI_PROBE_TRACE_EPSILON)
     {
-        attemptedFarField = true;
+        rayQueryEXT query;
+        rayQueryInitializeEXT(query, SceneTlas, gl_RayFlagsOpaqueEXT, 0xff, probePosition, DDGI_PROBE_TRACE_EPSILON, direction, nearTlasMaxDistance);
+        while (rayQueryProceedEXT(query))
+        {
+        }
+
+        if (rayQueryGetIntersectionTypeEXT(query, true) != gl_RayQueryCommittedIntersectionNoneEXT)
+        {
+            hitDistance = rayQueryGetIntersectionTEXT(query, true);
+            bool frontFace = rayQueryGetIntersectionFrontFaceEXT(query, true);
+            uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(query, true);
+            uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
+            vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, true);
+            vec3 hitPosition = probePosition + direction * hitDistance;
+            vec3 surfaceNormal;
+            vec3 surfaceAlbedo;
+            vec3 surfaceEmissive;
+            bool sampleMaterialTextures = ShouldSampleDdgiMaterialTextures(volumeCascade);
+            if (ResolveCommittedHitSurface(
+                instanceIndex,
+                primitiveIndex,
+                barycentrics,
+                direction,
+                volumeCascade,
+                sampleMaterialTextures,
+                0.0,
+                surfaceNormal,
+                surfaceAlbedo,
+                surfaceEmissive))
+            {
+                vec3 bounce = SampleSimpleDdgiUnifiedIrradiance(hitPosition + surfaceNormal * 0.03, surfaceNormal, -direction, true) * surfaceAlbedo / SIMPLE_DDGI_PI;
+                vec3 directNoShadowDiffuse;
+                vec3 directDiffuse = EvaluateDirectDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo, directNoShadowDiffuse);
+                vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
+                radiance = surfaceEmissive + emissiveProxyDiffuse + directDiffuse + bounce;
+                if (dot(max(directDiffuse, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) > 0.0001)
+                    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_DIRECT_LIGHT_HIT_COUNTER, 1u);
+                if (dot(max(surfaceEmissive + emissiveProxyDiffuse, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) > 0.0001)
+                    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_EMISSIVE_HIT_COUNTER, 1u);
+                hitKind = frontFace ? 1.0 : 2.0;
+            }
+        }
+    }
+
+    if (hitKind < 0.5 && farFieldEnabled &&
+        (((pc.Flags & SIMPLE_DDGI_FLAG_FAR_FIELD_FORCE_ALL) != 0u) || farFieldOnlyRing || maxDistance > nearTlasMaxDistance))
+    {
         AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_RAY_COUNTER, 1u);
         vec3 farNormal;
         vec3 farAlbedo;
         bool farStepExhausted;
         uint farVisitedSteps;
-        if (TraceFarFieldClipmapDetailed(probePosition, direction, farFieldStartDistance, maxDistance, hitDistance, farNormal, farAlbedo, farStepExhausted, farVisitedSteps))
+        if (TraceFarFieldClipmapDetailed(probePosition, direction, nearTlasMaxDistance, maxDistance, hitDistance, farNormal, farAlbedo, farStepExhausted, farVisitedSteps))
         {
             AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_HIT_COUNTER, 1u);
             AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_FAR_FIELD_HIT_COUNTER, 1u);
@@ -124,52 +202,6 @@ void main()
         AddRendererDiagnostic(pc.CurrentFrameIndex, stepBucket, 1u);
     }
 
-    if (hitKind < 0.5 && !(farFieldOnlyRing && attemptedFarField))
-    {
-        rayQueryEXT query;
-        rayQueryInitializeEXT(query, SceneTlas, gl_RayFlagsOpaqueEXT, 0xff, probePosition, 0.02, direction, maxDistance);
-        while (rayQueryProceedEXT(query))
-        {
-        }
-
-        if (rayQueryGetIntersectionTypeEXT(query, true) != gl_RayQueryCommittedIntersectionNoneEXT)
-        {
-            hitDistance = rayQueryGetIntersectionTEXT(query, true);
-            bool frontFace = rayQueryGetIntersectionFrontFaceEXT(query, true);
-            uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(query, true);
-            uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
-            vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, true);
-            vec3 hitPosition = probePosition + direction * hitDistance;
-            vec3 surfaceNormal;
-            vec3 surfaceAlbedo;
-            vec3 surfaceEmissive;
-            bool sampleMaterialTextures = ShouldSampleDdgiMaterialTextures(0u);
-            if (ResolveCommittedHitSurface(
-                instanceIndex,
-                primitiveIndex,
-                barycentrics,
-                direction,
-                0u,
-                sampleMaterialTextures,
-                0.0,
-                surfaceNormal,
-                surfaceAlbedo,
-                surfaceEmissive))
-            {
-                vec3 bounce = SampleSimpleDdgiIrradiance(hitPosition + surfaceNormal * 0.03, surfaceNormal, -direction) * surfaceAlbedo / SIMPLE_DDGI_PI;
-                vec3 directNoShadowDiffuse;
-                vec3 directDiffuse = EvaluateDirectDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo, directNoShadowDiffuse);
-                vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
-                radiance = surfaceEmissive + emissiveProxyDiffuse + directDiffuse + bounce;
-                if (dot(max(directDiffuse, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) > 0.0001)
-                    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_DIRECT_LIGHT_HIT_COUNTER, 1u);
-                if (dot(max(surfaceEmissive + emissiveProxyDiffuse, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) > 0.0001)
-                    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_EMISSIVE_HIT_COUNTER, 1u);
-                hitKind = frontFace ? 1.0 : 2.0;
-            }
-        }
-    }
-
     if (hitKind >= 0.5)
     {
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_HIT_COUNTER, 1u);
@@ -183,3 +215,5 @@ void main()
 
     WriteSimpleRayResult(globalRay, radiance, hitDistance, direction, hitKind);
 }
+
+#undef AddRendererDiagnostic

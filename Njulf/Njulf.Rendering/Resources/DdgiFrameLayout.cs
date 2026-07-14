@@ -540,9 +540,21 @@ namespace Njulf.Rendering.Resources
                 if (renderObject == null || !renderObject.Enabled || !renderObject.Visible)
                     continue;
 
-                Vector3 position = renderObject.Position;
-                min = Vector3.Min(min, position);
-                max = Vector3.Max(max, position);
+                if (renderObject.LocalMeshBounds is BoundingBox localMeshBounds)
+                {
+                    BoundingBox worldMeshBounds = SceneDataBuilder.TransformBoundingBox(
+                        localMeshBounds,
+                        renderObject.WorldMatrix);
+                    min = Vector3.Min(min, worldMeshBounds.Min);
+                    max = Vector3.Max(max, worldMeshBounds.Max);
+                }
+                else
+                {
+                    Vector3 position = renderObject.Position;
+                    min = Vector3.Min(min, position);
+                    max = Vector3.Max(max, position);
+                }
+
                 hasPoint = true;
             }
 

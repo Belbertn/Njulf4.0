@@ -44,6 +44,9 @@ internal sealed class ProductionRenderPipelineDeclaration
         "TransparentForwardPass",
         "WeightedTransparentPass",
         "WeightedOitCompositePass",
+        "GpuParticleResetPass",
+        "GpuParticleSimulatePass",
+        "GpuParticleSortPass",
         "ParticlePass",
         "DebugDrawPass",
         "FogPass",
@@ -86,14 +89,14 @@ internal sealed class ProductionRenderPipelineDeclaration
             Pass("DepthPrePass",
             Read(RenderGraphResourceId.SceneSubmissionBuffers),
             Read(RenderGraphResourceId.FoliageBuffers),
-            Write(RenderGraphResourceId.SceneDepth)),
+            WriteDepthAttachment(RenderGraphResourceId.SceneDepth)),
             Pass("MotionVectorPass",
-            Read(RenderGraphResourceId.SceneDepth),
+            ReadDepth(RenderGraphResourceId.SceneDepth),
             Read(RenderGraphResourceId.SceneSubmissionBuffers),
             WriteColorAttachment(RenderGraphResourceId.MotionVectors)),
             Pass("HiZBuildPass",
-            Read(RenderGraphResourceId.SceneDepth),
-            Write(RenderGraphResourceId.HiZPyramid)),
+            ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+            WriteComputeStorage(RenderGraphResourceId.HiZPyramid, ImageLayout.ShaderReadOnlyOptimal)),
             Pass("ForwardVisibilityCompactionPass",
             ReadComputeSampled(RenderGraphResourceId.HiZPyramid),
             ReadComputeBuffer(RenderGraphResourceId.SceneSubmissionBuffers),
@@ -103,7 +106,7 @@ internal sealed class ProductionRenderPipelineDeclaration
         if (includeSsgi)
         {
             declarations.Add(Pass("SceneSurfacePass",
-                Read(RenderGraphResourceId.SceneDepth),
+                ReadDepth(RenderGraphResourceId.SceneDepth),
                 Read(RenderGraphResourceId.HiZPyramid),
                 Read(RenderGraphResourceId.SceneSubmissionBuffers),
                 WriteColorAttachment(RenderGraphResourceId.SceneNormal),
@@ -113,44 +116,66 @@ internal sealed class ProductionRenderPipelineDeclaration
         declarations.AddRange([
             Pass("AmbientOcclusionPass",
             ReadDepth(RenderGraphResourceId.SceneDepth),
-            WriteComputeStorage(RenderGraphResourceId.AmbientOcclusionRaw),
-            Write(RenderGraphResourceId.AmbientOcclusionScratch)),
+            WriteComputeStorage(RenderGraphResourceId.AmbientOcclusionRaw, ImageLayout.ShaderReadOnlyOptimal)),
             Pass("AmbientOcclusionBlurPass",
             ReadComputeSampled(RenderGraphResourceId.AmbientOcclusionRaw),
-            ReadWriteComputeStorage(RenderGraphResourceId.AmbientOcclusionScratch),
-            WriteComputeStorage(RenderGraphResourceId.AmbientOcclusionBlurred)),
+            ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+            ReadWriteComputeStorage(RenderGraphResourceId.AmbientOcclusionScratch, ImageLayout.ShaderReadOnlyOptimal),
+            WriteComputeStorage(RenderGraphResourceId.AmbientOcclusionBlurred, ImageLayout.ShaderReadOnlyOptimal)),
             Pass("TiledLightCullingPass",
-            Read(RenderGraphResourceId.SceneDepth),
+            ReadComputeDepth(RenderGraphResourceId.SceneDepth),
             Write(RenderGraphResourceId.LightTiles))
         ]);
 
         declarations.Add(includeSsgi
             ? Pass("ForwardPlusPass",
-                Read(RenderGraphResourceId.SceneDepth),
+                ReadOrWriteDepthAttachment(RenderGraphResourceId.SceneDepth),
                 Read(RenderGraphResourceId.SceneSubmissionBuffers),
                 Read(RenderGraphResourceId.ForwardVisibilityBuffers),
                 Read(RenderGraphResourceId.FoliageBuffers),
                 Read(RenderGraphResourceId.LightTiles),
-                Read(RenderGraphResourceId.AmbientOcclusionBlurred),
+                ReadFragmentSampled(RenderGraphResourceId.AmbientOcclusionBlurred),
                 Read(RenderGraphResourceId.DirectionalShadowMap),
                 Read(RenderGraphResourceId.SpotShadowAtlas),
                 Read(RenderGraphResourceId.PointShadowCubemapArray),
                 Read(RenderGraphResourceId.ReflectionProbeCubemaps),
                 Read(RenderGraphResourceId.EnvironmentMaps),
+                ReadGraphicsStorage(RenderGraphResourceId.MeshGeometryBuffers),
+                ReadGraphicsStorage(RenderGraphResourceId.MaterialBuffers),
+                ReadFragmentSampled(RenderGraphResourceId.MaterialTextures),
+                ReadGraphicsStorage(RenderGraphResourceId.LightBuffers),
+                ReadGraphicsStorage(RenderGraphResourceId.EnvironmentData),
+                ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
+                ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
+                ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiProbeState),
+                ReadGraphicsStorage(RenderGraphResourceId.FullDdgiAtlases),
+                ReadGraphicsStorage(RenderGraphResourceId.FullDdgiState),
+                ReadWriteGraphicsStorage(RenderGraphResourceId.RendererDiagnosticsBuffer),
                 WriteColorAttachment(RenderGraphResourceId.SceneColor),
                 WriteColorAttachment(RenderGraphResourceId.SsgiTraceSource))
             : Pass("ForwardPlusPass",
-                Read(RenderGraphResourceId.SceneDepth),
+                ReadOrWriteDepthAttachment(RenderGraphResourceId.SceneDepth),
                 Read(RenderGraphResourceId.SceneSubmissionBuffers),
                 Read(RenderGraphResourceId.ForwardVisibilityBuffers),
                 Read(RenderGraphResourceId.FoliageBuffers),
                 Read(RenderGraphResourceId.LightTiles),
-                Read(RenderGraphResourceId.AmbientOcclusionBlurred),
+                ReadFragmentSampled(RenderGraphResourceId.AmbientOcclusionBlurred),
                 Read(RenderGraphResourceId.DirectionalShadowMap),
                 Read(RenderGraphResourceId.SpotShadowAtlas),
                 Read(RenderGraphResourceId.PointShadowCubemapArray),
                 Read(RenderGraphResourceId.ReflectionProbeCubemaps),
                 Read(RenderGraphResourceId.EnvironmentMaps),
+                ReadGraphicsStorage(RenderGraphResourceId.MeshGeometryBuffers),
+                ReadGraphicsStorage(RenderGraphResourceId.MaterialBuffers),
+                ReadFragmentSampled(RenderGraphResourceId.MaterialTextures),
+                ReadGraphicsStorage(RenderGraphResourceId.LightBuffers),
+                ReadGraphicsStorage(RenderGraphResourceId.EnvironmentData),
+                ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
+                ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
+                ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiProbeState),
+                ReadGraphicsStorage(RenderGraphResourceId.FullDdgiAtlases),
+                ReadGraphicsStorage(RenderGraphResourceId.FullDdgiState),
+                ReadWriteGraphicsStorage(RenderGraphResourceId.RendererDiagnosticsBuffer),
                 WriteColorAttachment(RenderGraphResourceId.SceneColor)));
 
         if (includeSsgi)
@@ -158,31 +183,32 @@ internal sealed class ProductionRenderPipelineDeclaration
             declarations.AddRange([
                 Pass("SsgiTracePass",
                     ReadComputeSampled(RenderGraphResourceId.SsgiTraceSource),
-                    ReadDepth(RenderGraphResourceId.SceneDepth),
+                    ReadComputeDepth(RenderGraphResourceId.SceneDepth),
                     ReadComputeSampled(RenderGraphResourceId.SceneNormal),
                     ReadComputeSampled(RenderGraphResourceId.SceneMaterial),
-                    WriteComputeStorage(RenderGraphResourceId.SsgiRaw),
-                    WriteComputeStorage(RenderGraphResourceId.SsgiHitDistance)),
+                    WriteComputeStorage(RenderGraphResourceId.SsgiRaw, ImageLayout.ShaderReadOnlyOptimal),
+                    WriteComputeStorage(RenderGraphResourceId.SsgiHitDistance, ImageLayout.ShaderReadOnlyOptimal)),
                 Pass("SsgiTemporalPass",
                     ReadComputeSampled(RenderGraphResourceId.SsgiRaw),
-                    ReadDepth(RenderGraphResourceId.SceneDepth),
+                    ReadComputeDepth(RenderGraphResourceId.SceneDepth),
                     ReadComputeSampled(RenderGraphResourceId.SceneNormal),
                     ReadComputeSampled(RenderGraphResourceId.MotionVectors),
-                    ReadWriteComputeStorage(RenderGraphResourceId.SsgiHistory),
-                    ReadWriteComputeStorage(RenderGraphResourceId.SsgiDepthHistory),
-                    ReadWriteComputeStorage(RenderGraphResourceId.SsgiNormalHistory),
-                    ReadWriteComputeStorage(RenderGraphResourceId.SsgiMoments),
-                    ReadWriteComputeStorage(RenderGraphResourceId.SsgiHistoryLength),
-                    WriteComputeStorage(RenderGraphResourceId.SsgiFiltered)),
+                    ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer),
+                    ReadWriteComputeStorage(RenderGraphResourceId.SsgiHistory, ImageLayout.ShaderReadOnlyOptimal),
+                    ReadWriteComputeStorage(RenderGraphResourceId.SsgiDepthHistory, ImageLayout.ShaderReadOnlyOptimal),
+                    ReadWriteComputeStorage(RenderGraphResourceId.SsgiNormalHistory, ImageLayout.ShaderReadOnlyOptimal),
+                    ReadWriteComputeStorage(RenderGraphResourceId.SsgiMoments, ImageLayout.ShaderReadOnlyOptimal),
+                    ReadWriteComputeStorage(RenderGraphResourceId.SsgiHistoryLength, ImageLayout.ShaderReadOnlyOptimal),
+                    WriteComputeStorage(RenderGraphResourceId.SsgiFiltered, ImageLayout.ShaderReadOnlyOptimal)),
                 Pass("SsgiDenoisePass",
                     ReadComputeSampled(RenderGraphResourceId.SsgiRaw),
                     ReadComputeSampled(RenderGraphResourceId.SsgiHitDistance),
                     ReadComputeSampled(RenderGraphResourceId.SsgiFiltered),
-                    ReadDepth(RenderGraphResourceId.SceneDepth),
+                    ReadComputeDepth(RenderGraphResourceId.SceneDepth),
                     ReadComputeSampled(RenderGraphResourceId.SceneNormal),
                     ReadComputeSampled(RenderGraphResourceId.SsgiMoments),
                     ReadComputeSampled(RenderGraphResourceId.SsgiHistoryLength),
-                    WriteComputeStorage(RenderGraphResourceId.GiFinalDiffuse)),
+                    WriteComputeStorage(RenderGraphResourceId.GiFinalDiffuse, ImageLayout.ShaderReadOnlyOptimal)),
             Pass("SsgiCompositePass",
                 ReadFragmentSampled(RenderGraphResourceId.GiFinalDiffuse),
                 ReadFragmentSampled(RenderGraphResourceId.SceneMaterial),
@@ -191,62 +217,171 @@ internal sealed class ProductionRenderPipelineDeclaration
         }
 
         // DDGI update runs after ForwardPlusPass and publishes cache data for subsequent frames.
+        // DDGI paths deliberately declare every concrete storage family they touch. A scheduler
+        // rejects the path if even one binding is unavailable rather than treating BufferSet or
+        // External as an opaque unit and risking an unpaired queue-family handoff.
         declarations.AddRange([
             Pass("FarFieldClipmapBakePass",
-                ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),
+                ReadComputeBuffer(RenderGraphResourceId.MeshGeometryBuffers),
+                ReadComputeBuffer(RenderGraphResourceId.MaterialBuffers),
+                ReadWriteComputeBuffer(RenderGraphResourceId.FarFieldParameters),
+                ReadWriteComputeBuffer(RenderGraphResourceId.FarFieldVoxels),
+                ReadComputeBuffer(RenderGraphResourceId.FarFieldInstances),
+                ReadWriteComputeBuffer(RenderGraphResourceId.FarFieldJumpFlood),
+                ReadWriteComputeBuffer(RenderGraphResourceId.FarFieldPageTable),
+                ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)),
             Pass("SimpleDdgiTracePass",
-                Read(RenderGraphResourceId.SceneSubmissionBuffers),
-                ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),
+                ReadComputeAccelerationStructure(RenderGraphResourceId.TlasStorage),
+                ReadComputeBuffer(RenderGraphResourceId.RayQueryInstanceMetadata),
+                ReadComputeBuffer(RenderGraphResourceId.MeshGeometryBuffers),
+                ReadComputeBuffer(RenderGraphResourceId.MaterialBuffers),
+                ReadComputeSampled(RenderGraphResourceId.MaterialTextures),
+                ReadComputeBuffer(RenderGraphResourceId.LightBuffers),
+                ReadComputeBuffer(RenderGraphResourceId.DdgiEmissiveSources),
+                ReadComputeBuffer(RenderGraphResourceId.EnvironmentData),
+                ReadComputeSampled(RenderGraphResourceId.EnvironmentMaps),
+                ReadComputeBuffer(RenderGraphResourceId.FarFieldParameters),
+                ReadComputeBuffer(RenderGraphResourceId.FarFieldVoxels),
+                ReadComputeBuffer(RenderGraphResourceId.FarFieldInstances),
+                ReadComputeBuffer(RenderGraphResourceId.FarFieldJumpFlood),
+                ReadComputeBuffer(RenderGraphResourceId.FarFieldPageTable),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRayScratch),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRelocationData),
+                ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)),
             Pass("SimpleDdgiRelocateClassifyPass",
-                ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRelocationData)),
             Pass("SimpleDdgiBlendPass",
-                ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRayScratch),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRelocationData),
+                ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)),
             Pass("DdgiSchedulePass",
-                ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),
+                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiScheduler),
+                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiState)),
             Pass("DdgiTracePass",
-                Read(RenderGraphResourceId.SceneSubmissionBuffers),
-                ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),
+                ReadComputeAccelerationStructure(RenderGraphResourceId.TlasStorage),
+                ReadComputeBuffer(RenderGraphResourceId.RayQueryInstanceMetadata),
+                ReadComputeBuffer(RenderGraphResourceId.MeshGeometryBuffers),
+                ReadComputeBuffer(RenderGraphResourceId.MaterialBuffers),
+                ReadComputeSampled(RenderGraphResourceId.MaterialTextures),
+                ReadComputeBuffer(RenderGraphResourceId.LightBuffers),
+                ReadComputeBuffer(RenderGraphResourceId.DdgiEmissiveSources),
+                ReadComputeBuffer(RenderGraphResourceId.EnvironmentData),
+                ReadComputeSampled(RenderGraphResourceId.EnvironmentMaps),
+                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiScheduler),
+                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiRayResources),
+                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiAtlases),
+                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiState),
+                ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)),
             Pass("DdgiBlendPass",
-                ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),
+                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiRayResources),
+                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiAtlases),
+                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiState),
+                ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)),
             Pass("DdgiRelocateClassifyPass",
-                ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),
+                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiAtlases),
+                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiState)),
             Pass("DdgiPublishPass",
-                ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),
+                ReadComputeBuffer(RenderGraphResourceId.FullDdgiAtlases),
+                ReadComputeBuffer(RenderGraphResourceId.FullDdgiState)),
             Pass("SkyboxPass",
-            Read(RenderGraphResourceId.SceneDepth),
-                Read(RenderGraphResourceId.EnvironmentMaps),
+            ReadDepth(RenderGraphResourceId.SceneDepth),
+                ReadFragmentSampled(RenderGraphResourceId.EnvironmentMaps),
+                ReadGraphicsStorage(RenderGraphResourceId.EnvironmentData),
                 ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)),
             Pass("TransparentForwardPass",
-            Read(RenderGraphResourceId.SceneDepth),
+            ReadDepth(RenderGraphResourceId.SceneDepth),
             Read(RenderGraphResourceId.DirectionalShadowMap),
             Read(RenderGraphResourceId.SpotShadowAtlas),
             Read(RenderGraphResourceId.PointShadowCubemapArray),
             Read(RenderGraphResourceId.ReflectionProbeCubemaps),
+            ReadFragmentSampled(RenderGraphResourceId.EnvironmentMaps),
+            ReadGraphicsStorage(RenderGraphResourceId.MeshGeometryBuffers),
+            ReadGraphicsStorage(RenderGraphResourceId.MaterialBuffers),
+            ReadFragmentSampled(RenderGraphResourceId.MaterialTextures),
+            ReadGraphicsStorage(RenderGraphResourceId.LightBuffers),
+            ReadGraphicsStorage(RenderGraphResourceId.EnvironmentData),
+            ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
+            ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
+            ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiProbeState),
+            ReadGraphicsStorage(RenderGraphResourceId.FullDdgiAtlases),
+            ReadGraphicsStorage(RenderGraphResourceId.FullDdgiState),
+            ReadWriteGraphicsStorage(RenderGraphResourceId.RendererDiagnosticsBuffer),
             ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)),
             Pass("WeightedTransparentPass",
-            Read(RenderGraphResourceId.SceneDepth),
+            ReadDepth(RenderGraphResourceId.SceneDepth),
             Read(RenderGraphResourceId.DirectionalShadowMap),
             Read(RenderGraphResourceId.SpotShadowAtlas),
             Read(RenderGraphResourceId.PointShadowCubemapArray),
             Read(RenderGraphResourceId.ReflectionProbeCubemaps),
+            ReadFragmentSampled(RenderGraphResourceId.EnvironmentMaps),
+            ReadGraphicsStorage(RenderGraphResourceId.MeshGeometryBuffers),
+            ReadGraphicsStorage(RenderGraphResourceId.MaterialBuffers),
+            ReadFragmentSampled(RenderGraphResourceId.MaterialTextures),
+            ReadGraphicsStorage(RenderGraphResourceId.LightBuffers),
+            ReadGraphicsStorage(RenderGraphResourceId.EnvironmentData),
+            ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
+            ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
+            ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiProbeState),
+            ReadGraphicsStorage(RenderGraphResourceId.FullDdgiAtlases),
+            ReadGraphicsStorage(RenderGraphResourceId.FullDdgiState),
+            ReadWriteGraphicsStorage(RenderGraphResourceId.RendererDiagnosticsBuffer),
             WriteColorAttachment(RenderGraphResourceId.WeightedOitAccumulation),
             WriteColorAttachment(RenderGraphResourceId.WeightedOitRevealage)),
             Pass("WeightedOitCompositePass",
             ReadFragmentSampled(RenderGraphResourceId.WeightedOitAccumulation),
             ReadFragmentSampled(RenderGraphResourceId.WeightedOitRevealage),
             ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)),
+            Pass("GpuParticleResetPass",
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleState),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleIndices),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleCounters),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleUnsortedOutput),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleRenderOutput),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleIndirectArguments),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleSortKeys)),
+            Pass("GpuParticleSimulatePass",
+            ReadComputeBuffer(RenderGraphResourceId.ParticleBuffers),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleState),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleIndices),
+            ReadComputeBuffer(RenderGraphResourceId.GpuParticleEmitterData),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleCounters),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleUnsortedOutput),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleIndirectArguments),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleSortKeys)),
+            Pass("GpuParticleSortPass",
+            ReadComputeBuffer(RenderGraphResourceId.ParticleBuffers),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleCounters),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleUnsortedOutput),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleRenderOutput),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleIndirectArguments),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleSortKeys),
+            ReadWriteComputeBuffer(RenderGraphResourceId.GpuParticleCounterReadback)),
             Pass("ParticlePass",
-            Read(RenderGraphResourceId.SceneDepth),
-            Read(RenderGraphResourceId.ParticleBuffers),
-            Read(RenderGraphResourceId.GpuParticleBuffers),
+            ReadDepth(RenderGraphResourceId.SceneDepth),
+            ReadGraphicsStorage(RenderGraphResourceId.ParticleBuffers),
+            ReadGraphicsStorage(RenderGraphResourceId.GpuParticleRenderOutput),
+            ReadGraphicsIndirect(RenderGraphResourceId.GpuParticleIndirectArguments),
             ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)),
             Pass("DebugDrawPass",
-            Read(RenderGraphResourceId.SceneDepth),
+            ReadDepth(RenderGraphResourceId.SceneDepth),
             ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)),
             Pass("FogPass",
             ReadComputeSampled(RenderGraphResourceId.SceneColor),
-            ReadDepth(RenderGraphResourceId.SceneDepth),
-            WriteComputeStorage(RenderGraphResourceId.FogOutput)),
+            ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+            WriteComputeStorage(RenderGraphResourceId.FogOutput, ImageLayout.ShaderReadOnlyOptimal)),
             Pass("AutoExposurePass",
             ReadComputeSampled(RenderGraphResourceId.SceneColor),
             ReadComputeSampled(RenderGraphResourceId.FogOutput),
@@ -254,7 +389,7 @@ internal sealed class ProductionRenderPipelineDeclaration
             Pass("BloomPass",
             ReadComputeSampled(RenderGraphResourceId.SceneColor),
             ReadComputeSampled(RenderGraphResourceId.FogOutput),
-            ReadWriteComputeStorage(RenderGraphResourceId.BloomChain)),
+            ReadWriteComputeStorage(RenderGraphResourceId.BloomChain, ImageLayout.ShaderReadOnlyOptimal)),
             Pass("ToneMapCompositePass",
             ReadFragmentSampled(RenderGraphResourceId.SceneColor),
             ReadFragmentSampled(RenderGraphResourceId.FogOutput),
@@ -297,6 +432,32 @@ internal sealed class ProductionRenderPipelineDeclaration
             OwnedImageResource(RenderGraphResourceId.AmbientOcclusionScratch, "Ambient occlusion scratch", RenderTargetManager.AmbientOcclusionFormat, RenderGraphResourceSizePolicy.HalfResolution),
             .. CreateSsgiResourceDescriptors(includeSsgi),
             BufferSetResource(RenderGraphResourceId.DdgiProbeResources, "DDGI probe resources"),
+            BufferSetResource(RenderGraphResourceId.TlasStorage, "TLAS storage"),
+            BufferSetResource(RenderGraphResourceId.RayQueryInstanceMetadata, "Ray-query instance metadata"),
+            BufferSetResource(RenderGraphResourceId.MeshGeometryBuffers, "Mesh geometry buffers"),
+            BufferSetResource(RenderGraphResourceId.MaterialBuffers, "Material buffers"),
+            ImageChainResource(RenderGraphResourceId.MaterialTextures, "Material textures", Format.R8G8B8A8Unorm, RenderGraphResourceSizePolicy.Dynamic),
+            BufferSetResource(RenderGraphResourceId.LightBuffers, "Light buffers"),
+            BufferSetResource(RenderGraphResourceId.EnvironmentData, "Environment data"),
+            BufferSetResource(RenderGraphResourceId.RendererDiagnosticsBuffer, "Renderer diagnostics"),
+            BufferSetResource(RenderGraphResourceId.DdgiEmissiveSources, "DDGI emissive sources"),
+            BufferSetResource(RenderGraphResourceId.FarFieldParameters, "Far-field parameters"),
+            BufferSetResource(RenderGraphResourceId.FarFieldVoxels, "Far-field voxel and distance buffers"),
+            BufferSetResource(RenderGraphResourceId.FarFieldInstances, "Far-field instances"),
+            BufferSetResource(RenderGraphResourceId.FarFieldJumpFlood, "Far-field jump-flood buffers"),
+            BufferSetResource(RenderGraphResourceId.FarFieldPageTable, "Far-field page table"),
+            BufferSetResource(RenderGraphResourceId.SimpleDdgiParameters, "Simple DDGI parameters"),
+            BufferSetResource(RenderGraphResourceId.SimpleDdgiIrradianceAtlas, "Simple DDGI irradiance atlas"),
+            BufferSetResource(RenderGraphResourceId.SimpleDdgiVisibilityAtlas, "Simple DDGI visibility atlas"),
+            BufferSetResource(RenderGraphResourceId.SimpleDdgiRayScratch, "Simple DDGI ray scratch"),
+            BufferSetResource(RenderGraphResourceId.SimpleDdgiProbeState, "Simple DDGI probe state"),
+            BufferSetResource(RenderGraphResourceId.SimpleDdgiUpdateQueue, "Simple DDGI update queue"),
+            BufferSetResource(RenderGraphResourceId.SimpleDdgiRelocationData, "Simple DDGI relocation and classification"),
+            BufferSetResource(RenderGraphResourceId.FullDdgiScheduler, "Full DDGI scheduler"),
+            BufferSetResource(RenderGraphResourceId.FullDdgiRayResources, "Full DDGI ray resources"),
+            BufferSetResource(RenderGraphResourceId.FullDdgiAtlases, "Full DDGI atlases"),
+            BufferSetResource(RenderGraphResourceId.FullDdgiState, "Full DDGI state"),
+            BufferSetResource(RenderGraphResourceId.FullDdgiPublishResources, "Full DDGI publish resources"),
             OwnedImageResource(RenderGraphResourceId.FogOutput, "Fog output", RenderTargetManager.FoggedSceneColorFormat, RenderGraphResourceSizePolicy.Swapchain),
             ImageResource(RenderGraphResourceId.DirectionalShadowMap, "Directional shadow map", depthFormat, RenderGraphResourceSizePolicy.ShadowMap),
             ImageResource(RenderGraphResourceId.SpotShadowAtlas, "Spot shadow atlas", depthFormat, RenderGraphResourceSizePolicy.ShadowMap),
@@ -304,6 +465,15 @@ internal sealed class ProductionRenderPipelineDeclaration
             ImageChainResource(RenderGraphResourceId.HiZPyramid, "Hi-Z pyramid", depthFormat, RenderGraphResourceSizePolicy.HalfResolution),
             BufferSetResource(RenderGraphResourceId.ParticleBuffers, "CPU particle buffers"),
             BufferSetResource(RenderGraphResourceId.GpuParticleBuffers, "GPU particle buffers"),
+            BufferSetResource(RenderGraphResourceId.GpuParticleState, "GPU particle state buffers"),
+            BufferSetResource(RenderGraphResourceId.GpuParticleIndices, "GPU particle index buffers"),
+            BufferSetResource(RenderGraphResourceId.GpuParticleEmitterData, "GPU particle emitter and curve buffers"),
+            BufferSetResource(RenderGraphResourceId.GpuParticleCounters, "GPU particle counters"),
+            BufferSetResource(RenderGraphResourceId.GpuParticleUnsortedOutput, "GPU particle unsorted output"),
+            BufferSetResource(RenderGraphResourceId.GpuParticleRenderOutput, "GPU particle render output"),
+            BufferSetResource(RenderGraphResourceId.GpuParticleIndirectArguments, "GPU particle indirect arguments"),
+            BufferSetResource(RenderGraphResourceId.GpuParticleSortKeys, "GPU particle sort keys"),
+            BufferSetResource(RenderGraphResourceId.GpuParticleCounterReadback, "GPU particle counter readback"),
             BufferSetResource(RenderGraphResourceId.FoliageBuffers, "Foliage buffers"),
             BufferSetResource(RenderGraphResourceId.SceneSubmissionBuffers, "Scene submission buffers"),
             BufferSetResource(RenderGraphResourceId.ForwardVisibilityBuffers, "Forward visibility buffers"),
@@ -602,6 +772,17 @@ internal sealed class ProductionRenderPipelineDeclaration
             RenderGraphQueueIntent.Graphics);
     }
 
+    private static RenderGraphResourceUsage ReadComputeDepth(RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.Read,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderSampledReadBit,
+            ImageLayout.DepthStencilReadOnlyOptimal,
+            RenderGraphQueueIntent.Compute);
+    }
+
     private static RenderGraphResourceUsage Write(RenderGraphResourceId resource)
     {
         return new RenderGraphResourceUsage(resource, RenderGraphResourceAccess.Write);
@@ -618,6 +799,56 @@ internal sealed class ProductionRenderPipelineDeclaration
             RenderGraphQueueIntent.Compute);
     }
 
+    private static RenderGraphResourceUsage ReadComputeAccelerationStructure(RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.Read,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.AccelerationStructureReadBitKhr,
+            ImageLayout.Undefined,
+            RenderGraphQueueIntent.Compute);
+    }
+
+    private static RenderGraphResourceUsage ReadGraphicsStorage(RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.Read,
+            PipelineStageFlags2.TaskShaderBitExt |
+            PipelineStageFlags2.MeshShaderBitExt |
+            PipelineStageFlags2.VertexShaderBit |
+            PipelineStageFlags2.FragmentShaderBit,
+            AccessFlags2.ShaderStorageReadBit,
+            ImageLayout.Undefined,
+            RenderGraphQueueIntent.Graphics);
+    }
+
+    private static RenderGraphResourceUsage ReadWriteGraphicsStorage(RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.ReadWrite,
+            PipelineStageFlags2.TaskShaderBitExt |
+            PipelineStageFlags2.MeshShaderBitExt |
+            PipelineStageFlags2.VertexShaderBit |
+            PipelineStageFlags2.FragmentShaderBit,
+            AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+            ImageLayout.Undefined,
+            RenderGraphQueueIntent.Graphics);
+    }
+
+    private static RenderGraphResourceUsage ReadGraphicsIndirect(RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.Read,
+            PipelineStageFlags2.DrawIndirectBit,
+            AccessFlags2.IndirectCommandReadBit,
+            ImageLayout.Undefined,
+            RenderGraphQueueIntent.Graphics);
+    }
+
     private static RenderGraphResourceUsage WriteColorAttachment(RenderGraphResourceId resource)
     {
         return new RenderGraphResourceUsage(
@@ -629,7 +860,38 @@ internal sealed class ProductionRenderPipelineDeclaration
             RenderGraphQueueIntent.Graphics);
     }
 
-    private static RenderGraphResourceUsage WriteComputeStorage(RenderGraphResourceId resource)
+    private static RenderGraphResourceUsage WriteDepthAttachment(RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.Write,
+            PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit,
+            AccessFlags2.DepthStencilAttachmentReadBit | AccessFlags2.DepthStencilAttachmentWriteBit,
+            ImageLayout.DepthStencilAttachmentOptimal,
+            RenderGraphQueueIntent.Graphics);
+    }
+
+    // Forward+ reads the prepass when it exists, but owns a depth clear/write when it does not.
+    // Leave layout selection to dynamic rendering while retaining a bounded source scope for a
+    // following compute handoff in either configuration.
+    private static RenderGraphResourceUsage ReadOrWriteDepthAttachment(RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.ReadWrite,
+            PipelineStageFlags2.EarlyFragmentTestsBit |
+            PipelineStageFlags2.LateFragmentTestsBit |
+            PipelineStageFlags2.FragmentShaderBit,
+            AccessFlags2.DepthStencilAttachmentReadBit |
+            AccessFlags2.DepthStencilAttachmentWriteBit |
+            AccessFlags2.ShaderSampledReadBit,
+            ImageLayout.Undefined,
+            RenderGraphQueueIntent.Graphics);
+    }
+
+    private static RenderGraphResourceUsage WriteComputeStorage(
+        RenderGraphResourceId resource,
+        ImageLayout finalImageLayout = ImageLayout.Undefined)
     {
         return new RenderGraphResourceUsage(
             resource,
@@ -637,7 +899,8 @@ internal sealed class ProductionRenderPipelineDeclaration
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageWriteBit,
             ImageLayout.General,
-            RenderGraphQueueIntent.Compute);
+            RenderGraphQueueIntent.Compute,
+            finalImageLayout);
     }
 
     private static RenderGraphResourceUsage WriteComputeBuffer(RenderGraphResourceId resource)
@@ -678,7 +941,9 @@ internal sealed class ProductionRenderPipelineDeclaration
             RenderGraphQueueIntent.Graphics);
     }
 
-    private static RenderGraphResourceUsage ReadWriteComputeStorage(RenderGraphResourceId resource)
+    private static RenderGraphResourceUsage ReadWriteComputeStorage(
+        RenderGraphResourceId resource,
+        ImageLayout finalImageLayout = ImageLayout.Undefined)
     {
         return new RenderGraphResourceUsage(
             resource,
@@ -686,7 +951,8 @@ internal sealed class ProductionRenderPipelineDeclaration
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
             ImageLayout.General,
-            RenderGraphQueueIntent.Compute);
+            RenderGraphQueueIntent.Compute,
+            finalImageLayout);
     }
 }
 

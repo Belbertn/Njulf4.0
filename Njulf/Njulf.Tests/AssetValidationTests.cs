@@ -447,7 +447,16 @@ public sealed class AssetValidationTests
 
     private static string CreateTestDirectory()
     {
-        string directory = Path.Combine(TestContext.CurrentContext.WorkDirectory, "asset-validation-tests", TestContext.CurrentContext.Test.ID);
+        // NUnit test IDs are stable across repeated test runs, so using only the
+        // ID leaks previously generated models into a later folder-wide scan.
+        // Give every invocation an isolated leaf directory; this also keeps
+        // concurrently executing test instances from observing each other's
+        // generated assets.
+        string directory = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            "asset-validation-tests",
+            TestContext.CurrentContext.Test.ID,
+            Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         return directory;
     }

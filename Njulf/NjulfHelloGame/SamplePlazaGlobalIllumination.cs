@@ -92,8 +92,22 @@ internal static class SamplePlazaGlobalIllumination
         gi.DdgiMinimumProbeRefreshFrames = 120;
         gi.DdgiProbeUpdateTimeBudgetMilliseconds = 2.5f;
         gi.DdgiGpuTotalUpdateTimeBudgetMilliseconds = 2.5f;
+        // The Sponza asset has hundreds of distinct meshes; the generic 256 MiB
+        // high-tier cap drops roughly half of them from the ray-query TLAS.
+        gi.GiAccelerationStructureMemoryBudgetBytes = 512UL * 1024UL * 1024UL;
+        // The camera ring is intentionally compact and does not cover Sponza's
+        // Y=18.76 upper arches at one-metre density. Keep a bounded overlapping
+        // slab for the upper courtyard; rings still provide travel coverage.
+        gi.SimpleDdgiAuthoredVolumes.Clear();
+        gi.SimpleDdgiAuthoredVolumes.Add(new SimpleDdgiAuthoredVolume(
+            new Vector3(-17.0f, 9.0f, -10.0f),
+            new Vector3(21.0f, 19.0f, 15.0f),
+            1.0f));
         gi.IndirectIntensity = 1.0f;
-        gi.EnvironmentFallbackIntensity = 0.45f;
+        // This is the missing-ownership complement, not an artistic IBL scale.
+        // Keep unsupported DDGI cells energy preserving; Environment.DiffuseIntensity
+        // remains the scene's artistic sky contribution.
+        gi.EnvironmentFallbackIntensity = 1.0f;
         gi.ResolutionScale = 0.5f;
         gi.MaxBounceDistance = 14.0f;
         gi.TemporalEnabled = false;

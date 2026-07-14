@@ -231,7 +231,7 @@ internal sealed class HelloGame : Game
         if (_smokeOptions.EnableSceneSubmissionValidation)
             renderer.Settings.SceneSubmission.ValidationCompareCpuGpuLists = true;
         if (_smokeOptions.EnableAsyncCompute)
-            renderer.Settings.AsyncCompute.Enabled = true;
+            renderer.Settings.AsyncCompute.Mode = AsyncComputeMode.ForceEnabledForValidation;
         if (_smokeOptions.EnableFarFieldClipmap)
             renderer.Settings.GlobalIllumination.FarFieldClipmapEnabled = true;
         if (_smokeOptions.EnableFarFieldForceAll)

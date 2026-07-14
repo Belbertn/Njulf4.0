@@ -66,6 +66,9 @@ namespace Njulf.Rendering.Pipeline
         }
 
         public override bool SupportsSecondaryCommandBuffer => true;
+        public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
+        public override bool SupportsAsyncCompute => true;
+        public override string AsyncComputeReason => "SSGI temporal filtering is part of the atomic trace/temporal/denoise async chain.";
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {

@@ -19,6 +19,7 @@ namespace Njulf.Rendering.Debug
         private readonly List<int>[] _activePassQueries = new List<int>[FramesInFlight];
         private readonly int[] _graphicsPassQueryCounts = new int[FramesInFlight];
         private readonly int[] _computePassQueryCounts = new int[FramesInFlight];
+        private readonly bool[] _computeQueryPoolsReset = new bool[FramesInFlight];
         private readonly FrameTimingSnapshot[] _completedSnapshots = new FrameTimingSnapshot[FramesInFlight];
         private readonly bool[] _framePending = new bool[FramesInFlight];
         private bool _disposed;
@@ -129,14 +130,29 @@ namespace Njulf.Rendering.Debug
             _activePassQueries[frameIndex].Clear();
             _graphicsPassQueryCounts[frameIndex] = 0;
             _computePassQueryCounts[frameIndex] = 0;
+            _computeQueryPoolsReset[frameIndex] = false;
 
             if (!EnabledThisFrame)
                 return;
 
             _context.Api.CmdResetQueryPool(commandBuffer, _graphicsQueryPools[frameIndex], 0, QueryCount);
-            _context.Api.CmdResetQueryPool(commandBuffer, _computeQueryPools[frameIndex], 0, QueryCount);
             PendingThisFrame = true;
             _framePending[frameIndex] = true;
+        }
+
+        /// <summary>
+        /// Resets the compute timestamp pool on the queue that will write it. Resetting it on the
+        /// primary graphics command buffer is not ordered before an independent compute queue and
+        /// can race the first compute timestamp write.
+        /// </summary>
+        public void BeginComputeQueueFrame(CommandBuffer commandBuffer, int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            if (!EnabledThisFrame || _computeQueryPoolsReset[frameIndex])
+                return;
+
+            _context.Api.CmdResetQueryPool(commandBuffer, _computeQueryPools[frameIndex], 0, QueryCount);
+            _computeQueryPoolsReset[frameIndex] = true;
         }
 
         public void BeginPass(CommandBuffer commandBuffer, int frameIndex, string passName)

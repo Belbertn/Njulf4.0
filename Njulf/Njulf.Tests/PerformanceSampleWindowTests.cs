@@ -24,5 +24,23 @@ namespace Njulf.Tests
                 Assert.That(stats.P95, Is.EqualTo(10));
             });
         }
+
+        [Test]
+        public void PerformanceSampleWindow_ClearDropsRetainedSamples()
+        {
+            var window = new PerformanceSampleWindow(4);
+            window.Add(12);
+            window.Add(24);
+
+            window.Clear();
+            PerformanceSampleStats stats = window.GetStats();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(stats.Count, Is.EqualTo(0));
+                Assert.That(stats.Average, Is.EqualTo(0));
+                Assert.That(stats.P95, Is.EqualTo(0));
+            });
+        }
     }
 }

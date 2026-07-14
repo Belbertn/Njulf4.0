@@ -68,7 +68,12 @@ namespace Njulf.Tests
         [Test]
         public void BuildVolumes_PacksEnabledVolumesAndHeader()
         {
-            var settings = new GlobalIlluminationSettings { Enabled = true, Mode = GlobalIlluminationMode.Ddgi };
+            var settings = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi,
+                DdgiSimpleEnabled = false
+            };
             settings.EnvironmentFallbackIntensity = 0.35f;
             settings.DdgiThinWallLeakClampStrength = 0.8f;
             settings.DdgiThinWallProxyThickness = 0.18f;
@@ -149,7 +154,8 @@ namespace Njulf.Tests
             var settings = new GlobalIlluminationSettings
             {
                 Enabled = true,
-                Mode = GlobalIlluminationMode.Ddgi
+                Mode = GlobalIlluminationMode.Ddgi,
+                DdgiSimpleEnabled = false
             };
 
             GPUDdgiProbeVolumeHeader header = GlobalIlluminationProbeVolumeData.BuildHeader(
@@ -180,6 +186,7 @@ namespace Njulf.Tests
             {
                 Enabled = true,
                 Mode = GlobalIlluminationMode.Ddgi,
+                DdgiSimpleEnabled = false,
                 DdgiExhaustiveGatherFallbackEnabled = false
             };
 
@@ -216,6 +223,7 @@ namespace Njulf.Tests
             {
                 Enabled = true,
                 Mode = GlobalIlluminationMode.Ddgi,
+                DdgiSimpleEnabled = false,
                 DdgiRawAtlasRadianceConventionEnabled = false
             };
 
@@ -252,6 +260,7 @@ namespace Njulf.Tests
             {
                 Enabled = true,
                 Mode = GlobalIlluminationMode.Ddgi,
+                DdgiSimpleEnabled = false,
                 DdgiDebugForceProbeActive = false
             };
 
@@ -284,7 +293,12 @@ namespace Njulf.Tests
         [Test]
         public void BuildVolumes_PreservesPerVolumeIntensityForFinalShading()
         {
-            var settings = new GlobalIlluminationSettings { Enabled = true, Mode = GlobalIlluminationMode.Ddgi };
+            var settings = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi,
+                DdgiSimpleEnabled = false
+            };
             var volumes = new[]
             {
                 new GlobalIlluminationProbeVolume
@@ -320,6 +334,7 @@ namespace Njulf.Tests
             {
                 Enabled = true,
                 Mode = GlobalIlluminationMode.Ddgi,
+                DdgiSimpleEnabled = false,
                 IndirectIntensity = 1.75f,
                 EnvironmentFallbackIntensity = 0.25f,
                 DdgiRawAtlasRadianceConventionEnabled = true
@@ -366,7 +381,12 @@ namespace Njulf.Tests
         [Test]
         public void BuildVolumes_PacksRuntimeClipmapMetadata()
         {
-            var settings = new GlobalIlluminationSettings { Enabled = true, Mode = GlobalIlluminationMode.Ddgi };
+            var settings = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi,
+                DdgiSimpleEnabled = false
+            };
             var volumes = new[]
             {
                 new GlobalIlluminationProbeVolume
@@ -430,6 +450,7 @@ namespace Njulf.Tests
             {
                 Enabled = true,
                 Mode = GlobalIlluminationMode.Ddgi,
+                DdgiSimpleEnabled = false,
                 DdgiMaxActiveProbes = 64,
                 DdgiAtlasMemoryBudgetBytes = GlobalIlluminationProbeVolumeData.AtlasBytesPerProbe * 64UL
             };
@@ -501,7 +522,12 @@ namespace Njulf.Tests
         [Test]
         public void BuildVolumes_UsesShaderRayBudgetAndExplicitMaxRayDistance()
         {
-            var settings = new GlobalIlluminationSettings { Enabled = true, Mode = GlobalIlluminationMode.Ddgi };
+            var settings = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi,
+                DdgiSimpleEnabled = false
+            };
             var volumes = new[]
             {
                 new GlobalIlluminationProbeVolume
@@ -542,6 +568,7 @@ namespace Njulf.Tests
             {
                 Enabled = true,
                 Mode = GlobalIlluminationMode.Ddgi,
+                DdgiSimpleEnabled = false,
                 DdgiMaxActiveProbes = 48,
                 DdgiMaxProbeUpdatesPerFrame = 5,
                 DdgiMaxRaysPerProbe = 80,

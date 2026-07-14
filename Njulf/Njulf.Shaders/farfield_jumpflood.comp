@@ -17,6 +17,12 @@ layout(push_constant) uniform FarFieldJumpFloodPushBlock
     uint Stride;
     uint DistanceBufferIndex;
     uint CurrentFrameIndex;
+    uint PageVoxelOffset;
+    uint PageDistanceWordOffset;
+    uint PageTableBufferIndex;
+    uint PageTableEntryIndex;
+    uint PageGeneration;
+    uint DiagnosticFlags;
 } pc;
 
 const uint FARFIELD_JUMP_FLOOD_MODE_SEED = 0u;
@@ -81,12 +87,30 @@ float FarFieldSeedBoxDistanceVoxels(uvec3 voxel, uint seed)
 void WritePackedDistance(uint packedWordIndex, uint lowDistance, uint highDistance)
 {
     uint packed = (lowDistance & 0xffffu) | ((highDistance & 0xffffu) << 16u);
-    WriteStorageWord(pc.DistanceBufferIndex, packedWordIndex, packed);
+    WriteStorageWord(pc.DistanceBufferIndex, pc.PageDistanceWordOffset + packedWordIndex, packed);
+}
+
+FarFieldClipmapParams ResolveFarFieldJumpFloodParams(FarFieldClipmapParams params)
+{
+    if (!params.pagedEnabled)
+        return params;
+
+    uint tableBase = pc.PageTableEntryIndex * FAR_FIELD_PAGE_TABLE_ENTRY_WORDS;
+    uint flags = ReadStorageWord(pc.PageTableBufferIndex, tableBase + 3u);
+    uint cascade = flags & FAR_FIELD_PAGE_CASCADE_MASK;
+    ivec3 worldPage = ivec3(
+        int(ReadStorageWord(pc.PageTableBufferIndex, tableBase + 0u)),
+        int(ReadStorageWord(pc.PageTableBufferIndex, tableBase + 1u)),
+        int(ReadStorageWord(pc.PageTableBufferIndex, tableBase + 2u)));
+    params.origin = FarFieldPageOrigin(params, cascade, worldPage);
+    params.voxelSize = FarFieldCascadeVoxelSize(params, cascade);
+    params.extent = FarFieldPageExtent(params, cascade);
+    return params;
 }
 
 void main()
 {
-    FarFieldClipmapParams params = ReadFarFieldClipmapParams(pc.ParamsBufferIndex);
+    FarFieldClipmapParams params = ResolveFarFieldJumpFloodParams(ReadFarFieldClipmapParams(pc.ParamsBufferIndex));
     uint dispatchIndex = gl_GlobalInvocationID.x;
     uint voxelCount = params.resolution.x * params.resolution.y * params.resolution.z;
 
@@ -95,7 +119,7 @@ void main()
         if (dispatchIndex >= voxelCount)
             return;
 
-        uint occupied = ReadStorageWord(pc.VoxelBufferIndex, dispatchIndex);
+        uint occupied = ReadStorageWord(pc.VoxelBufferIndex, pc.PageVoxelOffset + dispatchIndex);
         uint seed = (occupied & 0x80000000u) != 0u
             ? PackFarFieldSeed(FarFieldVoxelFromLinear(dispatchIndex, params))
             : 0u;
@@ -157,7 +181,7 @@ void main()
         }
 
         WritePackedDistance(dispatchIndex, distance0, distance1);
-        if (dispatchIndex == 0u)
+        if (dispatchIndex == 0u && !params.pagedEnabled)
         {
             WriteStorageFloat(pc.ParamsBufferIndex, 20u, float(pc.DistanceBufferIndex));
             WriteStorageFloat(pc.ParamsBufferIndex, 23u, 1.0);

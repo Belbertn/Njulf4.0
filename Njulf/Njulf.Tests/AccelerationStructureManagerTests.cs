@@ -108,6 +108,64 @@ public sealed unsafe class AccelerationStructureManagerTests
     }
 
     [Test]
+    public void AlignScratchBufferAddress_AlignsReportedValidationFailureAddress()
+    {
+        const ulong reportedAddress = 61_213_635_408UL;
+        const ulong requiredAlignment = 128UL;
+
+        ulong alignedAddress = AccelerationStructureManager.AlignScratchBufferAddress(
+            reportedAddress,
+            requiredAlignment);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(alignedAddress, Is.EqualTo(61_213_635_456UL));
+            Assert.That(alignedAddress % requiredAlignment, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void ScratchBufferAllocation_ReservesWorstCaseAlignmentPadding()
+    {
+        const ulong requiredSize = 4_096UL;
+        const ulong requiredAlignment = 128UL;
+
+        ulong allocationSize = AccelerationStructureManager.CalculateScratchBufferAllocationSize(
+            requiredSize,
+            requiredAlignment);
+
+        Assert.That(allocationSize, Is.EqualTo(4_223UL));
+    }
+
+    [Test]
+    public void TopLevelReservation_OnlyReservesGrowthBeyondCurrentAllocation()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                AccelerationStructureManager.CalculateAdditionalTopLevelReservation(1_024UL, 256UL),
+                Is.EqualTo(768UL));
+            Assert.That(
+                AccelerationStructureManager.CalculateAdditionalTopLevelReservation(1_024UL, 1_024UL),
+                Is.Zero);
+            Assert.That(
+                AccelerationStructureManager.CalculateAdditionalTopLevelReservation(512UL, 1_024UL),
+                Is.Zero);
+        });
+    }
+
+    [Test]
+    public void RenderObject_StaticHintIsExplicitOptIn()
+    {
+        var renderObject = new Njulf.Core.Scene.RenderObject();
+
+        Assert.That(renderObject.IsStatic, Is.False);
+
+        renderObject.IsStatic = true;
+        Assert.That(renderObject.IsStatic, Is.True);
+    }
+
+    [Test]
     public void ResolveGeometryPolicy_DeclaresDdgiVisibilityPolicy()
     {
         DdgiAccelerationStructureGeometryPolicy opaque = AccelerationStructureManager.ResolveGeometryPolicy(
@@ -201,7 +259,7 @@ public sealed unsafe class AccelerationStructureManagerTests
     }
 
     [Test]
-    public void CreateInstanceSignature_ChangesForTransformAndMaterialFlags()
+    public void CreateInstanceSignature_ChangesForTransformMaterialAndGeometryDomain()
     {
         var meshInfo = new MeshInfo
         {
@@ -223,17 +281,46 @@ public sealed unsafe class AccelerationStructureManagerTests
         {
             MaterialIndex = 9u
         };
+        var dynamicInstance = baseInstance with
+        {
+            Domain = AccelerationStructureGeometryDomain.Dynamic
+        };
 
         ulong baseSignature = AccelerationStructureManager.CreateInstanceSignature(new[] { baseInstance });
         ulong repeatedSignature = AccelerationStructureManager.CreateInstanceSignature(new[] { baseInstance });
         ulong movedSignature = AccelerationStructureManager.CreateInstanceSignature(new[] { movedInstance });
         ulong rematerialedSignature = AccelerationStructureManager.CreateInstanceSignature(new[] { rematerialedInstance });
+        ulong dynamicSignature = AccelerationStructureManager.CreateInstanceSignature(new[] { dynamicInstance });
 
         Assert.Multiple(() =>
         {
             Assert.That(repeatedSignature, Is.EqualTo(baseSignature));
             Assert.That(movedSignature, Is.Not.EqualTo(baseSignature));
             Assert.That(rematerialedSignature, Is.Not.EqualTo(baseSignature));
+            Assert.That(dynamicSignature, Is.Not.EqualTo(baseSignature));
+        });
+    }
+
+    [Test]
+    public void ResidencyPolicy_UsesExplicitBoundedSettingsAndKeepsLegacyPathOptIn()
+    {
+        AccelerationStructureResidencyPolicy disabled = AccelerationStructureResidencyPolicy.Disabled;
+        var bounded = new AccelerationStructureResidencyPolicy(
+            Enabled: true,
+            CameraPosition: new Vector3(10f, 20f, 30f),
+            MemoryBudgetBytes: 0,
+            StaticResidentDistance: 128f,
+            MaximumStaticInstances: 256,
+            EvictionGraceFrames: 3);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(disabled.Enabled, Is.False);
+            Assert.That(disabled.EffectiveMemoryBudgetBytes, Is.EqualTo(ulong.MaxValue));
+            Assert.That(bounded.Enabled, Is.True);
+            Assert.That(bounded.EffectiveMemoryBudgetBytes, Is.EqualTo(16UL));
+            Assert.That(bounded.MaximumStaticInstances, Is.EqualTo(256));
+            Assert.That(bounded.EvictionGraceFrames, Is.EqualTo(3));
         });
     }
 
@@ -245,6 +332,7 @@ public sealed unsafe class AccelerationStructureManagerTests
         Assert.That(source, Does.Not.Contain(".WaitIdle("));
         Assert.That(source, Does.Contain("RetireAccelerationStructureResource"));
         Assert.That(source, Does.Contain("RetireBufferResource"));
+        Assert.That(source, Does.Contain("RetiredAccelerationStructureBytes"));
     }
 
     private static string FindSourceFile(params string[] relativeParts)

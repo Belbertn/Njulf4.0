@@ -32,7 +32,7 @@ namespace Njulf.Rendering.Resources
         public const int CounterCount = MeshletCounterCount + DdgiForwardEstimateCounterCount + DdgiTraceEnergyCounterCount + DdgiTraceEarlyOutCounterCount + DdgiBlendEnergyCounterCount + DdgiTraceRingMismatchSampleCount + FarFieldCounterCount + DdgiInvestigationCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
-        private const ulong CounterBufferSize = CounterCount * sizeof(uint);
+        public const ulong CounterBufferSize = CounterCount * sizeof(uint);
 
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
@@ -304,6 +304,13 @@ namespace Njulf.Rendering.Resources
         {
             ValidateFrameIndex(frameIndex);
             return _lastCompletedDdgiForwardEstimateCounters[frameIndex];
+        }
+
+        /// <summary>Returns the current frame's physical diagnostics storage allocation.</summary>
+        public BufferHandle GetBufferHandle(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _buffers[frameIndex];
         }
 
         public DdgiInvestigationCounters GetLastCompletedDdgiInvestigationCounters(int frameIndex)

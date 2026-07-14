@@ -24,6 +24,13 @@ namespace Njulf.Core.Scene
             get => _mesh;
             set { _mesh = value; _dirty = true; }
         }
+
+        /// <summary>
+        /// Gets or sets the axis-aligned bounds of <see cref="Mesh"/> in mesh-local space.
+        /// Imported models populate this metadata so systems that do not own the mesh registry
+        /// can still derive geometry-aware world bounds. Hand-authored objects may leave it unset.
+        /// </summary>
+        public BoundingBox? LocalMeshBounds { get; set; }
         
         public object? Material
         {
@@ -42,6 +49,12 @@ namespace Njulf.Core.Scene
             get => _enabled;
             set => _enabled = value;
         }
+
+        /// <summary>
+        /// Marks geometry whose mesh and placement are normally stationary. Renderers may use
+        /// this hint for bounded spatial residency; moving or skinned objects should leave it off.
+        /// </summary>
+        public bool IsStatic { get; set; }
         
         public int UpdateOrder
         {

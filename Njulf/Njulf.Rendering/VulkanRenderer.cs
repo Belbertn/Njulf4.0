@@ -69,6 +69,11 @@ namespace Njulf.Rendering
         private readonly UploadBudgetTracker _uploadBudgetTracker = new();
         private readonly RuntimeStallTracker _stallTracker = new();
         private readonly RenderBudgetEvaluator _budgetEvaluator = new();
+        private readonly PerformanceSampleWindow _globalIlluminationCpuTimingWindow = new(120);
+        private readonly AsyncComputeScheduler _asyncComputeScheduler = new();
+        private readonly AsyncComputeTimingPolicy _asyncComputeTimingPolicy = new();
+        private readonly List<DeferredAsyncSubmission> _deferredAsyncSubmissions = new();
+        private readonly AsyncComputeTimingFrame?[] _asyncComputeTimingFrames = new AsyncComputeTimingFrame?[FramesInFlight];
         private readonly bool _ownsDependencies;
         private HiZDepthPyramid? _hizDepthPyramid;
         private RenderTargetManager? _renderTargets;
@@ -153,6 +158,9 @@ namespace Njulf.Rendering
         private GpuParticleResetPass _gpuParticleResetPass = null!;
         private GpuParticleSimulatePass _gpuParticleSimulatePass = null!;
         private GpuParticleSortPass _gpuParticleSortPass = null!;
+        private GpuParticleResetGraphPass _gpuParticleResetGraphPass = null!;
+        private GpuParticleSimulateGraphPass _gpuParticleSimulateGraphPass = null!;
+        private GpuParticleSortGraphPass _gpuParticleSortGraphPass = null!;
         private FoliageManager _foliageManager = null!;
         private FoliagePipeline _foliagePipeline = null!;
         private FoliageCullPass _foliageCullPass = null!;
@@ -203,9 +211,30 @@ namespace Njulf.Rendering
         private long _lastQueueSubmitMicroseconds;
         private long _lastAsyncComputeSubmitMicroseconds;
         private long _lastPresentMicroseconds;
-        private bool _asyncComputeSplitSubmittedThisFrame;
-        private ulong _asyncComputeWaitValueThisFrame;
+        private bool _asyncComputePlanRecordedThisFrame;
+        private int _asyncComputeSubmittedGraphicsSegmentsThisFrame;
+        private int _asyncComputeSubmittedComputeSegmentsThisFrame;
+        private readonly List<AsyncComputeTimelineWait> _asyncComputeWaitsThisFrame = new();
         private int _asyncComputeOwnershipTransferCountThisFrame;
+        private int _asyncComputePlannedReleaseBarrierCountThisFrame;
+        private int _asyncComputePlannedAcquireBarrierCountThisFrame;
+        private int _asyncComputeEmittedReleaseBarrierCountThisFrame;
+        private int _asyncComputeEmittedAcquireBarrierCountThisFrame;
+        private long _asyncComputeBarrierRecordMicrosecondsThisFrame;
+        private ulong _asyncComputeTransferredBytesThisFrame;
+        private int _asyncComputeTransferredImageSubresourcesThisFrame;
+        private ulong _nextAsyncComputeTimelineValue = 1;
+        private int _nextAutoTimingProbePath;
+        private AsyncComputeMode? _lastAsyncComputeTimingMode;
+        private AsyncComputePlan? _frameAsyncComputePlan;
+        private AsyncComputeSubmissionPlan? _frameAsyncComputeSubmissionPlan;
+        private bool _asyncComputeEmergencyFallbackLatched;
+        private string _asyncComputeLastFallbackReason = string.Empty;
+        private int _asyncComputeValidationFallbackCount;
+        private bool _deviceLost;
+        private bool _frameSubmissionFaulted;
+        private string _frameSubmissionFaultReason = string.Empty;
+        private bool _swapchainImageTransitionedThisFrame;
         private bool _lastAmbientOcclusionTargetEnabled = true;
         private AntiAliasingMode _lastAntiAliasingTargetMode = AntiAliasingMode.SmaaMedium;
         private bool _lastMotionVectorTargetEnabled = true;
@@ -457,7 +486,12 @@ namespace Njulf.Rendering
             _ddgiGatherTileManager = new DdgiGatherTileManager(_context, _bufferManager);
             _ddgiEmissiveSourceBuffer = CreateDdgiEmissiveSourceBuffer();
             _accelerationStructureManager = new AccelerationStructureManager(_context, _bufferManager, _meshManager, _materialManager);
-            _farFieldClipmapManager = new FarFieldClipmapManager(_context, _bufferManager, Settings, _accelerationStructureManager);
+            _farFieldClipmapManager = new FarFieldClipmapManager(
+                _context,
+                _bufferManager,
+                Settings,
+                _accelerationStructureManager,
+                _materialManager);
             _autoExposureManager = new AutoExposureManager(_context, _bufferManager, Settings);
             _skinningManager = new SkinningManager(_context, _bufferManager, _stagingRing, _meshManager);
 
@@ -516,6 +550,9 @@ namespace Njulf.Rendering
             _gpuParticleResetPass = new GpuParticleResetPass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
             _gpuParticleSimulatePass = new GpuParticleSimulatePass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
             _gpuParticleSortPass = new GpuParticleSortPass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
+            _gpuParticleResetGraphPass = new GpuParticleResetGraphPass(_context, _swapchain, _bindlessHeap, _gpuParticleResetPass);
+            _gpuParticleSimulateGraphPass = new GpuParticleSimulateGraphPass(_context, _swapchain, _bindlessHeap, _gpuParticleSimulatePass);
+            _gpuParticleSortGraphPass = new GpuParticleSortGraphPass(_context, _swapchain, _bindlessHeap, _gpuParticleSortPass, _gpuParticleRuntimeManager);
             _foliageCullPass = new FoliageCullPass(_context, _bindlessHeap, _bufferManager, _foliageManager, _foliagePipeline);
             _sceneOpaqueCompactionPass = new SceneOpaqueCompactionPass(_context, _swapchain, _bindlessHeap, _meshPipeline, _bufferManager);
             _forwardVisibilityCompactionPass = new ForwardVisibilityCompactionPass(_context, _swapchain, _bindlessHeap, _meshPipeline, _bufferManager);
@@ -766,6 +803,9 @@ namespace Njulf.Rendering
 
             var particlePass = new ParticlePass(
                 _context, _swapchain, _bindlessHeap, _particlePipeline, _bufferManager, _renderTargets!, Settings.Particles);
+            AddPassInstance(_gpuParticleResetGraphPass);
+            AddPassInstance(_gpuParticleSimulateGraphPass);
+            AddPassInstance(_gpuParticleSortGraphPass);
             AddPassInstance(particlePass);
 
             var debugDrawPass = new DebugDrawPass(
@@ -797,6 +837,14 @@ namespace Njulf.Rendering
                 () => _smaaResources?.IsReady == true);
             AddPassInstance(antiAliasingPass);
             ProductionRenderPipelineDeclaration.Instance.RegisterPasses(_renderGraph, passInstances, includeSsgi);
+            foreach (RenderPassBase asyncCandidate in passInstances.Values.Where(pass => pass.SupportsAsyncCompute))
+            {
+                if (!AsyncComputePassCatalog.IsProductionCandidate(asyncCandidate.Name))
+                {
+                    throw new InvalidOperationException(
+                        $"Async-capable pass '{asyncCandidate.Name}' has no production async-compute audit classification.");
+                }
+            }
             ProductionRenderPipelineDeclaration.Instance.ValidatePassOrder(_renderGraph.PassNames, includeSsgi);
             
             _renderGraph.Initialize();
@@ -892,13 +940,23 @@ namespace Njulf.Rendering
             if (!_isInitialized)
                 Initialize();
 
+            ThrowIfFrameSubmissionFaulted();
+
             if (_frameInProgress)
                 throw new InvalidOperationException("BeginFrame was called while a frame is already in progress.");
 
             _stallTracker.BeginFrame();
             
             // Wait for previous frame to complete
-            _sync.WaitForFence(_currentFrame);
+            try
+            {
+                _sync.WaitForFence(_currentFrame);
+            }
+            catch (VulkanException exception)
+            {
+                MarkFrameSubmissionFault("Failed while waiting for the in-flight frame fence.", exception.Result);
+                throw;
+            }
             _stallTracker.Record(RuntimeStallReason.FrameFenceWait, _sync.LastFenceWaitMicroseconds, "Frame fence");
             _diagnosticsBuffer.ReadCompletedFrame(_currentFrame);
             _gpuParticleRuntimeManager.ReadCompletedFrame(_currentFrame);
@@ -917,6 +975,7 @@ namespace Njulf.Rendering
             _completedForwardVisibilityCounters = _forwardVisibilityCompactionPass?.GetLastCompletedCounters(_currentFrame) ?? SceneSubmissionCounterSnapshot.Invalid;
             _completedSceneSubmissionValidation = _sceneOpaqueCompactionPass?.GetLastCompletedValidation(_currentFrame) ?? SceneSubmissionValidationSnapshot.Invalid;
             _gpuTimestamps.ReadCompletedFrame(_currentFrame);
+            RecordCompletedAsyncComputeTimingFrame(_currentFrame, _gpuTimestamps.LastCompletedSnapshot);
             
             // Process completed frame deletions
             _deleter.ProcessCompletedFrame(_sync.GetInFlightFence(_currentFrame));
@@ -941,7 +1000,11 @@ namespace Njulf.Rendering
             }
 
             if (acquireResult != Result.Success && acquireResult != Result.SuboptimalKhr)
+            {
+                if (acquireResult == Result.ErrorDeviceLost)
+                    MarkFrameSubmissionFault("The Vulkan device was lost while acquiring a swapchain image.", acquireResult);
                 throw new VulkanException("Failed to acquire swapchain image", acquireResult);
+            }
 
             _swapchainNeedsRecreate = acquireResult == Result.SuboptimalKhr;
 
@@ -950,6 +1013,8 @@ namespace Njulf.Rendering
             // Reset and begin recording the primary command buffer owned by this frame.
             _cmd.ResetGraphicsCommandBuffer(_currentFrame);
             _cmd.ResetAsyncSplitGraphicsCommandBuffers(_currentFrame);
+            if (_context.HasIndependentComputeQueue)
+                _cmd.ResetAsyncComputeCommandPool(_currentFrame);
             if (Settings.UseSecondaryCommandBuffers)
                 _cmd.ResetSecondaryGraphicsCommandPool(_currentFrame);
             _environmentManager?.EnsureResourcesCurrent(
@@ -960,16 +1025,26 @@ namespace Njulf.Rendering
                     _context.WaitIdle));
             
             _currentCommandBuffer = _cmd.BeginPrimaryGraphicsCommand(_currentFrame);
-            _asyncComputeSplitSubmittedThisFrame = false;
-            _asyncComputeWaitValueThisFrame = 0;
+            _asyncComputePlanRecordedThisFrame = false;
+            _asyncComputeSubmittedGraphicsSegmentsThisFrame = 0;
+            _asyncComputeSubmittedComputeSegmentsThisFrame = 0;
+            _asyncComputeWaitsThisFrame.Clear();
             _asyncComputeOwnershipTransferCountThisFrame = 0;
+            _asyncComputePlannedReleaseBarrierCountThisFrame = 0;
+            _asyncComputePlannedAcquireBarrierCountThisFrame = 0;
+            _asyncComputeEmittedReleaseBarrierCountThisFrame = 0;
+            _asyncComputeEmittedAcquireBarrierCountThisFrame = 0;
+            _asyncComputeBarrierRecordMicrosecondsThisFrame = 0;
+            _asyncComputeTransferredBytesThisFrame = 0;
+            _asyncComputeTransferredImageSubresourcesThisFrame = 0;
+            _frameAsyncComputePlan = null;
+            _frameAsyncComputeSubmissionPlan = null;
+            _deferredAsyncSubmissions.Clear();
+            _swapchainImageTransitionedThisFrame = false;
             _lastQueueSubmitMicroseconds = 0;
             _lastAsyncComputeSubmitMicroseconds = 0;
             _frameInProgress = true;
             _gpuTimestamps.BeginFrame(_currentCommandBuffer, _currentFrame, Settings.Debug.AllowGpuTiming);
-
-            // Acquired swapchain images are transitioned from their tracked layout.
-            TransitionSwapchainImage(_currentCommandBuffer, ImageLayout.ColorAttachmentOptimal);
 
             return true;
         }
@@ -981,27 +1056,73 @@ namespace Njulf.Rendering
 
             var vk = _context.Api;
             
-            // Transition swapchain image to present for the presentation engine.
-            TransitionSwapchainImage(_currentCommandBuffer, ImageLayout.PresentSrcKhr);
+            // The acquired image is only transitioned once the terminal graphics submission owns
+            // it. Earlier async setup/compute submissions never consume imageAvailable.
+            if (_swapchainImageTransitionedThisFrame)
+                TransitionSwapchainImage(_currentCommandBuffer, ImageLayout.PresentSrcKhr);
             
             // End command buffer recording
             Result result = vk.EndCommandBuffer(_currentCommandBuffer);
             if (result != Result.Success)
+            {
+                MarkFrameSubmissionFault($"Failed to end terminal graphics command buffer: {result}.", result);
                 throw new VulkanException("Failed to end command buffer", result);
+            }
 
-            // Reset the fence only after command recording succeeds and immediately before
-            // the submit that will signal it. This keeps the previous signaled state intact
-            // if frame recording fails.
-            _sync.ResetFence(_currentFrame);
+            // Every non-terminal command buffer was fully recorded before any submission. Submit
+            // it now; a failed submit still leaves the previous frame fence signalled.
+            SubmitDeferredAsyncSubmissions();
+
+            // Reset the fence only after all preceding submissions succeeded and immediately
+            // before the terminal graphics submit that waits all compute work.
+            try
+            {
+                _sync.ResetFence(_currentFrame);
+            }
+            catch (VulkanException exception)
+            {
+                MarkFrameSubmissionFault("Failed to reset the terminal frame fence before graphics submission.", exception.Result);
+                throw;
+            }
             _stallTracker.Record(RuntimeStallReason.Unknown, _sync.LastFenceResetMicroseconds, "Reset frame fence");
-            
+
             Semaphore renderFinishedSemaphore = _sync.GetRenderFinishedSemaphoreForImage(_imageIndex);
             var signalSemaphores = stackalloc Semaphore[] { renderFinishedSemaphore };
             var commandBuffers = stackalloc CommandBuffer[] { _currentCommandBuffer };
 
+            int timelineWaitCount = _asyncComputeWaitsThisFrame.Count;
+            int waitCount = checked(1 + timelineWaitCount);
+            Semaphore* waitSemaphores = stackalloc Semaphore[waitCount];
+            PipelineStageFlags* waitStages = stackalloc PipelineStageFlags[waitCount];
+            ulong* waitValues = stackalloc ulong[waitCount];
+            // A TimelineSemaphoreSubmitInfo accompanies the terminal submit whenever it waits
+            // on the async timeline. Its value arrays must cover *all* submit semaphores,
+            // including the binary render-finished signal, whose required value is zero.
+            ulong* signalValues = stackalloc ulong[1];
+            signalValues[0] = 0;
+            waitSemaphores[0] = _sync.GetImageAvailableSemaphore(_currentFrame);
+            // This is the first submission allowed to access the acquired image. A no-op frame
+            // still consumes the binary semaphore here so it can be safely reused on acquire;
+            // use AllCommands in that case because no color-attachment stage is guaranteed to
+            // occur in the terminal command buffer.
+            waitStages[0] = _swapchainImageTransitionedThisFrame
+                ? PipelineStageFlags.ColorAttachmentOutputBit
+                : PipelineStageFlags.AllCommandsBit;
+            waitValues[0] = 0;
+            for (int i = 0; i < timelineWaitCount; i++)
+            {
+                AsyncComputeTimelineWait wait = _asyncComputeWaitsThisFrame[i];
+                waitSemaphores[i + 1] = _cmd.AsyncComputeTimelineSemaphore;
+                waitStages[i + 1] = ToLegacyPipelineStage(wait.StageMask);
+                waitValues[i + 1] = wait.Value;
+            }
+
             var submitInfo = new SubmitInfo
             {
                 SType = StructureType.SubmitInfo,
+                WaitSemaphoreCount = (uint)waitCount,
+                PWaitSemaphores = waitSemaphores,
+                PWaitDstStageMask = waitStages,
                 CommandBufferCount = 1,
                 PCommandBuffers = commandBuffers,
                 SignalSemaphoreCount = 1,
@@ -1009,29 +1130,19 @@ namespace Njulf.Rendering
             };
 
             TimelineSemaphoreSubmitInfo timelineWaitInfo = default;
-            if (_asyncComputeSplitSubmittedThisFrame)
+            if (timelineWaitCount > 0)
             {
-                var waitSemaphores = stackalloc Semaphore[] { _cmd.AsyncComputeTimelineSemaphore };
-                var waitStages = stackalloc PipelineStageFlags[] { PipelineStageFlags.FragmentShaderBit | PipelineStageFlags.ComputeShaderBit };
-                var waitValues = stackalloc ulong[] { _asyncComputeWaitValueThisFrame };
                 timelineWaitInfo = new TimelineSemaphoreSubmitInfo
                 {
                     SType = StructureType.TimelineSemaphoreSubmitInfo,
-                    WaitSemaphoreValueCount = 1,
-                    PWaitSemaphoreValues = waitValues
+                    // vkQueueSubmit's timeline value arrays cover every wait semaphore. The
+                    // binary imageAvailable and renderFinished entries are explicitly zero.
+                    WaitSemaphoreValueCount = (uint)waitCount,
+                    PWaitSemaphoreValues = waitValues,
+                    SignalSemaphoreValueCount = 1,
+                    PSignalSemaphoreValues = signalValues
                 };
                 submitInfo.PNext = &timelineWaitInfo;
-                submitInfo.WaitSemaphoreCount = 1;
-                submitInfo.PWaitSemaphores = waitSemaphores;
-                submitInfo.PWaitDstStageMask = waitStages;
-            }
-            else
-            {
-                var waitSemaphores = stackalloc Semaphore[] { _sync.GetImageAvailableSemaphore(_currentFrame) };
-                var waitStages = stackalloc PipelineStageFlags[] { PipelineStageFlags.ColorAttachmentOutputBit };
-                submitInfo.WaitSemaphoreCount = 1;
-                submitInfo.PWaitSemaphores = waitSemaphores;
-                submitInfo.PWaitDstStageMask = waitStages;
             }
             
             long submitStart = Stopwatch.GetTimestamp();
@@ -1041,12 +1152,35 @@ namespace Njulf.Rendering
                 &submitInfo,
                 _sync.GetInFlightFence(_currentFrame));
             _lastQueueSubmitMicroseconds += ElapsedMicroseconds(submitStart);
-            if (_asyncComputeSplitSubmittedThisFrame)
-                _lastQueueSubmitMicroseconds += _lastAsyncComputeSubmitMicroseconds;
             _stallTracker.Record(RuntimeStallReason.QueueSubmit, _lastQueueSubmitMicroseconds, "Graphics queue submit");
             
             if (result != Result.Success)
+            {
+                string failureReason = $"Failed to submit terminal graphics segment: {result}.";
+                if (result == Result.ErrorDeviceLost)
+                    _deviceLost = true;
+                Result recoveryResult = TryRecoverFrameFenceAfterTerminalSubmitFailure(
+                    waitCount,
+                    waitSemaphores,
+                    waitStages,
+                    waitValues,
+                    timelineWaitCount > 0);
+                if (recoveryResult == Result.Success)
+                    failureReason += " A fence-only recovery submission was queued; rendering is stopped to preserve the acquired image contract.";
+                else if (result != Result.ErrorDeviceLost)
+                    failureReason += $" Fence recovery submission also failed: {recoveryResult}.";
+
+                MarkFrameSubmissionFault(failureReason, result);
                 throw new VulkanException("Failed to submit queue", result);
+            }
+
+            if (_asyncComputePlanRecordedThisFrame)
+            {
+                RecordSubmittedAsyncComputeSegment(AsyncComputeQueue.Graphics);
+                UpdateAsyncComputeSubmissionDiagnostics();
+            }
+
+            FinalizeAsyncComputeTimingFrame(_currentFrame);
             
             // Present
             var swapchains = stackalloc SwapchainKHR[] { _swapchain.Swapchain };
@@ -1067,6 +1201,14 @@ namespace Njulf.Rendering
             Result presentResult = _swapchain.Present(&presentInfo);
             _lastPresentMicroseconds = ElapsedMicroseconds(presentStart);
             _stallTracker.Record(RuntimeStallReason.Present, _lastPresentMicroseconds, "Present swapchain image");
+
+            if (presentResult != Result.Success &&
+                presentResult != Result.ErrorOutOfDateKhr &&
+                presentResult != Result.SuboptimalKhr)
+            {
+                MarkFrameSubmissionFault($"Failed to present swapchain image: {presentResult}.", presentResult);
+                throw new VulkanException("Failed to present swapchain image", presentResult);
+            }
             
             // Advance to next frame
             _currentFrame = (_currentFrame + 1) % FramesInFlight;
@@ -1488,40 +1630,6 @@ namespace Njulf.Rendering
                 SceneSubmissionDiagnosticsPolicy.BuildCompactionSkipReason(sceneData);
             UpdateHiZFallbackDiagnostics(sceneData);
             _diagnosticsBuffer.ResetCounters(_currentCommandBuffer, _currentFrame);
-            if (particlesAllowed)
-            {
-                _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "GpuParticleResetPass");
-                try
-                {
-                    _gpuParticleResetPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
-                }
-                finally
-                {
-                    _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
-                }
-
-                _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "GpuParticleSimulatePass");
-                try
-                {
-                    _gpuParticleSimulatePass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
-                }
-                finally
-                {
-                    _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
-                }
-
-                _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "GpuParticleSortPass");
-                try
-                {
-                    _gpuParticleSortPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
-                }
-                finally
-                {
-                    _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
-                }
-
-                _gpuParticleRuntimeManager.RecordCounterReadback(_currentCommandBuffer, _currentFrame, sceneData);
-            }
 
             if (!isolateSkinnedAnimationDebug)
             {
@@ -1554,12 +1662,30 @@ namespace Njulf.Rendering
             // Execute render graph
             sceneData.SecondaryCommandBufferEnabled = Settings.UseSecondaryCommandBuffers ? 1 : 0;
             AsyncComputePlan frameAsyncComputePlan = BuildAsyncComputePlan(sceneData);
-            if (IsDdgiAsyncComputeActuallyEnabled(frameAsyncComputePlan))
+            _frameAsyncComputePlan = frameAsyncComputePlan;
+            _frameAsyncComputeSubmissionPlan = frameAsyncComputePlan.SubmissionPlan;
+
+            // This is a runtime execution flag, not a request flag.  DDGI setup runs before
+            // the graph plan is compiled and may have observed an enabled setting, but a
+            // graphics-only or validation-fallback execution must never let DDGI's local
+            // barriers assume that a compute submission is going to follow.
+            sceneData.DdgiAsyncComputeEnabled = 0;
+            if (frameAsyncComputePlan.SubmissionPlan.Accepted && frameAsyncComputePlan.SubmissionPlan.ContainsAsyncCompute)
             {
-                ExecuteRenderGraphWithAsyncSimpleDdgi(sceneData);
+                if (!ExecuteRenderGraphWithAsyncPlan(
+                        frameAsyncComputePlan.SubmissionPlan,
+                        sceneData,
+                        out string fallbackReason))
+                {
+                    frameAsyncComputePlan = CreateGraphicsFallbackAsyncPlan(frameAsyncComputePlan, fallbackReason);
+                    _frameAsyncComputePlan = frameAsyncComputePlan;
+                    _frameAsyncComputeSubmissionPlan = frameAsyncComputePlan.SubmissionPlan;
+                }
             }
             else
             {
+                sceneData.DdgiAsyncComputeEnabled = 0;
+                EnsureSwapchainImageColorAttachment(_currentCommandBuffer);
                 _renderGraph.Execute(
                     _currentCommandBuffer,
                     _currentFrame,
@@ -1567,7 +1693,7 @@ namespace Njulf.Rendering
                     _gpuTimestamps,
                     _cmd,
                     Settings.UseSecondaryCommandBuffers);
-                sceneData.DdgiAsyncComputeEnabled = 0;
+                sceneData.DdgiAsyncComputeEnabled = IsDdgiAsyncComputeActuallyEnabled(frameAsyncComputePlan) ? 1 : 0;
             }
             _hizVisibilityPolicyState.PyramidValid = sceneData.HiZBuildEnabled;
             if (MeshletDiagnosticCountersActive)
@@ -1583,7 +1709,9 @@ namespace Njulf.Rendering
             UpdateHiZFallbackDiagnostics(sceneData);
             FrameTimingSnapshot completedGpuTimings = _gpuTimestamps.LastCompletedSnapshot;
             ApplyCompletedGpuTimings(sceneData, completedGpuTimings);
-            sceneData.AsyncComputeEstimatedOverlapMicroseconds = EstimateAsyncComputeOverlapMicroseconds(sceneData, completedGpuTimings);
+            sceneData.AsyncComputeEstimatedOverlapMicroseconds = EstimateAsyncComputeOverlapMicroseconds(
+                frameAsyncComputePlan.SubmissionPlan,
+                completedGpuTimings);
             _ddgiProbeVolumeManager?.ReportCompletedGpuUpdateMicroseconds(
                 sceneData.GpuDdgiUpdateMicroseconds,
                 HasCompletedDdgiGpuTiming(completedGpuTimings),
@@ -1600,6 +1728,8 @@ namespace Njulf.Rendering
                     sceneData.DdgiSchedulerP95OverBudget = sceneData.GpuDdgiScheduleOverBudget;
             }
             sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
+            UpdateGlobalIlluminationCpuTiming(sceneData);
+            CaptureAsyncComputeTimingFrame(frameAsyncComputePlan, sceneData);
             _lastSceneData = sceneData;
             _lastDiagnostics = BuildDiagnostics(sceneData);
             _debugDraw.ClearFrame();
@@ -3361,6 +3491,38 @@ namespace Njulf.Rendering
                 sceneData.LightCullRejectedSpotCount++;
         }
 
+        private void UpdateGlobalIlluminationCpuTiming(SceneRenderingData sceneData)
+        {
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            bool active = gi.Enabled &&
+                (gi.EffectiveUseSsgi || gi.EffectiveUseDdgi || gi.EffectiveUseSimpleDdgi);
+            if (!active)
+            {
+                _globalIlluminationCpuTimingWindow.Clear();
+                sceneData.CpuGlobalIlluminationRecordMicroseconds = 0;
+                sceneData.CpuGlobalIlluminationRecordP95Microseconds = 0;
+                sceneData.GlobalIlluminationCpuTimingSampleCount = 0;
+                return;
+            }
+
+            // Every term is owned by a distinct recorder.  The legacy DDGI
+            // scheduler runs outside its manager upload scope, while the simple
+            // path includes its scheduler in the manager upload time.  The AS
+            // manager reports a total preparation interval, so its detailed
+            // BLAS/TLAS/upload counters are deliberately not added again.
+            long totalMicroseconds = Math.Max(0, sceneData.CpuSsgiRecordMicroseconds) +
+                Math.Max(0, sceneData.CpuDdgiRecordMicroseconds) +
+                Math.Max(0, sceneData.CpuDdgiSchedulerMicroseconds) +
+                Math.Max(0, sceneData.CpuSimpleDdgiRecordMicroseconds) +
+                Math.Max(0, sceneData.CpuFarFieldRecordMicroseconds) +
+                Math.Max(0, sceneData.CpuAccelerationStructureBuildMicroseconds);
+            _globalIlluminationCpuTimingWindow.Add(totalMicroseconds);
+            PerformanceSampleStats stats = _globalIlluminationCpuTimingWindow.GetStats();
+            sceneData.CpuGlobalIlluminationRecordMicroseconds = totalMicroseconds;
+            sceneData.CpuGlobalIlluminationRecordP95Microseconds = Math.Max(0, (long)Math.Round(stats.P95));
+            sceneData.GlobalIlluminationCpuTimingSampleCount = stats.Count;
+        }
+
         private RendererDiagnostics BuildDiagnostics(SceneRenderingData sceneData)
         {
             ModelRenderUploadDiagnostics uploadDiagnostics = _modelUploadService.LastUploadDiagnostics;
@@ -3386,7 +3548,8 @@ namespace Njulf.Rendering
             bool spotShadowGpuCompactionJustified = IsSpotShadowGpuCompactionJustified(sceneData, spotShadowMeshletLightTests);
             bool pointShadowGpuCompactionJustified = IsPointShadowGpuCompactionJustified(sceneData, pointShadowMeshletFaceTests);
             ProductionRenderPipelineDeclaration productionPipeline = ProductionRenderPipelineDeclaration.Instance;
-            AsyncComputePlan asyncComputePlan = BuildAsyncComputePlan(sceneData);
+            AsyncComputePlan asyncComputePlan = _frameAsyncComputePlan ?? BuildAsyncComputePlan(sceneData);
+            DeviceRequirementReport? captureDevice = _context.SelectedDeviceRequirementReport;
             GlobalIlluminationSettings giSettings = Settings.GlobalIllumination;
             bool giRayQuerySupported = _context.RayQuerySupported && _accelerationStructureManager?.Supported == true;
             bool giAccelerationStructuresActive = _accelerationStructureManager?.Active == true;
@@ -3688,6 +3851,18 @@ namespace Njulf.Rendering
                 GlobalIlluminationSsgiActive = giUsesSsgi ? 1 : 0,
                 GlobalIlluminationDdgiActive = giUsesDdgi ? 1 : 0,
                 SimpleDdgiActive = giUsesSimpleDdgi ? sceneData.SimpleDdgiActive : 0,
+                SimpleDdgiStructuredGatherEnabled = giUsesSimpleDdgi &&
+                    sceneData.SimpleDdgiActive != 0 &&
+                    giRayQueryActive &&
+                    giSettings.SimpleDdgiStructuredGatherEnabled ? 1 : 0,
+                SimpleDdgiReducedBlendEnabled = giUsesSimpleDdgi && giSettings.SimpleDdgiReducedBlendEnabled ? 1 : 0,
+                SimpleDdgiToroidalScrollingEnabled = giUsesSimpleDdgi && giSettings.SimpleDdgiToroidalScrollingEnabled ? 1 : 0,
+                SimpleDdgiRegionalInvalidationEnabled = giUsesSimpleDdgi && giSettings.SimpleDdgiRegionalInvalidationEnabled ? 1 : 0,
+                FarFieldPagedFeatureEnabled = giUsesSimpleDdgi && giSettings.FarFieldPagedEnabled ? 1 : 0,
+                StreamedGiAccelerationStructuresFeatureEnabled = giUsesDdgi && giSettings.StreamedGiAccelerationStructuresEnabled ? 1 : 0,
+                DdgiDetailedCountersEnabled = giUsesDdgi &&
+                    (Settings.Diagnostics.DdgiForwardEstimateCountersEnabled ||
+                     giSettings.DebugView != GlobalIlluminationDebugView.None) ? 1 : 0,
                 SimpleDdgiProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiProbeCount : 0,
                 SimpleDdgiProbesUpdated = giUsesSimpleDdgi ? sceneData.SimpleDdgiProbesUpdated : 0,
                 SimpleDdgiRaysPerFrame = giUsesSimpleDdgi ? sceneData.SimpleDdgiRaysPerFrame : 0UL,
@@ -3700,7 +3875,43 @@ namespace Njulf.Rendering
                 SimpleDdgiFullRayProbeUpdateCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiFullRayProbeUpdateCount : 0,
                 SimpleDdgiMaintenanceRayProbeUpdateCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiMaintenanceRayProbeUpdateCount : 0,
                 SimpleDdgiAdaptiveRaySavedRaysPerFrame = giUsesSimpleDdgi ? sceneData.SimpleDdgiAdaptiveRaySavedRaysPerFrame : 0UL,
+                SimpleDdgiNearFullRayProbeUpdateCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiNearFullRayProbeUpdateCount : 0,
+                SimpleDdgiMidFullRayProbeUpdateCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiMidFullRayProbeUpdateCount : 0,
+                SimpleDdgiFarFullRayProbeUpdateCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiFarFullRayProbeUpdateCount : 0,
+                SimpleDdgiNearMaintenanceRayProbeUpdateCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiNearMaintenanceRayProbeUpdateCount : 0,
+                SimpleDdgiMidMaintenanceRayProbeUpdateCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiMidMaintenanceRayProbeUpdateCount : 0,
+                SimpleDdgiFarMaintenanceRayProbeUpdateCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiFarMaintenanceRayProbeUpdateCount : 0,
+                SimpleDdgiNearScheduledPrimaryRayCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiNearScheduledPrimaryRayCount : 0UL,
+                SimpleDdgiMidScheduledPrimaryRayCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiMidScheduledPrimaryRayCount : 0UL,
+                SimpleDdgiFarScheduledPrimaryRayCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiFarScheduledPrimaryRayCount : 0UL,
+                SimpleDdgiDirtyFirstUpdateLatencySampleCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiDirtyFirstUpdateLatencySampleCount : 0,
+                SimpleDdgiDirtyFirstUpdateLatencyP50Frames = giUsesSimpleDdgi ? sceneData.SimpleDdgiDirtyFirstUpdateLatencyP50Frames : 0,
+                SimpleDdgiDirtyFirstUpdateLatencyP95Frames = giUsesSimpleDdgi ? sceneData.SimpleDdgiDirtyFirstUpdateLatencyP95Frames : 0,
+                SimpleDdgiDirtyFirstUpdateLatencyMaxFrames = giUsesSimpleDdgi ? sceneData.SimpleDdgiDirtyFirstUpdateLatencyMaxFrames : 0,
+                SimpleDdgiDirtyConvergenceLatencySampleCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiDirtyConvergenceLatencySampleCount : 0,
+                SimpleDdgiDirtyConvergenceLatencyP50Frames = giUsesSimpleDdgi ? sceneData.SimpleDdgiDirtyConvergenceLatencyP50Frames : 0,
+                SimpleDdgiDirtyConvergenceLatencyP95Frames = giUsesSimpleDdgi ? sceneData.SimpleDdgiDirtyConvergenceLatencyP95Frames : 0,
+                SimpleDdgiDirtyConvergenceLatencyMaxFrames = giUsesSimpleDdgi ? sceneData.SimpleDdgiDirtyConvergenceLatencyMaxFrames : 0,
                 SimpleDdgiAtlasBytes = giUsesSimpleDdgi ? sceneData.SimpleDdgiAtlasBytes : 0UL,
+                SimpleDdgiSampledAtlasRequested = giUsesSimpleDdgi ? sceneData.SimpleDdgiSampledAtlasRequested : 0,
+                SimpleDdgiSampledAtlasActive = giUsesSimpleDdgi ? sceneData.SimpleDdgiSampledAtlasActive : 0,
+                SimpleDdgiSampledAtlasGroupCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiSampledAtlasGroupCount : 0,
+                SimpleDdgiSampledAtlasLayersPerTexture = giUsesSimpleDdgi ? sceneData.SimpleDdgiSampledAtlasLayersPerTexture : 0,
+                SimpleDdgiSampledAtlasImageBytes = giUsesSimpleDdgi ? sceneData.SimpleDdgiSampledAtlasImageBytes : 0UL,
+                SimpleDdgiSampledAtlasFallbackReason = giUsesSimpleDdgi ? sceneData.SimpleDdgiSampledAtlasFallbackReason : string.Empty,
+                FarFieldPagedMode = giUsesSimpleDdgi ? sceneData.FarFieldPagedMode : 0,
+                FarFieldPagePoolCapacity = giUsesSimpleDdgi ? sceneData.FarFieldPagePoolCapacity : 0,
+                FarFieldResidentPageCount = giUsesSimpleDdgi ? sceneData.FarFieldResidentPageCount : 0,
+                FarFieldPendingPageCount = giUsesSimpleDdgi ? sceneData.FarFieldPendingPageCount : 0,
+                FarFieldPageRequestCount = giUsesSimpleDdgi ? sceneData.FarFieldPageRequestCount : 0,
+                FarFieldPageMissCount = giUsesSimpleDdgi ? sceneData.FarFieldPageMissCount : 0,
+                FarFieldPageRebuildCount = giUsesSimpleDdgi ? sceneData.FarFieldPageRebuildCount : 0,
+                FarFieldPageEvictionCount = giUsesSimpleDdgi ? sceneData.FarFieldPageEvictionCount : 0,
+                FarFieldScheduledPageBakeCount = giUsesSimpleDdgi ? sceneData.FarFieldScheduledPageBakeCount : 0,
+                FarFieldCacheBytes = giUsesSimpleDdgi ? sceneData.FarFieldCacheBytes : 0UL,
+                FarFieldMemoryBudgetBytes = giUsesSimpleDdgi ? sceneData.FarFieldMemoryBudgetBytes : 0UL,
+                FarFieldInstanceBufferBytes = giUsesSimpleDdgi ? sceneData.FarFieldInstanceBufferBytes : 0UL,
+                FarFieldPageTableBytes = giUsesSimpleDdgi ? sceneData.FarFieldPageTableBytes : 0UL,
                 SimpleDdgiRecentered = giUsesSimpleDdgi ? sceneData.SimpleDdgiRecentered : 0,
                 SimpleDdgiAtlasPreservedOnRecenter = giUsesSimpleDdgi ? sceneData.SimpleDdgiAtlasPreservedOnRecenter : 0,
                 SimpleDdgiAtlasCleared = giUsesSimpleDdgi ? sceneData.SimpleDdgiAtlasCleared : 0,
@@ -3710,6 +3921,7 @@ namespace Njulf.Rendering
                 SimpleDdgiAtlasPreserveOnRecenterCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiAtlasPreserveOnRecenterCount : 0,
                 SimpleDdgiFramesSinceLastClear = giUsesSimpleDdgi ? sceneData.SimpleDdgiFramesSinceLastClear : 0,
                 SimpleDdgiFramesSinceLastRecenter = giUsesSimpleDdgi ? sceneData.SimpleDdgiFramesSinceLastRecenter : 0,
+                DdgiInvestigationCountersReadbackValid = giUsesDdgi ? sceneData.DdgiInvestigationCountersReadbackValid : 0,
                 SimpleDdgiFreshAtlasForwardSampleCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiFreshAtlasForwardSampleCount : 0,
                 SimpleDdgiZeroIrradianceSampleCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiZeroIrradianceSampleCount : 0,
                 SimpleDdgiNonzeroIrradianceSampleCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiNonzeroIrradianceSampleCount : 0,
@@ -3771,6 +3983,10 @@ namespace Njulf.Rendering
                 DdgiBlackFrameAfterAtlasClear = giUsesDdgi ? sceneData.DdgiBlackFrameAfterAtlasClear : 0,
                 DdgiBlackFrameDuringFreshAtlas = giUsesDdgi ? sceneData.DdgiBlackFrameDuringFreshAtlas : 0,
                 DdgiBlackFrameMovementClass = giUsesDdgi ? sceneData.DdgiBlackFrameMovementClass : DdgiCameraMovementClass.None,
+                GpuForwardGiGatherMicroseconds = giEnabled ? sceneData.GpuForwardGiGatherMicroseconds : 0,
+                GpuForwardGiGatherTimingCoverage = giEnabled ? sceneData.GpuForwardGiGatherTimingCoverage : 0,
+                GpuFarFieldUpdateMicroseconds = giUsesSimpleDdgi ? sceneData.GpuFarFieldUpdateMicroseconds : 0,
+                GpuFarFieldUpdateTimingValid = giUsesSimpleDdgi ? sceneData.GpuFarFieldUpdateTimingValid : 0,
                 GpuSimpleDdgiTraceMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiTraceMicroseconds : 0,
                 GpuSimpleDdgiBlendMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiBlendMicroseconds : 0,
                 SsgiWidth = ssgiWidth,
@@ -4004,6 +4220,11 @@ namespace Njulf.Rendering
                 DdgiCameraMovementClass = giUsesDdgi ? sceneData.DdgiCameraMovementClass : DdgiCameraMovementClass.None,
                 CpuSsgiRecordMicroseconds = giUsesSsgi ? sceneData.CpuSsgiRecordMicroseconds : 0,
                 CpuDdgiRecordMicroseconds = giUsesDdgi ? sceneData.CpuDdgiRecordMicroseconds : 0,
+                CpuSimpleDdgiRecordMicroseconds = giUsesSimpleDdgi ? sceneData.CpuSimpleDdgiRecordMicroseconds : 0,
+                CpuFarFieldRecordMicroseconds = giUsesSimpleDdgi ? sceneData.CpuFarFieldRecordMicroseconds : 0,
+                CpuGlobalIlluminationRecordMicroseconds = giEnabled ? sceneData.CpuGlobalIlluminationRecordMicroseconds : 0,
+                CpuGlobalIlluminationRecordP95Microseconds = giEnabled ? sceneData.CpuGlobalIlluminationRecordP95Microseconds : 0,
+                GlobalIlluminationCpuTimingSampleCount = giEnabled ? sceneData.GlobalIlluminationCpuTimingSampleCount : 0,
                 CpuDdgiSchedulerMicroseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerMicroseconds : 0,
                 CpuDdgiSchedulerP95Microseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerP95Microseconds : 0,
                 CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds : 0,
@@ -4050,6 +4271,18 @@ namespace Njulf.Rendering
                 AccelerationStructureTlasBuildCount = sceneData.AccelerationStructureTlasBuildCount,
                 AccelerationStructureTlasUpdateCount = sceneData.AccelerationStructureTlasUpdateCount,
                 AccelerationStructureTlasSkipCount = sceneData.AccelerationStructureTlasSkipCount,
+                AccelerationStructureStreamingEnabled = sceneData.AccelerationStructureStreamingEnabled,
+                AccelerationStructureStaticInstanceCandidateCount = sceneData.AccelerationStructureStaticInstanceCandidateCount,
+                AccelerationStructureStaticInstanceResidentCount = sceneData.AccelerationStructureStaticInstanceResidentCount,
+                AccelerationStructureStaticInstanceCulledCount = sceneData.AccelerationStructureStaticInstanceCulledCount,
+                AccelerationStructureBlasEvictionCount = sceneData.AccelerationStructureBlasEvictionCount,
+                AccelerationStructureBlasEvictionBytes = sceneData.AccelerationStructureBlasEvictionBytes,
+                AccelerationStructureBlasBudgetRejectedCount = sceneData.AccelerationStructureBlasBudgetRejectedCount,
+                AccelerationStructureBlasBytes = sceneData.AccelerationStructureBlasBytes,
+                AccelerationStructureTlasBytes = sceneData.AccelerationStructureTlasBytes,
+                AccelerationStructureRetiredBytes = sceneData.AccelerationStructureRetiredBytes,
+                AccelerationStructureResidentBytes = sceneData.AccelerationStructureResidentBytes,
+                AccelerationStructureMemoryBudgetBytes = sceneData.AccelerationStructureMemoryBudgetBytes,
                 AccelerationStructureInstanceUploadBytes = sceneData.AccelerationStructureInstanceUploadBytes,
                 AccelerationStructureRayQueryMetadataUploadBytes = sceneData.AccelerationStructureRayQueryMetadataUploadBytes,
                 CpuAccelerationStructureBuildMicroseconds = sceneData.CpuAccelerationStructureBuildMicroseconds,
@@ -4387,6 +4620,15 @@ namespace Njulf.Rendering
                 ActiveBudgetProfile = profile.Kind,
                 ActiveBudgetProfileName = profile.Name,
                 ActiveQualityPreset = Settings.QualityPreset,
+                CaptureGpuDeviceName = string.IsNullOrWhiteSpace(captureDevice?.DeviceName)
+                    ? "unknown-device"
+                    : captureDevice.DeviceName,
+                CaptureGpuDriverVersion = string.IsNullOrWhiteSpace(captureDevice?.DriverVersion)
+                    ? "unknown-driver"
+                    : captureDevice.DriverVersion,
+                CaptureRenderWidth = sceneData.ScreenWidth,
+                CaptureRenderHeight = sceneData.ScreenHeight,
+                CaptureSceneContentRevision = sceneData.SceneContentRevision,
                 ActiveFeatureIsolation = sceneData.ActiveFeatureIsolation,
                 SkippedRenderPassCount = sceneData.SkippedRenderPassCount,
                 GraphPlannedBarrierCount = sceneData.GraphPlannedBarrierCount,
@@ -4404,14 +4646,66 @@ namespace Njulf.Rendering
                 AsyncComputeRequested = asyncComputePlan.Requested ? 1 : 0,
                 AsyncComputeEnabled = asyncComputePlan.Enabled ? 1 : 0,
                 AsyncComputeSupported = asyncComputePlan.Supported ? 1 : 0,
+                AsyncComputeIndependentQueueAvailable = _context.HasIndependentComputeQueue ? 1 : 0,
+                AsyncComputeDedicatedQueueFamilyAvailable = _context.HasDedicatedComputeQueue ? 1 : 0,
+                AsyncComputeGraphicsQueueFamily = _context.GraphicsQueueFamilyIndex,
+                AsyncComputeComputeQueueFamily = _context.ComputeQueueFamilyIndex,
                 AsyncComputeCandidatePassCount = asyncComputePlan.CandidatePasses.Count,
                 AsyncComputeEnabledPassCount = asyncComputePlan.EnabledPasses.Count,
                 AsyncComputeQueueOwnershipTransitionCount = asyncComputePlan.QueueOwnershipTransitionCount,
                 AsyncComputeOwnershipTransferCount = sceneData.AsyncComputeOwnershipTransferCount,
                 AsyncComputeEstimatedOverlapMicroseconds = sceneData.AsyncComputeEstimatedOverlapMicroseconds,
+                AsyncComputeQueueBusyMicroseconds = EstimateAsyncComputeQueueBusyMicroseconds(
+                    asyncComputePlan.SubmissionPlan,
+                    _gpuTimestamps.LastCompletedSnapshot),
+                AsyncComputeFirstConsumerWaitEstimateMicroseconds = EstimateAsyncComputeFirstConsumerWaitMicroseconds(
+                    asyncComputePlan.SubmissionPlan,
+                    _gpuTimestamps.LastCompletedSnapshot),
+                AsyncComputeBarrierRecordMicroseconds = _asyncComputeBarrierRecordMicrosecondsThisFrame,
                 AsyncComputeStatus = asyncComputePlan.Status,
                 AsyncComputeCandidatePasses = asyncComputePlan.CandidatePasses,
                 AsyncComputeEnabledPasses = asyncComputePlan.EnabledPasses,
+                AsyncComputeRequestedMode = asyncComputePlan.RequestedMode,
+                AsyncComputeEffectiveMode = asyncComputePlan.EffectiveMode,
+                AsyncComputeGraphicsSegmentCount = asyncComputePlan.SubmissionPlan.GraphicsSegmentCount,
+                AsyncComputeComputeSegmentCount = asyncComputePlan.SubmissionPlan.ComputeSegmentCount,
+                AsyncComputePlannedGraphicsSegmentCount = asyncComputePlan.SubmissionPlan.GraphicsSegmentCount,
+                AsyncComputePlannedComputeSegmentCount = asyncComputePlan.SubmissionPlan.ComputeSegmentCount,
+                AsyncComputeSubmittedGraphicsSegmentCount = _asyncComputeSubmittedGraphicsSegmentsThisFrame,
+                AsyncComputeSubmittedComputeSegmentCount = _asyncComputeSubmittedComputeSegmentsThisFrame,
+                AsyncComputePlannedReleaseBarrierCount = _asyncComputePlannedReleaseBarrierCountThisFrame,
+                AsyncComputePlannedAcquireBarrierCount = _asyncComputePlannedAcquireBarrierCountThisFrame,
+                AsyncComputeEmittedReleaseBarrierCount = _asyncComputeEmittedReleaseBarrierCountThisFrame,
+                AsyncComputeEmittedAcquireBarrierCount = _asyncComputeEmittedAcquireBarrierCountThisFrame,
+                AsyncComputeTransferredBytes = _asyncComputeTransferredBytesThisFrame,
+                AsyncComputeTransferredImageSubresources = _asyncComputeTransferredImageSubresourcesThisFrame,
+                AsyncComputeValidationFallbackCount = _asyncComputeValidationFallbackCount,
+                AsyncComputeLastFallbackReason = _asyncComputeLastFallbackReason,
+                AsyncComputeResourcePlanGeneration = asyncComputePlan.SubmissionPlan.ResourcePlanGeneration,
+                AsyncComputeStalePlanRejectionCount = _renderGraph.ConcreteResourceBindings.StalePlanRejectionCount,
+                AsyncComputePaths = asyncComputePlan.SubmissionPlan.Paths
+                    .Select(path => new AsyncComputePathDiagnostic(
+                        path.Path,
+                        path.Requested,
+                        path.Supported,
+                        path.Eligible,
+                        path.Active,
+                        path.Status,
+                        path.Reason,
+                        path.Passes))
+                    .ToArray(),
+                AsyncComputeSegments = asyncComputePlan.SubmissionPlan.Segments
+                    .Select(segment => new AsyncComputeSegmentDiagnostic(
+                        segment.Id,
+                        segment.Queue.ToString(),
+                        segment.Passes,
+                        segment.TimelineWaits.Select(wait => wait.Value).ToArray(),
+                        segment.TimelineSignalValue,
+                        segment.AcquireTransfers.Count,
+                        segment.ReleaseTransfers.Count,
+                        segment.AccessesSwapchain,
+                        segment.IsTerminalGraphicsSegment))
+                    .ToArray(),
                 CpuPrimaryCommandRecordMicroseconds = sceneData.CpuPrimaryCommandRecordMicroseconds,
                 CpuSecondaryCommandRecordMicroseconds = sceneData.CpuSecondaryCommandRecordMicroseconds,
                 BudgetOverallStatus = _lastBudgetSnapshot.OverallStatus,
@@ -4579,13 +4873,23 @@ namespace Njulf.Rendering
             _context.Api.CmdSetScissor(commandBuffer, 0, 1, &scissor);
         }
 
-        private void ExecuteRenderGraphWithAsyncSimpleDdgi(SceneRenderingData sceneData)
+        private bool ExecuteRenderGraphWithAsyncPlan(
+            AsyncComputeSubmissionPlan plan,
+            SceneRenderingData sceneData,
+            out string fallbackReason)
         {
-            if (_simpleDdgiVolumeManager == null ||
-                _simpleDdgiTracePass == null ||
-                _simpleDdgiRelocateClassifyPass == null ||
-                _simpleDdgiBlendPass == null)
+            fallbackReason = string.Empty;
+            if (plan == null)
+                throw new ArgumentNullException(nameof(plan));
+            if (!plan.Accepted || !plan.ContainsAsyncCompute)
+                throw new InvalidOperationException("Only an accepted plan with compute segments can be recorded asynchronously.");
+            if (plan.ResourcePlanGeneration != _renderGraph.ConcreteResourceBindings.Generation)
             {
+                _renderGraph.ConcreteResourceBindings.RecordStalePlanRejection();
+                fallbackReason = "The concrete resource-binding generation changed after plan compilation.";
+                LatchAsyncComputeFallback(fallbackReason);
+                sceneData.DdgiAsyncComputeEnabled = 0;
+                EnsureSwapchainImageColorAttachment(_currentCommandBuffer);
                 _renderGraph.Execute(
                     _currentCommandBuffer,
                     _currentFrame,
@@ -4593,325 +4897,1368 @@ namespace Njulf.Rendering
                     _gpuTimestamps,
                     _cmd,
                     Settings.UseSecondaryCommandBuffers);
-                return;
+                return false;
             }
 
-            ulong setupValue = checked(_ddgiFrameSerial * 2UL + 1UL);
-            ulong computeCompleteValue = setupValue + 1UL;
+            if (plan.Segments.Any(segment => segment.AccessesSwapchain && !segment.IsTerminalGraphicsSegment))
+            {
+                fallbackReason = "The compiled plan would access the acquired swapchain image before the terminal graphics submission.";
+                LatchAsyncComputeFallback(fallbackReason);
+                sceneData.DdgiAsyncComputeEnabled = 0;
+                EnsureSwapchainImageColorAttachment(_currentCommandBuffer);
+                _renderGraph.Execute(
+                    _currentCommandBuffer,
+                    _currentFrame,
+                    sceneData,
+                    _gpuTimestamps,
+                    _cmd,
+                    Settings.UseSecondaryCommandBuffers);
+                return false;
+            }
 
-            _renderGraph.BeginSplitExecution(sceneData);
-            _renderGraph.ExecuteSelected(
-                _currentCommandBuffer,
-                _currentFrame,
-                sceneData,
-                static passName => passName == "SceneOpaqueCompactionPass",
-                _gpuTimestamps,
-                _cmd,
-                Settings.UseSecondaryCommandBuffers);
-
-            _asyncComputeOwnershipTransferCountThisFrame += _simpleDdgiVolumeManager.RecordAsyncComputeQueueFamilyTransfer(
-                _currentCommandBuffer,
-                SimpleDdgiQueueTransfer.GraphicsReleaseToCompute,
-                _context.GraphicsQueueFamilyIndex,
-                _context.ComputeQueueFamilyIndex);
-            sceneData.GraphQueueOwnershipTransitionCount += _asyncComputeOwnershipTransferCountThisFrame > 0 ? 1 : 0;
-
-            _cmd.EndCommandBuffer(_currentCommandBuffer);
-            SubmitAsyncSetupGraphicsCommand(_currentCommandBuffer, setupValue);
-
-            sceneData.DdgiAsyncComputeEnabled = 1;
-            CommandBuffer asyncCompute = _cmd.BeginAsyncComputeCommand(_currentFrame);
-            _simpleDdgiVolumeManager.RecordAsyncComputeQueueFamilyTransfer(
-                asyncCompute,
-                SimpleDdgiQueueTransfer.ComputeAcquireFromGraphics,
-                _context.GraphicsQueueFamilyIndex,
-                _context.ComputeQueueFamilyIndex);
-            ExecuteSimpleDdgiAsyncPass(_simpleDdgiTracePass, asyncCompute, sceneData);
-            ExecuteSimpleDdgiAsyncPass(_simpleDdgiRelocateClassifyPass, asyncCompute, sceneData);
-            ExecuteSimpleDdgiAsyncPass(_simpleDdgiBlendPass, asyncCompute, sceneData);
-            _asyncComputeOwnershipTransferCountThisFrame += _simpleDdgiVolumeManager.RecordAsyncComputeQueueFamilyTransfer(
-                asyncCompute,
-                SimpleDdgiQueueTransfer.ComputeReleaseToGraphics,
-                _context.GraphicsQueueFamilyIndex,
-                _context.ComputeQueueFamilyIndex);
-            _cmd.EndCommandBuffer(asyncCompute);
-            SubmitAsyncComputeCommand(asyncCompute, setupValue, computeCompleteValue);
-
-            CommandBuffer earlyGraphics = _cmd.BeginEarlyGraphicsCommand(_currentFrame);
-            SetViewportAndScissor(earlyGraphics);
-            _renderGraph.ExecuteSelected(
-                earlyGraphics,
-                _currentFrame,
-                sceneData,
-                IsPreForwardOverlapPass,
-                _gpuTimestamps,
-                _cmd,
-                Settings.UseSecondaryCommandBuffers);
-            _cmd.EndCommandBuffer(earlyGraphics);
-            SubmitAsyncEarlyGraphicsCommand(earlyGraphics);
-
-            CommandBuffer lateGraphics = _cmd.BeginLateGraphicsCommand(_currentFrame);
-            SetViewportAndScissor(lateGraphics);
-            _asyncComputeOwnershipTransferCountThisFrame += _simpleDdgiVolumeManager.RecordAsyncComputeQueueFamilyTransfer(
-                lateGraphics,
-                SimpleDdgiQueueTransfer.GraphicsAcquireFromCompute,
-                _context.GraphicsQueueFamilyIndex,
-                _context.ComputeQueueFamilyIndex);
-            sceneData.GraphQueueOwnershipTransitionCount += _asyncComputeOwnershipTransferCountThisFrame > 0 ? 1 : 0;
-            sceneData.GraphBarrierSummary = AppendBarrierSummary(sceneData.GraphBarrierSummary, "SimpleDDGI queue-family graphics<->compute");
-            _renderGraph.ExecuteSelected(
-                lateGraphics,
-                _currentFrame,
-                sceneData,
-                static passName => !IsSceneSubmissionPass(passName) && !IsPreForwardOverlapPass(passName) && !IsSimpleDdgiAsyncPass(passName),
-                _gpuTimestamps,
-                _cmd,
-                Settings.UseSecondaryCommandBuffers);
-
-            _currentCommandBuffer = lateGraphics;
-            _asyncComputeSplitSubmittedThisFrame = true;
-            _asyncComputeWaitValueThisFrame = computeCompleteValue;
-            sceneData.AsyncComputeOwnershipTransferCount = _asyncComputeOwnershipTransferCountThisFrame;
-            sceneData.DdgiAsyncComputeEnabled = 1;
-        }
-
-        private void ExecuteSimpleDdgiAsyncPass(RenderPassBase pass, CommandBuffer commandBuffer, SceneRenderingData sceneData)
-        {
-            if (!pass.ShouldExecute(_currentFrame, sceneData))
-                return;
-
-            long passStart = Stopwatch.GetTimestamp();
-            pass.Context.BeginDebugLabel(commandBuffer, pass.Name);
-            _gpuTimestamps.BeginComputePass(commandBuffer, _currentFrame, pass.Name);
             try
             {
-                pass.Execute(commandBuffer, _currentFrame, sceneData, _gpuTimestamps);
-            }
-            finally
+            // This must be set before executing selected passes. Simple DDGI uses it to choose
+            // the local post-dispatch dependency; it is true only after the entire scheduler
+            // plan has passed validation and is about to be recorded on its compute segment.
+            sceneData.DdgiAsyncComputeEnabled = IsDdgiAsyncComputeActuallyEnabled(plan) ? 1 : 0;
+            _renderGraph.BeginSplitExecution(sceneData);
+            _asyncComputePlannedReleaseBarrierCountThisFrame = plan.PlannedReleaseBarrierCount;
+            _asyncComputePlannedAcquireBarrierCountThisFrame = plan.PlannedAcquireBarrierCount;
+            _asyncComputeTransferredBytesThisFrame = plan.TransferBytes;
+            _asyncComputeTransferredImageSubresourcesThisFrame = plan.TransferImageSubresources;
+
+            foreach (AsyncComputeSubmissionSegment segment in plan.Segments)
             {
-                _gpuTimestamps.EndPass(commandBuffer, _currentFrame);
-                pass.Context.EndDebugLabel(commandBuffer);
-                sceneData.CpuPrimaryCommandRecordMicroseconds += ElapsedMicroseconds(passStart);
-            }
-        }
-
-        private unsafe void SubmitAsyncSetupGraphicsCommand(CommandBuffer commandBuffer, ulong signalValue)
-        {
-            var commandBuffers = stackalloc CommandBuffer[] { commandBuffer };
-            var waitSemaphores = stackalloc Semaphore[] { _sync.GetImageAvailableSemaphore(_currentFrame) };
-            var waitStages = stackalloc PipelineStageFlags[] { PipelineStageFlags.ColorAttachmentOutputBit };
-            var signalSemaphores = stackalloc Semaphore[] { _cmd.AsyncComputeTimelineSemaphore };
-            var signalValues = stackalloc ulong[] { signalValue };
-            var timelineInfo = new TimelineSemaphoreSubmitInfo
-            {
-                SType = StructureType.TimelineSemaphoreSubmitInfo,
-                SignalSemaphoreValueCount = 1,
-                PSignalSemaphoreValues = signalValues
-            };
-            var submitInfo = new SubmitInfo
-            {
-                SType = StructureType.SubmitInfo,
-                PNext = &timelineInfo,
-                WaitSemaphoreCount = 1,
-                PWaitSemaphores = waitSemaphores,
-                PWaitDstStageMask = waitStages,
-                CommandBufferCount = 1,
-                PCommandBuffers = commandBuffers,
-                SignalSemaphoreCount = 1,
-                PSignalSemaphores = signalSemaphores
-            };
-
-            long submitStart = Stopwatch.GetTimestamp();
-            Result result = _context.Api.QueueSubmit(_context.GraphicsQueue, 1, &submitInfo, default);
-            _lastQueueSubmitMicroseconds += ElapsedMicroseconds(submitStart);
-            if (result != Result.Success)
-                throw new VulkanException("Failed to submit async setup graphics command buffer", result);
-        }
-
-        private unsafe void SubmitAsyncComputeCommand(CommandBuffer commandBuffer, ulong waitValue, ulong signalValue)
-        {
-            var commandBuffers = stackalloc CommandBuffer[] { commandBuffer };
-            var waitSemaphores = stackalloc Semaphore[] { _cmd.AsyncComputeTimelineSemaphore };
-            var waitStages = stackalloc PipelineStageFlags[] { PipelineStageFlags.ComputeShaderBit };
-            var signalSemaphores = stackalloc Semaphore[] { _cmd.AsyncComputeTimelineSemaphore };
-            var waitValues = stackalloc ulong[] { waitValue };
-            var signalValues = stackalloc ulong[] { signalValue };
-            var timelineInfo = new TimelineSemaphoreSubmitInfo
-            {
-                SType = StructureType.TimelineSemaphoreSubmitInfo,
-                WaitSemaphoreValueCount = 1,
-                PWaitSemaphoreValues = waitValues,
-                SignalSemaphoreValueCount = 1,
-                PSignalSemaphoreValues = signalValues
-            };
-            var submitInfo = new SubmitInfo
-            {
-                SType = StructureType.SubmitInfo,
-                PNext = &timelineInfo,
-                WaitSemaphoreCount = 1,
-                PWaitSemaphores = waitSemaphores,
-                PWaitDstStageMask = waitStages,
-                CommandBufferCount = 1,
-                PCommandBuffers = commandBuffers,
-                SignalSemaphoreCount = 1,
-                PSignalSemaphores = signalSemaphores
-            };
-
-            long submitStart = Stopwatch.GetTimestamp();
-            Result result = _context.Api.QueueSubmit(_context.ComputeQueue, 1, &submitInfo, default);
-            _lastAsyncComputeSubmitMicroseconds = ElapsedMicroseconds(submitStart);
-            if (result != Result.Success)
-                throw new VulkanException("Failed to submit async compute command buffer", result);
-        }
-
-        private unsafe void SubmitAsyncEarlyGraphicsCommand(CommandBuffer commandBuffer)
-        {
-            var commandBuffers = stackalloc CommandBuffer[] { commandBuffer };
-            var submitInfo = new SubmitInfo
-            {
-                SType = StructureType.SubmitInfo,
-                CommandBufferCount = 1,
-                PCommandBuffers = commandBuffers
-            };
-
-            long submitStart = Stopwatch.GetTimestamp();
-            Result result = _context.Api.QueueSubmit(_context.GraphicsQueue, 1, &submitInfo, default);
-            _lastQueueSubmitMicroseconds += ElapsedMicroseconds(submitStart);
-            if (result != Result.Success)
-                throw new VulkanException("Failed to submit async early graphics command buffer", result);
-        }
-
-        private static bool IsSceneSubmissionPass(string passName) =>
-            passName == "SceneOpaqueCompactionPass";
-
-        private static bool IsPreForwardOverlapPass(string passName) =>
-            passName is
-                "DirectionalShadowPass" or
-                "SpotShadowPass" or
-                "PointShadowPass" or
-                "DepthPrePass" or
-                "MotionVectorPass" or
-                "HiZBuildPass" or
-                "ForwardVisibilityCompactionPass" or
-                "SceneSurfacePass" or
-                "AmbientOcclusionPass" or
-                "AmbientOcclusionBlurPass" or
-                "TiledLightCullingPass";
-
-        private static bool IsSimpleDdgiAsyncPass(string passName) =>
-            passName is "SimpleDdgiTracePass" or "SimpleDdgiRelocateClassifyPass" or "SimpleDdgiBlendPass";
-
-        private static string AppendBarrierSummary(string current, string item) =>
-            string.IsNullOrWhiteSpace(current) ? item : current + "; " + item;
-
-        private AsyncComputePlan BuildAsyncComputePlan(SceneRenderingData sceneData)
-        {
-            bool requested = Settings.AsyncCompute.Enabled;
-            bool supported = _context.HasDedicatedComputeQueue && _cmd.AsyncComputeTimelineSemaphore.Handle != 0;
-            RenderGraphDiagnostics graphDiagnostics = _renderGraph.CreateDiagnostics(
-                sceneData.ActiveFeatureIsolation,
-                asyncComputeEnabled: requested && supported);
-
-            var candidates = new List<string>();
-            foreach (RenderGraphPassDiagnostics pass in graphDiagnostics.Passes)
-            {
-                if (pass.EnabledByFeatureIsolation &&
-                    pass.AsyncComputeCandidate &&
-                    IsAsyncComputePassAllowedBySettings(pass.Name))
+                CommandBuffer commandBuffer;
+                if (segment.Id == 0)
                 {
-                    candidates.Add(pass.Name);
+                    commandBuffer = _currentCommandBuffer;
+                }
+                else if (segment.Queue == AsyncComputeQueue.Compute)
+                {
+                    commandBuffer = _cmd.BeginAsyncComputeCommand(_currentFrame);
+                    _gpuTimestamps.BeginComputeQueueFrame(commandBuffer, _currentFrame);
+                }
+                else
+                {
+                    commandBuffer = _cmd.BeginScheduledGraphicsCommand(_currentFrame);
+                    SetViewportAndScissor(commandBuffer);
+                }
+
+                long barrierRecordStart = Stopwatch.GetTimestamp();
+                QueueOwnershipTransferBarrierCounts acquireCounts = QueueOwnershipTransferRecorder.RecordAcquires(
+                    _context,
+                    commandBuffer,
+                    segment.AcquireTransfers);
+                _asyncComputeBarrierRecordMicrosecondsThisFrame += ElapsedMicroseconds(barrierRecordStart);
+                _asyncComputeEmittedAcquireBarrierCountThisFrame += acquireCounts.AcquireCount;
+
+                if (segment.AccessesSwapchain)
+                    EnsureSwapchainImageColorAttachment(commandBuffer);
+
+                if (segment.Passes.Count > 0)
+                {
+                    var passNames = new HashSet<string>(segment.Passes, StringComparer.Ordinal);
+                    _renderGraph.ExecuteSelected(
+                        commandBuffer,
+                        _currentFrame,
+                        sceneData,
+                        passNames.Contains,
+                        _gpuTimestamps,
+                        _cmd,
+                        useSecondaryCommandBuffers: segment.Queue == AsyncComputeQueue.Graphics && Settings.UseSecondaryCommandBuffers,
+                        isComputeQueue: segment.Queue == AsyncComputeQueue.Compute,
+                        usesExplicitQueueTransfers: true);
+                }
+
+                barrierRecordStart = Stopwatch.GetTimestamp();
+                QueueOwnershipTransferBarrierCounts releaseCounts = QueueOwnershipTransferRecorder.RecordReleases(
+                    _context,
+                    commandBuffer,
+                    segment.ReleaseTransfers);
+                _asyncComputeBarrierRecordMicrosecondsThisFrame += ElapsedMicroseconds(barrierRecordStart);
+                _asyncComputeEmittedReleaseBarrierCountThisFrame += releaseCounts.ReleaseCount;
+                _asyncComputeOwnershipTransferCountThisFrame += releaseCounts.OwnershipTransferCount;
+
+                if (segment.IsTerminalGraphicsSegment)
+                {
+                    _currentCommandBuffer = commandBuffer;
+                    _asyncComputeWaitsThisFrame.Clear();
+                    _asyncComputeWaitsThisFrame.AddRange(segment.TimelineWaits);
+                    continue;
+                }
+
+                _cmd.EndCommandBuffer(commandBuffer);
+                _deferredAsyncSubmissions.Add(new DeferredAsyncSubmission(commandBuffer, segment));
+            }
+
+            foreach (QueueOwnershipTransfer transfer in plan.Transfers.OrderBy(transfer => transfer.Id))
+            {
+                if (!transfer.IsConcurrentResource)
+                {
+                    foreach (RenderGraphConcreteResourceBinding binding in transfer.AllBindings)
+                        _renderGraph.ConcreteResourceBindings.CommitOwner(binding, transfer.DestinationQueueFamily);
                 }
             }
 
-            if (Settings.AsyncCompute.GpuParticlesEnabled && sceneData.GpuParticlesEnabled != 0)
-            {
-                candidates.Add("GpuParticleResetPass");
-                candidates.Add("GpuParticleSimulatePass");
-                candidates.Add("GpuParticleSortPass");
+            ulong maxTimelineValue = plan.Segments
+                .Select(segment => segment.TimelineSignalValue.GetValueOrDefault())
+                .DefaultIfEmpty(0UL)
+                .Max();
+            if (maxTimelineValue >= _nextAsyncComputeTimelineValue)
+                _nextAsyncComputeTimelineValue = checked(maxTimelineValue + 1UL);
+
+            _asyncComputePlanRecordedThisFrame = true;
+            sceneData.GraphQueueOwnershipTransitionCount = plan.QueueFamilyOwnershipTransferCount;
+            sceneData.AsyncComputeOwnershipTransferCount = _asyncComputeOwnershipTransferCountThisFrame;
+            sceneData.GraphBarrierSummary = $"async plan: {plan.GraphicsSegmentCount} graphics segments, {plan.ComputeSegmentCount} compute segments, {plan.QueueFamilyOwnershipTransferCount} queue-family handoffs";
+            return true;
             }
-
-            var enabledPasses = new List<string>(3);
-            bool simpleDdgiReady =
-                sceneData.SimpleDdgiActive != 0 &&
-                sceneData.SimpleDdgiProbesUpdated > 0 &&
-                _simpleDdgiTracePass != null &&
-                _simpleDdgiRelocateClassifyPass != null &&
-                _simpleDdgiBlendPass != null &&
-                IsAsyncComputePassAllowedBySettings("SimpleDdgiTracePass") &&
-                RenderFeatureIsolationPolicy.ShouldExecutePass(sceneData.ActiveFeatureIsolation, "SimpleDdgiTracePass") &&
-                RenderFeatureIsolationPolicy.ShouldExecutePass(sceneData.ActiveFeatureIsolation, "SimpleDdgiRelocateClassifyPass") &&
-                RenderFeatureIsolationPolicy.ShouldExecutePass(sceneData.ActiveFeatureIsolation, "SimpleDdgiBlendPass");
-
-            if (requested && supported && simpleDdgiReady)
+            catch (Exception exception)
             {
-                enabledPasses.Add("SimpleDdgiTracePass");
-                enabledPasses.Add("SimpleDdgiRelocateClassifyPass");
-                enabledPasses.Add("SimpleDdgiBlendPass");
+                // Some graph work is already appended after the renderer's upload/prelude
+                // commands, so replaying the graphics-only graph here would duplicate work in
+                // the same command buffer. Nothing has been submitted yet; abandon this frame
+                // rather than risk a partially recorded submission, and permanently fail closed.
+                MarkFrameSubmissionFault(
+                    $"Failed to record the validated async plan before submission: {exception.Message}",
+                    Result.ErrorUnknown);
+                throw;
             }
-
-            bool enabled = enabledPasses.Count > 0;
-            string status;
-            if (!requested)
-                status = "disabled by settings; async compute candidates are reported for timing validation.";
-            else if (!supported)
-                status = "requested but inactive: no dedicated compute queue family is available; using graphics queue fallback.";
-            else if (!simpleDdgiReady)
-                status = "requested and supported; no Simple DDGI update work was eligible this frame.";
-            else
-                status = "enabled: Simple DDGI trace/relocate/blend scheduled on dedicated compute queue.";
-
-            return new AsyncComputePlan(
-                requested,
-                supported,
-                enabled,
-                candidates,
-                enabledPasses,
-                sceneData.GraphQueueOwnershipTransitionCount > 0
-                    ? sceneData.GraphQueueOwnershipTransitionCount
-                    : graphDiagnostics.QueueOwnershipTransitionCount,
-                status,
-                graphDiagnostics);
         }
 
-        private bool IsAsyncComputePassAllowedBySettings(string passName)
+        private static AsyncComputePlan CreateGraphicsFallbackAsyncPlan(AsyncComputePlan source, string reason)
         {
-            return passName switch
+            string fallbackReason = string.IsNullOrWhiteSpace(reason)
+                ? "Async command recording was rejected before submission."
+                : reason;
+            IReadOnlyList<AsyncComputePathRuntimeStatus> paths = source.SubmissionPlan.Paths
+                .Select(path => path.Active || path.Eligible
+                    ? path with
+                    {
+                        Active = false,
+                        Eligible = false,
+                        Status = AsyncComputePathStatus.ValidationFallback,
+                        Reason = fallbackReason
+                    }
+                    : path)
+                .ToArray();
+            var submissionPlan = new AsyncComputeSubmissionPlan(
+                Accepted: false,
+                FailureReason: fallbackReason,
+                source.SubmissionPlan.ResourcePlanGeneration,
+                Array.Empty<AsyncComputeSubmissionSegment>(),
+                Array.Empty<QueueOwnershipTransfer>(),
+                paths);
+            return source with
             {
-                "HiZBuildPass" => Settings.AsyncCompute.HiZBuildEnabled,
-                "AmbientOcclusionBlurPass" => Settings.AsyncCompute.AmbientOcclusionBlurEnabled,
-                "FogPass" => Settings.AsyncCompute.FogEnabled,
-                "BloomPass" => Settings.AsyncCompute.BloomEnabled,
-                "DdgiSchedulePass" or "DdgiTracePass" or "DdgiBlendPass" or "DdgiRelocateClassifyPass" or "DdgiPublishPass" => Settings.AsyncCompute.DdgiUpdateEnabled && Settings.GlobalIllumination.DdgiAsyncComputeEnabled,
-                "SimpleDdgiTracePass" or "SimpleDdgiRelocateClassifyPass" or "SimpleDdgiBlendPass" => Settings.AsyncCompute.DdgiUpdateEnabled && Settings.GlobalIllumination.DdgiAsyncComputeEnabled,
-                _ => true
+                EffectiveMode = AsyncComputeMode.Disabled,
+                SubmissionPlan = submissionPlan,
+                Status = $"validation fallback: {fallbackReason}"
             };
+        }
+
+        private unsafe void SubmitDeferredAsyncSubmissions()
+        {
+            int maxWaitCount = 0;
+            foreach (DeferredAsyncSubmission deferred in _deferredAsyncSubmissions)
+                maxWaitCount = Math.Max(maxWaitCount, deferred.Segment.TimelineWaits.Count);
+
+            // Keep the temporary submission arrays outside the loop. Apart from avoiding managed
+            // allocation in the hot path, this prevents unbounded stack growth when a frame has
+            // many short segments.
+            Semaphore* waitSemaphores = stackalloc Semaphore[Math.Max(1, maxWaitCount)];
+            PipelineStageFlags* waitStages = stackalloc PipelineStageFlags[Math.Max(1, maxWaitCount)];
+            ulong* waitValues = stackalloc ulong[Math.Max(1, maxWaitCount)];
+            Semaphore* signalSemaphores = stackalloc Semaphore[1];
+            ulong* signalValues = stackalloc ulong[1];
+
+            foreach (DeferredAsyncSubmission deferred in _deferredAsyncSubmissions)
+            {
+                AsyncComputeSubmissionSegment segment = deferred.Segment;
+                int waitCount = segment.TimelineWaits.Count;
+                int signalCount = segment.TimelineSignalValue.HasValue ? 1 : 0;
+                for (int i = 0; i < waitCount; i++)
+                {
+                    AsyncComputeTimelineWait wait = segment.TimelineWaits[i];
+                    waitSemaphores[i] = _cmd.AsyncComputeTimelineSemaphore;
+                    waitStages[i] = ToLegacyPipelineStage(wait.StageMask);
+                    waitValues[i] = wait.Value;
+                }
+
+                if (signalCount > 0)
+                {
+                    signalSemaphores[0] = _cmd.AsyncComputeTimelineSemaphore;
+                    signalValues[0] = segment.TimelineSignalValue!.Value;
+                }
+
+                TimelineSemaphoreSubmitInfo timelineInfo = default;
+                if (waitCount > 0 || signalCount > 0)
+                {
+                    timelineInfo = new TimelineSemaphoreSubmitInfo
+                    {
+                        SType = StructureType.TimelineSemaphoreSubmitInfo,
+                        WaitSemaphoreValueCount = (uint)waitCount,
+                        PWaitSemaphoreValues = waitValues,
+                        SignalSemaphoreValueCount = (uint)signalCount,
+                        PSignalSemaphoreValues = signalValues
+                    };
+                }
+
+                CommandBuffer commandBuffer = deferred.CommandBuffer;
+                var submitInfo = new SubmitInfo
+                {
+                    SType = StructureType.SubmitInfo,
+                    PNext = waitCount > 0 || signalCount > 0 ? &timelineInfo : null,
+                    WaitSemaphoreCount = (uint)waitCount,
+                    PWaitSemaphores = waitSemaphores,
+                    PWaitDstStageMask = waitStages,
+                    CommandBufferCount = 1,
+                    PCommandBuffers = &commandBuffer,
+                    SignalSemaphoreCount = (uint)signalCount,
+                    PSignalSemaphores = signalSemaphores
+                };
+
+                long submitStart = Stopwatch.GetTimestamp();
+                Result result = _context.Api.QueueSubmit(
+                    segment.Queue == AsyncComputeQueue.Compute ? _context.ComputeQueue : _context.GraphicsQueue,
+                    1,
+                    &submitInfo,
+                    default);
+                long elapsed = ElapsedMicroseconds(submitStart);
+                _lastQueueSubmitMicroseconds += elapsed;
+                if (segment.Queue == AsyncComputeQueue.Compute)
+                    _lastAsyncComputeSubmitMicroseconds += elapsed;
+                if (result != Result.Success)
+                {
+                    MarkFrameSubmissionFault(
+                        $"Failed to submit scheduled {segment.Queue} segment {segment.Id}: {result}. " +
+                        "The frame is abandoned before its terminal graphics submission so command-pool reuse cannot race submitted work.",
+                        result);
+                    throw new VulkanException($"Failed to submit scheduled {segment.Queue} command buffer", result);
+                }
+
+                RecordSubmittedAsyncComputeSegment(segment.Queue);
+            }
+
+            _deferredAsyncSubmissions.Clear();
+        }
+
+        private void RecordSubmittedAsyncComputeSegment(AsyncComputeQueue queue)
+        {
+            if (queue == AsyncComputeQueue.Compute)
+                _asyncComputeSubmittedComputeSegmentsThisFrame++;
+            else
+                _asyncComputeSubmittedGraphicsSegmentsThisFrame++;
+        }
+
+        private void UpdateAsyncComputeSubmissionDiagnostics()
+        {
+            _lastDiagnostics = _lastDiagnostics with
+            {
+                AsyncComputeSubmittedGraphicsSegmentCount = _asyncComputeSubmittedGraphicsSegmentsThisFrame,
+                AsyncComputeSubmittedComputeSegmentCount = _asyncComputeSubmittedComputeSegmentsThisFrame
+            };
+        }
+
+        private void EnsureSwapchainImageColorAttachment(CommandBuffer commandBuffer)
+        {
+            if (_swapchainImageTransitionedThisFrame)
+                return;
+
+            TransitionSwapchainImage(commandBuffer, ImageLayout.ColorAttachmentOptimal);
+            _swapchainImageTransitionedThisFrame = true;
+        }
+
+        private void LatchAsyncComputeFallback(string reason)
+        {
+            _asyncComputeEmergencyFallbackLatched = true;
+            _asyncComputeLastFallbackReason = string.IsNullOrWhiteSpace(reason)
+                ? "Async compute synchronization-plan failure."
+                : reason;
+            _asyncComputeValidationFallbackCount++;
+        }
+
+        /// <summary>
+        /// A failed queue submit is not recoverable as a normal frame: it may have left an
+        /// acquired image unpresented or a non-terminal command buffer in flight.  Stop future
+        /// frame acquisition before a reset fence or command pool can be reused. Device loss is
+        /// recorded separately because no Vulkan recovery submission is legal in that state.
+        /// </summary>
+        private void MarkFrameSubmissionFault(string reason, Result result)
+        {
+            _deviceLost |= result == Result.ErrorDeviceLost;
+            _frameSubmissionFaulted = true;
+            _frameSubmissionFaultReason = string.IsNullOrWhiteSpace(reason)
+                ? "A Vulkan frame submission failed."
+                : reason;
+            LatchAsyncComputeFallback(_frameSubmissionFaultReason);
+            _asyncComputeTimingFrames[_currentFrame] = null;
+            _deferredAsyncSubmissions.Clear();
+            _frameInProgress = false;
+        }
+
+        private void ThrowIfFrameSubmissionFaulted()
+        {
+            if (!_frameSubmissionFaulted)
+                return;
+
+            string prefix = _deviceLost
+                ? "The Vulkan device was lost during a frame submission."
+                : "A previous frame submission failed and the renderer was stopped before unsafe resource reuse.";
+            throw new InvalidOperationException($"{prefix} {_frameSubmissionFaultReason}");
+        }
+
+        /// <summary>
+        /// The terminal fence was reset immediately before the submit that failed. For failures
+        /// other than device loss, submit an empty wait operation with that fence so all already
+        /// submitted graphics/compute work is covered and the fence cannot remain permanently
+        /// unsignalled. We still stop rendering afterwards: this only makes cleanup safe; it does
+        /// not pretend the acquired swapchain image was rendered or presented.
+        /// </summary>
+        private unsafe Result TryRecoverFrameFenceAfterTerminalSubmitFailure(
+            int waitCount,
+            Semaphore* waitSemaphores,
+            PipelineStageFlags* waitStages,
+            ulong* waitValues,
+            bool hasTimelineWaits)
+        {
+            if (_deviceLost || waitCount <= 0)
+                return Result.ErrorDeviceLost;
+
+            TimelineSemaphoreSubmitInfo timelineInfo = default;
+            if (hasTimelineWaits)
+            {
+                timelineInfo = new TimelineSemaphoreSubmitInfo
+                {
+                    SType = StructureType.TimelineSemaphoreSubmitInfo,
+                    WaitSemaphoreValueCount = (uint)waitCount,
+                    PWaitSemaphoreValues = waitValues
+                };
+            }
+
+            var recoverySubmit = new SubmitInfo
+            {
+                SType = StructureType.SubmitInfo,
+                PNext = hasTimelineWaits ? &timelineInfo : null,
+                WaitSemaphoreCount = (uint)waitCount,
+                PWaitSemaphores = waitSemaphores,
+                PWaitDstStageMask = waitStages,
+                CommandBufferCount = 0,
+                PCommandBuffers = null,
+                SignalSemaphoreCount = 0,
+                PSignalSemaphores = null
+            };
+
+            long submitStart = Stopwatch.GetTimestamp();
+            Result recovery = _context.Api.QueueSubmit(
+                _context.GraphicsQueue,
+                1,
+                &recoverySubmit,
+                _sync.GetInFlightFence(_currentFrame));
+            _lastQueueSubmitMicroseconds += ElapsedMicroseconds(submitStart);
+            return recovery;
+        }
+
+        private static PipelineStageFlags ToLegacyPipelineStage(PipelineStageFlags2 stages)
+        {
+            PipelineStageFlags result = PipelineStageFlags.None;
+            if ((stages & PipelineStageFlags2.ComputeShaderBit) != 0)
+                result |= PipelineStageFlags.ComputeShaderBit;
+            if ((stages & PipelineStageFlags2.FragmentShaderBit) != 0)
+                result |= PipelineStageFlags.FragmentShaderBit;
+            if ((stages & PipelineStageFlags2.VertexShaderBit) != 0)
+                result |= PipelineStageFlags.VertexShaderBit;
+            if ((stages & PipelineStageFlags2.ColorAttachmentOutputBit) != 0)
+                result |= PipelineStageFlags.ColorAttachmentOutputBit;
+            if ((stages & PipelineStageFlags2.EarlyFragmentTestsBit) != 0)
+                result |= PipelineStageFlags.EarlyFragmentTestsBit;
+            if ((stages & PipelineStageFlags2.LateFragmentTestsBit) != 0)
+                result |= PipelineStageFlags.LateFragmentTestsBit;
+            if ((stages & PipelineStageFlags2.TransferBit) != 0)
+                result |= PipelineStageFlags.TransferBit;
+            if ((stages & PipelineStageFlags2.DrawIndirectBit) != 0)
+                result |= PipelineStageFlags.DrawIndirectBit;
+            if ((stages & PipelineStageFlags2.AllCommandsBit) != 0)
+                result |= PipelineStageFlags.AllCommandsBit;
+            return result == PipelineStageFlags.None ? PipelineStageFlags.AllCommandsBit : result;
+        }
+
+        private sealed record DeferredAsyncSubmission(
+            CommandBuffer CommandBuffer,
+            AsyncComputeSubmissionSegment Segment);
+
+        private sealed class AsyncComputeTimingFrame
+        {
+            public AsyncComputeTimingFrame(
+                AsyncComputePlan plan,
+                IReadOnlyDictionary<AsyncComputePath, AsyncComputeTimingKey> keys)
+            {
+                Plan = plan ?? throw new ArgumentNullException(nameof(plan));
+                Keys = keys ?? throw new ArgumentNullException(nameof(keys));
+            }
+
+            public AsyncComputePlan Plan { get; }
+            public IReadOnlyDictionary<AsyncComputePath, AsyncComputeTimingKey> Keys { get; }
+            public long CpuSubmitMicroseconds { get; set; }
+            public long CpuBarrierRecordMicroseconds { get; set; }
+        }
+
+        private AsyncComputePlan BuildAsyncComputePlan(SceneRenderingData sceneData)
+        {
+            if (sceneData.ScenePayloadRebuilt != 0 ||
+                sceneData.HiZPolicySceneChanged != 0 ||
+                sceneData.HiZPolicyCameraCut != 0)
+            {
+                // A scene reload, material/object payload rebuild, or camera cut changes the
+                // producer/consumer workload enough that prior Auto samples are not comparable.
+                // Drop in-flight samples as well: their query results belong to the old workload.
+                _asyncComputeTimingPolicy.Clear();
+                Array.Clear(_asyncComputeTimingFrames);
+                _nextAutoTimingProbePath = 0;
+            }
+
+            AsyncComputeMode requestedMode = Settings.AsyncCompute.Mode;
+            if (_lastAsyncComputeTimingMode != requestedMode)
+            {
+                // Force validation deliberately permits several paths at once, so its timings
+                // are not attributable to an individual Auto candidate. Likewise, a policy
+                // change is a user-visible workload change. Start a fresh baseline instead of
+                // letting a previous mode promote a path with mixed samples.
+                _asyncComputeTimingPolicy.Clear();
+                Array.Clear(_asyncComputeTimingFrames);
+                _nextAutoTimingProbePath = 0;
+                _lastAsyncComputeTimingMode = requestedMode;
+            }
+
+            // Disabled is the exact graphics-only fallback and must retain the original hot
+            // path. Do not rebuild concrete bindings, allocate scheduler inputs, or touch a
+            // compute command resource merely to report that policy is off.
+            if (requestedMode == AsyncComputeMode.Disabled)
+                return CreateDisabledAsyncComputePlan(sceneData);
+
+            AsyncComputeMode effectiveMode = _asyncComputeEmergencyFallbackLatched
+                ? AsyncComputeMode.Disabled
+                : requestedMode;
+            bool supported = _context.HasIndependentComputeQueue && _cmd.AsyncComputeTimelineSemaphore.Handle != 0;
+            // A resource-plan refresh resolves many imported allocations. Avoid that CPU work on
+            // unsupported devices and after the emergency kill switch has already selected the
+            // graphics-only path; neither case can legally submit a compute segment.
+            if (supported && effectiveMode != AsyncComputeMode.Disabled)
+                RefreshAsyncComputeResourceBindings(sceneData);
+            var capabilities = new AsyncComputeQueueCapabilities(
+                supported,
+                _context.GraphicsQueueFamilyIndex,
+                _context.ComputeQueueFamilyIndex);
+
+            AsyncComputePath[] allPaths = Enum.GetValues<AsyncComputePath>();
+            var requestedByFeature = new Dictionary<AsyncComputePath, bool>(allPaths.Length);
+            var timingDecisions = new Dictionary<AsyncComputePath, AsyncComputeTimingDecision>(allPaths.Length);
+            foreach (AsyncComputePath path in allPaths)
+            {
+                requestedByFeature.Add(
+                    path,
+                    Settings.AsyncCompute.IsEnabledBy(path) &&
+                    RenderFeatureIsolationPolicy.ShouldExecutePass(sceneData.ActiveFeatureIsolation, GetRepresentativeAsyncPass(path)) &&
+                    IsAsyncComputePathFeatureActive(path, sceneData));
+                timingDecisions.Add(path, GetAsyncComputeTimingDecision(path, sceneData));
+            }
+
+            // Auto intentionally runs at most one path at a time. A path's timing samples are
+            // only meaningful when they are not contaminated by a different async path sharing
+            // the same frame, and a validated active path must continue receiving samples so it
+            // can demote on a workload regression.
+            AsyncComputePath? autoEnabledPath = effectiveMode == AsyncComputeMode.Auto
+                ? SelectAutoEnabledPath(sceneData, requestedByFeature, timingDecisions)
+                : null;
+            AsyncComputePath? autoTimingProbe = effectiveMode == AsyncComputeMode.Auto && !autoEnabledPath.HasValue
+                ? SelectAutoTimingProbe(sceneData, requestedByFeature)
+                : null;
+            AsyncComputePath? autoIsolatedPath = autoEnabledPath ?? autoTimingProbe;
+            var paths = new List<AsyncComputePathEligibility>(allPaths.Length);
+            foreach (AsyncComputePath path in allPaths)
+            {
+                bool requested = requestedByFeature[path];
+                AsyncComputeTimingDecision timing = timingDecisions[path];
+                bool isSelectedAutoPath = autoIsolatedPath == path;
+                bool isProbe = autoTimingProbe == path;
+                bool pauseForAutoIsolation = effectiveMode == AsyncComputeMode.Auto &&
+                    requested &&
+                    autoIsolatedPath.HasValue &&
+                    !isSelectedAutoPath;
+                bool timingEligible = effectiveMode == AsyncComputeMode.Auto
+                    ? isSelectedAutoPath && timing.Eligible
+                    : timing.Eligible;
+                AsyncComputePathStatus timingStatus = pauseForAutoIsolation
+                    ? timing.Status == AsyncComputePathStatus.Enabled
+                        ? AsyncComputePathStatus.PendingWarmup
+                        : timing.Status
+                    : timing.Status;
+                string reason = !requested
+                    ? DescribeInactiveAsyncComputePath(path, sceneData)
+                    : isProbe
+                        ? $"Collecting isolated Auto timing samples for {path}; no other async path is scheduled this frame."
+                        : pauseForAutoIsolation
+                            ? $"Waiting while {autoIsolatedPath!.Value} is the sole isolated Auto path for this workload."
+                            : effectiveMode == AsyncComputeMode.Auto && !autoIsolatedPath.HasValue
+                                ? "No complete, independently validated Auto path is available for this workload."
+                            : timing.Reason;
+                paths.Add(new AsyncComputePathEligibility(
+                    path,
+                    requested,
+                    timingEligible,
+                    timingStatus,
+                    reason,
+                    IsAutoTimingProbe: isProbe));
+            }
+
+            var passes = new List<AsyncComputePassRequest>(_renderGraph.PassNames.Count);
+            foreach (string passName in _renderGraph.PassNames)
+            {
+                AsyncComputePath? path = GetAsyncComputePath(passName);
+                bool enabledByFeatureIsolation = RenderFeatureIsolationPolicy.ShouldExecutePass(sceneData.ActiveFeatureIsolation, passName);
+                passes.Add(new AsyncComputePassRequest(
+                    passName,
+                    path,
+                    _renderGraph.GetPassResourceUsages(passName),
+                    enabledByFeatureIsolation,
+                    path?.ToString() ?? string.Empty,
+                    WillExecute: enabledByFeatureIsolation && _renderGraph.WillExecutePass(passName, _currentFrame, sceneData)));
+            }
+
+            AsyncComputeSubmissionPlan submissionPlan = _asyncComputeScheduler.Compile(new AsyncComputeSchedulerInput(
+                effectiveMode,
+                capabilities,
+                _renderGraph.ConcreteResourceBindings,
+                paths,
+                passes,
+                _currentFrame,
+                _nextAsyncComputeTimelineValue));
+            if (!submissionPlan.Accepted)
+            {
+                // A rejected structural plan is a synchronization-plan failure, not a normal
+                // per-feature ineligibility. Keep this frame on its intact graphics recording
+                // path and latch the process-wide kill switch before the next frame can attempt
+                // another compute submission.
+                LatchAsyncComputeFallback(submissionPlan.FailureReason);
+                effectiveMode = AsyncComputeMode.Disabled;
+            }
+            RenderGraphDiagnostics graphDiagnostics = _renderGraph.CreateDiagnostics(
+                sceneData.ActiveFeatureIsolation,
+                asyncComputeEnabled: false,
+                sceneData: sceneData);
+
+            string status = _asyncComputeEmergencyFallbackLatched
+                ? $"emergency fallback latched: {_asyncComputeLastFallbackReason}"
+                : requestedMode == AsyncComputeMode.Disabled
+                    ? "disabled by policy; graphics-only execution is active."
+                    : !supported
+                        ? "requested but inactive: no independent compute queue is available; using graphics-only execution."
+                        : !submissionPlan.Accepted
+                            ? $"validation fallback: {submissionPlan.FailureReason}"
+                            : submissionPlan.ContainsAsyncCompute
+                                ? "enabled: generic async segment plan compiled with validated concrete handoffs."
+                                : "no async path was eligible for this frame.";
+
+            return new AsyncComputePlan(
+                requestedMode,
+                effectiveMode,
+                supported,
+                submissionPlan,
+                graphDiagnostics,
+                status);
+        }
+
+        private AsyncComputePlan CreateDisabledAsyncComputePlan(SceneRenderingData sceneData)
+        {
+            bool supported = _context.HasIndependentComputeQueue && _cmd.AsyncComputeTimelineSemaphore.Handle != 0;
+            AsyncComputePathRuntimeStatus[] paths = Enum.GetValues<AsyncComputePath>()
+                .Select(path => new AsyncComputePathRuntimeStatus(
+                    path,
+                    Requested: false,
+                    Supported: supported,
+                    Eligible: false,
+                    Active: false,
+                    AsyncComputePathStatus.DisabledByPolicy,
+                    "Async compute mode is Disabled.",
+                    _renderGraph.PassNames.Where(passName => GetAsyncComputePath(passName) == path).ToArray()))
+                .ToArray();
+            var submissionPlan = new AsyncComputeSubmissionPlan(
+                Accepted: true,
+                FailureReason: string.Empty,
+                _renderGraph.ConcreteResourceBindings.Generation,
+                Array.Empty<AsyncComputeSubmissionSegment>(),
+                Array.Empty<QueueOwnershipTransfer>(),
+                paths);
+            return new AsyncComputePlan(
+                AsyncComputeMode.Disabled,
+                AsyncComputeMode.Disabled,
+                supported,
+                submissionPlan,
+                _renderGraph.CreateDiagnostics(sceneData.ActiveFeatureIsolation, asyncComputeEnabled: false),
+                _asyncComputeEmergencyFallbackLatched
+                    ? $"emergency fallback latched: {_asyncComputeLastFallbackReason}"
+                    : "disabled by policy; graphics-only execution is active.");
+        }
+
+        /// <summary>
+        /// Resolves graph resources to the exact Vulkan allocations used by this frame. Imported
+        /// buffer families are deliberately bound at allocation granularity; a bindless index or
+        /// a broad BufferSet is never treated as a queue-ownership target.
+        /// </summary>
+        private void RefreshAsyncComputeResourceBindings(SceneRenderingData sceneData)
+        {
+            if (sceneData == null)
+                throw new ArgumentNullException(nameof(sceneData));
+
+            var bindings = new List<RenderGraphConcreteResourceBinding>();
+            uint graphicsFamily = _context.GraphicsQueueFamilyIndex;
+            uint computeFamily = _context.ComputeQueueFamilyIndex;
+            IReadOnlyList<uint> queueFamilies = graphicsFamily == computeFamily
+                ? new[] { graphicsFamily }
+                : new[] { graphicsFamily, computeFamily };
+
+            foreach (RenderGraphResourceId resource in Enum.GetValues<RenderGraphResourceId>())
+            {
+                IReadOnlyList<RenderTarget> targets = _renderGraph.GetOwnedRenderTargets(resource);
+                for (int targetIndex = 0; targetIndex < targets.Count; targetIndex++)
+                {
+                    RenderTarget target = targets[targetIndex];
+                    AddRenderTargetBinding(
+                        bindings,
+                        resource,
+                        target,
+                        queueFamilies,
+                        graphicsFamily,
+                        RenderGraphResourceLifetime.Persistent,
+                        targetIndex,
+                        targets.Count > 1 ? targetIndex : -1);
+                }
+            }
+
+            // These two renderer-owned targets are graph imports rather than graph-owned
+            // allocations. They are nevertheless concrete Vulkan images and must participate in
+            // a plan before Hi-Z, fog, bloom, or SSGI can be placed on compute.
+            if (_renderTargets != null)
+            {
+                AddRenderTargetBinding(
+                    bindings,
+                    RenderGraphResourceId.SceneColor,
+                    _renderTargets.SceneColor,
+                    queueFamilies,
+                    graphicsFamily,
+                    RenderGraphResourceLifetime.Imported,
+                    bindingIndex: 0,
+                    historyIndex: -1);
+                AddRenderTargetBinding(
+                    bindings,
+                    RenderGraphResourceId.SceneDepth,
+                    _renderTargets.SceneDepth,
+                    queueFamilies,
+                    graphicsFamily,
+                    RenderGraphResourceLifetime.Imported,
+                    bindingIndex: 0,
+                    historyIndex: -1);
+            }
+
+            if (_hizDepthPyramid is { Image.Handle: not 0 } hiz)
+            {
+                bindings.Add(RenderGraphConcreteResourceBinding.ForImage(
+                    RenderGraphResourceId.HiZPyramid,
+                    "Hi-Z depth pyramid",
+                    hiz.Image,
+                    new ImageSubresourceRange
+                    {
+                        AspectMask = ImageAspectFlags.ColorBit,
+                        BaseMipLevel = 0,
+                        LevelCount = hiz.MipLevels,
+                        BaseArrayLayer = 0,
+                        LayerCount = 1
+                    },
+                    hiz.Layout,
+                    queueFamilies,
+                    graphicsFamily,
+                    SharingMode.Exclusive,
+                    allocationGeneration: hiz.Image.Handle,
+                    lifetime: RenderGraphResourceLifetime.Persistent,
+                    layoutTracker: layout => hiz.Layout = layout));
+            }
+
+            if (_imageIndex < _swapchain.Images.Length && _swapchain.Images[_imageIndex].Handle != 0)
+            {
+                Image swapchainImage = _swapchain.Images[_imageIndex];
+                bindings.Add(RenderGraphConcreteResourceBinding.ForImage(
+                    RenderGraphResourceId.SwapchainColor,
+                    $"Swapchain image {_imageIndex}",
+                    swapchainImage,
+                    new ImageSubresourceRange
+                    {
+                        AspectMask = ImageAspectFlags.ColorBit,
+                        BaseMipLevel = 0,
+                        LevelCount = 1,
+                        BaseArrayLayer = 0,
+                        LayerCount = 1
+                    },
+                    _swapchain.GetImageLayout(_imageIndex),
+                    queueFamilies,
+                    graphicsFamily,
+                    SharingMode.Exclusive,
+                    frameIndex: _currentFrame,
+                    allocationGeneration: swapchainImage.Handle,
+                    lifetime: RenderGraphResourceLifetime.Imported,
+                    layoutTracker: layout => _swapchain.SetImageLayout(_imageIndex, layout)));
+            }
+
+            if (_accelerationStructureManager != null)
+            {
+                foreach (AccelerationStructureStorageBuffer storage in _accelerationStructureManager.GetRayQueryStorageBuffers())
+                {
+                    AddAsyncComputeBufferBinding(
+                        bindings,
+                        RenderGraphResourceId.TlasStorage,
+                        storage.DebugName,
+                        storage.Handle,
+                        queueFamilies,
+                        graphicsFamily,
+                        PipelineStageFlags2.AccelerationStructureBuildBitKhr,
+                        AccessFlags2.AccelerationStructureWriteBitKhr);
+                }
+            }
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.RayQueryInstanceMetadata, "Ray-query instance metadata",
+                _accelerationStructureManager?.RayQueryInstanceMetadataBuffer ?? BufferHandle.Invalid,
+                queueFamilies, graphicsFamily);
+
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.MeshGeometryBuffers, "Mesh vertex positions",
+                _meshManager.VertexPositionBuffer, queueFamilies, graphicsFamily);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.MeshGeometryBuffers, "Mesh vertex normal tangents",
+                _meshManager.VertexNormalTangentBuffer, queueFamilies, graphicsFamily);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.MeshGeometryBuffers, "Mesh vertex UV colors",
+                _meshManager.VertexUvColorBuffer, queueFamilies, graphicsFamily);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.MeshGeometryBuffers, "Mesh index data",
+                _meshManager.IndexBuffer, queueFamilies, graphicsFamily);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.MeshGeometryBuffers, "Mesh metadata",
+                _meshManager.MeshMetadataBuffer, queueFamilies, graphicsFamily);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.MaterialBuffers, "Material data",
+                _materialManager.MaterialBuffer, queueFamilies, graphicsFamily);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.MaterialBuffers, "Material extension data",
+                _materialManager.MaterialExtensionBuffer, queueFamilies, graphicsFamily);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.LightBuffers, "Light data",
+                _lightManager.LightBuffer, queueFamilies, graphicsFamily);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.EnvironmentData, "Environment data",
+                _environmentManager?.EnvironmentBuffer ?? BufferHandle.Invalid, queueFamilies, graphicsFamily);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.DdgiEmissiveSources, "DDGI emissive sources",
+                _ddgiEmissiveSourceBuffer, queueFamilies, graphicsFamily);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.RendererDiagnosticsBuffer, "Renderer diagnostics",
+                _diagnosticsBuffer.GetBufferHandle(_currentFrame), queueFamilies, graphicsFamily, frameIndex: _currentFrame);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.ParticleBuffers, "Particle frame data",
+                sceneData.ParticleFrameDataBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.ParticleBuffers, "Particle instances",
+                sceneData.ParticleInstanceBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.ParticleBuffers, "Particle batches",
+                sceneData.ParticleBatchBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
+
+            if (_farFieldClipmapManager != null)
+            {
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FarFieldParameters, "Far-field parameters",
+                    _farFieldClipmapManager.ParamsBuffer, queueFamilies, graphicsFamily);
+
+                // Paged far-field baking writes directly into the resident page pool, so the
+                // active and bake descriptors intentionally reference one physical allocation.
+                // Register that allocation once under the shared graph resource. The legacy
+                // clipmap still uses two physical ping-pong buffers and therefore exposes both.
+                BufferHandle activeVoxelBuffer = _farFieldClipmapManager.VoxelBuffer;
+                BufferHandle bakeVoxelBuffer = _farFieldClipmapManager.BakeVoxelBuffer;
+                bool sharesVoxelAllocation = FarFieldClipmapManager.SharesVoxelAllocation(
+                    activeVoxelBuffer,
+                    bakeVoxelBuffer);
+                AddAsyncComputeBufferBinding(
+                    bindings,
+                    RenderGraphResourceId.FarFieldVoxels,
+                    sharesVoxelAllocation ? "Far-field active/bake voxels" : "Far-field active voxels",
+                    activeVoxelBuffer,
+                    queueFamilies,
+                    graphicsFamily);
+                if (!sharesVoxelAllocation)
+                {
+                    AddAsyncComputeBufferBinding(
+                        bindings,
+                        RenderGraphResourceId.FarFieldVoxels,
+                        "Far-field bake voxels",
+                        bakeVoxelBuffer,
+                        queueFamilies,
+                        graphicsFamily);
+                }
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FarFieldInstances, "Far-field instances",
+                    _farFieldClipmapManager.InstanceBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FarFieldJumpFlood, "Far-field distance field",
+                    _farFieldClipmapManager.DistanceBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FarFieldJumpFlood, "Far-field jump-flood scratch 0",
+                    _farFieldClipmapManager.JumpFloodScratch0Buffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FarFieldJumpFlood, "Far-field jump-flood scratch 1",
+                    _farFieldClipmapManager.JumpFloodScratch1Buffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FarFieldPageTable, "Far-field page table",
+                    _farFieldClipmapManager.PageTableBuffer, queueFamilies, graphicsFamily);
+            }
+
+            if (_simpleDdgiVolumeManager != null)
+            {
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiParameters, "Simple DDGI parameters",
+                    _simpleDdgiVolumeManager.ParamsBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiIrradianceAtlas, "Simple DDGI irradiance atlas",
+                    _simpleDdgiVolumeManager.IrradianceAtlasBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiVisibilityAtlas, "Simple DDGI visibility atlas",
+                    _simpleDdgiVolumeManager.VisibilityAtlasBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiRayScratch, "Simple DDGI ray scratch",
+                    _simpleDdgiVolumeManager.RayResultScratchBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiProbeState, "Simple DDGI probe state",
+                    _simpleDdgiVolumeManager.ProbeStateBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiUpdateQueue, "Simple DDGI update queue",
+                    _simpleDdgiVolumeManager.ProbeUpdateQueueBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiRelocationData, "Simple DDGI relocation classification",
+                    _simpleDdgiVolumeManager.RelocationClassificationBuffer, queueFamilies, graphicsFamily);
+            }
+
+            if (_ddgiProbeVolumeManager != null)
+            {
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiState, "DDGI volume metadata",
+                    _ddgiProbeVolumeManager.VolumeMetadataBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiState, "DDGI probe state",
+                    _ddgiProbeVolumeManager.ProbeStateBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiState, "DDGI probe update queue",
+                    _ddgiProbeVolumeManager.ProbeUpdateQueueBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiState, "DDGI relocation classification",
+                    _ddgiProbeVolumeManager.ProbeRelocationClassificationBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiAtlases, "DDGI irradiance atlas",
+                    _ddgiProbeVolumeManager.IrradianceAtlasBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiAtlases, "DDGI visibility atlas",
+                    _ddgiProbeVolumeManager.VisibilityAtlasBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiRayResources, "DDGI ray scratch",
+                    _ddgiProbeVolumeManager.RayResultScratchBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI scheduler constants",
+                    _ddgiProbeVolumeManager.SchedulerConstantsBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI dirty regions",
+                    _ddgiProbeVolumeManager.DirtyRegionBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI probe candidates",
+                    _ddgiProbeVolumeManager.ProbeCandidateBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI scheduler group counts",
+                    _ddgiProbeVolumeManager.SchedulerGroupCountBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI scheduler prefix",
+                    _ddgiProbeVolumeManager.SchedulerPrefixBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI scheduler counters",
+                    _ddgiProbeVolumeManager.SchedulerCounterBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI trace indirect dispatch",
+                    _ddgiProbeVolumeManager.TraceIndirectDispatchBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI scheduler counter readback",
+                    _ddgiProbeVolumeManager.GetSchedulerCounterReadbackBuffer(_currentFrame), queueFamilies, graphicsFamily,
+                    frameIndex: _currentFrame);
+            }
+
+            GpuParticleAsyncResourceSet particleResources = _gpuParticleRuntimeManager.GetAsyncResourceSet(_currentFrame);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleState, "GPU particle state",
+                particleResources.StateBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleIndices, "GPU particle alive indices",
+                particleResources.AliveIndexBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleIndices, "GPU particle dead indices",
+                particleResources.DeadIndexBuffer, queueFamilies, graphicsFamily);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleEmitterData, "GPU particle emitters",
+                particleResources.EmitterBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleEmitterData, "GPU particle curves",
+                particleResources.CurveSampleBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleCounters, "GPU particle counters",
+                particleResources.CounterBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleUnsortedOutput, "GPU particle unsorted output",
+                particleResources.UnsortedRenderInstanceBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleRenderOutput, "GPU particle render output",
+                particleResources.RenderInstanceBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleIndirectArguments, "GPU particle indirect arguments",
+                particleResources.IndirectDrawBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleSortKeys, "GPU particle sort keys",
+                particleResources.SortKeyBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleCounterReadback, "GPU particle counter readback",
+                particleResources.CounterReadbackBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
+
+            // Deduplicate within a logical set only. The same texture can be reachable through
+            // both environment and material descriptors; RenderGraphResourceBindings models
+            // those exact aliases with one physical ownership key.
+            AddTextureBindings(bindings, RenderGraphResourceId.EnvironmentMaps, "Environment texture", _environmentManager?.GetSampledTextureHandles(),
+                queueFamilies, graphicsFamily, new HashSet<ulong>());
+            IReadOnlyList<TextureHandle> materialTextures = _materialManager.GetReferencedTextureHandles();
+            if (materialTextures.Count == 0)
+                materialTextures = [_textureManager.DefaultWhiteTexture];
+            int materialTextureBindingCount = AddTextureBindings(bindings, RenderGraphResourceId.MaterialTextures, "Material texture", materialTextures,
+                queueFamilies, graphicsFamily, new HashSet<ulong>());
+            if (materialTextureBindingCount == 0)
+            {
+                AddTextureBindings(bindings, RenderGraphResourceId.MaterialTextures, "Material fallback texture",
+                    [_textureManager.DefaultWhiteTexture], queueFamilies, graphicsFamily, new HashSet<ulong>());
+            }
+
+            _renderGraph.ReplaceConcreteResourceBindings(bindings);
+        }
+
+        private static void AddRenderTargetBinding(
+            ICollection<RenderGraphConcreteResourceBinding> bindings,
+            RenderGraphResourceId resource,
+            RenderTarget target,
+            IReadOnlyList<uint> queueFamilies,
+            uint graphicsFamily,
+            RenderGraphResourceLifetime lifetime,
+            int bindingIndex,
+            int historyIndex)
+        {
+            if (target.Image.Handle == 0)
+                return;
+
+            ImageAspectFlags aspect = target.Descriptor.DepthAttachment
+                ? ImageAspectFlags.DepthBit
+                : ImageAspectFlags.ColorBit;
+            bindings.Add(RenderGraphConcreteResourceBinding.ForImage(
+                resource,
+                $"{target.Name}#{bindingIndex}",
+                target.Image,
+                new ImageSubresourceRange
+                {
+                    AspectMask = aspect,
+                    BaseMipLevel = 0,
+                    LevelCount = 1,
+                    BaseArrayLayer = 0,
+                    LayerCount = 1
+                },
+                target.Layout,
+                queueFamilies,
+                graphicsFamily,
+                SharingMode.Exclusive,
+                frameIndex: -1,
+                historyIndex: historyIndex,
+                allocationGeneration: target.Image.Handle,
+                lifetime: lifetime,
+                layoutTracker: target.SetTrackedLayout));
+        }
+
+        private void AddAsyncComputeBufferBinding(
+            ICollection<RenderGraphConcreteResourceBinding> bindings,
+            RenderGraphResourceId resource,
+            string name,
+            BufferHandle handle,
+            IReadOnlyList<uint> queueFamilies,
+            uint graphicsFamily,
+            PipelineStageFlags2 initialStageMask = PipelineStageFlags2.None,
+            AccessFlags2 initialAccessMask = AccessFlags2.None,
+            int frameIndex = -1)
+        {
+            if (!handle.IsValid)
+                return;
+
+            ulong byteSize = _bufferManager.GetBufferSize(handle);
+            if (byteSize == 0)
+                return;
+
+            bindings.Add(RenderGraphConcreteResourceBinding.ForBuffer(
+                resource,
+                $"{name}#{handle.Index}.{handle.Generation}",
+                _bufferManager.GetBuffer(handle),
+                byteSize,
+                queueFamilies,
+                graphicsFamily,
+                SharingMode.Exclusive,
+                frameIndex: frameIndex,
+                allocationGeneration: handle.Generation,
+                lifetime: RenderGraphResourceLifetime.Imported,
+                allocationSize: byteSize,
+                initialStageMask: initialStageMask,
+                initialAccessMask: initialAccessMask));
+        }
+
+        private int AddTextureBindings(
+            ICollection<RenderGraphConcreteResourceBinding> bindings,
+            RenderGraphResourceId resource,
+            string name,
+            IReadOnlyList<TextureHandle>? textureHandles,
+            IReadOnlyList<uint> queueFamilies,
+            uint graphicsFamily,
+            ISet<ulong> boundImages)
+        {
+            if (textureHandles == null || textureHandles.Count == 0)
+                return 0;
+
+            int added = 0;
+            for (int index = 0; index < textureHandles.Count; index++)
+            {
+                TextureHandle handle = textureHandles[index];
+                if (!handle.IsValid || !_textureManager.TryGetImageBinding(handle, out TextureImageBinding texture))
+                    continue;
+                if (!boundImages.Add(texture.Image.Handle))
+                    continue;
+
+                bindings.Add(RenderGraphConcreteResourceBinding.ForImage(
+                    resource,
+                    $"{name}#{handle.Index}.{handle.Generation}",
+                    texture.Image,
+                    new ImageSubresourceRange
+                    {
+                        AspectMask = ImageAspectFlags.ColorBit,
+                        BaseMipLevel = 0,
+                        LevelCount = texture.MipLevels,
+                        BaseArrayLayer = 0,
+                        LayerCount = texture.ArrayLayers
+                    },
+                    ImageLayout.ShaderReadOnlyOptimal,
+                    queueFamilies,
+                    graphicsFamily,
+                    SharingMode.Exclusive,
+                    allocationGeneration: texture.Generation == 0 ? 1u : texture.Generation,
+                    lifetime: RenderGraphResourceLifetime.Imported));
+                added++;
+            }
+
+            return added;
+        }
+
+        private bool IsAsyncComputePathFeatureActive(AsyncComputePath path, SceneRenderingData sceneData)
+        {
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            bool animationDebugActive = sceneData.AnimationDebugView != AnimationDebugView.None;
+            bool fogWillExecute =
+                Settings.Fog.Enabled &&
+                Settings.Fog.Mode != FogMode.Disabled &&
+                !animationDebugActive;
+            bool ssgiChainWillExecute =
+                GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(gi, sceneData.DebugViewMode) &&
+                gi.TemporalEnabled &&
+                sceneData.DepthPrePassEnabled &&
+                sceneData.FoliageDebugView == 0 &&
+                !animationDebugActive;
+            return path switch
+            {
+                AsyncComputePath.SimpleDdgiUpdate =>
+                    gi.EffectiveUseSimpleDdgi &&
+                    gi.DdgiAsyncComputeEnabled &&
+                    sceneData.SimpleDdgiActive != 0 &&
+                    sceneData.SimpleDdgiProbesUpdated > 0 &&
+                    // Sampled-atlas images are currently submitted as direct
+                    // graphics-queue resources. Keep the whole producer chain
+                    // on graphics until the render graph owns their queue
+                    // transitions and lifetime declarations.
+                    sceneData.SimpleDdgiSampledAtlasActive == 0,
+                AsyncComputePath.FullDdgiUpdate =>
+                    gi.EffectiveUseDdgi &&
+                    !gi.EffectiveUseSimpleDdgi &&
+                    gi.DdgiAsyncComputeEnabled &&
+                    sceneData.GlobalIlluminationDdgiActive != 0 &&
+                    sceneData.DdgiProbesUpdated > 0,
+                AsyncComputePath.FarFieldClipmapBake =>
+                    gi.EffectiveUseSimpleDdgi &&
+                    gi.FarFieldClipmapEnabled &&
+                    _farFieldClipmapManager?.BakePending == true,
+                AsyncComputePath.AmbientOcclusionBlur =>
+                    Settings.AmbientOcclusion.Enabled &&
+                    sceneData.DepthPrePassEnabled &&
+                    Settings.AmbientOcclusion.BlurRadius > 0,
+                AsyncComputePath.HiZBuild => sceneData.HiZBuildEnabled,
+                AsyncComputePath.SsgiChain => ssgiChainWillExecute,
+                // Fog samples Simple DDGI. Keep it on graphics whenever the
+                // optional image mirror is live for the same ownership reason.
+                AsyncComputePath.Fog => fogWillExecute && sceneData.SimpleDdgiSampledAtlasActive == 0,
+                AsyncComputePath.Bloom =>
+                    Settings.Bloom.Enabled &&
+                    _renderTargets?.BloomMipCount > 0 &&
+                    !(fogWillExecute && Settings.Fog.DebugView != FogDebugView.None),
+                AsyncComputePath.GpuParticles =>
+                    sceneData.GpuParticlesEnabled != 0 &&
+                    sceneData.GpuParticleEmitterCount > 0 &&
+                    sceneData.GpuParticleCapacity > 0,
+                _ => false
+            };
+        }
+
+        private AsyncComputeTimingDecision GetAsyncComputeTimingDecision(
+            AsyncComputePath path,
+            SceneRenderingData sceneData)
+        {
+            if (Settings.AsyncCompute.Mode != AsyncComputeMode.Auto)
+            {
+                return new AsyncComputeTimingDecision(
+                    AsyncComputePathStatus.Enabled,
+                    Eligible: true,
+                    Active: true,
+                    "Timing gate is bypassed only by ForceEnabledForValidation; resource and capability validation still apply.",
+                    new AsyncComputeTimingStats(0, 0, 0, 0),
+                    new AsyncComputeTimingStats(0, 0, 0, 0));
+            }
+
+            return _asyncComputeTimingPolicy.Evaluate(
+                CreateAsyncComputeTimingKey(path, sceneData),
+                Settings.AsyncCompute,
+                _temporalSampleIndex > int.MaxValue ? int.MaxValue : (int)_temporalSampleIndex);
+        }
+
+        /// <summary>
+        /// Auto keeps one proven path active at a time. Combining independently measured paths
+        /// would make their samples non-attributable and can turn two local wins into a frame-time
+        /// loss through extra queue waits or submissions.
+        /// </summary>
+        private AsyncComputePath? SelectAutoEnabledPath(
+            SceneRenderingData sceneData,
+            IReadOnlyDictionary<AsyncComputePath, bool> requestedByFeature,
+            IReadOnlyDictionary<AsyncComputePath, AsyncComputeTimingDecision> timingDecisions)
+        {
+            AsyncComputePath[] candidates = Enum.GetValues<AsyncComputePath>();
+            return candidates
+                .Where(path => requestedByFeature.TryGetValue(path, out bool requested) && requested)
+                .Where(path => timingDecisions.TryGetValue(path, out AsyncComputeTimingDecision? timing) && timing.Eligible)
+                .OrderByDescending(path =>
+                {
+                    AsyncComputeTimingDecision timing = timingDecisions[path];
+                    return timing.GraphicsOnly.MeanMilliseconds - timing.Async.MeanMilliseconds;
+                })
+                .ThenBy(path => (int)path)
+                .Select(path => (AsyncComputePath?)path)
+                .FirstOrDefault(path => path.HasValue && HasCompleteAsyncResourcePlan(path.Value, sceneData));
+        }
+
+        private bool HasCompleteAsyncResourcePlan(AsyncComputePath path, SceneRenderingData sceneData)
+        {
+            string[] passNames = _renderGraph.PassNames
+                .Where(passName => GetAsyncComputePath(passName) == path)
+                .Where(passName => _renderGraph.WillExecutePass(passName, _currentFrame, sceneData))
+                .ToArray();
+            return passNames.Length > 0 &&
+                   _renderGraph.ValidateConcreteResourcePlan(passNames, _currentFrame).Count == 0;
+        }
+
+        /// <summary>
+        /// Auto mode first profiles one concrete, fully bound path at a time. This avoids the
+        /// circular policy failure where Auto has no async samples to promote from, and avoids
+        /// attributing a combined multi-path frame-time change to every individual path.
+        /// </summary>
+        private AsyncComputePath? SelectAutoTimingProbe(
+            SceneRenderingData sceneData,
+            IReadOnlyDictionary<AsyncComputePath, bool> requestedByFeature)
+        {
+            int frameNumber = _temporalSampleIndex > int.MaxValue ? int.MaxValue : (int)_temporalSampleIndex;
+            AsyncComputePath[] allPaths = Enum.GetValues<AsyncComputePath>();
+            for (int offset = 0; offset < allPaths.Length; offset++)
+            {
+                int index = (_nextAutoTimingProbePath + offset) % allPaths.Length;
+                AsyncComputePath path = allPaths[index];
+                if (!requestedByFeature.TryGetValue(path, out bool requested) || !requested)
+                    continue;
+                if (!_asyncComputeTimingPolicy.CanCollectAsyncProbe(
+                        CreateAsyncComputeTimingKey(path, sceneData),
+                        Settings.AsyncCompute,
+                        frameNumber))
+                {
+                    continue;
+                }
+
+                if (!HasCompleteAsyncResourcePlan(path, sceneData))
+                {
+                    // An incomplete path must not monopolize Auto probing. It remains visible as
+                    // MissingResourcePlan when explicitly forced, while complete paths continue
+                    // collecting their own samples.
+                    continue;
+                }
+
+                _nextAutoTimingProbePath = (index + 1) % allPaths.Length;
+                return path;
+            }
+
+            return null;
+        }
+
+        private AsyncComputeTimingKey CreateAsyncComputeTimingKey(
+            AsyncComputePath path,
+            SceneRenderingData sceneData)
+        {
+            DeviceRequirementReport? device = _context.SelectedDeviceRequirementReport;
+            return new AsyncComputeTimingKey(
+                string.IsNullOrWhiteSpace(device?.DeviceName) ? "unknown-device" : device.DeviceName,
+                string.IsNullOrWhiteSpace(device?.DriverVersion) ? "unknown-driver" : device.DriverVersion,
+                BuildAsyncComputeWorkloadIdentity(sceneData),
+                path);
+        }
+
+        private string DescribeInactiveAsyncComputePath(AsyncComputePath path, SceneRenderingData sceneData)
+        {
+            if (!Settings.AsyncCompute.IsEnabledBy(path))
+                return "Disabled by the per-path async-compute setting.";
+            if (!RenderFeatureIsolationPolicy.ShouldExecutePass(sceneData.ActiveFeatureIsolation, GetRepresentativeAsyncPass(path)))
+                return "Disabled by active feature-isolation mode.";
+
+            return path switch
+            {
+                AsyncComputePath.SimpleDdgiUpdate => "Simple DDGI is inactive for this frame.",
+                AsyncComputePath.FullDdgiUpdate => "Full DDGI is inactive for this frame.",
+                AsyncComputePath.FarFieldClipmapBake => "No far-field clipmap bake is pending.",
+                AsyncComputePath.AmbientOcclusionBlur => "Ambient occlusion blur is inactive for this frame.",
+                AsyncComputePath.HiZBuild => "Hi-Z build is inactive for this frame.",
+                AsyncComputePath.SsgiChain => "The complete SSGI chain is inactive for this frame.",
+                AsyncComputePath.Fog => "Fog is disabled for this frame.",
+                AsyncComputePath.Bloom => "Bloom is disabled or has no mip chain.",
+                AsyncComputePath.GpuParticles => "GPU particle emitters are inactive for this frame.",
+                _ => "The feature is inactive for this frame."
+            };
+        }
+
+        private string BuildAsyncComputeWorkloadIdentity(SceneRenderingData sceneData)
+        {
+            return string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"{sceneData.ScreenWidth}x{sceneData.ScreenHeight}|{sceneData.ActiveFeatureIsolation}|{sceneData.ObjectCount}|{sceneData.MeshletCount}|{sceneData.LightCount}|{sceneData.DepthPrePassEnabled}|{sceneData.HiZBuildEnabled}|{sceneData.GpuParticlesEnabled}|{sceneData.GpuParticleEmitterCount}|{sceneData.FoliageClusterCount}|{Settings.GlobalIllumination.Mode}|{Settings.GlobalIllumination.EffectiveUseSsgi}|{Settings.GlobalIllumination.EffectiveUseDdgi}|{Settings.GlobalIllumination.EffectiveUseSimpleDdgi}|{Settings.AmbientOcclusion.Enabled}|{Settings.AmbientOcclusion.BlurRadius}|{Settings.Fog.Enabled}|{Settings.Fog.Mode}|{Settings.Bloom.Enabled}|{Settings.Bloom.MipCount}|{Settings.AntiAliasing.EffectiveMode}");
+        }
+
+        private static string GetRepresentativeAsyncPass(AsyncComputePath path) => path switch
+        {
+            AsyncComputePath.SimpleDdgiUpdate => "SimpleDdgiTracePass",
+            AsyncComputePath.FullDdgiUpdate => "DdgiTracePass",
+            AsyncComputePath.FarFieldClipmapBake => "FarFieldClipmapBakePass",
+            AsyncComputePath.AmbientOcclusionBlur => "AmbientOcclusionBlurPass",
+            AsyncComputePath.HiZBuild => "HiZBuildPass",
+            AsyncComputePath.SsgiChain => "SsgiTracePass",
+            AsyncComputePath.Fog => "FogPass",
+            AsyncComputePath.Bloom => "BloomPass",
+            AsyncComputePath.GpuParticles => "GpuParticleSimulatePass",
+            _ => string.Empty
+        };
+
+        private static AsyncComputePath? GetAsyncComputePath(string passName) => passName switch
+        {
+            "SimpleDdgiTracePass" or "SimpleDdgiRelocateClassifyPass" or "SimpleDdgiBlendPass" => AsyncComputePath.SimpleDdgiUpdate,
+            "DdgiSchedulePass" or "DdgiTracePass" or "DdgiBlendPass" or "DdgiRelocateClassifyPass" or "DdgiPublishPass" => AsyncComputePath.FullDdgiUpdate,
+            "FarFieldClipmapBakePass" => AsyncComputePath.FarFieldClipmapBake,
+            "AmbientOcclusionBlurPass" => AsyncComputePath.AmbientOcclusionBlur,
+            "HiZBuildPass" => AsyncComputePath.HiZBuild,
+            "SsgiTracePass" or "SsgiTemporalPass" or "SsgiDenoisePass" => AsyncComputePath.SsgiChain,
+            "FogPass" => AsyncComputePath.Fog,
+            "BloomPass" => AsyncComputePath.Bloom,
+            "GpuParticleResetPass" or "GpuParticleSimulatePass" or "GpuParticleSortPass" => AsyncComputePath.GpuParticles,
+            _ => null
+        };
+
+        private void CaptureAsyncComputeTimingFrame(AsyncComputePlan plan, SceneRenderingData sceneData)
+        {
+            if (plan.RequestedMode == AsyncComputeMode.Disabled)
+            {
+                _asyncComputeTimingFrames[_currentFrame] = null;
+                return;
+            }
+
+            if (plan.RequestedMode == AsyncComputeMode.ForceEnabledForValidation)
+            {
+                // A forced frame can contain multiple independent paths. It remains useful for
+                // validation and diagnostics, but cannot provide an attributable Auto sample.
+                _asyncComputeTimingFrames[_currentFrame] = null;
+                return;
+            }
+
+            var keys = new Dictionary<AsyncComputePath, AsyncComputeTimingKey>();
+            foreach (AsyncComputePathRuntimeStatus path in plan.SubmissionPlan.Paths)
+            {
+                // Only collect a graphics baseline while the feature actually executes. A frame
+                // with fog, GI, or a history path disabled is not a valid baseline for enabling
+                // that path later in Auto mode.
+                if (path.Requested)
+                    keys.Add(path.Path, CreateAsyncComputeTimingKey(path.Path, sceneData));
+            }
+
+            _asyncComputeTimingFrames[_currentFrame] = new AsyncComputeTimingFrame(plan, keys);
+        }
+
+        private void FinalizeAsyncComputeTimingFrame(int frameIndex)
+        {
+            if (_asyncComputeTimingFrames[frameIndex] is { } timingFrame)
+            {
+                // This includes every queue submit needed by the frame, which is the cost Auto
+                // must amortize before it can promote a path.
+                timingFrame.CpuSubmitMicroseconds = _lastQueueSubmitMicroseconds;
+                timingFrame.CpuBarrierRecordMicroseconds = _asyncComputeBarrierRecordMicrosecondsThisFrame;
+            }
+        }
+
+        private void RecordCompletedAsyncComputeTimingFrame(int frameIndex, FrameTimingSnapshot timings)
+        {
+            AsyncComputeTimingFrame? timingFrame = _asyncComputeTimingFrames[frameIndex];
+            _asyncComputeTimingFrames[frameIndex] = null;
+            if (timingFrame == null)
+                return;
+
+            AsyncComputeSubmissionPlan plan = timingFrame.Plan.SubmissionPlan;
+            long totalPassGpuMicroseconds = 0;
+            foreach (PassTiming timing in timings.Passes)
+            {
+                if (timing.GpuAvailable && timing.GpuMicroseconds > 0)
+                    totalPassGpuMicroseconds = checked(totalPassGpuMicroseconds + timing.GpuMicroseconds);
+            }
+            // Graphics and compute pass query pools measure durations independently. When work is
+            // actually concurrent, subtract the deliberately labelled overlap estimate rather
+            // than treating the sum of both queues as elapsed frame time.
+            long frameGpuMicroseconds = plan.ContainsAsyncCompute
+                ? Math.Max(0, totalPassGpuMicroseconds - EstimateAsyncComputeOverlapMicroseconds(plan, timings))
+                : totalPassGpuMicroseconds;
+            if (frameGpuMicroseconds <= 0)
+                return;
+
+            double frameMilliseconds = frameGpuMicroseconds / 1000.0;
+            if (!plan.ContainsAsyncCompute)
+            {
+                foreach ((AsyncComputePath _, AsyncComputeTimingKey key) in timingFrame.Keys)
+                    _asyncComputeTimingPolicy.RecordGraphicsOnly(
+                        key,
+                        frameMilliseconds,
+                        timingFrame.CpuSubmitMicroseconds / 1000.0);
+                return;
+            }
+
+            foreach (AsyncComputePathRuntimeStatus path in plan.Paths)
+            {
+                if (!path.Active || !timingFrame.Keys.TryGetValue(path.Path, out AsyncComputeTimingKey key))
+                    continue;
+
+                long dispatchMicroseconds = 0;
+                foreach (string passName in path.Passes)
+                    dispatchMicroseconds = checked(dispatchMicroseconds + timings.GetGpuMicrosecondsOrZero(passName));
+
+                _asyncComputeTimingPolicy.RecordAsync(
+                    key,
+                    frameMilliseconds,
+                    dispatchMicroseconds / 1000.0,
+                    transferBarrierMilliseconds: timingFrame.CpuBarrierRecordMicroseconds / 1000.0,
+                    graphicsWaitMilliseconds: EstimateAsyncComputeFirstConsumerWaitMicroseconds(plan, timings) / 1000.0,
+                    cpuSubmitMilliseconds: timingFrame.CpuSubmitMicroseconds / 1000.0);
+            }
         }
 
         private static bool IsDdgiAsyncComputeActuallyEnabled(AsyncComputePlan plan)
         {
-            if (!plan.Enabled)
-                return false;
-
-            for (int i = 0; i < plan.EnabledPasses.Count; i++)
-            {
-                string passName = plan.EnabledPasses[i];
-                if (passName is "DdgiSchedulePass" or "DdgiTracePass" or "DdgiBlendPass" or "DdgiRelocateClassifyPass" or "DdgiPublishPass" or
-                    "SimpleDdgiTracePass" or "SimpleDdgiRelocateClassifyPass" or "SimpleDdgiBlendPass")
-                    return true;
-            }
-
-            return false;
+            return IsDdgiAsyncComputeActuallyEnabled(plan.SubmissionPlan);
         }
 
+        private static bool IsDdgiAsyncComputeActuallyEnabled(AsyncComputeSubmissionPlan plan) =>
+            plan.Accepted &&
+            plan.ContainsAsyncCompute &&
+            plan.Paths.Any(path => path.Active && path.Path is AsyncComputePath.SimpleDdgiUpdate or AsyncComputePath.FullDdgiUpdate);
+
         private sealed record AsyncComputePlan(
-            bool Requested,
+            AsyncComputeMode RequestedMode,
+            AsyncComputeMode EffectiveMode,
             bool Supported,
-            bool Enabled,
-            IReadOnlyList<string> CandidatePasses,
-            IReadOnlyList<string> EnabledPasses,
-            int QueueOwnershipTransitionCount,
-            string Status,
-            RenderGraphDiagnostics GraphDiagnostics);
+            AsyncComputeSubmissionPlan SubmissionPlan,
+            RenderGraphDiagnostics GraphDiagnostics,
+            string Status)
+        {
+            public bool Requested => RequestedMode != AsyncComputeMode.Disabled;
+            public bool Enabled => SubmissionPlan.ContainsAsyncCompute;
+            public IReadOnlyList<string> CandidatePasses => SubmissionPlan.Paths
+                .Where(path => path.Requested &&
+                               path.Supported &&
+                               path.Status is not AsyncComputePathStatus.MissingResourcePlan and not AsyncComputePathStatus.ValidationFallback)
+                .SelectMany(path => path.Passes)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            public IReadOnlyList<string> EnabledPasses => SubmissionPlan.ActivePasses;
+            public int QueueOwnershipTransitionCount => SubmissionPlan.QueueFamilyOwnershipTransferCount;
+        }
 
         private UploadBudgetSnapshot BuildUploadBudgetSnapshot(SceneRenderingData sceneData, RenderBudgetProfile profile)
         {
@@ -5253,6 +6600,8 @@ namespace Njulf.Rendering
             sceneData.GpuDdgiPublishMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiPublishPass");
             sceneData.GpuSimpleDdgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiTracePass");
             sceneData.GpuSimpleDdgiBlendMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiBlendPass");
+            sceneData.GpuFarFieldUpdateMicroseconds = timings.GetGpuMicrosecondsOrZero("FarFieldClipmapBakePass");
+            sceneData.GpuFarFieldUpdateTimingValid = HasCompletedGpuTiming(timings, "FarFieldClipmapBakePass") ? 1 : 0;
             long gpuSimpleDdgiRelocateClassifyMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiRelocateClassifyPass");
             if (sceneData.GpuSimpleDdgiTraceMicroseconds > 0 || gpuSimpleDdgiRelocateClassifyMicroseconds > 0 || sceneData.GpuSimpleDdgiBlendMicroseconds > 0)
             {
@@ -5282,6 +6631,8 @@ namespace Njulf.Rendering
                 ? sceneData.GpuDirectionalShadowMicroseconds
                 : 0;
             sceneData.GpuForwardOpaqueMicroseconds = timings.GetGpuMicrosecondsOrZero("ForwardPlusPass");
+            sceneData.GpuForwardGiGatherMicroseconds = timings.GetGpuMicrosecondsOrZero("ForwardGiGatherPass");
+            sceneData.GpuForwardGiGatherTimingCoverage = HasCompletedGpuTiming(timings, "ForwardGiGatherPass") ? 1 : 0;
             sceneData.GpuTransparentMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("TransparentForwardPass") +
                 timings.GetGpuMicrosecondsOrZero("WeightedTransparentPass") +
@@ -5306,29 +6657,101 @@ namespace Njulf.Rendering
             }
         }
 
-        private static long EstimateAsyncComputeOverlapMicroseconds(SceneRenderingData sceneData, FrameTimingSnapshot timings)
+        private static long EstimateAsyncComputeQueueBusyMicroseconds(
+            AsyncComputeSubmissionPlan plan,
+            FrameTimingSnapshot timings)
         {
-            if (sceneData.DdgiAsyncComputeEnabled == 0)
+            if (plan == null || !plan.ContainsAsyncCompute)
                 return 0;
 
-            long simpleDdgiCompute =
-                timings.GetGpuMicrosecondsOrZero("SimpleDdgiTracePass") +
-                timings.GetGpuMicrosecondsOrZero("SimpleDdgiRelocateClassifyPass") +
-                timings.GetGpuMicrosecondsOrZero("SimpleDdgiBlendPass");
-            long overlappedGraphics =
-                timings.GetGpuMicrosecondsOrZero("DirectionalShadowPass") +
-                timings.GetGpuMicrosecondsOrZero("SpotShadowPass") +
-                timings.GetGpuMicrosecondsOrZero("PointShadowPass") +
-                timings.GetGpuMicrosecondsOrZero("DepthPrePass") +
-                timings.GetGpuMicrosecondsOrZero("MotionVectorPass") +
-                timings.GetGpuMicrosecondsOrZero("HiZBuildPass") +
-                timings.GetGpuMicrosecondsOrZero("ForwardVisibilityCompactionPass") +
-                timings.GetGpuMicrosecondsOrZero("SceneSurfacePass") +
-                timings.GetGpuMicrosecondsOrZero("AmbientOcclusionPass") +
-                timings.GetGpuMicrosecondsOrZero("AmbientOcclusionBlurPass") +
-                timings.GetGpuMicrosecondsOrZero("TiledLightCullingPass");
+            long total = 0;
+            foreach (AsyncComputeSubmissionSegment segment in plan.Segments)
+            {
+                if (segment.Queue != AsyncComputeQueue.Compute)
+                    continue;
+                foreach (string pass in segment.Passes)
+                    total = checked(total + timings.GetGpuMicrosecondsOrZero(pass));
+            }
 
-            return Math.Max(0, Math.Min(simpleDdgiCompute, overlappedGraphics));
+            return total;
+        }
+
+        /// <summary>
+        /// Timestamp query pools provide pass durations rather than queue-global wall-clock
+        /// intervals, so overlap is intentionally an estimate. For each compute segment we use
+        /// the immediately following graphics segment as its useful overlap window. This remains
+        /// meaningful for diagnostics and Auto policy without claiming an unmeasured queue span.
+        /// </summary>
+        private static long EstimateAsyncComputeOverlapMicroseconds(
+            AsyncComputeSubmissionPlan plan,
+            FrameTimingSnapshot timings)
+        {
+            if (plan == null || !plan.ContainsAsyncCompute)
+                return 0;
+
+            long totalOverlap = 0;
+            for (int segmentIndex = 0; segmentIndex < plan.Segments.Count; segmentIndex++)
+            {
+                AsyncComputeSubmissionSegment compute = plan.Segments[segmentIndex];
+                if (compute.Queue != AsyncComputeQueue.Compute)
+                    continue;
+
+                long computeBusy = SumGpuPassMicroseconds(compute.Passes, timings);
+                long graphicsWindow = 0;
+                for (int next = segmentIndex + 1; next < plan.Segments.Count; next++)
+                {
+                    AsyncComputeSubmissionSegment candidate = plan.Segments[next];
+                    if (candidate.Queue != AsyncComputeQueue.Graphics)
+                        continue;
+                    graphicsWindow = SumGpuPassMicroseconds(candidate.Passes, timings);
+                    break;
+                }
+
+                totalOverlap = checked(totalOverlap + Math.Min(computeBusy, graphicsWindow));
+            }
+
+            return Math.Max(0, totalOverlap);
+        }
+
+        private static long EstimateAsyncComputeFirstConsumerWaitMicroseconds(
+            AsyncComputeSubmissionPlan plan,
+            FrameTimingSnapshot timings)
+        {
+            if (plan == null || !plan.ContainsAsyncCompute)
+                return 0;
+
+            long totalWait = 0;
+            for (int segmentIndex = 0; segmentIndex < plan.Segments.Count; segmentIndex++)
+            {
+                AsyncComputeSubmissionSegment compute = plan.Segments[segmentIndex];
+                if (compute.Queue != AsyncComputeQueue.Compute)
+                    continue;
+
+                long computeBusy = SumGpuPassMicroseconds(compute.Passes, timings);
+                long graphicsWindow = 0;
+                for (int next = segmentIndex + 1; next < plan.Segments.Count; next++)
+                {
+                    AsyncComputeSubmissionSegment candidate = plan.Segments[next];
+                    if (candidate.Queue != AsyncComputeQueue.Graphics)
+                        continue;
+                    graphicsWindow = SumGpuPassMicroseconds(candidate.Passes, timings);
+                    break;
+                }
+
+                totalWait = checked(totalWait + Math.Max(0, computeBusy - graphicsWindow));
+            }
+
+            return totalWait;
+        }
+
+        private static long SumGpuPassMicroseconds(
+            IReadOnlyList<string> passNames,
+            FrameTimingSnapshot timings)
+        {
+            long total = 0;
+            foreach (string passName in passNames)
+                total = checked(total + timings.GetGpuMicrosecondsOrZero(passName));
+            return total;
         }
 
         private static bool ForwardOcclusionCountersReconcile(SceneRenderingData sceneData)
@@ -5477,6 +6900,10 @@ namespace Njulf.Rendering
             bool simpleDdgiActive = Settings.GlobalIllumination.EffectiveUseSimpleDdgi &&
                                     _simpleDdgiVolumeManager != null &&
                                     _farFieldClipmapManager != null;
+            bool simpleDdgiStructuredGatherAvailable = simpleDdgiActive &&
+                                                        Settings.GlobalIllumination.EffectiveUseRayQueryBackend &&
+                                                        _context.RayQuerySupported &&
+                                                        _accelerationStructureManager?.Active == true;
             SimpleDdgiDirtySignature simpleDdgiDirtySignature = CreateSimpleDdgiDirtySignature(scene, lightSnapshot, _ddgiEmissiveSourceRevision);
             _simpleDdgiVolumeManager?.Upload(
                 scene,
@@ -5485,10 +6912,30 @@ namespace Njulf.Rendering
                 _currentCommandBuffer,
                 _currentFrame,
                 simpleDdgiDirtySignature.Signature,
-                simpleDdgiDirtySignature.ReasonFlags);
+                simpleDdgiDirtySignature.ReasonFlags,
+                simpleDdgiStructuredGatherAvailable,
+                layout.DirtyRegions);
             if (simpleDdgiActive)
             {
-                _farFieldClipmapManager!.Upload(scene, camera.Position, _stagingRing, _currentCommandBuffer);
+                _farFieldClipmapManager!.Upload(
+                    scene,
+                    camera.Position,
+                    _stagingRing,
+                    _currentCommandBuffer,
+                    sceneData.SceneContentRevision);
+                sceneData.FarFieldPagedMode = _farFieldClipmapManager.PagedMode ? 1 : 0;
+                sceneData.FarFieldPagePoolCapacity = _farFieldClipmapManager.PagePoolCapacity;
+                sceneData.FarFieldResidentPageCount = _farFieldClipmapManager.ResidentPageCount;
+                sceneData.FarFieldPendingPageCount = _farFieldClipmapManager.PendingPageCount;
+                sceneData.FarFieldPageRequestCount = _farFieldClipmapManager.PageRequestCount;
+                sceneData.FarFieldPageMissCount = _farFieldClipmapManager.PageMissCount;
+                sceneData.FarFieldPageRebuildCount = _farFieldClipmapManager.PageRebuildCount;
+                sceneData.FarFieldPageEvictionCount = _farFieldClipmapManager.PageEvictionsThisFrame;
+                sceneData.FarFieldScheduledPageBakeCount = _farFieldClipmapManager.ScheduledPageBakeCount;
+                sceneData.FarFieldCacheBytes = _farFieldClipmapManager.PageCacheBytes;
+                sceneData.FarFieldMemoryBudgetBytes = Settings.GlobalIllumination.FarFieldMemoryBudgetBytes;
+                sceneData.FarFieldInstanceBufferBytes = _farFieldClipmapManager.InstanceBufferBytes;
+                sceneData.FarFieldPageTableBytes = _farFieldClipmapManager.PageTableBufferBytes;
             }
             bool ddgiRayUpdateActive = ddgiActive &&
                                        Settings.GlobalIllumination.EffectiveUseRayQueryBackend &&
@@ -5598,7 +7045,10 @@ namespace Njulf.Rendering
             sceneData.DdgiEmergencyDegradeActive = ddgiActive ? _ddgiProbeVolumeManager.LastEmergencyDegradeActive : 0;
             sceneData.DdgiEffectiveMaxShadedLights = ddgiActive ? _ddgiProbeVolumeManager.LastEffectiveMaxShadedLights : 0;
             sceneData.DdgiAdaptiveBudgetReason = ddgiActive ? _ddgiProbeVolumeManager.LastAdaptiveBudgetReason : string.Empty;
-            sceneData.DdgiAsyncComputeEnabled = ddgiActive && Settings.AsyncCompute.DdgiUpdateEnabled && Settings.GlobalIllumination.DdgiAsyncComputeEnabled ? 1 : 0;
+            // The graph scheduler owns the runtime async state.  Configuration only expresses
+            // a request; complete concrete bindings and an accepted submission plan are also
+            // required before this becomes true.
+            sceneData.DdgiAsyncComputeEnabled = 0;
             sceneData.DdgiAtlasMemoryBudgetBytes = ddgiActive ? Settings.GlobalIllumination.DdgiAtlasMemoryBudgetBytes : 0UL;
             sceneData.DdgiProbeRelocationCount = ddgiRayUpdateActive && Settings.GlobalIllumination.DdgiProbeRelocationEnabled ? scheduledProbeUpdates : 0;
             sceneData.DdgiProbeClassificationCount = ddgiRayUpdateActive && Settings.GlobalIllumination.DdgiProbeClassificationEnabled ? scheduledProbeUpdates : 0;
@@ -5709,6 +7159,12 @@ namespace Njulf.Rendering
             sceneData.DdgiWarmedCascade0ProbeFraction = ddgiActive ? _ddgiProbeVolumeManager.LastWarmedCascade0ProbeFraction : 0.0f;
             PopulateDdgiPassExecutionDiagnostics(sceneData);
             sceneData.CpuDdgiRecordMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.LastUploadMicroseconds : 0;
+            sceneData.CpuSimpleDdgiRecordMicroseconds = simpleDdgiActive
+                ? _simpleDdgiVolumeManager?.LastUploadMicroseconds ?? 0
+                : 0;
+            sceneData.CpuFarFieldRecordMicroseconds = simpleDdgiActive
+                ? _farFieldClipmapManager?.LastUploadMicroseconds ?? 0
+                : 0;
             sceneData.CpuDdgiSchedulerMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.LastSchedulerMicroseconds : 0;
             sceneData.CpuDdgiSchedulerP95Microseconds = ddgiActive ? _ddgiProbeVolumeManager.SchedulerP95Microseconds : 0;
             sceneData.CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.CpuSchedulerPhaseClipmapDirtyMicroseconds : 0;
@@ -5728,8 +7184,11 @@ namespace Njulf.Rendering
             if (simpleDdgiActive)
             {
                 PopulateSimpleDdgiFrameData(sceneData, simpleDdgiRayUpdateActive);
-                sceneData.DdgiTextureBytes = _simpleDdgiVolumeManager?.AtlasBytes ?? 0UL;
-                sceneData.DdgiBufferBytes = (_simpleDdgiVolumeManager?.NonAtlasBufferBytes ?? 0UL) + (_farFieldClipmapManager?.BufferBytes ?? 0UL);
+                // The canonical simple-DDGI atlases are SSBOs. Only the optional
+                // sampled mirror belongs in texture accounting; keeping the two
+                // categories separate makes the hard memory budget meaningful.
+                sceneData.DdgiTextureBytes = _simpleDdgiVolumeManager?.SampledAtlasImageBytes ?? 0UL;
+                sceneData.DdgiBufferBytes = (_simpleDdgiVolumeManager?.BufferBytes ?? 0UL) + (_farFieldClipmapManager?.BufferBytes ?? 0UL);
                 sceneData.DdgiGpuSchedulerFallbackActive = 0;
                 sceneData.DdgiGpuSchedulerFallbackReason = string.Empty;
                 sceneData.DdgiSchedulerP95OverBudget = 0;
@@ -5795,7 +7254,30 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiFullRayProbeUpdateCount = _simpleDdgiVolumeManager.FullRayProbeUpdateCount;
             sceneData.SimpleDdgiMaintenanceRayProbeUpdateCount = _simpleDdgiVolumeManager.MaintenanceRayProbeUpdateCount;
             sceneData.SimpleDdgiAdaptiveRaySavedRaysPerFrame = _simpleDdgiVolumeManager.AdaptiveRaySavedPrimaryRayCount;
+            sceneData.SimpleDdgiNearFullRayProbeUpdateCount = _simpleDdgiVolumeManager.NearFullRayProbeUpdateCount;
+            sceneData.SimpleDdgiMidFullRayProbeUpdateCount = _simpleDdgiVolumeManager.MidFullRayProbeUpdateCount;
+            sceneData.SimpleDdgiFarFullRayProbeUpdateCount = _simpleDdgiVolumeManager.FarFullRayProbeUpdateCount;
+            sceneData.SimpleDdgiNearMaintenanceRayProbeUpdateCount = _simpleDdgiVolumeManager.NearMaintenanceRayProbeUpdateCount;
+            sceneData.SimpleDdgiMidMaintenanceRayProbeUpdateCount = _simpleDdgiVolumeManager.MidMaintenanceRayProbeUpdateCount;
+            sceneData.SimpleDdgiFarMaintenanceRayProbeUpdateCount = _simpleDdgiVolumeManager.FarMaintenanceRayProbeUpdateCount;
+            sceneData.SimpleDdgiNearScheduledPrimaryRayCount = _simpleDdgiVolumeManager.NearScheduledPrimaryRayCount;
+            sceneData.SimpleDdgiMidScheduledPrimaryRayCount = _simpleDdgiVolumeManager.MidScheduledPrimaryRayCount;
+            sceneData.SimpleDdgiFarScheduledPrimaryRayCount = _simpleDdgiVolumeManager.FarScheduledPrimaryRayCount;
+            sceneData.SimpleDdgiDirtyFirstUpdateLatencySampleCount = _simpleDdgiVolumeManager.DirtyFirstUpdateLatencySampleCount;
+            sceneData.SimpleDdgiDirtyFirstUpdateLatencyP50Frames = _simpleDdgiVolumeManager.DirtyFirstUpdateLatencyP50Frames;
+            sceneData.SimpleDdgiDirtyFirstUpdateLatencyP95Frames = _simpleDdgiVolumeManager.DirtyFirstUpdateLatencyP95Frames;
+            sceneData.SimpleDdgiDirtyFirstUpdateLatencyMaxFrames = _simpleDdgiVolumeManager.DirtyFirstUpdateLatencyMaxFrames;
+            sceneData.SimpleDdgiDirtyConvergenceLatencySampleCount = _simpleDdgiVolumeManager.DirtyConvergenceLatencySampleCount;
+            sceneData.SimpleDdgiDirtyConvergenceLatencyP50Frames = _simpleDdgiVolumeManager.DirtyConvergenceLatencyP50Frames;
+            sceneData.SimpleDdgiDirtyConvergenceLatencyP95Frames = _simpleDdgiVolumeManager.DirtyConvergenceLatencyP95Frames;
+            sceneData.SimpleDdgiDirtyConvergenceLatencyMaxFrames = _simpleDdgiVolumeManager.DirtyConvergenceLatencyMaxFrames;
             sceneData.SimpleDdgiAtlasBytes = _simpleDdgiVolumeManager.AtlasBytes;
+            sceneData.SimpleDdgiSampledAtlasRequested = _simpleDdgiVolumeManager.SampledAtlasRequested ? 1 : 0;
+            sceneData.SimpleDdgiSampledAtlasActive = _simpleDdgiVolumeManager.SampledAtlasActive ? 1 : 0;
+            sceneData.SimpleDdgiSampledAtlasGroupCount = _simpleDdgiVolumeManager.SampledAtlasGroupCount;
+            sceneData.SimpleDdgiSampledAtlasLayersPerTexture = _simpleDdgiVolumeManager.SampledAtlasLayersPerTexture;
+            sceneData.SimpleDdgiSampledAtlasImageBytes = _simpleDdgiVolumeManager.SampledAtlasImageBytes;
+            sceneData.SimpleDdgiSampledAtlasFallbackReason = _simpleDdgiVolumeManager.SampledAtlasFallbackReason;
             sceneData.SimpleDdgiRecentered = _simpleDdgiVolumeManager.RecenteredThisFrame ? 1 : 0;
             sceneData.SimpleDdgiAtlasPreservedOnRecenter = _simpleDdgiVolumeManager.AtlasPreservedOnRecenterThisFrame ? 1 : 0;
             sceneData.SimpleDdgiAtlasCleared = _simpleDdgiVolumeManager.AtlasClearedThisFrame ? 1 : 0;
@@ -5815,20 +7297,19 @@ namespace Njulf.Rendering
                 ? (_simpleDdgiVolumeManager.UpdateStartProbe + probesToUpdate - 1) % _simpleDdgiVolumeManager.ProbeCount
                 : 0;
             sceneData.DdgiSkippedProbeCount = Math.Max(0, _simpleDdgiVolumeManager.ProbeCount - probesToUpdate);
-            float estimatedAge = probesToUpdate > 0 && probesToUpdate < _simpleDdgiVolumeManager.ProbeCount
-                ? MathF.Ceiling(_simpleDdgiVolumeManager.ProbeCount / (float)probesToUpdate)
-                : 0.0f;
-            sceneData.DdgiFramesSinceProbeUpdatedP50 = estimatedAge * 0.5f;
-            sceneData.DdgiFramesSinceProbeUpdatedP95 = estimatedAge * 0.95f;
-            sceneData.DdgiFramesSinceProbeUpdatedMax = estimatedAge;
+            _simpleDdgiVolumeManager.GetEstimatedProbeAgeFrames(
+                out float estimatedAgeP50,
+                out float estimatedAgeP95,
+                out float estimatedAgeMaximum);
+            sceneData.DdgiFramesSinceProbeUpdatedP50 = estimatedAgeP50;
+            sceneData.DdgiFramesSinceProbeUpdatedP95 = estimatedAgeP95;
+            sceneData.DdgiFramesSinceProbeUpdatedMax = estimatedAgeMaximum;
             sceneData.DdgiNewlyInvalidatedProbeCount = _simpleDdgiVolumeManager.NewlyInvalidatedProbeCount;
             sceneData.DdgiRefreshReasonRecenterProbeCount = _simpleDdgiVolumeManager.RecenterRefreshProbeCount;
-            sceneData.DdgiRefreshReasonDirtyProbeCount = 0;
+            sceneData.DdgiRefreshReasonDirtyProbeCount = _simpleDdgiVolumeManager.DirtyRefreshProbeCount;
             sceneData.DdgiRefreshReasonAgeProbeCount = _simpleDdgiVolumeManager.AgeRefreshProbeCount;
             sceneData.DdgiRefreshReasonVisibilityProbeCount = 0;
             sceneData.DdgiRefreshReasonFullRefreshProbeCount = _simpleDdgiVolumeManager.FullRefreshProbeCount;
-            if (_simpleDdgiVolumeManager.RecenteredThisFrame)
-                sceneData.DdgiRefreshReasonRecenterProbeCount = _simpleDdgiVolumeManager.ProbeCount;
             if (!simpleDdgiRayUpdateActive && _simpleDdgiVolumeManager.ProbeCount > 0)
                 sceneData.DdgiSimpleTraceTlasUnavailableFrameCount = Math.Max(sceneData.DdgiSimpleTraceTlasUnavailableFrameCount, 1u);
             sceneData.DdgiMaxActiveProbeBudget = _simpleDdgiVolumeManager.ProbeCount;
@@ -5853,8 +7334,8 @@ namespace Njulf.Rendering
             sceneData.DdgiCurrentIrradianceAtlasBytes = _simpleDdgiVolumeManager.IrradianceAtlasBytes;
             sceneData.DdgiCurrentVisibilityAtlasBytes = _simpleDdgiVolumeManager.VisibilityAtlasBytes;
             sceneData.DdgiAtlasMemoryBudgetBytes = Settings.GlobalIllumination.DdgiAtlasMemoryBudgetBytes;
-            sceneData.DdgiTextureBytes = _simpleDdgiVolumeManager.AtlasBytes;
-            sceneData.DdgiBufferBytes = _simpleDdgiVolumeManager.NonAtlasBufferBytes + (_farFieldClipmapManager?.BufferBytes ?? 0UL);
+            sceneData.DdgiTextureBytes = _simpleDdgiVolumeManager.SampledAtlasImageBytes;
+            sceneData.DdgiBufferBytes = _simpleDdgiVolumeManager.BufferBytes + (_farFieldClipmapManager?.BufferBytes ?? 0UL);
             sceneData.DdgiProbeRelocationCount = _simpleDdgiVolumeManager.ProbeRelocationCount;
             sceneData.DdgiProbeClassificationCount = probesToUpdate;
             sceneData.DdgiClassifiedInactiveProbeCountEstimate = _simpleDdgiVolumeManager.ClassifiedInactiveProbeCountEstimate;
@@ -5876,7 +7357,9 @@ namespace Njulf.Rendering
                 sceneData.LocalLightCount,
                 Settings.GlobalIllumination.DdgiMaxShadedLights);
             sceneData.DdgiQualityTier = Settings.GlobalIllumination.DdgiQualityTier;
-            sceneData.DdgiAsyncComputeEnabled = Settings.AsyncCompute.DdgiUpdateEnabled && Settings.GlobalIllumination.DdgiAsyncComputeEnabled ? 1 : 0;
+            // See the full-DDGI setup above: this is a runtime execution result, not the
+            // user's request. It is set immediately before a validated split graph executes.
+            sceneData.DdgiAsyncComputeEnabled = 0;
             sceneData.DdgiCacheGeneration = 1u;
             sceneData.DdgiWarmupState = DdgiRuntimeWarmupState.SteadyState;
             sceneData.DdgiCacheWarmupState = DdgiRuntimeWarmupState.SteadyState;
@@ -6476,6 +7959,12 @@ namespace Njulf.Rendering
                 _ddgiEmissiveSourceRevision++;
                 if (_ddgiEmissiveSourceRevision == 0)
                     _ddgiEmissiveSourceRevision = 1;
+
+                // The revision is payload metadata, not source content.  Stamp it
+                // only after the content comparison so it cannot make every frame
+                // appear dirty by changing the next frame's signature.
+                for (int i = 0; i < count; i++)
+                    _ddgiEmissiveSourceScratch[i].BoundsMinRevision.W = _ddgiEmissiveSourceRevision;
             }
 
             _ddgiEmissiveSourceCount = count;
@@ -6515,7 +8004,10 @@ namespace Njulf.Rendering
             {
                 signature = HashAdd(signature, _ddgiEmissiveSourceScratch[i].CenterRadius);
                 signature = HashAdd(signature, _ddgiEmissiveSourceScratch[i].RadianceImportance);
-                signature = HashAdd(signature, _ddgiEmissiveSourceScratch[i].BoundsMinRevision);
+                signature = HashAdd(signature, new Vector3(
+                    _ddgiEmissiveSourceScratch[i].BoundsMinRevision.X,
+                    _ddgiEmissiveSourceScratch[i].BoundsMinRevision.Y,
+                    _ddgiEmissiveSourceScratch[i].BoundsMinRevision.Z));
                 signature = HashAdd(signature, _ddgiEmissiveSourceScratch[i].BoundsMaxFlags);
             }
 
@@ -6654,7 +8146,8 @@ namespace Njulf.Rendering
             _ddgiDirtyRegionScratch.Clear();
             sceneData.VfxDdgiDirtyProbeEventCount = 0;
 
-            if (!Settings.GlobalIllumination.EffectiveUseDdgi)
+            if (!Settings.GlobalIllumination.EffectiveUseDdgi &&
+                !Settings.GlobalIllumination.EffectiveUseSimpleDdgi)
             {
                 ResetDdgiDynamicTracking();
                 return _ddgiDirtyRegionScratch;
@@ -7010,7 +8503,14 @@ namespace Njulf.Rendering
             Vector3 p = new(MathF.Max(0.0f, padding));
             BoundingBox expanded = new(bounds.Min - p, bounds.Max + p);
             _ddgiDirtyBoundsScratch.Add(expanded);
-            _ddgiDirtyRegionScratch.Add(new DdgiDirtyRegion(expanded, reason));
+            _ddgiDirtyRegionScratch.Add(new DdgiDirtyRegion(expanded, reason)
+            {
+                OldWorldBounds = bounds,
+                NewWorldBounds = bounds,
+                InfluenceBounds = expanded,
+                ReasonFlags = 1u << (int)reason,
+                Priority = DdgiDirtyReasonPolicy.ResolvePriority(reason)
+            });
         }
 
         private void StoreLastDdgiLights(LightFrameSnapshot lightSnapshot)
@@ -7049,15 +8549,37 @@ namespace Njulf.Rendering
                 _currentCommandBuffer,
                 enabled,
                 _gpuTimestamps,
-                _currentFrame);
+                _currentFrame,
+                new AccelerationStructureResidencyPolicy(
+                    gi.StreamedGiAccelerationStructuresEnabled,
+                    sceneData.CameraPosition,
+                    gi.GiAccelerationStructureMemoryBudgetBytes,
+                    gi.GiAccelerationStructureStaticResidentDistance,
+                    gi.GiAccelerationStructureMaximumStaticInstances,
+                    gi.GiAccelerationStructureEvictionGraceFrames));
             sceneData.AccelerationStructureBottomLevelCount = stats.BottomLevelCount;
             sceneData.AccelerationStructureTopLevelInstanceCount = stats.TopLevelInstanceCount;
             sceneData.AccelerationStructureBlasBuildCount = stats.BlasBuildCount;
             sceneData.AccelerationStructureTlasBuildCount = stats.TlasBuildCount;
             sceneData.AccelerationStructureTlasUpdateCount = stats.TlasUpdateCount;
             sceneData.AccelerationStructureTlasSkipCount = stats.TlasSkipCount;
+            sceneData.AccelerationStructureStreamingEnabled = gi.StreamedGiAccelerationStructuresEnabled ? 1 : 0;
+            sceneData.AccelerationStructureStaticInstanceCandidateCount = stats.StaticInstanceCandidateCount;
+            sceneData.AccelerationStructureStaticInstanceResidentCount = stats.StaticInstanceResidentCount;
+            sceneData.AccelerationStructureStaticInstanceCulledCount = stats.StaticInstanceCulledCount;
+            sceneData.AccelerationStructureBlasEvictionCount = stats.BlasEvictionCount;
+            sceneData.AccelerationStructureBlasEvictionBytes = stats.BlasEvictionBytes;
+            sceneData.AccelerationStructureBlasBudgetRejectedCount = stats.BlasBudgetRejectedCount;
+            sceneData.AccelerationStructureBlasBytes = stats.BottomLevelAccelerationStructureBytes;
+            sceneData.AccelerationStructureTlasBytes = stats.TopLevelAccelerationStructureBytes;
+            sceneData.AccelerationStructureRetiredBytes = stats.RetiredAccelerationStructureBytes;
+            sceneData.AccelerationStructureResidentBytes = stats.AccelerationStructureBytes;
+            sceneData.AccelerationStructureMemoryBudgetBytes = gi.StreamedGiAccelerationStructuresEnabled
+                ? gi.GiAccelerationStructureMemoryBudgetBytes
+                : 0;
             sceneData.AccelerationStructureBytes = checked(
                 stats.AccelerationStructureBytes +
+                stats.RetiredAccelerationStructureBytes +
                 stats.ScratchBufferBytes +
                 stats.InstanceBufferBytes +
                 stats.RayQueryInstanceMetadataBufferBytes);
@@ -7097,7 +8619,12 @@ namespace Njulf.Rendering
         {
             ulong lightSignature = CreateDdgiLightSignature(lightSnapshot);
             ulong emissiveSignature = HashAdd(HashStart, emissiveSourceRevision);
-            ulong geometrySignature = Settings.GlobalIllumination.SimpleDdgiDynamicGeometryDirtyBoostEnabled
+            // Region events are the normal Simple DDGI dynamic path.  Retain the
+            // whole-scene signature only as the explicit legacy/validation mode;
+            // otherwise hashing every render object merely recreates global dirty
+            // boosts that the region scheduler is designed to avoid.
+            ulong geometrySignature = !Settings.GlobalIllumination.SimpleDdgiRegionalInvalidationEnabled &&
+                                     Settings.GlobalIllumination.SimpleDdgiDynamicGeometryDirtyBoostEnabled
                 ? CreateSimpleDdgiDynamicGeometrySignature(scene)
                 : HashStart;
 
@@ -7424,6 +8951,7 @@ namespace Njulf.Rendering
         {
             if (counters.ReadbackValid == 0)
             {
+                sceneData.DdgiInvestigationCountersReadbackValid = 0;
                 sceneData.SimpleDdgiFreshAtlasForwardSampleCount = 0;
                 sceneData.SimpleDdgiZeroIrradianceSampleCount = 0;
                 sceneData.SimpleDdgiNonzeroIrradianceSampleCount = 0;
@@ -7473,6 +9001,7 @@ namespace Njulf.Rendering
                 return;
             }
 
+            sceneData.DdgiInvestigationCountersReadbackValid = 1;
             sceneData.SimpleDdgiFreshAtlasForwardSampleCount = counters.FreshAtlasForwardSampleCount;
             sceneData.SimpleDdgiZeroIrradianceSampleCount = counters.SimpleZeroIrradianceSampleCount;
             sceneData.SimpleDdgiNonzeroIrradianceSampleCount = counters.SimpleNonzeroIrradianceSampleCount;
@@ -7913,6 +9442,8 @@ namespace Njulf.Rendering
                 _bindlessHeap.HiZSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
             _renderGraph.OnSwapchainRecreated();
+            _asyncComputeTimingPolicy.Clear();
+            Array.Clear(_asyncComputeTimingFrames);
             _lastAmbientOcclusionTargetEnabled = aoEnabled;
             _lastAntiAliasingTargetMode = aaMode;
             _lastMotionVectorTargetEnabled = motionVectorTargetEnabled;
@@ -8088,8 +9619,11 @@ namespace Njulf.Rendering
             _environmentManager?.RegisterReflectionProbeFallback(_bindlessHeap);
             _reflectionProbeManager?.Register(_bindlessHeap);
             _ddgiProbeVolumeManager?.Register(_bindlessHeap);
+            _simpleDdgiVolumeManager?.Register(_bindlessHeap);
             _ddgiGatherTileManager?.Register(_bindlessHeap);
             _renderGraph.OnSwapchainRecreated();
+            _asyncComputeTimingPolicy.Clear();
+            Array.Clear(_asyncComputeTimingFrames);
         }
 
         private void EnsureFrameInProgress(string operation)

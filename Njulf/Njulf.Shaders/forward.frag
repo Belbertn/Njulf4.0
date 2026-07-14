@@ -1976,8 +1976,13 @@ void AccumulateDdgiInvestigationForwardDiagnostics(
         SimpleDdgiVolume diagnosticVolume;
         float diagnosticEdgeWeight;
         vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
-        vec3 diagnosticWorldPosition = SimpleDdgiBiasedSamplePosition(worldPosition, safeNormal, viewDir, simpleParams);
-        bool diagnosticInVolume = SelectSimpleDdgiVolume(simpleParams, diagnosticWorldPosition, diagnosticVolumeIndex, diagnosticVolume, diagnosticEdgeWeight);
+        bool diagnosticInVolume = SelectSimpleDdgiVolume(simpleParams, worldPosition, diagnosticVolumeIndex, diagnosticVolume, diagnosticEdgeWeight);
+        vec3 diagnosticWorldPosition = SimpleDdgiBiasedSamplePosition(
+            worldPosition,
+            safeNormal,
+            viewDir,
+            simpleParams,
+            diagnosticVolume.spacing);
         vec3 grid = (diagnosticWorldPosition - diagnosticVolume.origin) / diagnosticVolume.spacing;
         vec3 maxGrid = vec3(diagnosticVolume.gridCount) - vec3(1.0);
         if (!diagnosticInVolume || any(lessThan(grid, vec3(0.0))) || any(greaterThan(grid, maxGrid)))
@@ -2128,7 +2133,7 @@ float EstimateFarFieldSunShadow(vec3 worldPosition, vec3 normal, vec3 lightDirec
         origin,
         normalize(lightDirection),
         farField.voxelSize * 0.5,
-        max(farField.extent, farField.startDistance + farField.voxelSize),
+        FarFieldTraceMaximumDistance(farField),
         hitT,
         hitNormal,
         hitAlbedo,
@@ -2679,7 +2684,10 @@ void EvaluateIbl(
 
     vec3 irradianceDirection = RotateEnvironmentDirection(normal, environment.RotationRadians);
     vec3 irradiance = texture(BindlessCubeTextures[nonuniformEXT(environment.IrradianceTextureIndex)], irradianceDirection).rgb;
-    diffuseIbl = diffuseWeight * albedo * irradiance * environment.DiffuseIntensity * ambientOcclusion;
+    // Diffuse IBL is an irradiance-derived radiance field.  AO is applied once by
+    // indirect composition to the environment-owned share; DDGI retains its own
+    // probe visibility instead of receiving a second screen-space occlusion term.
+    diffuseIbl = diffuseWeight * albedo * irradiance * environment.DiffuseIntensity;
 
     vec3 reflectionDirection = reflect(-viewDirection, normal);
     float maxLod = max(float(environment.PrefilteredMipCount) - 1.0, 0.0);
@@ -2707,22 +2715,9 @@ void EvaluateIbl(
         reflectionDebugColor);
 #endif
 
-    SimpleDdgiParams simpleSpecularParams = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
-    if ((simpleSpecularParams.flags & (SIMPLE_DDGI_FLAG_ENABLED | SIMPLE_DDGI_FLAG_ROUGH_SPECULAR_ENABLED)) ==
-        (SIMPLE_DDGI_FLAG_ENABLED | SIMPLE_DDGI_FLAG_ROUGH_SPECULAR_ENABLED) &&
-        simpleSpecularParams.probeCount > 0u)
-    {
-        float roughSpecularWeight = smoothstep(0.6, 0.85, roughness);
-        if (roughSpecularWeight > 0.0)
-        {
-            vec3 specularProbeIrradiance = SampleSimpleDdgiUnifiedIrradiance(fragWorldPosition, reflectionDirection, viewDirection, false);
-            vec3 specularProbeFallback = specularProbeIrradiance * (fresnel * brdf.x + brdf.y) * specularOcclusion;
-            AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_ROUGH_SPECULAR_SAMPLE_COUNTER, 1u);
-            if (DdgiDiagnosticLuminance(specularProbeFallback) > 0.00001)
-                AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_ROUGH_SPECULAR_NONZERO_COUNTER, 1u);
-            specularIbl = mix(specularIbl, max(specularIbl, specularProbeFallback), roughSpecularWeight);
-        }
-    }
+    // Simple DDGI stores diffuse hemispherical irradiance only.  It is not a
+    // directional radiance representation, so indirect specular remains owned by
+    // SSR/reflection probes/prefiltered environment lighting.
 }
 
 vec3 EvaluatePbrLight(
@@ -3500,9 +3495,12 @@ void main()
     }
 
     SimpleDdgiParams simpleDdgiParams = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
-    bool simpleDdgiActive = (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_ENABLED) != 0u && simpleDdgiParams.probeCount > 0u;
+    bool simpleDdgiConfigured = (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_ENABLED) != 0u && simpleDdgiParams.probeCount > 0u;
+    bool simpleDdgiActive = simpleDdgiConfigured &&
+        (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) != 0u;
     DdgiSampleResult ddgiSample = EmptyDdgiSampleResult();
     vec3 ddgiDiffuse = vec3(0.0);
+    vec3 finalDdgiDiffuse = vec3(0.0);
     float ddgiCoverage = 0.0;
     float fallbackWeight = 0.0;
     float nearContactSuppression = 0.0;
@@ -3513,33 +3511,72 @@ void main()
 
     if (simpleDdgiActive)
     {
-        vec3 simpleIrradiance = SampleSimpleDdgiIrradiance(fragWorldPosition, ddgiNormal, viewDirection);
-        SimpleDdgiDebugSample simpleDebug = SampleSimpleDdgiDebug(fragWorldPosition, ddgiNormal, viewDirection);
+        // A support-aware result distinguishes an unavailable probe field from
+        // legitimate zero irradiance.  Fresh, exposed, and invalid slots
+        // are excluded before this reaches lighting composition.
+        SimpleDdgiGatherResult simpleGather = SampleSimpleDdgiGather(fragWorldPosition, ddgiNormal, viewDirection);
+        float simpleSupport = clamp(simpleGather.validSupport, 0.0, 1.0);
+        float simpleDirectionalSupport = clamp(simpleGather.directionalSupport, 0.0, 1.0);
+        float simpleOwnership = SimpleDdgiRadiometricOwnership(simpleGather);
+        float simpleFallback = (1.0 - simpleOwnership) * simpleDdgiParams.environmentFallbackIntensity;
+        vec3 simpleIrradiance = simpleGather.irradiance;
         ddgiSample.irradiance = simpleIrradiance;
-        ddgiSample.coverage = 1.0;
-        ddgiSample.spatialCoverage = 1.0;
-        ddgiSample.supportCoverage = 1.0;
-        ddgiSample.weight = 1.0;
-        ddgiSample.visibility = simpleDebug.visibility;
-        ddgiSample.visibilityConfidence = simpleDebug.visibilityConfidence;
-        ddgiSample.activeProbe = 1.0;
-        ddgiSample.probeIndex = simpleDebug.probeIndex;
-        ddgiSample.logicalProbePosition = simpleDebug.logicalProbePosition;
-        ddgiSample.relocatedProbePosition = simpleDebug.relocatedProbePosition;
-        ddgiSample.visibilityMomentMean = simpleDebug.visibilityMomentMean;
-        ddgiSample.visibilityMomentVariance = simpleDebug.visibilityMomentVariance;
-        ddgiSample.visibilityProbeDistance = simpleDebug.visibilityProbeDistance;
-        ddgiSample.visibilityMaxRayDistance = simpleDebug.visibilityMaxRayDistance;
-        ddgiSample.cascadeIndex = float(simpleDebug.volumeIndex);
-        SimpleDdgiVolume selectedSimpleVolume = ReadSimpleDdgiVolume(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX), min(simpleDebug.volumeIndex, max(simpleDdgiParams.volumeCount, 1u) - 1u));
-        ddgiSample.minProbeSpacing = selectedSimpleVolume.spacing;
+        ddgiSample.coverage = simpleGather.spatialCoverage;
+        ddgiSample.spatialCoverage = simpleGather.spatialCoverage;
+        ddgiSample.supportCoverage = simpleSupport;
+        ddgiSample.weight = simpleDirectionalSupport;
+        ddgiSample.ownershipConsumed = simpleOwnership;
+        ddgiSample.visibility = simpleGather.transportVisibility;
+        ddgiSample.visibilityConfidence = simpleGather.transportVisibility;
+        ddgiSample.activeProbe = simpleSupport;
+        ddgiSample.cascadeIndex = float(simpleGather.selectedVolume);
+        ddgiSample.minProbeSpacing = simpleGather.selectedSpacing;
         ddgiSample.rayBudget = float(simpleDdgiParams.raysPerProbe) / 256.0;
-        ddgiDiffuse = simpleIrradiance * albedo * max(1.0 - metallic, 0.0) / PI;
-        finalDiffuseIndirect = ddgiDiffuse + diffuseIbl * indirectAo;
-        ddgiCoverage = 1.0;
+        ddgiSample.leakClamp = simpleGather.transportVisibility;
+        ddgiSample.irradianceAtlasConfidence = simpleSupport;
+        ddgiSample.qualityConfidence = simpleDirectionalSupport;
+
+        // Diagnostic sampling is intentionally opt-in.  It rereads probe state and
+        // atlases, so doing it per shaded fragment made normal production frames
+        // pay the cost of a second gather.
+        float simpleDiagnosticVisibility = simpleGather.transportVisibility;
+        float simpleDiagnosticVisibilityMean = 0.0;
+        if (IsDdgiDebugView(debugViewMode) || DdgiForwardEstimateDiagnosticPixel())
+        {
+            SimpleDdgiDebugSample simpleDebug = SampleSimpleDdgiDebug(fragWorldPosition, ddgiNormal, viewDirection);
+            ddgiSample.probeIndex = simpleDebug.probeIndex;
+            ddgiSample.logicalProbePosition = simpleDebug.logicalProbePosition;
+            ddgiSample.relocatedProbePosition = simpleDebug.relocatedProbePosition;
+            ddgiSample.visibilityMomentMean = simpleDebug.visibilityMomentMean;
+            ddgiSample.visibilityMomentVariance = simpleDebug.visibilityMomentVariance;
+            ddgiSample.visibilityProbeDistance = simpleDebug.visibilityProbeDistance;
+            ddgiSample.visibilityMaxRayDistance = simpleDebug.visibilityMaxRayDistance;
+            simpleDiagnosticVisibility = simpleDebug.visibility;
+            simpleDiagnosticVisibilityMean = simpleDebug.visibilityMomentMean;
+        }
+
+        // Once valid probe data produces a normalized estimate, DDGI owns the
+        // spatially covered share. Probe-validity mass selects that estimate but
+        // must not premultiply it, or inactive probes next to geometry become a
+        // visible dark lattice. Screen-space AO is reserved for the environment
+        // fallback because probe visibility already occludes DDGI bounce lighting.
+        ddgiDiffuse = simpleIrradiance * simpleDdgiParams.indirectIntensity * albedo * max(1.0 - metallic, 0.0) / PI;
+        finalDdgiDiffuse = ddgiDiffuse * simpleOwnership;
+        finalDiffuseIndirect = finalDdgiDiffuse + diffuseIbl * simpleFallback * indirectAo;
+        ddgiCoverage = simpleGather.spatialCoverage;
+        fallbackWeight = simpleFallback;
         hybridDebugDiffuse = finalDiffuseIndirect;
-        hybridSuppressionMask = vec3(1.0);
-        hybridEffectiveDdgiWeight = 1.0;
+        hybridSuppressionMask = vec3(simpleSupport, simpleDirectionalSupport, simpleGather.transportVisibility);
+        hybridEffectiveDdgiWeight = simpleOwnership;
+
+        HybridDiffuseGiResult simpleHybridDiagnostics;
+        simpleHybridDiagnostics.diffuse = finalDiffuseIndirect;
+        simpleHybridDiagnostics.ddgiCoverage = simpleGather.spatialCoverage;
+        simpleHybridDiagnostics.environmentFallbackWeight = simpleFallback;
+        simpleHybridDiagnostics.nearContactSuppression = 0.0;
+        simpleHybridDiagnostics.effectiveDdgiWeight = simpleOwnership;
+        simpleHybridDiagnostics.suppressionMask = hybridSuppressionMask;
+        AccumulateDdgiForwardEstimateDiagnostics(simpleHybridDiagnostics, ddgiSample, ddgiDiffuse);
         AccumulateDdgiInvestigationForwardDiagnostics(
             true,
             simpleDdgiParams,
@@ -3547,9 +3584,39 @@ void main()
             ddgiNormal,
             viewDirection,
             simpleIrradiance,
-            simpleDebug.visibility,
-            simpleDebug.visibilityMomentMean,
-            ddgiDiffuse,
+            simpleDiagnosticVisibility,
+            simpleDiagnosticVisibilityMean,
+            finalDdgiDiffuse,
+            diffuseIbl,
+            finalDiffuseIndirect);
+    }
+    else if (simpleDdgiConfigured)
+    {
+        // Never sample a stale simple atlas when the ray-query-backed structured
+        // path is unavailable.  The simple manager owns storage incompatible with
+        // legacy DDGI, so environment IBL is the safe fallback until updates resume.
+        fallbackWeight = simpleDdgiParams.environmentFallbackIntensity;
+        finalDiffuseIndirect = diffuseIbl * fallbackWeight * indirectAo;
+        hybridDebugDiffuse = finalDiffuseIndirect;
+        hybridSuppressionMask = vec3(0.0);
+        HybridDiffuseGiResult simpleFallbackDiagnostics;
+        simpleFallbackDiagnostics.diffuse = finalDiffuseIndirect;
+        simpleFallbackDiagnostics.ddgiCoverage = 0.0;
+        simpleFallbackDiagnostics.environmentFallbackWeight = fallbackWeight;
+        simpleFallbackDiagnostics.nearContactSuppression = 0.0;
+        simpleFallbackDiagnostics.effectiveDdgiWeight = 0.0;
+        simpleFallbackDiagnostics.suppressionMask = vec3(0.0);
+        AccumulateDdgiForwardEstimateDiagnostics(simpleFallbackDiagnostics, ddgiSample, vec3(0.0));
+        AccumulateDdgiInvestigationForwardDiagnostics(
+            true,
+            simpleDdgiParams,
+            fragWorldPosition,
+            ddgiNormal,
+            viewDirection,
+            vec3(0.0),
+            0.0,
+            0.0,
+            vec3(0.0),
             diffuseIbl,
             finalDiffuseIndirect);
     }
@@ -3564,6 +3631,7 @@ void main()
         fallbackWeight = hybridDiffuse.environmentFallbackWeight;
         nearContactSuppression = hybridDiffuse.nearContactSuppression;
         finalDiffuseIndirect = hybridDiffuse.diffuse;
+        finalDdgiDiffuse = ddgiDiffuse * hybridDiffuse.effectiveDdgiWeight;
         hybridDebugDiffuse = hybridDiffuse.diffuse;
         hybridSuppressionMask = hybridDiffuse.suppressionMask;
         hybridEffectiveDdgiWeight = hybridDiffuse.effectiveDdgiWeight;
@@ -3625,15 +3693,16 @@ void main()
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_OCCUPANCY_SLICE)
     {
         FarFieldClipmapParams farField = ReadFarFieldClipmapParams(uint(FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX));
-        uvec2 xy = min(uvec2(floor(giDebugUv * vec2(farField.resolution.xy))), farField.resolution.xy - uvec2(1u));
-        ivec3 voxel = ivec3(int(xy.x), int(xy.y), int(farField.resolution.z / 2u));
-        uint packed = ReadStorageWord(farField.voxelBufferIndex, FarFieldVoxelIndex(voxel, farField));
+        uint packed;
+        bool missing;
+        ReadFarFieldDebugVoxel(farField, giDebugUv, packed, missing);
         vec3 rgb = vec3(
             float((packed >> 0u) & 0xffu),
             float((packed >> 8u) & 0xffu),
             float((packed >> 16u) & 0xffu)) / 255.0;
         float occupied = (packed & 0x80000000u) != 0u ? 1.0 : 0.0;
-        WriteForwardColor(vec4(mix(vec3(0.02), rgb, occupied), 1.0));
+        vec3 base = missing ? vec3(0.08, 0.015, 0.12) : vec3(0.02);
+        WriteForwardColor(vec4(mix(base, rgb, occupied), 1.0));
         return;
     }
 
@@ -3694,7 +3763,7 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE)
     {
-        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE, clamp(ddgiDiffuse, vec3(0.0), vec3(64.0)));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE, clamp(finalDdgiDiffuse, vec3(0.0), vec3(64.0)));
         return;
     }
 

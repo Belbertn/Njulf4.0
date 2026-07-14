@@ -11,6 +11,63 @@ namespace Njulf.Tests
     public class DdgiFrameLayoutBuilderTests
     {
         [Test]
+        public void EstimateSceneProbeBounds_UsesTransformedLocalMeshBounds()
+        {
+            var scene = new Scene();
+            scene.Add(new RenderObject
+            {
+                Position = new Vector3(10.0f, 20.0f, 30.0f),
+                LocalMeshBounds = new BoundingBox(
+                    new Vector3(-2.0f, -3.0f, -4.0f),
+                    new Vector3(6.0f, 7.0f, 8.0f))
+            });
+
+            BoundingBox bounds = DdgiFrameLayoutBuilder.EstimateSceneProbeBounds(scene);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(bounds.Min, Is.EqualTo(new Vector3(8.0f, 17.0f, 26.0f)));
+                Assert.That(bounds.Max, Is.EqualTo(new Vector3(16.0f, 27.0f, 38.0f)));
+            });
+        }
+
+        [Test]
+        public void EstimateSceneProbeBounds_MixesMeshBoundsWithLegacyPositionFallback()
+        {
+            var scene = new Scene();
+            scene.Add(new RenderObject
+            {
+                LocalMeshBounds = new BoundingBox(
+                    new Vector3(-5.0f, -6.0f, -7.0f),
+                    new Vector3(5.0f, 6.0f, 7.0f))
+            });
+            scene.Add(new RenderObject { Position = new Vector3(20.0f, 21.0f, 22.0f) });
+
+            BoundingBox bounds = DdgiFrameLayoutBuilder.EstimateSceneProbeBounds(scene);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(bounds.Min, Is.EqualTo(new Vector3(-5.0f, -6.0f, -7.0f)));
+                Assert.That(bounds.Max, Is.EqualTo(new Vector3(20.0f, 21.0f, 22.0f)));
+            });
+        }
+
+        [Test]
+        public void EstimateSceneProbeBounds_WithoutMeshBounds_PreservesPositionPadding()
+        {
+            var scene = new Scene();
+            scene.Add(new RenderObject { Position = new Vector3(2.0f, 3.0f, 4.0f) });
+
+            BoundingBox bounds = DdgiFrameLayoutBuilder.EstimateSceneProbeBounds(scene);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(bounds.Min, Is.EqualTo(new Vector3(-10.0f, 1.0f, -8.0f)));
+                Assert.That(bounds.Max, Is.EqualTo(new Vector3(14.0f, 13.0f, 16.0f)));
+            });
+        }
+
+        [Test]
         public void Build_WhenCameraRelativeDisabledAndNoAuthoredVolumes_DoesNotEmitDefaultVolume()
         {
             var scene = new Scene();
@@ -21,6 +78,7 @@ namespace Njulf.Tests
                 Enabled = true,
                 Mode = GlobalIlluminationMode.Ddgi,
                 UseDdgi = true,
+                DdgiSimpleEnabled = false,
                 DdgiCameraRelativeEnabled = false
             };
 
@@ -308,6 +366,7 @@ namespace Njulf.Tests
                 Enabled = false,
                 Mode = GlobalIlluminationMode.Ddgi,
                 UseDdgi = true,
+                DdgiSimpleEnabled = false,
                 DdgiCameraRelativeEnabled = true
             };
 
@@ -642,6 +701,7 @@ namespace Njulf.Tests
                 Enabled = true,
                 Mode = GlobalIlluminationMode.Ddgi,
                 UseDdgi = true,
+                DdgiSimpleEnabled = false,
                 DdgiCameraRelativeEnabled = true,
                 DdgiClipmapCascadeCount = 2,
                 DdgiClipmapProbeCountX = 4,

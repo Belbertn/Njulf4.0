@@ -34,6 +34,26 @@ namespace Njulf.Rendering.Pipeline
 
         protected override AccessFlags2 BarrierDestinationAccess => AccessFlags2.ShaderStorageReadBit;
         protected override PipelineStageFlags2 BarrierDestinationStage => PipelineStageFlags2.ComputeShaderBit;
+
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
+        {
+            // The trace is the transaction producer.  If the ray-query resource is
+            // unavailable, invalidate this frame's transaction before relocation or
+            // blending have a chance to observe an older scratch allocation.
+            if (!base.ShouldExecute(frameIndex, sceneData) || !VolumeManager.CanExecuteTraceTransaction)
+            {
+                VolumeManager.AbortUpdateTransaction();
+                return false;
+            }
+
+            return true;
+        }
+
+        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        {
+            base.Execute(cmd, frameIndex, sceneData);
+            VolumeManager.MarkTraceExecuted();
+        }
     }
 
     public sealed unsafe class SimpleDdgiBlendPass : SimpleDdgiComputePass
@@ -54,9 +74,40 @@ namespace Njulf.Rendering.Pipeline
             return checked((uint)Math.Max(1, VolumeManager.ProbesToUpdate));
         }
 
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
+        {
+            // A planner evaluates all three predicates before trace is recorded.
+            // Use the schedule-time gate here, then require the strict producer
+            // chain immediately before recording the actual consumer dispatch.
+            if (!base.ShouldExecute(frameIndex, sceneData) || !VolumeManager.CanScheduleBlendTransaction)
+            {
+                VolumeManager.AbortUpdateTransaction();
+                return false;
+            }
+
+            return true;
+        }
+
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
+            if (!VolumeManager.CanExecuteBlendTransaction)
+            {
+                VolumeManager.AbortUpdateTransaction();
+                return;
+            }
+
             base.Execute(cmd, frameIndex, sceneData);
+            // The sampled atlas is deliberately graphics-queue only until its
+            // images are declared render-graph resources with queue ownership
+            // transfers.  Keep the canonical SSBO blend as the producer, then
+            // mirror only the updated probe layers for the A/B sampled path.
+            VolumeManager.SynchronizeSampledAtlasesAfterBlend(cmd);
+            long sampledAtlasSynchronizationMicroseconds = VolumeManager.LastSampledAtlasSynchronizationMicroseconds;
+            // Upload() owns scheduler, state, and initial full-mirror recording.
+            // Account for the post-blend incremental mirror here as well so the
+            // rolling GI CPU P95 includes every sampled-atlas upload command.
+            sceneData.CpuSimpleDdgiRecordMicroseconds = checked(
+                sceneData.CpuSimpleDdgiRecordMicroseconds + sampledAtlasSynchronizationMicroseconds);
             VolumeManager.MarkBlendExecuted();
         }
     }
@@ -79,10 +130,30 @@ namespace Njulf.Rendering.Pipeline
             return checked((uint)Math.Max(1UL, ((ulong)Math.Max(0, VolumeManager.ProbesToUpdate) + 63UL) / 64UL));
         }
 
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
+        {
+            // See SimpleDdgiBlendPass: this must stay schedulable beside trace for
+            // async planning, but it may only record after this transaction's trace.
+            if (!base.ShouldExecute(frameIndex, sceneData) || !VolumeManager.CanScheduleRelocateClassifyTransaction)
+            {
+                VolumeManager.AbortUpdateTransaction();
+                return false;
+            }
+
+            return true;
+        }
+
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
+            if (!VolumeManager.CanExecuteRelocateClassifyTransaction)
+            {
+                VolumeManager.AbortUpdateTransaction();
+                return;
+            }
+
             base.Execute(cmd, frameIndex, sceneData);
             VolumeManager.RecordProbeStateReadback(cmd, frameIndex);
+            VolumeManager.MarkRelocateClassifyExecuted();
         }
 
         protected override PipelineStageFlags2 BarrierDestinationStage => PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit;
@@ -97,6 +168,7 @@ namespace Njulf.Rendering.Pipeline
         private const uint FarFieldForceAllFlag = 1u << 2;
         private const uint SharedMemoryBlendEnabledFlag = 1u << 3;
         private const uint ClassificationSchedulingEnabledFlag = 1u << 4;
+        private const uint ReducedBlendEnabledFlag = 1u << 5;
 
         private readonly string _shaderName;
         private readonly RenderSettings _settings;
@@ -164,7 +236,9 @@ namespace Njulf.Rendering.Pipeline
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             if (_pipeline.Handle == 0)
                 return false;
-            if (!gi.EffectiveUseSimpleDdgi || !gi.EffectiveUseRayQueryBackend)
+            if (!gi.EffectiveUseSimpleDdgi ||
+                !gi.SimpleDdgiStructuredGatherEnabled ||
+                !gi.EffectiveUseRayQueryBackend)
                 return false;
             if (_requiresRayQuery && (_accelerationStructureManager?.Active != true))
                 return false;
@@ -255,6 +329,8 @@ namespace Njulf.Rendering.Pipeline
                 flags |= SharedMemoryBlendEnabledFlag;
             if (gi.SimpleDdgiClassificationSchedulingEnabled)
                 flags |= ClassificationSchedulingEnabledFlag;
+            if (gi.SimpleDdgiReducedBlendEnabled)
+                flags |= ReducedBlendEnabledFlag;
 
             return new GPUSimpleDdgiPushConstants
             {

@@ -33,6 +33,17 @@ namespace Njulf.Rendering.Diagnostics
                 _count++;
         }
 
+        /// <summary>
+        /// Drops all retained samples without allocating.  Callers use this when a
+        /// feature is disabled or its resource topology changes so a later capture
+        /// cannot inherit a percentile from an incompatible workload.
+        /// </summary>
+        public void Clear()
+        {
+            _nextIndex = 0;
+            _count = 0;
+        }
+
         public PerformanceSampleStats GetStats()
         {
             if (_count == 0)

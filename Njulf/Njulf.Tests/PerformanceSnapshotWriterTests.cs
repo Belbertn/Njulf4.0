@@ -56,6 +56,35 @@ public sealed class PerformanceSnapshotWriterTests
             GlobalIlluminationRayQueryActive = 1,
             GlobalIlluminationSsgiActive = 0,
             GlobalIlluminationDdgiActive = 1,
+            SimpleDdgiActive = 1,
+            SimpleDdgiStructuredGatherEnabled = 1,
+            SimpleDdgiReducedBlendEnabled = 1,
+            SimpleDdgiSampledAtlasRequested = 1,
+            SimpleDdgiSampledAtlasActive = 1,
+            SimpleDdgiSampledAtlasGroupCount = 2,
+            SimpleDdgiSampledAtlasLayersPerTexture = 2048,
+            SimpleDdgiSampledAtlasImageBytes = 3_932_160,
+            SimpleDdgiToroidalScrollingEnabled = 1,
+            SimpleDdgiRegionalInvalidationEnabled = 1,
+            FarFieldPagedFeatureEnabled = 1,
+            StreamedGiAccelerationStructuresFeatureEnabled = 1,
+            CaptureGpuDeviceName = "Reference GPU",
+            CaptureGpuDriverVersion = "999.1",
+            CaptureRenderWidth = 1920,
+            CaptureRenderHeight = 1080,
+            CaptureSceneContentRevision = 42,
+            GpuTimingValid = 1,
+            GpuForwardGiGatherTimingCoverage = 1,
+            GpuForwardGiGatherMicroseconds = 40,
+            GpuFarFieldUpdateTimingValid = 1,
+            GpuFarFieldUpdateMicroseconds = 10,
+            CpuSsgiRecordMicroseconds = 11,
+            CpuDdgiRecordMicroseconds = 13,
+            CpuSimpleDdgiRecordMicroseconds = 17,
+            CpuFarFieldRecordMicroseconds = 19,
+            CpuGlobalIlluminationRecordMicroseconds = 164,
+            CpuGlobalIlluminationRecordP95Microseconds = 200,
+            GlobalIlluminationCpuTimingSampleCount = 3,
             SsgiWidth = 960,
             SsgiHeight = 540,
             SsgiResolutionScale = 0.5f,
@@ -279,6 +308,17 @@ public sealed class PerformanceSnapshotWriterTests
         {
             Assert.That(json, Does.Contain("\"Foliage\""));
             Assert.That(json, Does.Contain("\"GlobalIllumination\""));
+            Assert.That(json, Does.Contain("\"SchemaVersion\": 2"));
+            Assert.That(json, Does.Contain("\"Capture\""));
+            Assert.That(json, Does.Contain("\"GpuDeviceName\": \"Reference GPU\""));
+            Assert.That(json, Does.Contain("\"DriverVersion\": \"999.1\""));
+            Assert.That(json, Does.Contain("\"RenderWidth\": 1920"));
+            Assert.That(json, Does.Contain("\"RenderHeight\": 1080"));
+            Assert.That(json, Does.Contain("\"SceneContentRevision\": 42"));
+            Assert.That(json, Does.Contain("\"structured-gather\""));
+            Assert.That(json, Does.Contain("\"sampled-atlas\""));
+            Assert.That(json, Does.Contain("\"paged-far-field\""));
+            Assert.That(json, Does.Contain("forward-gather=inclusive-forward-draw"));
             Assert.That(json, Does.Contain("\"ActiveQualityPreset\": 4"));
             Assert.That(json, Does.Contain("\"Mode\": 2"));
             Assert.That(json, Does.Contain("\"RayQueryActive\": true"));
@@ -332,6 +372,11 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"SimpleDdgiFullRayProbeUpdateCount\": 5"));
             Assert.That(json, Does.Contain("\"SimpleDdgiMaintenanceRayProbeUpdateCount\": 9"));
             Assert.That(json, Does.Contain("\"SimpleDdgiAdaptiveRaySavedRaysPerFrame\": 864"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiSampledAtlasRequested\": true"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiSampledAtlasActive\": true"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiSampledAtlasGroupCount\": 2"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiSampledAtlasLayersPerTexture\": 2048"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiSampledAtlasImageBytes\": 3932160"));
             Assert.That(json, Does.Contain("\"DdgiEstimatedShadowRayUpperBound\": 1536"));
             Assert.That(json, Does.Contain("\"DdgiSelectedDirectionalHitCount\": 768"));
             Assert.That(json, Does.Contain("\"DdgiSelectedLocalHitCount\": 768"));
@@ -442,7 +487,10 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"GpuDdgiScheduleMicroseconds\": 4"));
             Assert.That(json, Does.Contain("\"GpuDdgiScheduleP95Microseconds\": 240"));
             Assert.That(json, Does.Contain("\"GpuDdgiScheduleOverBudget\": 0"));
-            Assert.That(json, Does.Contain("\"GpuMicroseconds\": 605"));
+            Assert.That(json, Does.Contain("\"CpuRecordMicroseconds\": 164"));
+            Assert.That(json, Does.Contain("\"CpuRecordP95Microseconds\": 200"));
+            Assert.That(json, Does.Contain("\"CpuTimingSampleCount\": 3"));
+            Assert.That(json, Does.Contain("\"GpuMicroseconds\": 655"));
             Assert.That(json, Does.Contain("\"LikelyBottleneck\": \"fragment-alpha-overdraw-or-forward-shading\""));
         });
     }
@@ -486,6 +534,66 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("Current-frame forward visibility compaction fell back: previous forward visibility compaction overflowed"));
             Assert.That(json, Does.Contain("Scene-submission GPU opaque compaction overflowed."));
             Assert.That(json, Does.Contain("Scene-submission CPU/GPU validation reported mismatches."));
+        });
+    }
+
+    [Test]
+    public void PerformanceSnapshotWriter_WarnsWhenGiAccountingOrResidencyIsNotReleaseReady()
+    {
+        string directory = Path.Combine(TestContext.CurrentContext.WorkDirectory, "performance-snapshot-gi-warning-tests");
+        if (Directory.Exists(directory))
+            Directory.Delete(directory, recursive: true);
+
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationDdgiActive = 1,
+            SimpleDdgiActive = 1,
+            SimpleDdgiSampledAtlasRequested = 1,
+            SimpleDdgiSampledAtlasActive = 0,
+            SimpleDdgiSampledAtlasFallbackReason = "sampled-atlas-memory-budget-exhausted",
+            GpuTimingValid = 1,
+            GpuForwardGiGatherTimingCoverage = 0,
+            CpuGlobalIlluminationRecordP95Microseconds = 251,
+            GlobalIlluminationCpuTimingSampleCount = 1,
+            DdgiDetailedCountersEnabled = 1,
+            DdgiInvestigationCountersReadbackValid = 0,
+            SimpleDdgiDirtyFirstUpdateLatencySampleCount = 1,
+            SimpleDdgiDirtyFirstUpdateLatencyP95Frames = 2,
+            SimpleDdgiDirtyConvergenceLatencySampleCount = 1,
+            SimpleDdgiDirtyConvergenceLatencyP95Frames = 9,
+            StreamedGiAccelerationStructuresFeatureEnabled = 1,
+            AccelerationStructureResidentBytes = 512,
+            AccelerationStructureMemoryBudgetBytes = 256,
+            AccelerationStructureBlasBudgetRejectedCount = 1,
+            FarFieldPagedMode = 1,
+            FarFieldCacheBytes = 512,
+            FarFieldMemoryBudgetBytes = 256,
+            DdgiBlackFrameSuspect = 1
+        };
+        RenderBudgetProfile profile = RenderBudgetProfile.Development;
+        RenderBudgetSnapshot budget = new RenderBudgetEvaluator().Evaluate(
+            profile,
+            diagnostics,
+            MemoryBudgetSnapshot.Empty,
+            new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0, [], RenderBudgetStatus.WithinBudget),
+            new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+        string path = new PerformanceSnapshotWriter().Write(directory, diagnostics, budget);
+        string json = File.ReadAllText(path);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(json, Does.Contain("Forward GI gather timing is unavailable"));
+            Assert.That(json, Does.Contain("GI CPU scheduling and upload P95 exceeds"));
+            Assert.That(json, Does.Contain("Sampled Simple DDGI atlas fell back to the canonical SSBO path: sampled-atlas-memory-budget-exhausted"));
+            Assert.That(json, Does.Contain("Detailed GI counter readback is unavailable"));
+            Assert.That(json, Does.Contain("dirty-to-first-update P95 exceeds"));
+            Assert.That(json, Does.Contain("dirty-to-convergence P95 exceeds"));
+            Assert.That(json, Does.Contain("Resident GI acceleration structures exceed"));
+            Assert.That(json, Does.Contain("residency rejected BLAS allocation"));
+            Assert.That(json, Does.Contain("Far-field page cache exceeds"));
+            Assert.That(json, Does.Contain("DDGI black-frame suspect was reported"));
         });
     }
 }

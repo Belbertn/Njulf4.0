@@ -12,7 +12,13 @@ const uint SIMPLE_DDGI_FLAG_PARTICLE_ENABLED = 1u << 4;
 const uint SIMPLE_DDGI_FLAG_ADAPTIVE_HYSTERESIS = 1u << 5;
 const uint SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED = 1u << 6;
 const uint SIMPLE_DDGI_FLAG_FAR_SUN_SHADOW_ENABLED = 1u << 7;
-const uint SIMPLE_DDGI_FLAG_ROUGH_SPECULAR_ENABLED = 1u << 8;
+// Feature gate for the support-aware gather/composition path.  When disabled,
+// callers receive explicit no-support and can take the environment-only safety
+// fallback rather than sampling an obsolete atlas convention.
+const uint SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED = 1u << 8;
+// Detailed investigation counters are disabled in normal production rendering
+// so per-ray/per-texel atomic traffic is never part of the steady-state cost.
+const uint SIMPLE_DDGI_FLAG_DETAILED_DIAGNOSTICS_ENABLED = 1u << 9;
 const uint SIMPLE_DDGI_IRRADIANCE_TEXELS = 8u;
 const uint SIMPLE_DDGI_VISIBILITY_TEXELS = 16u;
 const uint SIMPLE_DDGI_MAX_RAYS_PER_PROBE = 256u;
@@ -23,14 +29,28 @@ const uint SIMPLE_DDGI_MAX_VOLUME_COUNT = 16u;
 const uint SIMPLE_DDGI_VOLUME_KIND_LEGACY = 0u;
 const uint SIMPLE_DDGI_VOLUME_KIND_AUTHORED = 1u;
 const uint SIMPLE_DDGI_VOLUME_KIND_RING = 2u;
+const uint SIMPLE_DDGI_AUTHORED_VOLUME_CASCADE = 0xffffffffu;
 const uint SIMPLE_DDGI_PROBE_STATE_STRIDE_WORDS = 8u;
 const uint SIMPLE_DDGI_PROBE_UPDATE_STRIDE_WORDS = 8u;
 const uint SIMPLE_DDGI_RELOCATION_CLASSIFICATION_STRIDE_WORDS = 12u;
 const uint SIMPLE_DDGI_PROBE_FLAG_FRESH = 1u << 0;
 const uint SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED = 1u << 1;
 const uint SIMPLE_DDGI_PROBE_FLAG_INACTIVE = 1u << 2;
+const uint SIMPLE_DDGI_UPDATE_MATERIAL_TEXTURE_CASCADE_SHIFT = 3u;
+const uint SIMPLE_DDGI_UPDATE_MATERIAL_TEXTURE_CASCADE_MASK = 0x7u << SIMPLE_DDGI_UPDATE_MATERIAL_TEXTURE_CASCADE_SHIFT;
+const uint SIMPLE_DDGI_UPDATE_MAX_SHADED_LIGHTS_SHIFT = 6u;
+const uint SIMPLE_DDGI_UPDATE_MAX_SHADED_LIGHTS_MASK = 0x3fu << SIMPLE_DDGI_UPDATE_MAX_SHADED_LIGHTS_SHIFT;
+const uint SIMPLE_DDGI_UPDATE_MAINTENANCE = 1u << 12;
+// The remaining state-flag bits carry a non-zero physical-slot generation.  An
+// update recorded for an old toroidal mapping must never mutate the slot after it
+// has been re-exposed for a new world cell.
+const uint SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT = 8u;
+const uint SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK = 0xffffff00u;
 const uint SIMPLE_DDGI_PROBE_FLAG_RAY_COUNT_SHIFT = 16u;
 const uint SIMPLE_DDGI_PROBE_FLAG_RAY_COUNT_MASK = 0xffff0000u;
+const uint SIMPLE_DDGI_UPDATE_GENERATION_MASK = 0x00ffffffu;
+const uint SIMPLE_DDGI_UPDATE_AGE_SHIFT = 24u;
+const uint SIMPLE_DDGI_UPDATE_AGE_MASK = 0xff000000u;
 const uint SIMPLE_DDGI_CLASSIFICATION_ACTIVE = 0u;
 const uint SIMPLE_DDGI_CLASSIFICATION_INACTIVE = 1u;
 
@@ -50,6 +70,7 @@ struct SimpleDdgiParams
     float farFieldStartDistance;
     vec3 environmentRadiance;
     float environmentIntensity;
+    float environmentFallbackIntensity;
     uint updateStartProbe;
     uint probesToUpdate;
     float selfShadowBiasScale;
@@ -62,7 +83,23 @@ struct SimpleDdgiParams
     float hysteresisChangeThreshold;
     float hysteresisStepThreshold;
     uint volumeCount;
+    // Optional sampled-image mirror metadata. The SSBO remains canonical and
+    // handles octahedral seam filtering, while images accelerate interior taps.
+    uint sampledAtlasLayersPerTexture;
+    uint sampledAtlasTextureGroupCount;
+    uint sampledAtlasEnabled;
 };
+
+bool SimpleDdgiDetailedDiagnosticsEnabled(SimpleDdgiParams params)
+{
+    return (params.flags & SIMPLE_DDGI_FLAG_DETAILED_DIAGNOSTICS_ENABLED) != 0u;
+}
+
+void AddSimpleDdgiDiagnostic(SimpleDdgiParams params, uint frameIndex, uint counterIndex, uint value)
+{
+    if (SimpleDdgiDetailedDiagnosticsEnabled(params))
+        AddRendererDiagnostic(frameIndex, counterIndex, value);
+}
 
 struct SimpleDdgiVolume
 {
@@ -76,6 +113,8 @@ struct SimpleDdgiVolume
     uint kind;
     uint updateStartProbe;
     uint probesToUpdate;
+    uint sourceOrdinal;
+    uvec3 physicalOffset;
 };
 
 struct SimpleDdgiDebugSample
@@ -107,6 +146,7 @@ struct SimpleDdgiProbeUpdate
     uint probeIndex;
     uint volumeIndex;
     uint flags;
+    uint expectedGeneration;
 };
 
 uint SimpleDdgiProbeStateBase(uint probeIndex)
@@ -145,13 +185,47 @@ SimpleDdgiProbeUpdate ReadSimpleDdgiProbeUpdate(uint bufferIndex, uint queueOffs
     update.probeIndex = ReadStorageWord(bufferIndex, baseWord);
     update.volumeIndex = ReadStorageWord(bufferIndex, baseWord + 1u);
     update.flags = ReadStorageWord(bufferIndex, baseWord + 2u);
+    update.expectedGeneration = ReadStorageWord(bufferIndex, baseWord + 3u);
     return update;
+}
+
+uint SimpleDdgiProbeGeneration(SimpleDdgiProbeState state)
+{
+    return (state.flags & SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK) >> SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT;
+}
+
+bool SimpleDdgiUpdateMatchesProbeGeneration(SimpleDdgiProbeUpdate update, SimpleDdgiProbeState state)
+{
+    uint expectedGeneration = update.expectedGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK;
+    return expectedGeneration != 0u && expectedGeneration == SimpleDdgiProbeGeneration(state);
+}
+
+uint SimpleDdgiUpdateAge(SimpleDdgiProbeUpdate update)
+{
+    return max((update.expectedGeneration & SIMPLE_DDGI_UPDATE_AGE_MASK) >> SIMPLE_DDGI_UPDATE_AGE_SHIFT, 1u);
+}
+
+bool SimpleDdgiUpdateIsMaintenance(SimpleDdgiProbeUpdate update)
+{
+    return (update.flags & SIMPLE_DDGI_UPDATE_MAINTENANCE) != 0u;
 }
 
 uint SimpleDdgiUpdateRayCount(SimpleDdgiProbeUpdate update, SimpleDdgiParams p)
 {
     uint packed = (update.flags & SIMPLE_DDGI_PROBE_FLAG_RAY_COUNT_MASK) >> SIMPLE_DDGI_PROBE_FLAG_RAY_COUNT_SHIFT;
     return clamp(packed == 0u ? p.raysPerProbe : packed, 1u, min(p.raysPerProbe, SIMPLE_DDGI_MAX_RAYS_PER_PROBE));
+}
+
+int SimpleDdgiUpdateMaterialTextureMaxCascade(SimpleDdgiProbeUpdate update)
+{
+    uint packed = (update.flags & SIMPLE_DDGI_UPDATE_MATERIAL_TEXTURE_CASCADE_MASK) >> SIMPLE_DDGI_UPDATE_MATERIAL_TEXTURE_CASCADE_SHIFT;
+    return int(packed) - 1;
+}
+
+uint SimpleDdgiUpdateMaxShadedLights(SimpleDdgiProbeUpdate update, uint fallback)
+{
+    uint packed = (update.flags & SIMPLE_DDGI_UPDATE_MAX_SHADED_LIGHTS_MASK) >> SIMPLE_DDGI_UPDATE_MAX_SHADED_LIGHTS_SHIFT;
+    return min(packed, fallback);
 }
 
 SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
@@ -181,6 +255,7 @@ SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
     p.farFieldStartDistance = max(hysteresis.w, 0.0);
     p.environmentRadiance = max(environment.xyz, vec3(0.0));
     p.environmentIntensity = max(environment.w, 0.0);
+    p.environmentFallbackIntensity = clamp(updateRange.w, 0.0, 4.0);
     p.updateStartProbe = uint(max(updateRange.x, 0.0));
     p.probesToUpdate = uint(max(updateRange.y, 0.0));
     p.debugView = uint(max(debugAndBias.x, 0.0));
@@ -193,6 +268,9 @@ SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
     p.hysteresisChangeThreshold = max(bias.z, 0.001);
     p.hysteresisStepThreshold = max(max(bias.w, 0.001), p.hysteresisChangeThreshold);
     p.volumeCount = min(uint(max(max(reserved.x, updateRange.z), 0.0)), SIMPLE_DDGI_MAX_VOLUME_COUNT);
+    p.sampledAtlasLayersPerTexture = uint(max(reserved.y, 0.0));
+    p.sampledAtlasTextureGroupCount = uint(max(reserved.z, 0.0));
+    p.sampledAtlasEnabled = uint(max(reserved.w, 0.0));
     return p;
 }
 
@@ -204,6 +282,7 @@ SimpleDdgiVolume ReadSimpleDdgiVolume(uint bufferIndex, uint volumeIndex)
     vec4 worldMinAndEdge = ReadStorageVec4(bufferIndex, baseWord + 8u);
     vec4 worldMaxAndKind = ReadStorageVec4(bufferIndex, baseWord + 12u);
     vec4 updateRange = ReadStorageVec4(bufferIndex, baseWord + 16u);
+    vec4 raysAndReserved = ReadStorageVec4(bufferIndex, baseWord + 20u);
 
     SimpleDdgiVolume volume;
     volume.origin = originAndSpacing.xyz;
@@ -216,7 +295,18 @@ SimpleDdgiVolume ReadSimpleDdgiVolume(uint bufferIndex, uint volumeIndex)
     volume.kind = uint(max(worldMaxAndKind.w, 0.0));
     volume.updateStartProbe = uint(max(updateRange.x, 0.0));
     volume.probesToUpdate = uint(max(updateRange.y, 0.0));
+    volume.sourceOrdinal = uint(max(raysAndReserved.x, 0.0));
+    volume.physicalOffset = uvec3(max(raysAndReserved.yzw, vec3(0.0)));
     return volume;
+}
+
+uint SimpleDdgiVolumeQualityCascade(SimpleDdgiVolume volume)
+{
+    if (volume.kind == SIMPLE_DDGI_VOLUME_KIND_AUTHORED)
+        return SIMPLE_DDGI_AUTHORED_VOLUME_CASCADE;
+    if (volume.kind != 2u || volume.sourceOrdinal < 10000u)
+        return 0u;
+    return min(volume.sourceOrdinal - 10000u, 3u);
 }
 
 bool SimpleDdgiContains(SimpleDdgiVolume volume, vec3 worldPosition)
@@ -244,7 +334,10 @@ uint SimpleDdgiProbeIndex(uvec3 coord, SimpleDdgiParams p)
 
 uint SimpleDdgiProbeIndex(uvec3 coord, SimpleDdgiVolume volume)
 {
-    return volume.firstProbeIndex + coord.x + coord.y * volume.gridCount.x + coord.z * volume.gridCount.x * volume.gridCount.y;
+    // Ring coordinates are logical/world-relative.  Atlas/state storage is
+    // toroidal, so preserved cells retain their physical slot without a copy.
+    uvec3 physical = (coord + volume.physicalOffset) % max(volume.gridCount, uvec3(1u));
+    return volume.firstProbeIndex + physical.x + physical.y * volume.gridCount.x + physical.z * volume.gridCount.x * volume.gridCount.y;
 }
 
 uvec3 SimpleDdgiProbeCoord(uint probeIndex, SimpleDdgiParams p)
@@ -288,7 +381,8 @@ uvec3 SimpleDdgiProbeCoord(uint localProbeIndex, SimpleDdgiVolume volume)
     uint rem = localProbeIndex - z * xy;
     uint y = rem / max(volume.gridCount.x, 1u);
     uint x = rem - y * max(volume.gridCount.x, 1u);
-    return uvec3(x, y, z);
+    uvec3 physical = uvec3(x, y, z);
+    return (physical + volume.gridCount - (volume.physicalOffset % volume.gridCount)) % volume.gridCount;
 }
 
 vec3 SimpleDdgiProbeWorldPosition(uint globalProbeIndex, SimpleDdgiParams p, out uint volumeIndexOut)
@@ -412,11 +506,59 @@ uint SimpleDdgiMirrorOctTexelIndex(ivec2 coord, uint texelsPerProbe)
     return uint(c.x) + uint(c.y) * texelsPerProbe;
 }
 
-vec4 SampleSimpleDdgiAtlasBilinear(uint bufferIndex, uint probeIndex, vec3 direction, uint texelsPerProbe)
+bool SimpleDdgiCanSampleAtlasImage(SimpleDdgiParams p, uint bufferIndex, uint probeIndex)
 {
-    vec2 texelUv = SimpleDdgiOctEncode(direction) * float(texelsPerProbe) - vec2(0.5);
+    if (p.sampledAtlasEnabled == 0u ||
+        p.sampledAtlasLayersPerTexture == 0u ||
+        p.sampledAtlasTextureGroupCount == 0u ||
+        (bufferIndex != uint(SIMPLE_DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX) &&
+         bufferIndex != uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX)))
+    {
+        return false;
+    }
+
+    uint groupIndex = probeIndex / p.sampledAtlasLayersPerTexture;
+    return groupIndex < p.sampledAtlasTextureGroupCount &&
+        groupIndex < uint(SIMPLE_DDGI_SAMPLED_ATLAS_TEXTURE_GROUP_COUNT);
+}
+
+vec4 SampleSimpleDdgiAtlasImage(
+    SimpleDdgiParams p,
+    uint bufferIndex,
+    uint probeIndex,
+    vec2 encodedDirection)
+{
+    uint groupIndex = probeIndex / p.sampledAtlasLayersPerTexture;
+    uint layerIndex = probeIndex - groupIndex * p.sampledAtlasLayersPerTexture;
+    int textureIndex = bufferIndex == uint(SIMPLE_DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX)
+        ? SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX + int(groupIndex)
+        : SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX + int(groupIndex);
+    return texture(
+        BindlessArrayTextures[nonuniformEXT(textureIndex)],
+        vec3(clamp(encodedDirection, vec2(0.0), vec2(1.0)), float(layerIndex)));
+}
+
+vec4 SampleSimpleDdgiAtlasBilinear(
+    uint bufferIndex,
+    uint probeIndex,
+    vec3 direction,
+    uint texelsPerProbe,
+    SimpleDdgiParams p)
+{
+    vec2 encodedDirection = SimpleDdgiOctEncode(direction);
+    vec2 texelUv = encodedDirection * float(texelsPerProbe) - vec2(0.5);
     ivec2 base = ivec2(floor(texelUv));
     vec2 f = fract(texelUv);
+    // Hardware filtering is exactly equivalent for a strictly interior quad.
+    // At octahedral seams retain the SSBO mirror lookup, which preserves the
+    // established cross-edge convention instead of clamping the image border.
+    if (all(greaterThanEqual(base, ivec2(0))) &&
+        all(lessThan(base + ivec2(1), ivec2(int(texelsPerProbe)))) &&
+        SimpleDdgiCanSampleAtlasImage(p, bufferIndex, probeIndex))
+    {
+        return SampleSimpleDdgiAtlasImage(p, bufferIndex, probeIndex, encodedDirection);
+    }
+
     vec4 s00 = ReadSimpleDdgiAtlasTexel(bufferIndex, probeIndex, SimpleDdgiMirrorOctTexelIndex(base, texelsPerProbe), texelsPerProbe);
     vec4 s10 = ReadSimpleDdgiAtlasTexel(bufferIndex, probeIndex, SimpleDdgiMirrorOctTexelIndex(base + ivec2(1, 0), texelsPerProbe), texelsPerProbe);
     vec4 s01 = ReadSimpleDdgiAtlasTexel(bufferIndex, probeIndex, SimpleDdgiMirrorOctTexelIndex(base + ivec2(0, 1), texelsPerProbe), texelsPerProbe);
@@ -424,20 +566,35 @@ vec4 SampleSimpleDdgiAtlasBilinear(uint bufferIndex, uint probeIndex, vec3 direc
     return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
 }
 
-float SimpleDdgiChebyshev(float mean, float mean2, float receiverDistance)
+float SimpleDdgiChebyshev(float mean, float mean2, float receiverDistance, float probeSpacing)
 {
     if (receiverDistance <= mean)
         return 1.0;
-    float variance = max(mean2 - mean * mean, 0.0025);
+    // Visibility moments represent progressively larger cells in outer rings.
+    // A fixed world-space floor becomes nearly binary at 4-16 m spacing and lets
+    // sparse ray noise turn otherwise valid coarse-ring samples completely black.
+    float varianceFloor = max(0.0025, probeSpacing * probeSpacing * 0.0025);
+    float variance = max(mean2 - mean * mean, varianceFloor);
     float d = receiverDistance - mean;
     return clamp(variance / (variance + d * d), 0.0, 1.0);
 }
 
-vec3 SimpleDdgiBiasedSamplePosition(vec3 worldPos, vec3 normal, vec3 viewDir, SimpleDdgiParams p)
+vec3 SimpleDdgiBiasedSamplePosition(vec3 worldPos, vec3 normal, vec3 viewDir, SimpleDdgiParams p, float volumeSpacing)
 {
     vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
     vec3 safeView = length(viewDir) > 0.00001 ? normalize(viewDir) : safeNormal;
-    return worldPos + safeNormal * p.normalBias + safeView * p.viewBias;
+    // Settings are expressed as spacing-relative scales.  Clamp them to small,
+    // safe world-space limits so a coarse far ring cannot push a lookup through
+    // a wall and a fine authored volume still avoids self-intersection.
+    float spacing = max(volumeSpacing, 0.001);
+    float normalBias = clamp(p.normalBias * spacing, 0.002, max(0.01, spacing * 0.20));
+    float viewBias = clamp(p.viewBias * spacing, 0.0, max(0.01, spacing * 0.35));
+    return worldPos + safeNormal * normalBias + safeView * viewBias;
+}
+
+vec3 SimpleDdgiBiasedSamplePosition(vec3 worldPos, vec3 normal, vec3 viewDir, SimpleDdgiParams p)
+{
+    return SimpleDdgiBiasedSamplePosition(worldPos, normal, viewDir, p, p.spacing);
 }
 
 bool SelectSimpleDdgiVolume(SimpleDdgiParams p, vec3 worldPosition, out uint selectedVolumeIndex, out SimpleDdgiVolume selectedVolume, out float selectedEdgeWeight)
@@ -460,14 +617,75 @@ bool SelectSimpleDdgiVolume(SimpleDdgiParams p, vec3 worldPosition, out uint sel
     return false;
 }
 
-vec3 SampleSimpleDdgiVolumeIrradiance(SimpleDdgiParams p, SimpleDdgiVolume volume, vec3 biasedWorldPos, vec3 safeNormal)
+struct SimpleDdgiGatherResult
 {
+    vec3 irradiance;
+    float validSupport;
+    float directionalSupport;
+    float spatialCoverage;
+    float transportVisibility;
+    float ownership;
+    uint selectedVolume;
+    float selectedSpacing;
+    uint validProbeCount;
+};
+
+SimpleDdgiGatherResult EmptySimpleDdgiGatherResult()
+{
+    SimpleDdgiGatherResult result;
+    result.irradiance = vec3(0.0);
+    result.validSupport = 0.0;
+    result.directionalSupport = 0.0;
+    result.spatialCoverage = 0.0;
+    result.transportVisibility = 0.0;
+    result.ownership = 0.0;
+    result.selectedVolume = 0u;
+    result.selectedSpacing = 0.0;
+    result.validProbeCount = 0u;
+    return result;
+}
+
+float SimpleDdgiRadiometricOwnership(SimpleDdgiGatherResult gather)
+{
+    // Probe validity mass is a confidence and interpolation signal, not an
+    // energy term. Once a normalized gather has usable support, DDGI owns the
+    // spatially covered share. Otherwise inactive probes next to geometry stamp
+    // their trilinear support pattern back onto the final irradiance field.
+    return gather.validSupport > 0.000001
+        ? clamp(gather.spatialCoverage, 0.0, 1.0)
+        : 0.0;
+}
+
+bool SimpleDdgiProbeSupportsGather(SimpleDdgiProbeState state, vec4 irradiance, vec4 visibility)
+{
+    uint invalidFlags = SIMPLE_DDGI_PROBE_FLAG_FRESH |
+        SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED |
+        SIMPLE_DDGI_PROBE_FLAG_INACTIVE;
+    return (state.flags & invalidFlags) == 0u &&
+        state.classification != SIMPLE_DDGI_CLASSIFICATION_INACTIVE &&
+        state.activeWeight > 0.001 &&
+        irradiance.w > 0.5 &&
+        visibility.z > 0.5;
+}
+
+SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
+    SimpleDdgiParams p,
+    SimpleDdgiVolume volume,
+    uint volumeIndex,
+    vec3 biasedWorldPos,
+    vec3 safeNormal)
+{
+    SimpleDdgiGatherResult result = EmptySimpleDdgiGatherResult();
+    result.selectedVolume = volumeIndex;
+    result.selectedSpacing = volume.spacing;
     vec3 grid = (biasedWorldPos - volume.origin) / volume.spacing;
     vec3 baseF = floor(grid);
     vec3 fracV = clamp(grid - baseF, vec3(0.0), vec3(1.0));
     ivec3 base = ivec3(baseF);
     vec3 accumulated = vec3(0.0);
-    float totalWeight = 0.0;
+    float validMass = 0.0;
+    float directionalMass = 0.0;
+    float visibleMass = 0.0;
 
     for (uint z = 0u; z < 2u; z++)
     for (uint y = 0u; y < 2u; y++)
@@ -477,30 +695,62 @@ vec3 SampleSimpleDdgiVolumeIrradiance(SimpleDdgiParams p, SimpleDdgiVolume volum
         if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, ivec3(volume.gridCount))))
             continue;
 
+        vec3 w3 = mix(1.0 - fracV, fracV, vec3(x, y, z));
+        float trilinear = w3.x * w3.y * w3.z;
+        result.spatialCoverage += trilinear;
+
         uint probeIndex = SimpleDdgiProbeIndex(uvec3(c), volume);
         SimpleDdgiProbeState state = ReadSimpleDdgiProbeState(uint(SIMPLE_DDGI_PROBE_STATE_BUFFER_INDEX), probeIndex);
-        if (state.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE || state.activeWeight <= 0.001)
-            continue;
-
         vec3 probePos = volume.origin + vec3(c) * volume.spacing + state.relocation;
         vec3 toSurface = biasedWorldPos - probePos;
         float distanceToProbe = length(toSurface);
         vec3 probeToSurface = distanceToProbe > 0.00001 ? toSurface / distanceToProbe : safeNormal;
+        vec4 irradiance = SampleSimpleDdgiAtlasBilinear(uint(SIMPLE_DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), probeIndex, safeNormal, p.irradianceTexels, p);
+        vec4 moments = SampleSimpleDdgiAtlasBilinear(uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), probeIndex, probeToSurface, p.visibilityTexels, p);
+        if (!SimpleDdgiProbeSupportsGather(state, irradiance, moments))
+            continue;
+
         float halfLambert = clamp(dot(safeNormal, -probeToSurface) * 0.5 + 0.5, 0.0, 1.0);
-        float backfaceWeight = halfLambert * halfLambert;
-        vec4 irradiance = SampleSimpleDdgiAtlasBilinear(uint(SIMPLE_DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), probeIndex, safeNormal, p.irradianceTexels);
-        vec4 moments = SampleSimpleDdgiAtlasBilinear(uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), probeIndex, probeToSurface, p.visibilityTexels);
-        float visibility = SimpleDdgiChebyshev(moments.x, moments.y, max(distanceToProbe - 0.03 * p.selfShadowBiasScale, 0.0));
-        vec3 w3 = mix(1.0 - fracV, fracV, vec3(x, y, z));
-        float trilinear = w3.x * w3.y * w3.z;
-        float weight = max(trilinear * backfaceWeight * visibility, trilinear * 1.0e-5);
-        accumulated += irradiance.rgb * weight;
-        totalWeight += weight;
+        // Directional weighting chooses representative probes; it is not missing
+        // data and must not remove energy from an otherwise valid interpolation
+        // cell.  Keep a tiny directional floor so an entirely back-facing cell can
+        // still produce a stable estimate while visibility remains authoritative.
+        float directionalWeight = max(halfLambert * halfLambert, 1.0e-4);
+        float dataWeight = trilinear * clamp(state.activeWeight, 0.0, 1.0);
+        float directionalTransportWeight = dataWeight * directionalWeight;
+        float visibilityBias = clamp(0.03 * p.selfShadowBiasScale * volume.spacing, 0.002, volume.spacing * 0.10);
+        float transportVisibility = SimpleDdgiChebyshev(
+            moments.x,
+            moments.y,
+            max(distanceToProbe - visibilityBias, 0.0),
+            volume.spacing);
+        float transportWeight = directionalTransportWeight * transportVisibility;
+        accumulated += max(irradiance.rgb, vec3(0.0)) * transportWeight;
+        validMass += dataWeight;
+        directionalMass += directionalTransportWeight;
+        visibleMass += transportWeight;
+        result.validProbeCount++;
     }
 
-    return totalWeight > 0.000001
-        ? clamp(accumulated / totalWeight, vec3(0.0), vec3(64.0))
+    float spatialCoverage = clamp(result.spatialCoverage, 0.0, 1.0);
+    result.spatialCoverage = spatialCoverage;
+    result.validSupport = spatialCoverage > 0.000001
+        ? clamp(validMass / spatialCoverage, 0.0, 1.0)
+        : 0.0;
+    result.directionalSupport = validMass > 0.000001
+        ? clamp(directionalMass / validMass, 0.0, 1.0)
+        : 0.0;
+    result.transportVisibility = directionalMass > 0.000001
+        ? clamp(visibleMass / directionalMass, 0.0, 1.0)
+        : 0.0;
+    result.ownership = clamp(validMass, 0.0, 1.0);
+    // Normalize probe selection while retaining physical visibility in the
+    // numerator.  Normalizing by geometric coverage incorrectly premultiplies the
+    // result by back-face support and produces a probe-aligned dark lattice.
+    result.irradiance = directionalMass > 0.000001
+        ? clamp(accumulated / directionalMass, vec3(0.0), vec3(64.0))
         : vec3(0.0);
+    return result;
 }
 
 vec3 SimpleDdgiRotateEnvironmentDirection(vec3 direction, float radians)
@@ -540,7 +790,7 @@ float EstimateFarFieldSkyVisibility(vec3 worldPos)
     );
 
     uint coneCount = 3u;
-    float maxDistance = max(farField.extent, farField.startDistance + farField.voxelSize);
+    float maxDistance = FarFieldTraceMaximumDistance(farField);
     float visibility = 0.0;
     for (uint i = 0u; i < coneCount; i++)
     {
@@ -565,61 +815,156 @@ float EstimateFarFieldSkyVisibility(vec3 worldPos)
     float normalizedVisibility = clamp(visibility / float(coneCount), 0.0, 1.0);
     SimpleDdgiParams simpleParams = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
     uint diagnosticFrame = simpleParams.frameIndex % uint(FRAMES_IN_FLIGHT);
-    AddRendererDiagnostic(diagnosticFrame, DDGI_INVESTIGATION_SKY_VISIBILITY_SAMPLE_COUNTER, 1u);
-    AddRendererDiagnostic(
+    AddSimpleDdgiDiagnostic(simpleParams, diagnosticFrame, DDGI_INVESTIGATION_SKY_VISIBILITY_SAMPLE_COUNTER, 1u);
+    AddSimpleDdgiDiagnostic(
+        simpleParams,
         diagnosticFrame,
         DDGI_INVESTIGATION_SKY_VISIBILITY_ACCUM_COUNTER,
         uint(clamp(normalizedVisibility, 0.0, 16.0) * 1024.0 + 0.5));
     return normalizedVisibility;
 }
 
-vec3 SampleSimpleDdgiUnifiedIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir, bool allowFallback)
+SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
+    SimpleDdgiGatherResult outer,
+    SimpleDdgiGatherResult inner,
+    float innerWeight)
 {
+    float w = clamp(innerWeight, 0.0, 1.0);
+    float innerValidMass = inner.ownership * w;
+    // Inner data has priority, but a geometrically selected ring must not hide a
+    // valid coarser ring when its own probes are fresh, inactive, or otherwise
+    // unsupported. The outer ring fills only the ownership still unrepresented.
+    float outerWeight = 1.0 - innerValidMass;
+    float outerValidMass = outer.ownership * outerWeight;
+    float validMass = outerValidMass + innerValidMass;
+    float outerDirectionalMass = outerValidMass * outer.directionalSupport;
+    float innerDirectionalMass = innerValidMass * inner.directionalSupport;
+    float directionalMass = outerDirectionalMass + innerDirectionalMass;
+    float visibleMass = outerDirectionalMass * outer.transportVisibility +
+        innerDirectionalMass * inner.transportVisibility;
+    vec3 accumulated = outer.irradiance * outerDirectionalMass +
+        inner.irradiance * innerDirectionalMass;
+    SimpleDdgiGatherResult result;
+    float innerSpatialMass = inner.spatialCoverage * w;
+    result.spatialCoverage = clamp(
+        innerSpatialMass + outer.spatialCoverage * (1.0 - innerSpatialMass),
+        0.0,
+        1.0);
+    result.validSupport = result.spatialCoverage > 0.000001
+        ? clamp(validMass / result.spatialCoverage, 0.0, 1.0)
+        : 0.0;
+    result.directionalSupport = validMass > 0.000001
+        ? clamp(directionalMass / validMass, 0.0, 1.0)
+        : 0.0;
+    result.transportVisibility = directionalMass > 0.000001
+        ? clamp(visibleMass / directionalMass, 0.0, 1.0)
+        : 0.0;
+    result.ownership = clamp(validMass, 0.0, 1.0);
+    result.irradiance = directionalMass > 0.000001
+        ? clamp(accumulated / directionalMass, vec3(0.0), vec3(64.0))
+        : vec3(0.0);
+    result.selectedVolume = inner.selectedVolume;
+    result.selectedSpacing = mix(outer.selectedSpacing, inner.selectedSpacing, w);
+    result.validProbeCount = inner.validProbeCount + outer.validProbeCount;
+    return result;
+}
+
+SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 viewDir)
+{
+    SimpleDdgiGatherResult empty = EmptySimpleDdgiGatherResult();
     SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
-    if ((p.flags & SIMPLE_DDGI_FLAG_ENABLED) == 0u || p.probeCount == 0u || p.volumeCount == 0u)
-        return vec3(0.0);
+    if ((p.flags & (SIMPLE_DDGI_FLAG_ENABLED | SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED)) !=
+            (SIMPLE_DDGI_FLAG_ENABLED | SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) ||
+        p.probeCount == 0u || p.volumeCount == 0u)
+        return empty;
 
     vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
-    vec3 biasedWorldPos = SimpleDdgiBiasedSamplePosition(worldPos, safeNormal, viewDir, p);
     uint selectedVolumeIndex;
     SimpleDdgiVolume selectedVolume;
     float edgeWeight;
-    if (!SelectSimpleDdgiVolume(p, biasedWorldPos, selectedVolumeIndex, selectedVolume, edgeWeight))
-    {
-        vec3 fallback = allowFallback ? SimpleDdgiEnvironmentIrradianceFallback(safeNormal, p) : vec3(0.0);
-        if (allowFallback && (p.flags & SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u)
-            fallback *= EstimateFarFieldSkyVisibility(biasedWorldPos);
-        return fallback * p.indirectIntensity;
-    }
+    if (!SelectSimpleDdgiVolume(p, worldPos, selectedVolumeIndex, selectedVolume, edgeWeight))
+        return empty;
+    vec3 biasedWorldPos = SimpleDdgiBiasedSamplePosition(
+        worldPos,
+        safeNormal,
+        viewDir,
+        p,
+        selectedVolume.spacing);
+    edgeWeight = SimpleDdgiEdgeWeight(selectedVolume, biasedWorldPos);
 
-    vec3 selectedIrradiance = SampleSimpleDdgiVolumeIrradiance(p, selectedVolume, biasedWorldPos, safeNormal);
-    if (edgeWeight >= 0.999)
-        return selectedIrradiance * p.indirectIntensity;
+    SimpleDdgiGatherResult selected = SampleSimpleDdgiVolumeGather(
+        p,
+        selectedVolume,
+        selectedVolumeIndex,
+        biasedWorldPos,
+        safeNormal);
+    if (edgeWeight >= 0.999 && selected.ownership >= 0.999)
+        return selected;
 
+    bool foundOuterVolume = false;
     for (uint nextVolumeIndex = selectedVolumeIndex + 1u; nextVolumeIndex < p.volumeCount; nextVolumeIndex++)
     {
         SimpleDdgiVolume nextVolume = ReadSimpleDdgiVolume(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX), nextVolumeIndex);
         if (!SimpleDdgiContains(nextVolume, biasedWorldPos))
             continue;
 
-        vec3 nextIrradiance = SampleSimpleDdgiVolumeIrradiance(p, nextVolume, biasedWorldPos, safeNormal);
-        return mix(nextIrradiance, selectedIrradiance, edgeWeight) * p.indirectIntensity;
+        SimpleDdgiGatherResult outer = SampleSimpleDdgiVolumeGather(
+            p,
+            nextVolume,
+            nextVolumeIndex,
+            biasedWorldPos,
+            safeNormal);
+        selected = BlendSimpleDdgiGatherResults(
+            outer,
+            selected,
+            foundOuterVolume ? 1.0 : edgeWeight);
+        foundOuterVolume = true;
+        if (selected.ownership >= 0.999)
+            break;
     }
 
-    vec3 fallbackIrradiance = allowFallback ? SimpleDdgiEnvironmentIrradianceFallback(safeNormal, p) : vec3(0.0);
-    if (allowFallback && (p.flags & SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u)
-        fallbackIrradiance *= EstimateFarFieldSkyVisibility(biasedWorldPos);
-    return mix(fallbackIrradiance, selectedIrradiance, edgeWeight) * p.indirectIntensity;
+    if (foundOuterVolume)
+        return selected;
+
+    // At the outer edge only ownership fades.  Irradiance stays normalized so the
+    // caller can compose the represented DDGI share and the missing environment
+    // share exactly once.
+    selected.spatialCoverage *= edgeWeight;
+    selected.ownership *= edgeWeight;
+    return selected;
+}
+
+vec3 SampleSimpleDdgiUnifiedIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir, bool allowFallback)
+{
+    SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    if ((p.flags & SIMPLE_DDGI_FLAG_ENABLED) == 0u)
+        return vec3(0.0);
+
+    vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
+    SimpleDdgiGatherResult gather = SampleSimpleDdgiGather(worldPos, safeNormal, viewDir);
+    float selectedSpacing = gather.selectedSpacing > 0.0 ? gather.selectedSpacing : p.spacing;
+    vec3 biasedWorldPos = SimpleDdgiBiasedSamplePosition(worldPos, safeNormal, viewDir, p, selectedSpacing);
+    float ownership = SimpleDdgiRadiometricOwnership(gather);
+    vec3 irradiance = gather.irradiance * ownership;
+    if (allowFallback)
+    {
+        vec3 fallback = SimpleDdgiEnvironmentIrradianceFallback(safeNormal, p);
+        if ((p.flags & SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u)
+            fallback *= EstimateFarFieldSkyVisibility(biasedWorldPos);
+        irradiance += fallback * (1.0 - ownership) * p.environmentFallbackIntensity;
+    }
+
+    return clamp(irradiance * p.indirectIntensity, vec3(0.0), vec3(64.0));
 }
 
 SimpleDdgiDebugSample SampleSimpleDdgiDebug(vec3 worldPos, vec3 normal, vec3 viewDir)
 {
     SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
-    vec3 biasedWorldPos = SimpleDdgiBiasedSamplePosition(worldPos, normal, viewDir, p);
     uint selectedVolumeIndex;
     SimpleDdgiVolume volume;
     float edgeWeight;
-    SelectSimpleDdgiVolume(p, biasedWorldPos, selectedVolumeIndex, volume, edgeWeight);
+    SelectSimpleDdgiVolume(p, worldPos, selectedVolumeIndex, volume, edgeWeight);
+    vec3 biasedWorldPos = SimpleDdgiBiasedSamplePosition(worldPos, normal, viewDir, p, volume.spacing);
     vec3 grid = (biasedWorldPos - volume.origin) / volume.spacing;
     ivec3 nearest = ivec3(round(grid));
     nearest = clamp(nearest, ivec3(0), ivec3(volume.gridCount) - ivec3(1));
@@ -630,7 +975,7 @@ SimpleDdgiDebugSample SampleSimpleDdgiDebug(vec3 worldPos, vec3 normal, vec3 vie
     vec3 toSurface = biasedWorldPos - probePos;
     float distanceToProbe = length(toSurface);
     vec3 probeToSurface = distanceToProbe > 0.00001 ? toSurface / distanceToProbe : normalize(normal);
-    vec4 moments = SampleSimpleDdgiAtlasBilinear(uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), probeIndex, probeToSurface, p.visibilityTexels);
+    vec4 moments = SampleSimpleDdgiAtlasBilinear(uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), probeIndex, probeToSurface, p.visibilityTexels, p);
     float mean = max(moments.x, 0.0);
     float variance = max(moments.y - mean * mean, 0.0);
 
@@ -639,7 +984,12 @@ SimpleDdgiDebugSample SampleSimpleDdgiDebug(vec3 worldPos, vec3 normal, vec3 vie
     result.volumeIndex = selectedVolumeIndex;
     result.logicalProbePosition = logicalProbePos;
     result.relocatedProbePosition = probePos;
-    result.visibility = SimpleDdgiChebyshev(moments.x, moments.y, max(distanceToProbe - 0.03 * p.selfShadowBiasScale, 0.0));
+    float visibilityBias = clamp(0.03 * p.selfShadowBiasScale * volume.spacing, 0.002, volume.spacing * 0.10);
+    result.visibility = SimpleDdgiChebyshev(
+        moments.x,
+        moments.y,
+        max(distanceToProbe - visibilityBias, 0.0),
+        volume.spacing);
     result.visibilityMaxRayDistance = max(volume.spacing * float(max(max(volume.gridCount.x, volume.gridCount.y), volume.gridCount.z)), volume.spacing);
     result.visibilityConfidence = mean > 0.0001
         ? clamp(1.0 - sqrt(variance) / max(result.visibilityMaxRayDistance, 0.0001), 0.0, 1.0)

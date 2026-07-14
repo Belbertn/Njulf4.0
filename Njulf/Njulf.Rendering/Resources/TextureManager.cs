@@ -1752,6 +1752,32 @@ namespace Njulf.Rendering.Resources
             };
         }
 
+        /// <summary>
+        /// Resolves a descriptor handle to the underlying immutable image allocation for render
+        /// graph synchronization. Invalid or retired handles intentionally return false so an
+        /// optional material slot cannot manufacture a stale ownership contract.
+        /// </summary>
+        public bool TryGetImageBinding(TextureHandle handle, out TextureImageBinding binding)
+        {
+            lock (_lock)
+            {
+                if (!TryGetTextureInfoLocked(handle, out TextureInfo? textureInfo) || textureInfo.Image.Handle == 0)
+                {
+                    binding = default;
+                    return false;
+                }
+
+                binding = new TextureImageBinding(
+                    textureInfo.Image,
+                    textureInfo.Format,
+                    textureInfo.Extent,
+                    textureInfo.MipLevels,
+                    textureInfo.ArrayLayers,
+                    textureInfo.Generation);
+                return true;
+            }
+        }
+
         private static bool IsBlockCompressedFormat(Format format)
         {
             return format is
@@ -1930,4 +1956,13 @@ namespace Njulf.Rendering.Resources
             System.Diagnostics.Debug.WriteLine("Texture manager disposed.");
         }
     }
+
+    /// <summary>Immutable physical image metadata used when importing sampled textures into a graph plan.</summary>
+    public readonly record struct TextureImageBinding(
+        Image Image,
+        Format Format,
+        Extent3D Extent,
+        uint MipLevels,
+        uint ArrayLayers,
+        uint Generation);
 }

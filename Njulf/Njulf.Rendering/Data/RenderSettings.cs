@@ -1488,9 +1488,42 @@ namespace Njulf.Rendering.Data
         private float _simpleDdgiNormalBias = 0.1f;
         private float _simpleDdgiViewBias = 0.3f;
         private int _simpleDdgiProbeUpdatesPerFrame = 2_048;
+        // Independent per-ring controls.  The legacy scalar controls remain as
+        // compatibility defaults, while the scheduler consumes these explicit
+        // values for near/authored, mid, and far camera-relative volumes.
+        private int _simpleDdgiNearFullRaysPerProbe = 128;
+        private int _simpleDdgiMidFullRaysPerProbe = 64;
+        private int _simpleDdgiFarFullRaysPerProbe = 32;
+        private int _simpleDdgiNearMaintenanceRaysPerProbe = 32;
+        private int _simpleDdgiMidMaintenanceRaysPerProbe = 16;
+        private int _simpleDdgiFarMaintenanceRaysPerProbe = 8;
+        private int _simpleDdgiNearMinimumUpdateQuota = 128;
+        private int _simpleDdgiMidMinimumUpdateQuota = 48;
+        private int _simpleDdgiFarMinimumUpdateQuota = 16;
+        private int _simpleDdgiNearMaximumUpdateQuota = 1_024;
+        private int _simpleDdgiMidMaximumUpdateQuota = 512;
+        private int _simpleDdgiFarMaximumUpdateQuota = 256;
+        private int _simpleDdgiNearMaterialTextureMaxCascade = 1;
+        private int _simpleDdgiMidMaterialTextureMaxCascade = 0;
+        private int _simpleDdgiFarMaterialTextureMaxCascade = -1;
+        private int _simpleDdgiNearMaxShadedLights = 8;
+        private int _simpleDdgiMidMaxShadedLights = 4;
+        private int _simpleDdgiFarMaxShadedLights = 2;
         private int _farFieldClipmapResolution = 128;
         private float _farFieldStartDistance = 12.0f;
         private int _farFieldMaxTraceSteps = 256;
+        private int _farFieldPageResolution = 32;
+        private int _farFieldCascadeCount = 3;
+        private int _farFieldResidentPageBudget = 48;
+        private int _farFieldPageUpdatesPerFrame = 1;
+        private int _farFieldPageRequestRadius = 1;
+        private float _farFieldBaseVoxelSize = 1.0f;
+        private float _farFieldCascadeVoxelScale = 3.0f;
+        private ulong _farFieldMemoryBudgetBytes = 96UL * 1024UL * 1024UL;
+        private ulong _giAccelerationStructureMemoryBudgetBytes = 256UL * 1024UL * 1024UL;
+        private float _giAccelerationStructureStaticResidentDistance = 256.0f;
+        private int _giAccelerationStructureMaximumStaticInstances = 8_192;
+        private int _giAccelerationStructureEvictionGraceFrames = 120;
 
         public bool Enabled { get; set; } = true;
         public GlobalIlluminationMode Mode { get; set; } = GlobalIlluminationMode.Hybrid;
@@ -1508,7 +1541,10 @@ namespace Njulf.Rendering.Data
             set => _environmentFallbackIntensity = Clamp(value, 0.0f, 4.0f);
         }
 
-        public bool UseSsgi { get; set; } = true;
+        /// <summary>
+        /// Screen-space global illumination is opt-in while DDGI remains the production default.
+        /// </summary>
+        public bool UseSsgi { get; set; }
         public bool UseDdgi { get; set; } = true;
         public bool UseRayQueryBackend { get; set; }
         public DdgiQualityTier DdgiQualityTier { get; set; } = DdgiQualityTier.DdgiHigh;
@@ -1527,7 +1563,7 @@ namespace Njulf.Rendering.Data
         public bool DdgiDebugForceProbeActive { get; set; }
         public bool DdgiThinWallPolicyEnabled { get; set; } = true;
         public bool DdgiRoomSpacingScaledBiasEnabled { get; set; } = true;
-        public bool DdgiSimpleEnabled { get; set; }
+        public bool DdgiSimpleEnabled { get; set; } = true;
         public bool SimpleDdgiSharedMemoryBlendEnabled { get; set; } = true;
         public bool SimpleDdgiClassificationSchedulingEnabled { get; set; } = true;
         public bool SimpleDdgiClassificationReadbackEnabled { get; set; } = true;
@@ -1535,13 +1571,56 @@ namespace Njulf.Rendering.Data
         public bool SimpleDdgiLightingDirtyBoostEnabled { get; set; } = true;
         public bool SimpleDdgiDynamicGeometryDirtyBoostEnabled { get; set; } = true;
         public bool SimpleDdgiAdaptiveRaysEnabled { get; set; } = true;
+        /// <summary>
+        /// Uses the support-aware DDGI gather result in forward shading.  This is the
+        /// production path: invalid, fresh, and exposed probe slots contribute no support
+        /// and the environment owns the missing energy.
+        /// </summary>
+        public bool SimpleDdgiStructuredGatherEnabled { get; set; } = true;
+        /// <summary>
+        /// Uses the O(rays + texels) SH/ray-splat blend path.  Keep this switch while
+        /// captures are compared against the legacy ray-by-texel implementation.
+        /// </summary>
+        public bool SimpleDdgiReducedBlendEnabled { get; set; } = true;
+        /// <summary>
+        /// Enables the sampled-image mirror of the canonical Simple-DDGI SSBO
+        /// atlases for controlled A/B captures. The SSBO remains the writer and
+        /// safety fallback; this stays opt-in until target-device validation is
+        /// complete.
+        /// </summary>
+        public bool SimpleDdgiSampledAtlasEnabled { get; set; }
+        /// <summary>
+        /// Keeps camera-relative rings in a shared toroidal physical layout so normal
+        /// scrolling invalidates only exposed cells and never copies atlas data.
+        /// </summary>
+        public bool SimpleDdgiToroidalScrollingEnabled { get; set; } = true;
+        /// <summary>
+        /// Maps bounded dirty regions to affected simple-DDGI probe cells instead of
+        /// promoting the entire world after every dynamic change.
+        /// </summary>
+        public bool SimpleDdgiRegionalInvalidationEnabled { get; set; } = true;
         public bool SimpleDdgiFogEnabled { get; set; } = true;
         public bool SimpleDdgiParticlesEnabled { get; set; } = true;
-        public bool SimpleDdgiRoughSpecularEnabled { get; set; } = true;
+        // DDGI stores diffuse irradiance, not a directional radiance lobe.  Do not use
+        // it as a rough-specular approximation in production; reflection probes/SSR/IBL
+        // remain the single owner of indirect specular energy.
+        public bool SimpleDdgiRoughSpecularEnabled { get; set; }
         public bool FarFieldSkyVisibilityEnabled { get; set; } = true;
         public bool FarFieldSunShadowEnabled { get; set; } = true;
         public bool FarFieldClipmapEnabled { get; set; }
+        /// <summary>
+        /// Uses fixed-resolution, world-keyed physical pages instead of one
+        /// scene-sized voxel cube.  The legacy clipmap remains available only for
+        /// A/B validation and emergency rollback.
+        /// </summary>
+        public bool FarFieldPagedEnabled { get; set; } = true;
         public bool FarFieldForceAll { get; set; }
+        /// <summary>
+        /// Restricts static GI ray-query geometry to a camera-relative working set
+        /// with deterministic eviction. Dynamic render objects remain detailed and
+        /// authoritative while present.
+        /// </summary>
+        public bool StreamedGiAccelerationStructuresEnabled { get; set; } = true;
         public IList<SimpleDdgiAuthoredVolume> SimpleDdgiAuthoredVolumes { get; } = new List<SimpleDdgiAuthoredVolume>();
 
         public float SimpleDdgiProbeSpacing
@@ -1596,6 +1675,115 @@ namespace Njulf.Rendering.Data
         {
             get => Math.Min(_simpleDdgiMaintenanceRaysPerProbe, _simpleDdgiRaysPerProbe);
             set => _simpleDdgiMaintenanceRaysPerProbe = Clamp(value, 1, MaxSimpleDdgiRaysPerProbe);
+        }
+
+        public int SimpleDdgiNearFullRaysPerProbe
+        {
+            get => _simpleDdgiNearFullRaysPerProbe;
+            set => _simpleDdgiNearFullRaysPerProbe = Clamp(value, 1, MaxSimpleDdgiRaysPerProbe);
+        }
+
+        public int SimpleDdgiMidFullRaysPerProbe
+        {
+            get => _simpleDdgiMidFullRaysPerProbe;
+            set => _simpleDdgiMidFullRaysPerProbe = Clamp(value, 1, MaxSimpleDdgiRaysPerProbe);
+        }
+
+        public int SimpleDdgiFarFullRaysPerProbe
+        {
+            get => _simpleDdgiFarFullRaysPerProbe;
+            set => _simpleDdgiFarFullRaysPerProbe = Clamp(value, 1, MaxSimpleDdgiRaysPerProbe);
+        }
+
+        public int SimpleDdgiNearMaintenanceRaysPerProbe
+        {
+            get => Math.Min(_simpleDdgiNearMaintenanceRaysPerProbe, _simpleDdgiNearFullRaysPerProbe);
+            set => _simpleDdgiNearMaintenanceRaysPerProbe = Clamp(value, 1, MaxSimpleDdgiRaysPerProbe);
+        }
+
+        public int SimpleDdgiMidMaintenanceRaysPerProbe
+        {
+            get => Math.Min(_simpleDdgiMidMaintenanceRaysPerProbe, _simpleDdgiMidFullRaysPerProbe);
+            set => _simpleDdgiMidMaintenanceRaysPerProbe = Clamp(value, 1, MaxSimpleDdgiRaysPerProbe);
+        }
+
+        public int SimpleDdgiFarMaintenanceRaysPerProbe
+        {
+            get => Math.Min(_simpleDdgiFarMaintenanceRaysPerProbe, _simpleDdgiFarFullRaysPerProbe);
+            set => _simpleDdgiFarMaintenanceRaysPerProbe = Clamp(value, 1, MaxSimpleDdgiRaysPerProbe);
+        }
+
+        public int SimpleDdgiNearMinimumUpdateQuota
+        {
+            get => _simpleDdgiNearMinimumUpdateQuota;
+            set => _simpleDdgiNearMinimumUpdateQuota = Clamp(value, 0, MaxSimpleDdgiTotalProbeCount);
+        }
+
+        public int SimpleDdgiMidMinimumUpdateQuota
+        {
+            get => _simpleDdgiMidMinimumUpdateQuota;
+            set => _simpleDdgiMidMinimumUpdateQuota = Clamp(value, 0, MaxSimpleDdgiTotalProbeCount);
+        }
+
+        public int SimpleDdgiFarMinimumUpdateQuota
+        {
+            get => _simpleDdgiFarMinimumUpdateQuota;
+            set => _simpleDdgiFarMinimumUpdateQuota = Clamp(value, 0, MaxSimpleDdgiTotalProbeCount);
+        }
+
+        public int SimpleDdgiNearMaximumUpdateQuota
+        {
+            get => Math.Max(_simpleDdgiNearMaximumUpdateQuota, _simpleDdgiNearMinimumUpdateQuota);
+            set => _simpleDdgiNearMaximumUpdateQuota = Clamp(value, 0, MaxSimpleDdgiTotalProbeCount);
+        }
+
+        public int SimpleDdgiMidMaximumUpdateQuota
+        {
+            get => Math.Max(_simpleDdgiMidMaximumUpdateQuota, _simpleDdgiMidMinimumUpdateQuota);
+            set => _simpleDdgiMidMaximumUpdateQuota = Clamp(value, 0, MaxSimpleDdgiTotalProbeCount);
+        }
+
+        public int SimpleDdgiFarMaximumUpdateQuota
+        {
+            get => Math.Max(_simpleDdgiFarMaximumUpdateQuota, _simpleDdgiFarMinimumUpdateQuota);
+            set => _simpleDdgiFarMaximumUpdateQuota = Clamp(value, 0, MaxSimpleDdgiTotalProbeCount);
+        }
+
+        /// <summary>-1 uses compact material statistics instead of texture samples.</summary>
+        public int SimpleDdgiNearMaterialTextureMaxCascade
+        {
+            get => _simpleDdgiNearMaterialTextureMaxCascade;
+            set => _simpleDdgiNearMaterialTextureMaxCascade = Clamp(value, -1, MaxDdgiClipmapCascadeCount - 1);
+        }
+
+        public int SimpleDdgiMidMaterialTextureMaxCascade
+        {
+            get => _simpleDdgiMidMaterialTextureMaxCascade;
+            set => _simpleDdgiMidMaterialTextureMaxCascade = Clamp(value, -1, MaxDdgiClipmapCascadeCount - 1);
+        }
+
+        public int SimpleDdgiFarMaterialTextureMaxCascade
+        {
+            get => _simpleDdgiFarMaterialTextureMaxCascade;
+            set => _simpleDdgiFarMaterialTextureMaxCascade = Clamp(value, -1, MaxDdgiClipmapCascadeCount - 1);
+        }
+
+        public int SimpleDdgiNearMaxShadedLights
+        {
+            get => _simpleDdgiNearMaxShadedLights;
+            set => _simpleDdgiNearMaxShadedLights = Clamp(value, 0, 64);
+        }
+
+        public int SimpleDdgiMidMaxShadedLights
+        {
+            get => _simpleDdgiMidMaxShadedLights;
+            set => _simpleDdgiMidMaxShadedLights = Clamp(value, 0, 64);
+        }
+
+        public int SimpleDdgiFarMaxShadedLights
+        {
+            get => _simpleDdgiFarMaxShadedLights;
+            set => _simpleDdgiFarMaxShadedLights = Clamp(value, 0, 64);
         }
 
         public float SimpleDdgiHysteresis
@@ -1668,6 +1856,90 @@ namespace Njulf.Rendering.Data
         {
             get => _farFieldMaxTraceSteps;
             set => _farFieldMaxTraceSteps = Clamp(value, 1, 2048);
+        }
+
+        /// <summary>Voxel resolution of one physical far-field page.</summary>
+        public int FarFieldPageResolution
+        {
+            get => _farFieldPageResolution;
+            set => _farFieldPageResolution = Clamp(value, 16, 128);
+        }
+
+        /// <summary>Number of geometric far-field cascades represented by the page cache.</summary>
+        public int FarFieldCascadeCount
+        {
+            get => _farFieldCascadeCount;
+            set => _farFieldCascadeCount = Clamp(value, 1, 4);
+        }
+
+        /// <summary>Hard cap on resident physical pages across all cascades.</summary>
+        public int FarFieldResidentPageBudget
+        {
+            get => _farFieldResidentPageBudget;
+            set => _farFieldResidentPageBudget = Clamp(value, 1, 256);
+        }
+
+        /// <summary>Maximum pages rebuilt each frame; bounds streaming work and hitches.</summary>
+        public int FarFieldPageUpdatesPerFrame
+        {
+            get => _farFieldPageUpdatesPerFrame;
+            set => _farFieldPageUpdatesPerFrame = Clamp(value, 1, 16);
+        }
+
+        /// <summary>World-page radius requested around the camera in each cascade.</summary>
+        public int FarFieldPageRequestRadius
+        {
+            get => _farFieldPageRequestRadius;
+            set => _farFieldPageRequestRadius = Clamp(value, 0, 4);
+        }
+
+        /// <summary>Stable world-space voxel size of cascade zero.</summary>
+        public float FarFieldBaseVoxelSize
+        {
+            get => _farFieldBaseVoxelSize;
+            set => _farFieldBaseVoxelSize = Clamp(value, 0.125f, 64.0f);
+        }
+
+        /// <summary>Geometric voxel-size multiplier between far-field cascades.</summary>
+        public float FarFieldCascadeVoxelScale
+        {
+            get => _farFieldCascadeVoxelScale;
+            set => _farFieldCascadeVoxelScale = Clamp(value, 1.25f, 8.0f);
+        }
+
+        /// <summary>Hard memory ceiling for far-field page pool, distance, and scratch buffers.</summary>
+        public ulong FarFieldMemoryBudgetBytes
+        {
+            get => _farFieldMemoryBudgetBytes;
+            set => _farFieldMemoryBudgetBytes = Clamp(value, 8UL * 1024UL * 1024UL, 512UL * 1024UL * 1024UL);
+        }
+
+        /// <summary>Hard cap for active BLAS and TLAS allocations used by GI ray queries.</summary>
+        public ulong GiAccelerationStructureMemoryBudgetBytes
+        {
+            get => _giAccelerationStructureMemoryBudgetBytes;
+            set => _giAccelerationStructureMemoryBudgetBytes = Clamp(value, 16UL * 1024UL * 1024UL, 2048UL * 1024UL * 1024UL);
+        }
+
+        /// <summary>Maximum camera distance at which static batch instances enter the GI TLAS.</summary>
+        public float GiAccelerationStructureStaticResidentDistance
+        {
+            get => _giAccelerationStructureStaticResidentDistance;
+            set => _giAccelerationStructureStaticResidentDistance = Clamp(value, 1.0f, 100_000.0f);
+        }
+
+        /// <summary>Upper bound on static batch instances selected for a GI TLAS frame.</summary>
+        public int GiAccelerationStructureMaximumStaticInstances
+        {
+            get => _giAccelerationStructureMaximumStaticInstances;
+            set => _giAccelerationStructureMaximumStaticInstances = Clamp(value, 0, 65_536);
+        }
+
+        /// <summary>Frames an unused BLAS remains resident before normal streaming eviction.</summary>
+        public int GiAccelerationStructureEvictionGraceFrames
+        {
+            get => _giAccelerationStructureEvictionGraceFrames;
+            set => _giAccelerationStructureEvictionGraceFrames = Clamp(value, 0, 3_600);
         }
 
         public int DdgiClipmapCascadeCount
@@ -2174,6 +2446,12 @@ namespace Njulf.Rendering.Data
             DdgiSchedulerMode = DdgiSchedulerMode.Gpu;
             DdgiGpuSchedulerReadbackValidationEnabled = false;
             DdgiExhaustiveGatherFallbackEnabled = true;
+            SimpleDdgiStructuredGatherEnabled = true;
+            SimpleDdgiReducedBlendEnabled = true;
+            SimpleDdgiSampledAtlasEnabled = false;
+            SimpleDdgiToroidalScrollingEnabled = true;
+            SimpleDdgiRegionalInvalidationEnabled = true;
+            SimpleDdgiRoughSpecularEnabled = false;
 
             switch (tier)
             {
@@ -2210,6 +2488,7 @@ namespace Njulf.Rendering.Data
                     DdgiProbeUpdateTimeBudgetMilliseconds = 0.75f;
                     DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
                     DdgiGpuTotalUpdateTimeBudgetMilliseconds = 0.75f;
+                    ApplySimpleDdgiQualityTier(tier);
                     break;
                 case DdgiQualityTier.DdgiMedium:
                     DdgiClipmapCascadeCount = 3;
@@ -2244,6 +2523,7 @@ namespace Njulf.Rendering.Data
                     DdgiProbeUpdateTimeBudgetMilliseconds = 1.0f;
                     DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
                     DdgiGpuTotalUpdateTimeBudgetMilliseconds = 1.0f;
+                    ApplySimpleDdgiQualityTier(tier);
                     break;
                 case DdgiQualityTier.DdgiUltra:
                     DdgiClipmapCascadeCount = MaxDdgiClipmapCascadeCount;
@@ -2278,6 +2558,7 @@ namespace Njulf.Rendering.Data
                     DdgiProbeUpdateTimeBudgetMilliseconds = 2.5f;
                     DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
                     DdgiGpuTotalUpdateTimeBudgetMilliseconds = 2.5f;
+                    ApplySimpleDdgiQualityTier(tier);
                     break;
                 default:
                     DdgiClipmapCascadeCount = MaxDdgiClipmapCascadeCount;
@@ -2312,6 +2593,258 @@ namespace Njulf.Rendering.Data
                     DdgiProbeUpdateTimeBudgetMilliseconds = 1.5f;
                     DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
                     DdgiGpuTotalUpdateTimeBudgetMilliseconds = 1.5f;
+                    ApplySimpleDdgiQualityTier(DdgiQualityTier.DdgiHigh);
+                    break;
+            }
+        }
+
+        private void ApplySimpleDdgiQualityTier(DdgiQualityTier tier)
+        {
+            // The simple path has independent bounded resources.  These settings are
+            // intentionally explicit rather than inheriting a fixed 20k+ probe layout
+            // from whatever tier happened to be active previously.
+            SimpleDdgiAdaptiveHysteresisEnabled = true;
+            SimpleDdgiLightingDirtyBoostEnabled = true;
+            SimpleDdgiAdaptiveRaysEnabled = true;
+            SimpleDdgiClassificationSchedulingEnabled = true;
+            SimpleDdgiClassificationReadbackEnabled = true;
+
+            switch (tier)
+            {
+                case DdgiQualityTier.DdgiLow:
+                    SimpleDdgiRingCount = 2;
+                    SimpleDdgiRingBaseSpacing = 1.75f;
+                    SimpleDdgiRingSpacingMultiplier = 2.5f;
+                    SimpleDdgiRingGridSizeX = 12;
+                    SimpleDdgiRingGridSizeY = 6;
+                    SimpleDdgiRingGridSizeZ = 12;
+                    SimpleDdgiRaysPerProbe = 32;
+                    SimpleDdgiMaintenanceRaysPerProbe = 8;
+                    SimpleDdgiProbeUpdatesPerFrame = 128;
+                    FarFieldClipmapResolution = 64;
+                    FarFieldMaxTraceSteps = 96;
+                    break;
+
+                case DdgiQualityTier.DdgiMedium:
+                    SimpleDdgiRingCount = 2;
+                    SimpleDdgiRingBaseSpacing = 1.40f;
+                    SimpleDdgiRingSpacingMultiplier = 2.75f;
+                    SimpleDdgiRingGridSizeX = 16;
+                    SimpleDdgiRingGridSizeY = 8;
+                    SimpleDdgiRingGridSizeZ = 16;
+                    SimpleDdgiRaysPerProbe = 64;
+                    SimpleDdgiMaintenanceRaysPerProbe = 16;
+                    SimpleDdgiProbeUpdatesPerFrame = 384;
+                    FarFieldClipmapResolution = 96;
+                    FarFieldMaxTraceSteps = 128;
+                    break;
+
+                case DdgiQualityTier.DdgiUltra:
+                    SimpleDdgiRingCount = 3;
+                    SimpleDdgiRingBaseSpacing = 0.85f;
+                    SimpleDdgiRingSpacingMultiplier = 3.5f;
+                    SimpleDdgiRingGridSizeX = 24;
+                    SimpleDdgiRingGridSizeY = 12;
+                    SimpleDdgiRingGridSizeZ = 24;
+                    SimpleDdgiRaysPerProbe = 128;
+                    SimpleDdgiMaintenanceRaysPerProbe = 32;
+                    SimpleDdgiProbeUpdatesPerFrame = 1_024;
+                    FarFieldClipmapResolution = 192;
+                    FarFieldMaxTraceSteps = 256;
+                    break;
+
+                default:
+                    SimpleDdgiRingCount = 3;
+                    SimpleDdgiRingBaseSpacing = 1.0f;
+                    SimpleDdgiRingSpacingMultiplier = 3.25f;
+                    SimpleDdgiRingGridSizeX = 20;
+                    SimpleDdgiRingGridSizeY = 10;
+                    SimpleDdgiRingGridSizeZ = 20;
+                    SimpleDdgiRaysPerProbe = 96;
+                    SimpleDdgiMaintenanceRaysPerProbe = 24;
+                    SimpleDdgiProbeUpdatesPerFrame = 768;
+                    FarFieldClipmapResolution = 128;
+                    FarFieldMaxTraceSteps = 192;
+                    break;
+            }
+
+            ApplySimpleDdgiRingQualityTier(tier);
+            ApplyFarFieldPageQualityTier(tier);
+            ApplyGiAccelerationStructureQualityTier(tier);
+        }
+
+        private void ApplySimpleDdgiRingQualityTier(DdgiQualityTier tier)
+        {
+            switch (tier)
+            {
+                case DdgiQualityTier.DdgiLow:
+                    SimpleDdgiNearFullRaysPerProbe = 32;
+                    SimpleDdgiMidFullRaysPerProbe = 16;
+                    SimpleDdgiFarFullRaysPerProbe = 8;
+                    SimpleDdgiNearMaintenanceRaysPerProbe = 8;
+                    SimpleDdgiMidMaintenanceRaysPerProbe = 4;
+                    SimpleDdgiFarMaintenanceRaysPerProbe = 2;
+                    SimpleDdgiNearMinimumUpdateQuota = 64;
+                    SimpleDdgiMidMinimumUpdateQuota = 24;
+                    SimpleDdgiFarMinimumUpdateQuota = 8;
+                    SimpleDdgiNearMaximumUpdateQuota = 112;
+                    SimpleDdgiMidMaximumUpdateQuota = 48;
+                    SimpleDdgiFarMaximumUpdateQuota = 24;
+                    SimpleDdgiNearMaterialTextureMaxCascade = 0;
+                    SimpleDdgiMidMaterialTextureMaxCascade = -1;
+                    SimpleDdgiFarMaterialTextureMaxCascade = -1;
+                    SimpleDdgiNearMaxShadedLights = 4;
+                    SimpleDdgiMidMaxShadedLights = 2;
+                    SimpleDdgiFarMaxShadedLights = 1;
+                    break;
+
+                case DdgiQualityTier.DdgiMedium:
+                    SimpleDdgiNearFullRaysPerProbe = 64;
+                    SimpleDdgiMidFullRaysPerProbe = 32;
+                    SimpleDdgiFarFullRaysPerProbe = 16;
+                    SimpleDdgiNearMaintenanceRaysPerProbe = 16;
+                    SimpleDdgiMidMaintenanceRaysPerProbe = 8;
+                    SimpleDdgiFarMaintenanceRaysPerProbe = 4;
+                    SimpleDdgiNearMinimumUpdateQuota = 192;
+                    SimpleDdgiMidMinimumUpdateQuota = 72;
+                    SimpleDdgiFarMinimumUpdateQuota = 24;
+                    SimpleDdgiNearMaximumUpdateQuota = 336;
+                    SimpleDdgiMidMaximumUpdateQuota = 144;
+                    SimpleDdgiFarMaximumUpdateQuota = 64;
+                    SimpleDdgiNearMaterialTextureMaxCascade = 1;
+                    SimpleDdgiMidMaterialTextureMaxCascade = 0;
+                    SimpleDdgiFarMaterialTextureMaxCascade = -1;
+                    SimpleDdgiNearMaxShadedLights = 6;
+                    SimpleDdgiMidMaxShadedLights = 3;
+                    SimpleDdgiFarMaxShadedLights = 1;
+                    break;
+
+                case DdgiQualityTier.DdgiUltra:
+                    SimpleDdgiNearFullRaysPerProbe = 192;
+                    SimpleDdgiMidFullRaysPerProbe = 96;
+                    SimpleDdgiFarFullRaysPerProbe = 48;
+                    SimpleDdgiNearMaintenanceRaysPerProbe = 48;
+                    SimpleDdgiMidMaintenanceRaysPerProbe = 24;
+                    SimpleDdgiFarMaintenanceRaysPerProbe = 12;
+                    SimpleDdgiNearMinimumUpdateQuota = 512;
+                    SimpleDdgiMidMinimumUpdateQuota = 192;
+                    SimpleDdgiFarMinimumUpdateQuota = 64;
+                    SimpleDdgiNearMaximumUpdateQuota = 896;
+                    SimpleDdgiMidMaximumUpdateQuota = 384;
+                    SimpleDdgiFarMaximumUpdateQuota = 160;
+                    SimpleDdgiNearMaterialTextureMaxCascade = 2;
+                    SimpleDdgiMidMaterialTextureMaxCascade = 1;
+                    SimpleDdgiFarMaterialTextureMaxCascade = 0;
+                    SimpleDdgiNearMaxShadedLights = 12;
+                    SimpleDdgiMidMaxShadedLights = 6;
+                    SimpleDdgiFarMaxShadedLights = 3;
+                    break;
+
+                default:
+                    SimpleDdgiNearFullRaysPerProbe = 96;
+                    SimpleDdgiMidFullRaysPerProbe = 48;
+                    SimpleDdgiFarFullRaysPerProbe = 24;
+                    SimpleDdgiNearMaintenanceRaysPerProbe = 24;
+                    SimpleDdgiMidMaintenanceRaysPerProbe = 12;
+                    SimpleDdgiFarMaintenanceRaysPerProbe = 6;
+                    SimpleDdgiNearMinimumUpdateQuota = 384;
+                    SimpleDdgiMidMinimumUpdateQuota = 144;
+                    SimpleDdgiFarMinimumUpdateQuota = 48;
+                    SimpleDdgiNearMaximumUpdateQuota = 672;
+                    SimpleDdgiMidMaximumUpdateQuota = 288;
+                    SimpleDdgiFarMaximumUpdateQuota = 120;
+                    SimpleDdgiNearMaterialTextureMaxCascade = 1;
+                    SimpleDdgiMidMaterialTextureMaxCascade = 0;
+                    SimpleDdgiFarMaterialTextureMaxCascade = -1;
+                    SimpleDdgiNearMaxShadedLights = 8;
+                    SimpleDdgiMidMaxShadedLights = 4;
+                    SimpleDdgiFarMaxShadedLights = 2;
+                    break;
+            }
+        }
+
+        private void ApplyFarFieldPageQualityTier(DdgiQualityTier tier)
+        {
+            FarFieldPagedEnabled = true;
+            switch (tier)
+            {
+                case DdgiQualityTier.DdgiLow:
+                    FarFieldCascadeCount = 2;
+                    FarFieldPageResolution = 16;
+                    FarFieldResidentPageBudget = 12;
+                    FarFieldPageUpdatesPerFrame = 1;
+                    FarFieldPageRequestRadius = 1;
+                    FarFieldBaseVoxelSize = 2.0f;
+                    FarFieldCascadeVoxelScale = 3.0f;
+                    FarFieldMemoryBudgetBytes = 24UL * 1024UL * 1024UL;
+                    break;
+
+                case DdgiQualityTier.DdgiMedium:
+                    FarFieldCascadeCount = 3;
+                    FarFieldPageResolution = 24;
+                    FarFieldResidentPageBudget = 24;
+                    FarFieldPageUpdatesPerFrame = 1;
+                    FarFieldPageRequestRadius = 1;
+                    FarFieldBaseVoxelSize = 1.5f;
+                    FarFieldCascadeVoxelScale = 3.0f;
+                    FarFieldMemoryBudgetBytes = 48UL * 1024UL * 1024UL;
+                    break;
+
+                case DdgiQualityTier.DdgiUltra:
+                    FarFieldCascadeCount = 4;
+                    FarFieldPageResolution = 48;
+                    FarFieldResidentPageBudget = 64;
+                    FarFieldPageUpdatesPerFrame = 2;
+                    FarFieldPageRequestRadius = 1;
+                    FarFieldBaseVoxelSize = 0.75f;
+                    FarFieldCascadeVoxelScale = 2.5f;
+                    FarFieldMemoryBudgetBytes = 192UL * 1024UL * 1024UL;
+                    break;
+
+                default:
+                    FarFieldCascadeCount = 3;
+                    FarFieldPageResolution = 32;
+                    FarFieldResidentPageBudget = 48;
+                    FarFieldPageUpdatesPerFrame = 1;
+                    FarFieldPageRequestRadius = 1;
+                    FarFieldBaseVoxelSize = 1.0f;
+                    FarFieldCascadeVoxelScale = 3.0f;
+                    FarFieldMemoryBudgetBytes = 96UL * 1024UL * 1024UL;
+                    break;
+            }
+        }
+
+        private void ApplyGiAccelerationStructureQualityTier(DdgiQualityTier tier)
+        {
+            StreamedGiAccelerationStructuresEnabled = true;
+            switch (tier)
+            {
+                case DdgiQualityTier.DdgiLow:
+                    GiAccelerationStructureMemoryBudgetBytes = 64UL * 1024UL * 1024UL;
+                    GiAccelerationStructureStaticResidentDistance = 96.0f;
+                    GiAccelerationStructureMaximumStaticInstances = 1_024;
+                    GiAccelerationStructureEvictionGraceFrames = 60;
+                    break;
+
+                case DdgiQualityTier.DdgiMedium:
+                    GiAccelerationStructureMemoryBudgetBytes = 128UL * 1024UL * 1024UL;
+                    GiAccelerationStructureStaticResidentDistance = 160.0f;
+                    GiAccelerationStructureMaximumStaticInstances = 4_096;
+                    GiAccelerationStructureEvictionGraceFrames = 90;
+                    break;
+
+                case DdgiQualityTier.DdgiUltra:
+                    GiAccelerationStructureMemoryBudgetBytes = 512UL * 1024UL * 1024UL;
+                    GiAccelerationStructureStaticResidentDistance = 384.0f;
+                    GiAccelerationStructureMaximumStaticInstances = 16_384;
+                    GiAccelerationStructureEvictionGraceFrames = 240;
+                    break;
+
+                default:
+                    GiAccelerationStructureMemoryBudgetBytes = 256UL * 1024UL * 1024UL;
+                    GiAccelerationStructureStaticResidentDistance = 256.0f;
+                    GiAccelerationStructureMaximumStaticInstances = 8_192;
+                    GiAccelerationStructureEvictionGraceFrames = 120;
                     break;
             }
         }
@@ -2643,13 +3176,70 @@ namespace Njulf.Rendering.Data
 
     public sealed class AsyncComputeSettings
     {
-        public bool Enabled { get; set; }
+        /// <summary>
+        /// Defaults to <see cref="AsyncComputeMode.Auto"/> for new installations. Auto starts on
+        /// the graphics queue, collects isolated timing samples, and only promotes a complete
+        /// resource plan after it proves a sustained benefit. Pre-v3 files without a Mode keep
+        /// their legacy graphics-only behavior during settings migration.
+        /// </summary>
+        public AsyncComputeMode Mode { get; set; } = AsyncComputeMode.Auto;
+
+        /// <summary>
+        /// Compatibility shim for settings written before <see cref="Mode"/> existed.  Setting this
+        /// to true is intentionally a validation request rather than a production auto-enable: an
+        /// old explicit opt-in must never silently become a profitability decision.
+        /// </summary>
+        [Obsolete("Use Mode. Legacy true maps to ForceEnabledForValidation.")]
+        public bool Enabled
+        {
+            get => Mode != AsyncComputeMode.Disabled;
+            set => Mode = value
+                ? AsyncComputeMode.ForceEnabledForValidation
+                : AsyncComputeMode.Disabled;
+        }
+
         public bool HiZBuildEnabled { get; set; } = true;
         public bool AmbientOcclusionBlurEnabled { get; set; } = true;
+        /// <summary>
+        /// Keeps the async SSGI candidate opt-in while the DDGI path is being finalized.
+        /// </summary>
+        public bool SsgiChainEnabled { get; set; }
         public bool FogEnabled { get; set; } = true;
         public bool BloomEnabled { get; set; } = true;
-        public bool DdgiUpdateEnabled { get; set; } = true;
+        public bool SimpleDdgiUpdateEnabled { get; set; } = true;
+        public bool FullDdgiUpdateEnabled { get; set; } = true;
+        public bool FarFieldClipmapBakeEnabled { get; set; } = true;
         public bool GpuParticlesEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Compatibility alias for the former single DDGI toggle.  New configurations can control
+        /// Simple DDGI and full DDGI independently.
+        /// </summary>
+        [Obsolete("Use SimpleDdgiUpdateEnabled and FullDdgiUpdateEnabled.")]
+        public bool DdgiUpdateEnabled
+        {
+            get => SimpleDdgiUpdateEnabled && FullDdgiUpdateEnabled;
+            set
+            {
+                SimpleDdgiUpdateEnabled = value;
+                FullDdgiUpdateEnabled = value;
+            }
+        }
+
+        /// <summary>Minimum samples retained for each graphics-only/async timing window.</summary>
+        public int AutoMinimumSampleCount { get; set; } = 30;
+
+        /// <summary>Minimum warm-up frames before Auto may promote a path.</summary>
+        public int AutoWarmupFrameCount { get; set; } = 60;
+
+        /// <summary>Absolute GPU frame-time benefit required by Auto, in milliseconds.</summary>
+        public float AutoMinimumAbsoluteBenefitMilliseconds { get; set; } = 0.25f;
+
+        /// <summary>Relative GPU frame-time benefit required by Auto.</summary>
+        public float AutoMinimumRelativeBenefit { get; set; } = 0.03f;
+
+        /// <summary>Frames a path remains in its current decision before Auto may flip it again.</summary>
+        public int AutoDecisionCooldownFrames { get; set; } = 180;
     }
 
     public sealed class RenderSettings
@@ -2712,6 +3302,9 @@ namespace Njulf.Rendering.Data
         {
             QualityPreset = preset;
             ShowRawHdrSceneColor = false;
+            // Simple DDGI is the production DDGI implementation. Presets restore
+            // that default so scene changes cannot inherit the legacy backend.
+            GlobalIllumination.DdgiSimpleEnabled = true;
 
             switch (preset)
             {
@@ -3045,7 +3638,9 @@ namespace Njulf.Rendering.Data
 
         private sealed record RenderSettingsFile
         {
-            public int Version { get; init; } = 1;
+            // A missing version is legacy by definition. FromSettings always writes v3, which
+            // lets deserialization distinguish a new schema file from pre-policy snapshots.
+            public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
             public DynamicResolutionFile DynamicResolution { get; init; } = new();
@@ -3071,6 +3666,7 @@ namespace Njulf.Rendering.Data
             {
                 return new RenderSettingsFile
                 {
+                    Version = 3,
                     QualityPreset = settings.QualityPreset,
                     ResolutionScale = settings.ResolutionScale,
                     DynamicResolution = DynamicResolutionFile.FromSettings(settings.DynamicResolution),
@@ -3113,7 +3709,10 @@ namespace Njulf.Rendering.Data
                 Foliage.ApplyTo(settings.Foliage);
                 SceneSubmission.ApplyTo(settings.SceneSubmission);
                 HiZOcclusion.ApplyTo(settings.HiZOcclusion);
-                AsyncCompute.ApplyTo(settings.AsyncCompute);
+                // Version 3 introduced Auto as the fresh-install default. Older files did not
+                // have a trustworthy policy field, so retain their graphics-only behavior when
+                // Mode is absent instead of silently changing an existing installation.
+                AsyncCompute.ApplyTo(settings.AsyncCompute, missingModeMeansDisabled: !Version.HasValue || Version.Value < 3);
                 settings.Diagnostics.GpuMeshletCountersEnabled = GpuMeshletCountersEnabled;
                 settings.Diagnostics.DdgiForwardEstimateCountersEnabled = DdgiForwardEstimateCountersEnabled;
             }
@@ -3126,7 +3725,8 @@ namespace Njulf.Rendering.Data
             public GlobalIlluminationDebugView DebugView { get; init; } = GlobalIlluminationDebugView.None;
             public float IndirectIntensity { get; init; } = 1.0f;
             public float EnvironmentFallbackIntensity { get; init; } = 1.0f;
-            public bool UseSsgi { get; init; } = true;
+            // Keep partially specified settings files on the DDGI-focused default.
+            public bool UseSsgi { get; init; }
             public bool UseDdgi { get; init; } = true;
             public bool UseRayQueryBackend { get; init; }
             public DdgiQualityTier DdgiQualityTier { get; init; } = DdgiQualityTier.DdgiHigh;
@@ -3144,7 +3744,7 @@ namespace Njulf.Rendering.Data
             public bool DdgiDebugForceProbeActive { get; init; }
             public bool DdgiThinWallPolicyEnabled { get; init; } = true;
             public bool DdgiRoomSpacingScaledBiasEnabled { get; init; } = true;
-            public bool DdgiSimpleEnabled { get; init; }
+            public bool DdgiSimpleEnabled { get; init; } = true;
             public SimpleDdgiAuthoredVolume[] SimpleDdgiAuthoredVolumes { get; init; } = Array.Empty<SimpleDdgiAuthoredVolume>();
             public bool SimpleDdgiSharedMemoryBlendEnabled { get; init; } = true;
             public bool SimpleDdgiClassificationSchedulingEnabled { get; init; } = true;
@@ -3153,9 +3753,14 @@ namespace Njulf.Rendering.Data
             public bool SimpleDdgiLightingDirtyBoostEnabled { get; init; } = true;
             public bool SimpleDdgiDynamicGeometryDirtyBoostEnabled { get; init; } = true;
             public bool SimpleDdgiAdaptiveRaysEnabled { get; init; } = true;
+            public bool SimpleDdgiStructuredGatherEnabled { get; init; } = true;
+            public bool SimpleDdgiReducedBlendEnabled { get; init; } = true;
+            public bool SimpleDdgiSampledAtlasEnabled { get; init; }
+            public bool SimpleDdgiToroidalScrollingEnabled { get; init; } = true;
+            public bool SimpleDdgiRegionalInvalidationEnabled { get; init; } = true;
             public bool SimpleDdgiFogEnabled { get; init; } = true;
             public bool SimpleDdgiParticlesEnabled { get; init; } = true;
-            public bool SimpleDdgiRoughSpecularEnabled { get; init; } = true;
+            public bool SimpleDdgiRoughSpecularEnabled { get; init; }
             public float SimpleDdgiProbeSpacing { get; init; } = 1.25f;
             public int SimpleDdgiRingCount { get; init; } = 3;
             public float SimpleDdgiRingBaseSpacing { get; init; } = 1.0f;
@@ -3165,6 +3770,24 @@ namespace Njulf.Rendering.Data
             public int SimpleDdgiRingGridSizeZ { get; init; } = 24;
             public int SimpleDdgiRaysPerProbe { get; init; } = 128;
             public int SimpleDdgiMaintenanceRaysPerProbe { get; init; } = 32;
+            public int SimpleDdgiNearFullRaysPerProbe { get; init; } = 128;
+            public int SimpleDdgiMidFullRaysPerProbe { get; init; } = 64;
+            public int SimpleDdgiFarFullRaysPerProbe { get; init; } = 32;
+            public int SimpleDdgiNearMaintenanceRaysPerProbe { get; init; } = 32;
+            public int SimpleDdgiMidMaintenanceRaysPerProbe { get; init; } = 16;
+            public int SimpleDdgiFarMaintenanceRaysPerProbe { get; init; } = 8;
+            public int SimpleDdgiNearMinimumUpdateQuota { get; init; } = 128;
+            public int SimpleDdgiMidMinimumUpdateQuota { get; init; } = 48;
+            public int SimpleDdgiFarMinimumUpdateQuota { get; init; } = 16;
+            public int SimpleDdgiNearMaximumUpdateQuota { get; init; } = 1_024;
+            public int SimpleDdgiMidMaximumUpdateQuota { get; init; } = 512;
+            public int SimpleDdgiFarMaximumUpdateQuota { get; init; } = 256;
+            public int SimpleDdgiNearMaterialTextureMaxCascade { get; init; } = 1;
+            public int SimpleDdgiMidMaterialTextureMaxCascade { get; init; } = 0;
+            public int SimpleDdgiFarMaterialTextureMaxCascade { get; init; } = -1;
+            public int SimpleDdgiNearMaxShadedLights { get; init; } = 8;
+            public int SimpleDdgiMidMaxShadedLights { get; init; } = 4;
+            public int SimpleDdgiFarMaxShadedLights { get; init; } = 2;
             public float SimpleDdgiHysteresis { get; init; } = 0.97f;
             public float SimpleDdgiHysteresisChangeThreshold { get; init; } = 0.25f;
             public float SimpleDdgiHysteresisStepThreshold { get; init; } = 0.80f;
@@ -3173,12 +3796,26 @@ namespace Njulf.Rendering.Data
             public float SimpleDdgiStableMaintenanceEmaThreshold { get; init; } = 0.03f;
             public int SimpleDdgiProbeUpdatesPerFrame { get; init; } = 2_048;
             public bool FarFieldClipmapEnabled { get; init; }
+            public bool FarFieldPagedEnabled { get; init; } = true;
             public bool FarFieldSkyVisibilityEnabled { get; init; } = true;
             public bool FarFieldSunShadowEnabled { get; init; } = true;
             public int FarFieldClipmapResolution { get; init; } = 128;
             public float FarFieldStartDistance { get; init; } = 12.0f;
             public int FarFieldMaxTraceSteps { get; init; } = 256;
+            public int FarFieldPageResolution { get; init; } = 32;
+            public int FarFieldCascadeCount { get; init; } = 3;
+            public int FarFieldResidentPageBudget { get; init; } = 48;
+            public int FarFieldPageUpdatesPerFrame { get; init; } = 1;
+            public int FarFieldPageRequestRadius { get; init; } = 1;
+            public float FarFieldBaseVoxelSize { get; init; } = 1.0f;
+            public float FarFieldCascadeVoxelScale { get; init; } = 3.0f;
+            public ulong FarFieldMemoryBudgetBytes { get; init; } = 96UL * 1024UL * 1024UL;
             public bool FarFieldForceAll { get; init; }
+            public bool StreamedGiAccelerationStructuresEnabled { get; init; } = true;
+            public ulong GiAccelerationStructureMemoryBudgetBytes { get; init; } = 256UL * 1024UL * 1024UL;
+            public float GiAccelerationStructureStaticResidentDistance { get; init; } = 256.0f;
+            public int GiAccelerationStructureMaximumStaticInstances { get; init; } = 8_192;
+            public int GiAccelerationStructureEvictionGraceFrames { get; init; } = 120;
             public int DdgiClipmapCascadeCount { get; init; } = GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount;
             public int DdgiClipmapProbeCountX { get; init; } = 24;
             public int DdgiClipmapProbeCountY { get; init; } = 14;
@@ -3289,6 +3926,11 @@ namespace Njulf.Rendering.Data
                     SimpleDdgiLightingDirtyBoostEnabled = settings.SimpleDdgiLightingDirtyBoostEnabled,
                     SimpleDdgiDynamicGeometryDirtyBoostEnabled = settings.SimpleDdgiDynamicGeometryDirtyBoostEnabled,
                     SimpleDdgiAdaptiveRaysEnabled = settings.SimpleDdgiAdaptiveRaysEnabled,
+                    SimpleDdgiStructuredGatherEnabled = settings.SimpleDdgiStructuredGatherEnabled,
+                    SimpleDdgiReducedBlendEnabled = settings.SimpleDdgiReducedBlendEnabled,
+                    SimpleDdgiSampledAtlasEnabled = settings.SimpleDdgiSampledAtlasEnabled,
+                    SimpleDdgiToroidalScrollingEnabled = settings.SimpleDdgiToroidalScrollingEnabled,
+                    SimpleDdgiRegionalInvalidationEnabled = settings.SimpleDdgiRegionalInvalidationEnabled,
                     SimpleDdgiFogEnabled = settings.SimpleDdgiFogEnabled,
                     SimpleDdgiParticlesEnabled = settings.SimpleDdgiParticlesEnabled,
                     SimpleDdgiRoughSpecularEnabled = settings.SimpleDdgiRoughSpecularEnabled,
@@ -3301,6 +3943,24 @@ namespace Njulf.Rendering.Data
                     SimpleDdgiRingGridSizeZ = settings.SimpleDdgiRingGridSizeZ,
                     SimpleDdgiRaysPerProbe = settings.SimpleDdgiRaysPerProbe,
                     SimpleDdgiMaintenanceRaysPerProbe = settings.SimpleDdgiMaintenanceRaysPerProbe,
+                    SimpleDdgiNearFullRaysPerProbe = settings.SimpleDdgiNearFullRaysPerProbe,
+                    SimpleDdgiMidFullRaysPerProbe = settings.SimpleDdgiMidFullRaysPerProbe,
+                    SimpleDdgiFarFullRaysPerProbe = settings.SimpleDdgiFarFullRaysPerProbe,
+                    SimpleDdgiNearMaintenanceRaysPerProbe = settings.SimpleDdgiNearMaintenanceRaysPerProbe,
+                    SimpleDdgiMidMaintenanceRaysPerProbe = settings.SimpleDdgiMidMaintenanceRaysPerProbe,
+                    SimpleDdgiFarMaintenanceRaysPerProbe = settings.SimpleDdgiFarMaintenanceRaysPerProbe,
+                    SimpleDdgiNearMinimumUpdateQuota = settings.SimpleDdgiNearMinimumUpdateQuota,
+                    SimpleDdgiMidMinimumUpdateQuota = settings.SimpleDdgiMidMinimumUpdateQuota,
+                    SimpleDdgiFarMinimumUpdateQuota = settings.SimpleDdgiFarMinimumUpdateQuota,
+                    SimpleDdgiNearMaximumUpdateQuota = settings.SimpleDdgiNearMaximumUpdateQuota,
+                    SimpleDdgiMidMaximumUpdateQuota = settings.SimpleDdgiMidMaximumUpdateQuota,
+                    SimpleDdgiFarMaximumUpdateQuota = settings.SimpleDdgiFarMaximumUpdateQuota,
+                    SimpleDdgiNearMaterialTextureMaxCascade = settings.SimpleDdgiNearMaterialTextureMaxCascade,
+                    SimpleDdgiMidMaterialTextureMaxCascade = settings.SimpleDdgiMidMaterialTextureMaxCascade,
+                    SimpleDdgiFarMaterialTextureMaxCascade = settings.SimpleDdgiFarMaterialTextureMaxCascade,
+                    SimpleDdgiNearMaxShadedLights = settings.SimpleDdgiNearMaxShadedLights,
+                    SimpleDdgiMidMaxShadedLights = settings.SimpleDdgiMidMaxShadedLights,
+                    SimpleDdgiFarMaxShadedLights = settings.SimpleDdgiFarMaxShadedLights,
                     SimpleDdgiHysteresis = settings.SimpleDdgiHysteresis,
                     SimpleDdgiHysteresisChangeThreshold = settings.SimpleDdgiHysteresisChangeThreshold,
                     SimpleDdgiHysteresisStepThreshold = settings.SimpleDdgiHysteresisStepThreshold,
@@ -3309,12 +3969,26 @@ namespace Njulf.Rendering.Data
                     SimpleDdgiStableMaintenanceEmaThreshold = settings.SimpleDdgiStableMaintenanceEmaThreshold,
                     SimpleDdgiProbeUpdatesPerFrame = settings.SimpleDdgiProbeUpdatesPerFrame,
                     FarFieldClipmapEnabled = settings.FarFieldClipmapEnabled,
+                    FarFieldPagedEnabled = settings.FarFieldPagedEnabled,
                     FarFieldSkyVisibilityEnabled = settings.FarFieldSkyVisibilityEnabled,
                     FarFieldSunShadowEnabled = settings.FarFieldSunShadowEnabled,
                     FarFieldClipmapResolution = settings.FarFieldClipmapResolution,
                     FarFieldStartDistance = settings.FarFieldStartDistance,
                     FarFieldMaxTraceSteps = settings.FarFieldMaxTraceSteps,
+                    FarFieldPageResolution = settings.FarFieldPageResolution,
+                    FarFieldCascadeCount = settings.FarFieldCascadeCount,
+                    FarFieldResidentPageBudget = settings.FarFieldResidentPageBudget,
+                    FarFieldPageUpdatesPerFrame = settings.FarFieldPageUpdatesPerFrame,
+                    FarFieldPageRequestRadius = settings.FarFieldPageRequestRadius,
+                    FarFieldBaseVoxelSize = settings.FarFieldBaseVoxelSize,
+                    FarFieldCascadeVoxelScale = settings.FarFieldCascadeVoxelScale,
+                    FarFieldMemoryBudgetBytes = settings.FarFieldMemoryBudgetBytes,
                     FarFieldForceAll = settings.FarFieldForceAll,
+                    StreamedGiAccelerationStructuresEnabled = settings.StreamedGiAccelerationStructuresEnabled,
+                    GiAccelerationStructureMemoryBudgetBytes = settings.GiAccelerationStructureMemoryBudgetBytes,
+                    GiAccelerationStructureStaticResidentDistance = settings.GiAccelerationStructureStaticResidentDistance,
+                    GiAccelerationStructureMaximumStaticInstances = settings.GiAccelerationStructureMaximumStaticInstances,
+                    GiAccelerationStructureEvictionGraceFrames = settings.GiAccelerationStructureEvictionGraceFrames,
                     DdgiClipmapCascadeCount = settings.DdgiClipmapCascadeCount,
                     DdgiClipmapProbeCountX = settings.DdgiClipmapProbeCountX,
                     DdgiClipmapProbeCountY = settings.DdgiClipmapProbeCountY,
@@ -3427,6 +4101,11 @@ namespace Njulf.Rendering.Data
                 settings.SimpleDdgiLightingDirtyBoostEnabled = SimpleDdgiLightingDirtyBoostEnabled;
                 settings.SimpleDdgiDynamicGeometryDirtyBoostEnabled = SimpleDdgiDynamicGeometryDirtyBoostEnabled;
                 settings.SimpleDdgiAdaptiveRaysEnabled = SimpleDdgiAdaptiveRaysEnabled;
+                settings.SimpleDdgiStructuredGatherEnabled = SimpleDdgiStructuredGatherEnabled;
+                settings.SimpleDdgiReducedBlendEnabled = SimpleDdgiReducedBlendEnabled;
+                settings.SimpleDdgiSampledAtlasEnabled = SimpleDdgiSampledAtlasEnabled;
+                settings.SimpleDdgiToroidalScrollingEnabled = SimpleDdgiToroidalScrollingEnabled;
+                settings.SimpleDdgiRegionalInvalidationEnabled = SimpleDdgiRegionalInvalidationEnabled;
                 settings.SimpleDdgiFogEnabled = SimpleDdgiFogEnabled;
                 settings.SimpleDdgiParticlesEnabled = SimpleDdgiParticlesEnabled;
                 settings.SimpleDdgiRoughSpecularEnabled = SimpleDdgiRoughSpecularEnabled;
@@ -3439,6 +4118,24 @@ namespace Njulf.Rendering.Data
                 settings.SimpleDdgiRingGridSizeZ = SimpleDdgiRingGridSizeZ;
                 settings.SimpleDdgiRaysPerProbe = SimpleDdgiRaysPerProbe;
                 settings.SimpleDdgiMaintenanceRaysPerProbe = SimpleDdgiMaintenanceRaysPerProbe;
+                settings.SimpleDdgiNearFullRaysPerProbe = SimpleDdgiNearFullRaysPerProbe;
+                settings.SimpleDdgiMidFullRaysPerProbe = SimpleDdgiMidFullRaysPerProbe;
+                settings.SimpleDdgiFarFullRaysPerProbe = SimpleDdgiFarFullRaysPerProbe;
+                settings.SimpleDdgiNearMaintenanceRaysPerProbe = SimpleDdgiNearMaintenanceRaysPerProbe;
+                settings.SimpleDdgiMidMaintenanceRaysPerProbe = SimpleDdgiMidMaintenanceRaysPerProbe;
+                settings.SimpleDdgiFarMaintenanceRaysPerProbe = SimpleDdgiFarMaintenanceRaysPerProbe;
+                settings.SimpleDdgiNearMinimumUpdateQuota = SimpleDdgiNearMinimumUpdateQuota;
+                settings.SimpleDdgiMidMinimumUpdateQuota = SimpleDdgiMidMinimumUpdateQuota;
+                settings.SimpleDdgiFarMinimumUpdateQuota = SimpleDdgiFarMinimumUpdateQuota;
+                settings.SimpleDdgiNearMaximumUpdateQuota = SimpleDdgiNearMaximumUpdateQuota;
+                settings.SimpleDdgiMidMaximumUpdateQuota = SimpleDdgiMidMaximumUpdateQuota;
+                settings.SimpleDdgiFarMaximumUpdateQuota = SimpleDdgiFarMaximumUpdateQuota;
+                settings.SimpleDdgiNearMaterialTextureMaxCascade = SimpleDdgiNearMaterialTextureMaxCascade;
+                settings.SimpleDdgiMidMaterialTextureMaxCascade = SimpleDdgiMidMaterialTextureMaxCascade;
+                settings.SimpleDdgiFarMaterialTextureMaxCascade = SimpleDdgiFarMaterialTextureMaxCascade;
+                settings.SimpleDdgiNearMaxShadedLights = SimpleDdgiNearMaxShadedLights;
+                settings.SimpleDdgiMidMaxShadedLights = SimpleDdgiMidMaxShadedLights;
+                settings.SimpleDdgiFarMaxShadedLights = SimpleDdgiFarMaxShadedLights;
                 settings.SimpleDdgiHysteresis = SimpleDdgiHysteresis;
                 settings.SimpleDdgiHysteresisChangeThreshold = SimpleDdgiHysteresisChangeThreshold;
                 settings.SimpleDdgiHysteresisStepThreshold = SimpleDdgiHysteresisStepThreshold;
@@ -3447,12 +4144,26 @@ namespace Njulf.Rendering.Data
                 settings.SimpleDdgiStableMaintenanceEmaThreshold = SimpleDdgiStableMaintenanceEmaThreshold;
                 settings.SimpleDdgiProbeUpdatesPerFrame = SimpleDdgiProbeUpdatesPerFrame;
                 settings.FarFieldClipmapEnabled = FarFieldClipmapEnabled;
+                settings.FarFieldPagedEnabled = FarFieldPagedEnabled;
                 settings.FarFieldSkyVisibilityEnabled = FarFieldSkyVisibilityEnabled;
                 settings.FarFieldSunShadowEnabled = FarFieldSunShadowEnabled;
                 settings.FarFieldClipmapResolution = FarFieldClipmapResolution;
                 settings.FarFieldStartDistance = FarFieldStartDistance;
                 settings.FarFieldMaxTraceSteps = FarFieldMaxTraceSteps;
+                settings.FarFieldPageResolution = FarFieldPageResolution;
+                settings.FarFieldCascadeCount = FarFieldCascadeCount;
+                settings.FarFieldResidentPageBudget = FarFieldResidentPageBudget;
+                settings.FarFieldPageUpdatesPerFrame = FarFieldPageUpdatesPerFrame;
+                settings.FarFieldPageRequestRadius = FarFieldPageRequestRadius;
+                settings.FarFieldBaseVoxelSize = FarFieldBaseVoxelSize;
+                settings.FarFieldCascadeVoxelScale = FarFieldCascadeVoxelScale;
+                settings.FarFieldMemoryBudgetBytes = FarFieldMemoryBudgetBytes;
                 settings.FarFieldForceAll = FarFieldForceAll;
+                settings.StreamedGiAccelerationStructuresEnabled = StreamedGiAccelerationStructuresEnabled;
+                settings.GiAccelerationStructureMemoryBudgetBytes = GiAccelerationStructureMemoryBudgetBytes;
+                settings.GiAccelerationStructureStaticResidentDistance = GiAccelerationStructureStaticResidentDistance;
+                settings.GiAccelerationStructureMaximumStaticInstances = GiAccelerationStructureMaximumStaticInstances;
+                settings.GiAccelerationStructureEvictionGraceFrames = GiAccelerationStructureEvictionGraceFrames;
                 settings.DdgiClipmapCascadeCount = DdgiClipmapCascadeCount;
                 settings.DdgiClipmapProbeCountX = DdgiClipmapProbeCountX;
                 settings.DdgiClipmapProbeCountY = DdgiClipmapProbeCountY;
@@ -3535,38 +4246,82 @@ namespace Njulf.Rendering.Data
 
         private sealed record AsyncComputeFile
         {
-            public bool Enabled { get; init; }
+            public AsyncComputeMode? Mode { get; init; }
+
+            // Version 1 persisted a single bool. Keep accepting it, but do not emit it from
+            // new files so a modern mode cannot be overwritten by JSON property ordering.
+            [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+            public bool? Enabled { get; init; }
             public bool HiZBuildEnabled { get; init; } = true;
             public bool AmbientOcclusionBlurEnabled { get; init; } = true;
+            // Keep partially specified settings files from scheduling SSGI unexpectedly.
+            public bool SsgiChainEnabled { get; init; }
             public bool FogEnabled { get; init; } = true;
             public bool BloomEnabled { get; init; } = true;
-            public bool DdgiUpdateEnabled { get; init; } = true;
+            public bool SimpleDdgiUpdateEnabled { get; init; } = true;
+            public bool FullDdgiUpdateEnabled { get; init; } = true;
+            public bool FarFieldClipmapBakeEnabled { get; init; } = true;
             public bool GpuParticlesEnabled { get; init; } = true;
+            [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+            public bool? DdgiUpdateEnabled { get; init; }
+            public int AutoMinimumSampleCount { get; init; } = 30;
+            public int AutoWarmupFrameCount { get; init; } = 60;
+            public float AutoMinimumAbsoluteBenefitMilliseconds { get; init; } = 0.25f;
+            public float AutoMinimumRelativeBenefit { get; init; } = 0.03f;
+            public int AutoDecisionCooldownFrames { get; init; } = 180;
 
             public static AsyncComputeFile FromSettings(AsyncComputeSettings settings)
             {
                 return new AsyncComputeFile
                 {
-                    Enabled = settings.Enabled,
+                    Mode = settings.Mode,
                     HiZBuildEnabled = settings.HiZBuildEnabled,
                     AmbientOcclusionBlurEnabled = settings.AmbientOcclusionBlurEnabled,
+                    SsgiChainEnabled = settings.SsgiChainEnabled,
                     FogEnabled = settings.FogEnabled,
                     BloomEnabled = settings.BloomEnabled,
-                    DdgiUpdateEnabled = settings.DdgiUpdateEnabled,
-                    GpuParticlesEnabled = settings.GpuParticlesEnabled
+                    SimpleDdgiUpdateEnabled = settings.SimpleDdgiUpdateEnabled,
+                    FullDdgiUpdateEnabled = settings.FullDdgiUpdateEnabled,
+                    FarFieldClipmapBakeEnabled = settings.FarFieldClipmapBakeEnabled,
+                    GpuParticlesEnabled = settings.GpuParticlesEnabled,
+                    AutoMinimumSampleCount = settings.AutoMinimumSampleCount,
+                    AutoWarmupFrameCount = settings.AutoWarmupFrameCount,
+                    AutoMinimumAbsoluteBenefitMilliseconds = settings.AutoMinimumAbsoluteBenefitMilliseconds,
+                    AutoMinimumRelativeBenefit = settings.AutoMinimumRelativeBenefit,
+                    AutoDecisionCooldownFrames = settings.AutoDecisionCooldownFrames
                 };
             }
 
-            public void ApplyTo(AsyncComputeSettings settings)
+            public void ApplyTo(AsyncComputeSettings settings, bool missingModeMeansDisabled)
             {
-                settings.Enabled = Enabled;
+                settings.Mode = Mode.HasValue && Enum.IsDefined(Mode.Value)
+                    ? Mode.Value
+                    : Enabled.HasValue
+                        ? Enabled.Value
+                            ? AsyncComputeMode.ForceEnabledForValidation
+                            : AsyncComputeMode.Disabled
+                        : missingModeMeansDisabled
+                            ? AsyncComputeMode.Disabled
+                            : AsyncComputeMode.Auto;
                 settings.HiZBuildEnabled = HiZBuildEnabled;
                 settings.AmbientOcclusionBlurEnabled = AmbientOcclusionBlurEnabled;
+                settings.SsgiChainEnabled = SsgiChainEnabled;
                 settings.FogEnabled = FogEnabled;
                 settings.BloomEnabled = BloomEnabled;
-                settings.DdgiUpdateEnabled = DdgiUpdateEnabled;
+                bool legacyDdgiEnabled = DdgiUpdateEnabled.GetValueOrDefault(true);
+                settings.SimpleDdgiUpdateEnabled = SimpleDdgiUpdateEnabled && legacyDdgiEnabled;
+                settings.FullDdgiUpdateEnabled = FullDdgiUpdateEnabled && legacyDdgiEnabled;
+                settings.FarFieldClipmapBakeEnabled = FarFieldClipmapBakeEnabled;
                 settings.GpuParticlesEnabled = GpuParticlesEnabled;
+                settings.AutoMinimumSampleCount = Math.Clamp(AutoMinimumSampleCount, 1, 4_096);
+                settings.AutoWarmupFrameCount = Math.Clamp(AutoWarmupFrameCount, 0, 16_384);
+                settings.AutoMinimumAbsoluteBenefitMilliseconds = ClampFinite(AutoMinimumAbsoluteBenefitMilliseconds, 0.0f, 100.0f, 0.25f);
+                settings.AutoMinimumRelativeBenefit = ClampFinite(AutoMinimumRelativeBenefit, 0.0f, 1.0f, 0.03f);
+                settings.AutoDecisionCooldownFrames = Math.Clamp(AutoDecisionCooldownFrames, 0, 16_384);
             }
+
+            private static float ClampFinite(float value, float minimum, float maximum, float fallback) =>
+                float.IsFinite(value) ? Math.Clamp(value, minimum, maximum) : fallback;
         }
 
         private sealed record SceneSubmissionFile

@@ -13,6 +13,13 @@ on:
           - gpu
           - sync
           - all
+      async_compute:
+        description: Exercise the forced async-compute scheduler path
+        default: off
+        type: choice
+        options:
+          - off
+          - force
 
 jobs:
   smoke:
@@ -34,6 +41,16 @@ jobs:
           --validation ${{ inputs.validation }}
           --startup-log artifacts/renderer-startup.jsonl
           --health-report artifacts/renderer-health.json
+      - name: Forced async-compute synchronization and GPU-assisted validation smoke
+        if: inputs.async_compute == 'force'
+        run: >
+          dotnet run --project NjulfHelloGame -c Release --
+          --smoke-mode startup
+          --smoke-frames 3
+          --async-compute
+          --validation all
+          --startup-log artifacts/renderer-async-startup.jsonl
+          --health-report artifacts/renderer-async-health.json
       - name: Upload smoke artifacts
         if: always()
         uses: actions/upload-artifact@v4

@@ -725,7 +725,8 @@ public sealed class ShaderBuildTests
             Assert.That(hitShading, Does.Contain("bool TryReadSelectedDdgiDirectionalLight(out GPULight selectedLight)"));
             Assert.That(hitShading, Does.Contain("bool TryBuildSelectedDdgiLocalLightContribution("));
             Assert.That(hitShading, Does.Contain("vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit("));
-            Assert.That(hitShading, Does.Contain("uint selectedLightCapacity = min(pc.MaxShadedLights, DDGI_MAX_SELECTED_HIT_LIGHTS);"));
+            Assert.That(hitShading, Does.Contain("#define DDGI_HIT_MAX_SHADED_LIGHTS pc.MaxShadedLights"));
+            Assert.That(hitShading, Does.Contain("uint selectedLightCapacity = min(DDGI_HIT_MAX_SHADED_LIGHTS, DDGI_MAX_SELECTED_HIT_LIGHTS);"));
             Assert.That(hitShading, Does.Contain("attenuation *= max(pc.SelectedLocalLightEnergyScale, 0.0);"));
             Assert.That(hitShading, Does.Contain("bool ShouldUseCompactDdgiMaterial(uint volumeCascadeIndex)"));
             Assert.That(hitShading, Does.Contain("vec3 ResolveCompactDdgiAlbedo(GPUMaterialData material)"));
@@ -739,7 +740,8 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("uint requestRaysPerProbe = request.RayCount > 0u"));
             Assert.That(shader, Does.Contain("uint raysPerProbe = ResolveDdgiRequestRayCount(request, updateParams);"));
             Assert.That(hitShading, Does.Contain("bool ShouldSampleDdgiMaterialTextures(uint volumeCascadeIndex)"));
-            Assert.That(hitShading, Does.Contain("volumeCascadeIndex <= pc.MaterialTextureMaxCascade"));
+            Assert.That(hitShading, Does.Contain("#define DDGI_HIT_MATERIAL_TEXTURE_MAX_CASCADE pc.MaterialTextureMaxCascade"));
+            Assert.That(hitShading, Does.Contain("volumeCascadeIndex <= DDGI_HIT_MATERIAL_TEXTURE_MAX_CASCADE"));
             Assert.That(shader, Does.Contain("float materialTextureLod = DdgiMaterialTextureLod(volumeCascadeIndex);"));
             Assert.That(shader, Does.Not.Contain("DDGI_HARD_MAX_SHADED_LIGHTS"));
             Assert.That(shader, Does.Not.Contain("uint lightCount = min(pc.LightCount, min(pc.MaxShadedLights"));
@@ -1109,10 +1111,6 @@ public sealed class ShaderBuildTests
             Assert.That(manager, Does.Contain("DdgiGpuSchedulerSafetyScanFraction"));
             Assert.That(manager, Does.Contain("DdgiGpuSchedulerDirtyScanFraction"));
             Assert.That(manager, Does.Contain("CmdCopyBuffer(commandBuffer, source, destination"));
-            Assert.That(renderer, Does.Contain("requested but inactive: no dedicated compute queue family is available; using graphics queue fallback."));
-            Assert.That(renderer, Does.Contain("enabled: Simple DDGI trace/relocate/blend scheduled on dedicated compute queue."));
-            Assert.That(renderer, Does.Contain("DdgiAsyncComputeEnabled = ddgiAsyncComputeActuallyEnabled ? 1 : 0"));
-            Assert.That(renderer, Does.Contain("IsDdgiAsyncComputeActuallyEnabled"));
             Assert.That(shader, Does.Not.Contain("RecursiveProbeStateBufferIndex"));
             Assert.That(shader, Does.Not.Contain("RecursiveIrradianceAtlasBufferIndex"));
             Assert.That(shader, Does.Not.Contain("RecursiveVisibilityAtlasBufferIndex"));
@@ -1251,7 +1249,8 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS)"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS, clamp(hybridDebugDiffuse, vec3(0.0), vec3(64.0)));"));
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_OCCUPANCY_SLICE)"));
-            Assert.That(shader, Does.Contain("ReadStorageWord(farField.voxelBufferIndex, FarFieldVoxelIndex(voxel, farField))"));
+            Assert.That(shader, Does.Contain("ReadFarFieldDebugVoxel(farField, giDebugUv, packed, missing);"));
+            Assert.That(shader, Does.Contain("vec3 base = missing ? vec3(0.08, 0.015, 0.12) : vec3(0.02);"));
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_TRACE_RESULT)"));
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SKY_VISIBILITY)"));
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SUN_SHADOW)"));

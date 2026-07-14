@@ -47,6 +47,9 @@ public sealed class ProductionRenderPipelineDeclarationTests
         "TransparentForwardPass",
         "WeightedTransparentPass",
         "WeightedOitCompositePass",
+        "GpuParticleResetPass",
+        "GpuParticleSimulatePass",
+        "GpuParticleSortPass",
         "ParticlePass",
         "DebugDrawPass",
         "FogPass",
@@ -99,6 +102,21 @@ public sealed class ProductionRenderPipelineDeclarationTests
     {
         ProductionRenderPipelineDeclaration declaration = ProductionRenderPipelineDeclaration.Instance;
         var graph = new RenderGraph();
+        RenderGraphResourceId[] explicitDdgiResources =
+        [
+            RenderGraphResourceId.SimpleDdgiParameters,
+            RenderGraphResourceId.SimpleDdgiIrradianceAtlas,
+            RenderGraphResourceId.SimpleDdgiVisibilityAtlas,
+            RenderGraphResourceId.SimpleDdgiRayScratch,
+            RenderGraphResourceId.SimpleDdgiProbeState,
+            RenderGraphResourceId.SimpleDdgiUpdateQueue,
+            RenderGraphResourceId.SimpleDdgiRelocationData,
+            RenderGraphResourceId.FullDdgiScheduler,
+            RenderGraphResourceId.FullDdgiRayResources,
+            RenderGraphResourceId.FullDdgiAtlases,
+            RenderGraphResourceId.FullDdgiState,
+            RenderGraphResourceId.FullDdgiPublishResources
+        ];
         var passInstances = declaration.PassOrder.ToDictionary(
             passName => passName,
             CreateUninitializedPass,
@@ -113,7 +131,15 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(graph.PassNames, Is.EqualTo(declaration.PassOrder));
             Assert.DoesNotThrow(() => declaration.ValidatePassOrder(graph.PassNames));
             Assert.DoesNotThrow(graph.ValidateResourceDeclarations);
-            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(42));
+            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(77));
+            foreach (RenderGraphResourceId resource in explicitDdgiResources)
+            {
+                Assert.That(
+                    graph.ResourceInventory,
+                    Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(resource)
+                        .And.Property(nameof(RenderGraphResourceDescriptor.Kind)).EqualTo(RenderGraphResourceKind.BufferSet),
+                    resource.ToString());
+            }
             Assert.That(
                 graph.ResourceInventory,
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SceneSubmissionBuffers));
@@ -241,7 +267,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(graph.PassNames, Is.EqualTo(declaration.GetPassOrder(includeSsgi: false)));
             Assert.DoesNotThrow(() => declaration.ValidatePassOrder(graph.PassNames, includeSsgi: false));
             Assert.DoesNotThrow(graph.ValidateResourceDeclarations);
-            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(30));
+            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(65));
             foreach (string passName in ssgiOnlyPasses)
                 Assert.That(graph.PassNames, Does.Not.Contain(passName), passName);
             foreach (RenderGraphResourceId resource in ssgiOnlyResources)
@@ -280,11 +306,32 @@ public sealed class ProductionRenderPipelineDeclarationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(diagnostics.AsyncComputeCandidatePassCount, Is.EqualTo(9));
+            Assert.That(diagnostics.AsyncComputeCandidatePassCount, Is.EqualTo(19));
             Assert.That(diagnostics.AsyncComputeEnabledPassCount, Is.EqualTo(0));
             Assert.That(
                 diagnostics.Passes.Where(pass => pass.AsyncComputeCandidate).Select(pass => pass.Name),
-                Is.EquivalentTo(new[] { "HiZBuildPass", "AmbientOcclusionBlurPass", "DdgiSchedulePass", "DdgiTracePass", "DdgiBlendPass", "DdgiRelocateClassifyPass", "DdgiPublishPass", "FogPass", "BloomPass" }));
+                Is.EquivalentTo(new[]
+                {
+                    "HiZBuildPass",
+                    "AmbientOcclusionBlurPass",
+                    "FarFieldClipmapBakePass",
+                    "SimpleDdgiTracePass",
+                    "SimpleDdgiRelocateClassifyPass",
+                    "SimpleDdgiBlendPass",
+                    "DdgiSchedulePass",
+                    "DdgiTracePass",
+                    "DdgiBlendPass",
+                    "DdgiRelocateClassifyPass",
+                    "DdgiPublishPass",
+                    "SsgiTracePass",
+                    "SsgiTemporalPass",
+                    "SsgiDenoisePass",
+                    "FogPass",
+                    "BloomPass",
+                    "GpuParticleResetPass",
+                    "GpuParticleSimulatePass",
+                    "GpuParticleSortPass"
+                }));
             Assert.That(
                 diagnostics.Passes.Single(pass => pass.Name == "BloomPass").QueueIntent,
                 Is.EqualTo(RenderGraphQueueIntent.Compute.ToString()));
@@ -322,6 +369,125 @@ public sealed class ProductionRenderPipelineDeclarationTests
                     Is.EqualTo(AccessFlags2.ColorAttachmentWriteBit | AccessFlags2.ColorAttachmentReadBit),
                     passName);
             }
+        });
+    }
+
+    [Test]
+    public void AmbientOcclusionBlur_DeclaresItsComputeDepthSample()
+    {
+        ProductionRenderPipelineDeclaration declaration = ProductionRenderPipelineDeclaration.Instance;
+        RenderGraphResourceUsage usage = declaration.PassResourceDeclarations
+            .Single(pass => pass.PassName == "AmbientOcclusionBlurPass")
+            .Usages
+            .Single(candidate => candidate.Resource == RenderGraphResourceId.SceneDepth);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(usage.Access, Is.EqualTo(RenderGraphResourceAccess.Read));
+            Assert.That(usage.QueueIntent, Is.EqualTo(RenderGraphQueueIntent.Compute));
+            Assert.That(usage.StageMask, Is.EqualTo(PipelineStageFlags2.ComputeShaderBit));
+            Assert.That(usage.AccessMask, Is.EqualTo(AccessFlags2.ShaderSampledReadBit));
+            Assert.That(usage.ImageLayout, Is.EqualTo(ImageLayout.DepthStencilReadOnlyOptimal));
+        });
+    }
+
+    [Test]
+    public void ForwardPlus_DeclaresTheConditionalDepthAttachmentContract()
+    {
+        ProductionRenderPipelineDeclaration declaration = ProductionRenderPipelineDeclaration.Instance;
+        RenderGraphResourceUsage usage = declaration.PassResourceDeclarations
+            .Single(pass => pass.PassName == "ForwardPlusPass")
+            .Usages
+            .Single(candidate => candidate.Resource == RenderGraphResourceId.SceneDepth);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(usage.Access, Is.EqualTo(RenderGraphResourceAccess.ReadWrite));
+            Assert.That(usage.QueueIntent, Is.EqualTo(RenderGraphQueueIntent.Graphics));
+            Assert.That(
+                usage.StageMask,
+                Is.EqualTo(
+                    PipelineStageFlags2.EarlyFragmentTestsBit |
+                    PipelineStageFlags2.LateFragmentTestsBit |
+                    PipelineStageFlags2.FragmentShaderBit));
+            Assert.That(
+                usage.AccessMask,
+                Is.EqualTo(
+                    AccessFlags2.DepthStencilAttachmentReadBit |
+                    AccessFlags2.DepthStencilAttachmentWriteBit |
+                    AccessFlags2.ShaderSampledReadBit));
+            Assert.That(usage.ImageLayout, Is.EqualTo(ImageLayout.Undefined));
+        });
+    }
+
+    [Test]
+    public void AsyncDdgiAndParticles_DeclareConcreteResourceContracts()
+    {
+        ProductionRenderPipelineDeclaration declaration = ProductionRenderPipelineDeclaration.Instance;
+        RenderGraphResourceUsage[] simpleTrace = declaration.PassResourceDeclarations
+            .Single(pass => pass.PassName == "SimpleDdgiTracePass")
+            .Usages;
+        RenderGraphResourceUsage[] particleSimulation = declaration.PassResourceDeclarations
+            .Single(pass => pass.PassName == "GpuParticleSimulatePass")
+            .Usages;
+        RenderGraphResourceUsage[] particleSort = declaration.PassResourceDeclarations
+            .Single(pass => pass.PassName == "GpuParticleSortPass")
+            .Usages;
+        string[] passOrder = declaration.PassOrder.ToArray();
+        int resetIndex = Array.IndexOf(passOrder, "GpuParticleResetPass");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                simpleTrace,
+                Has.Some.Property(nameof(RenderGraphResourceUsage.Resource)).EqualTo(RenderGraphResourceId.TlasStorage)
+                    .And.Property(nameof(RenderGraphResourceUsage.StageMask)).EqualTo(PipelineStageFlags2.ComputeShaderBit)
+                    .And.Property(nameof(RenderGraphResourceUsage.AccessMask)).EqualTo(AccessFlags2.AccelerationStructureReadBitKhr));
+            Assert.That(simpleTrace.Select(usage => usage.Resource), Does.Contain(RenderGraphResourceId.MaterialTextures));
+            Assert.That(simpleTrace.Select(usage => usage.Resource), Does.Contain(RenderGraphResourceId.EnvironmentData));
+            Assert.That(simpleTrace.Select(usage => usage.Resource), Does.Contain(RenderGraphResourceId.RendererDiagnosticsBuffer));
+            Assert.That(particleSimulation.Select(usage => usage.Resource), Does.Contain(RenderGraphResourceId.ParticleBuffers));
+            Assert.That(particleSimulation.Select(usage => usage.Resource), Does.Contain(RenderGraphResourceId.GpuParticleEmitterData));
+            Assert.That(particleSort.Select(usage => usage.Resource), Does.Contain(RenderGraphResourceId.GpuParticleCounterReadback));
+            Assert.That(passOrder.Skip(resetIndex).Take(4), Is.EqualTo(new[]
+            {
+                "GpuParticleResetPass",
+                "GpuParticleSimulatePass",
+                "GpuParticleSortPass",
+                "ParticlePass"
+            }));
+        });
+    }
+
+    [Test]
+    public void ComputePassCatalog_ExplicitlyClassifiesProductionAndGraphicsQueueWork()
+    {
+        IReadOnlyList<AsyncComputePassAuditEntry> audit = AsyncComputePassCatalog.All;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(audit.Select(entry => entry.PassName), Is.Unique);
+            Assert.That(audit, Has.All.Property(nameof(AsyncComputePassAuditEntry.Producers)).Not.Empty);
+            Assert.That(audit, Has.All.Property(nameof(AsyncComputePassAuditEntry.Consumers)).Not.Empty);
+            Assert.That(audit, Has.All.Property(nameof(AsyncComputePassAuditEntry.Rationale)).Not.Empty);
+            Assert.That(
+                AsyncComputePassCatalog.ProductionCandidatePasses,
+                Is.EquivalentTo(new[]
+                {
+                    "AmbientOcclusionBlurPass", "HiZBuildPass",
+                    "SsgiTracePass", "SsgiTemporalPass", "SsgiDenoisePass",
+                    "FarFieldClipmapBakePass",
+                    "SimpleDdgiTracePass", "SimpleDdgiRelocateClassifyPass", "SimpleDdgiBlendPass",
+                    "DdgiSchedulePass", "DdgiTracePass", "DdgiBlendPass", "DdgiRelocateClassifyPass", "DdgiPublishPass",
+                    "FogPass", "BloomPass",
+                    "GpuParticleResetPass", "GpuParticleSimulatePass", "GpuParticleSortPass"
+                }));
+            Assert.That(
+                AsyncComputePassCatalog.GetClassification("TiledLightCullingPass"),
+                Is.EqualTo(AsyncComputePassClassification.GraphicsQueueComputeByDesign));
+            Assert.That(
+                () => AsyncComputePassCatalog.GetClassification("UnknownComputePass"),
+                Throws.InvalidOperationException);
         });
     }
 
@@ -427,13 +593,23 @@ public sealed class ProductionRenderPipelineDeclarationTests
         public override bool SupportsAsyncCompute => Name is
             "HiZBuildPass" or
             "AmbientOcclusionBlurPass" or
+            "FarFieldClipmapBakePass" or
+            "SimpleDdgiTracePass" or
+            "SimpleDdgiRelocateClassifyPass" or
+            "SimpleDdgiBlendPass" or
             "DdgiSchedulePass" or
             "DdgiTracePass" or
             "DdgiBlendPass" or
             "DdgiRelocateClassifyPass" or
             "DdgiPublishPass" or
+            "SsgiTracePass" or
+            "SsgiTemporalPass" or
+            "SsgiDenoisePass" or
             "FogPass" or
-            "BloomPass";
+            "BloomPass" or
+            "GpuParticleResetPass" or
+            "GpuParticleSimulatePass" or
+            "GpuParticleSortPass";
 
         public override string AsyncComputeReason => SupportsAsyncCompute
             ? "Test pass is marked as an async compute candidate."

@@ -1276,7 +1276,10 @@ namespace Njulf.Rendering.Data
         public Vector4 Statistics;
     }
 
-    // 96 bytes. Coarse far-field voxel clipmap params, mirrored by farfield_clipmap.glsl.
+    // 144 bytes. Coarse far-field parameters, mirrored by farfield_clipmap.glsl.
+    // The first six vectors retain the legacy single-clipmap layout.  The final
+    // three vectors describe the bounded virtual-page cache used by production
+    // far-field tracing and incremental page baking.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUFarFieldClipmapParams
     {
@@ -1286,6 +1289,25 @@ namespace Njulf.Rendering.Data
         public Vector4 BakeParams;
         public Vector4 Diagnostics;
         public Vector4 Reserved0;
+        public Vector4 PagingParams;
+        public Vector4 PagingLayout;
+        public Vector4 CameraAndBakePage;
+    }
+
+    // 32 bytes. Open-addressed virtual far-field page-table entry.  The world
+    // page coordinate is stable; the physical-page index is bounded by the
+    // selected quality tier and is never inferred from world size.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFarFieldPageTableEntry
+    {
+        public int WorldPageX;
+        public int WorldPageY;
+        public int WorldPageZ;
+        public uint CascadeAndFlags;
+        public uint PhysicalPageIndex;
+        public uint Generation;
+        public uint Reserved0;
+        public uint Reserved1;
     }
 
     // 80 bytes. Static opaque instance metadata for far-field voxelization.
@@ -1334,6 +1356,12 @@ namespace Njulf.Rendering.Data
         public uint TriangleCount;
         public uint MaterialTextureMaxCascade;
         public uint CurrentFrameIndex;
+        public uint PageVoxelOffset;
+        public uint PageDistanceWordOffset;
+        public uint PageTableBufferIndex;
+        public uint PageTableEntryIndex;
+        public uint PageGeneration;
+        public uint DiagnosticFlags;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

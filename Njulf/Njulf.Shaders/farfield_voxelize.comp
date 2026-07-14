@@ -17,12 +17,25 @@ layout(push_constant) uniform FarFieldVoxelizePushBlock
     uint TriangleCount;
     uint MaterialTextureMaxCascade;
     uint CurrentFrameIndex;
+    uint PageVoxelOffset;
+    uint PageDistanceWordOffset;
+    uint PageTableBufferIndex;
+    uint PageTableEntryIndex;
+    uint PageGeneration;
+    uint DiagnosticFlags;
 } pc;
 
 const uint FARFIELD_VOXELIZE_MODE_CLEAR = 0u;
 const uint FARFIELD_VOXELIZE_MODE_TRIANGLES = 1u;
 const uint FARFIELD_VOXELIZE_MODE_PUBLISH = 2u;
 const uint FARFIELD_INSTANCE_STRIDE_WORDS = 20u;
+const uint FARFIELD_DIAGNOSTIC_FLAG_DETAILED = 1u << 0;
+
+void AddFarFieldDiagnostic(uint counterIndex, uint value)
+{
+    if ((pc.DiagnosticFlags & FARFIELD_DIAGNOSTIC_FLAG_DETAILED) != 0u)
+        AddRendererDiagnostic(pc.CurrentFrameIndex, counterIndex, value);
+}
 
 uint PackFarFieldVoxel(vec3 albedo)
 {
@@ -98,23 +111,54 @@ bool FarFieldTriangleBoxOverlap(vec3 boxCenter, vec3 halfSize, vec3 p0, vec3 p1,
     return true;
 }
 
+FarFieldClipmapParams ResolveFarFieldVoxelizeParams(FarFieldClipmapParams params)
+{
+    if (!params.pagedEnabled)
+        return params;
+
+    uint tableBase = pc.PageTableEntryIndex * FAR_FIELD_PAGE_TABLE_ENTRY_WORDS;
+    uint flags = ReadStorageWord(pc.PageTableBufferIndex, tableBase + 3u);
+    uint cascade = flags & FAR_FIELD_PAGE_CASCADE_MASK;
+    ivec3 worldPage = ivec3(
+        int(ReadStorageWord(pc.PageTableBufferIndex, tableBase + 0u)),
+        int(ReadStorageWord(pc.PageTableBufferIndex, tableBase + 1u)),
+        int(ReadStorageWord(pc.PageTableBufferIndex, tableBase + 2u)));
+    params.origin = FarFieldPageOrigin(params, cascade, worldPage);
+    params.voxelSize = FarFieldCascadeVoxelSize(params, cascade);
+    params.extent = FarFieldPageExtent(params, cascade);
+    return params;
+}
+
 void main()
 {
-    FarFieldClipmapParams params = ReadFarFieldClipmapParams(pc.ParamsBufferIndex);
+    FarFieldClipmapParams params = ResolveFarFieldVoxelizeParams(ReadFarFieldClipmapParams(pc.ParamsBufferIndex));
     uint dispatchIndex = gl_GlobalInvocationID.x;
     uint voxelCount = params.resolution.x * params.resolution.y * params.resolution.z;
 
     if (pc.Mode == FARFIELD_VOXELIZE_MODE_PUBLISH)
     {
         if (dispatchIndex == 0u)
-            WriteStorageFloat(pc.ParamsBufferIndex, 16u, float(pc.VoxelBufferIndex));
+        {
+            if (params.pagedEnabled)
+            {
+                uint tableBase = pc.PageTableEntryIndex * FAR_FIELD_PAGE_TABLE_ENTRY_WORDS;
+                uint generation = ReadStorageWord(pc.PageTableBufferIndex, tableBase + 5u);
+                uint flags = ReadStorageWord(pc.PageTableBufferIndex, tableBase + 3u);
+                if (generation == pc.PageGeneration && (flags & FAR_FIELD_PAGE_ALLOCATED_FLAG) != 0u)
+                    atomicOr(BindlessStorageBuffers[nonuniformEXT(pc.PageTableBufferIndex)].Words[tableBase + 3u], FAR_FIELD_PAGE_VALID_FLAG);
+            }
+            else
+            {
+                WriteStorageFloat(pc.ParamsBufferIndex, 16u, float(pc.VoxelBufferIndex));
+            }
+        }
         return;
     }
 
     if (pc.Mode == FARFIELD_VOXELIZE_MODE_CLEAR)
     {
         if (dispatchIndex < voxelCount)
-            WriteStorageWord(pc.VoxelBufferIndex, dispatchIndex, 0u);
+            WriteStorageWord(pc.VoxelBufferIndex, pc.PageVoxelOffset + dispatchIndex, 0u);
         return;
     }
 
@@ -130,7 +174,7 @@ void main()
     uint triBase = indexOffset + dispatchIndex * 3u;
     if (triBase + 2u >= indexOffset + indexCount)
         return;
-    AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_BAKED_TRIANGLE_COUNTER, 1u);
+    AddFarFieldDiagnostic(FAR_FIELD_BAKED_TRIANGLE_COUNTER, 1u);
 
     uint i0 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triBase + 0u);
     uint i1 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triBase + 1u);
@@ -157,7 +201,7 @@ void main()
             continue;
 
         uint voxelIndex = FarFieldVoxelIndex(ivec3(x, y, z), params);
-        atomicOr(BindlessStorageBuffers[nonuniformEXT(pc.VoxelBufferIndex)].Words[voxelIndex], packed);
-        AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_OCCUPIED_VOXEL_WRITE_COUNTER, 1u);
+        atomicOr(BindlessStorageBuffers[nonuniformEXT(pc.VoxelBufferIndex)].Words[pc.PageVoxelOffset + voxelIndex], packed);
+        AddFarFieldDiagnostic(FAR_FIELD_OCCUPIED_VOXEL_WRITE_COUNTER, 1u);
     }
 }

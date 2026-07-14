@@ -204,6 +204,28 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void ContentRevision_IsStableForDeduplicationAndChangesWhenASlotIsReused()
+        {
+            using var manager = new MaterialManager();
+            MaterialHandle first = manager.RegisterMaterial(CreateGpuMaterial(8, 9, 10, 11));
+            uint firstRevision = manager.GetMaterialContentRevision(first.Index);
+
+            MaterialHandle duplicate = manager.RegisterMaterial(CreateGpuMaterial(8, 9, 10, 11));
+            manager.DestroyMaterial(first);
+            MaterialHandle replacement = manager.RegisterMaterial(CreateGpuMaterial(12, 9, 10, 11));
+            uint replacementRevision = manager.GetMaterialContentRevision(replacement.Index);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(firstRevision, Is.GreaterThan(0u));
+                Assert.That(duplicate, Is.EqualTo(first));
+                Assert.That(manager.GetMaterialContentRevision(-1), Is.EqualTo(0u));
+                Assert.That(replacement.Index, Is.EqualTo(first.Index));
+                Assert.That(replacementRevision, Is.Not.EqualTo(firstRevision));
+            });
+        }
+
         private static GPUMaterialData CreateGpuMaterial(
             int albedoTextureIndex,
             int normalTextureIndex,

@@ -18,6 +18,8 @@ namespace Njulf.Rendering.Core
         private CommandBuffer[] _graphicsCommandBuffers = Array.Empty<CommandBuffer>();
         private CommandBuffer[] _earlyGraphicsCommandBuffers = Array.Empty<CommandBuffer>();
         private CommandBuffer[] _lateGraphicsCommandBuffers = Array.Empty<CommandBuffer>();
+        private readonly List<CommandBuffer>[] _scheduledGraphicsCommandBuffers = new List<CommandBuffer>[FramesInFlight];
+        private readonly int[] _scheduledGraphicsCommandBufferCursors = new int[FramesInFlight];
         private readonly CommandPool[] _secondaryGraphicsCommandPools = new CommandPool[FramesInFlight];
         private readonly List<CommandBuffer>[] _secondaryGraphicsCommandBuffers = new List<CommandBuffer>[FramesInFlight];
         private readonly int[] _secondaryGraphicsCommandBufferCursors = new int[FramesInFlight];
@@ -29,6 +31,9 @@ namespace Njulf.Rendering.Core
         // Dedicated async compute command pools and buffers.
         private readonly CommandPool[] _computeCommandPools = new CommandPool[FramesInFlight];
         private readonly CommandBuffer[] _computeCommandBuffers = new CommandBuffer[FramesInFlight];
+        private readonly List<CommandBuffer>[] _additionalComputeCommandBuffers = new List<CommandBuffer>[FramesInFlight];
+        private readonly int[] _computeCommandBufferCursors = new int[FramesInFlight];
+        private readonly bool[] _computeCommandPoolsResetForFrame = new bool[FramesInFlight];
         private Semaphore _asyncComputeTimelineSemaphore;
         
         private bool _disposed;
@@ -40,11 +45,13 @@ namespace Njulf.Rendering.Core
             CreateGraphicsCommandPool();
             AllocateGraphicsCommandBuffers();
             AllocateAsyncSplitGraphicsCommandBuffers();
+            for (int i = 0; i < FramesInFlight; i++)
+                _scheduledGraphicsCommandBuffers[i] = new List<CommandBuffer>();
             CreateSecondaryGraphicsCommandPools();
             
             if (context.HasDedicatedTransferQueue)
                 CreateTransferCommandPool();
-            if (context.HasDedicatedComputeQueue)
+            if (context.HasIndependentComputeQueue)
                 CreateComputeCommandResources();
         }
         
@@ -209,6 +216,7 @@ namespace Njulf.Rendering.Core
                 if (result != Result.Success)
                     throw new VulkanException($"Failed to allocate async compute command buffer for frame {i}", result);
                 _context.SetDebugName(_computeCommandBuffers[i].Handle, ObjectType.CommandBuffer, $"Async Compute Command Buffer Frame {i}");
+                _additionalComputeCommandBuffers[i] = new List<CommandBuffer>();
             }
 
             var timelineCreateInfo = new SemaphoreTypeCreateInfo
@@ -293,15 +301,39 @@ namespace Njulf.Rendering.Core
         public CommandBuffer BeginAsyncComputeCommand(int frameIndex)
         {
             RenderingConstants.ValidateFrameIndex(frameIndex);
-            if (!_context.HasDedicatedComputeQueue)
-                throw new InvalidOperationException("Async compute command buffers require a dedicated compute queue.");
+            if (!_context.HasIndependentComputeQueue)
+                throw new InvalidOperationException("Async compute command buffers require a separately created compute queue.");
 
-            Result resetResult = _context.Api.ResetCommandPool(
-                _context.Device,
-                _computeCommandPools[frameIndex],
-                CommandPoolResetFlags.None);
-            if (resetResult != Result.Success)
-                throw new VulkanException("Failed to reset async compute command pool", resetResult);
+            if (!_computeCommandPoolsResetForFrame[frameIndex])
+                ResetAsyncComputeCommandPool(frameIndex);
+
+            int cursor = _computeCommandBufferCursors[frameIndex]++;
+            CommandBuffer commandBuffer;
+            if (cursor == 0)
+            {
+                commandBuffer = _computeCommandBuffers[frameIndex];
+            }
+            else
+            {
+                List<CommandBuffer> extraBuffers = _additionalComputeCommandBuffers[frameIndex];
+                int extraIndex = cursor - 1;
+                if (extraIndex >= extraBuffers.Count)
+                {
+                    var allocation = new CommandBufferAllocateInfo
+                    {
+                        SType = StructureType.CommandBufferAllocateInfo,
+                        CommandPool = _computeCommandPools[frameIndex],
+                        Level = CommandBufferLevel.Primary,
+                        CommandBufferCount = 1
+                    };
+                    Result allocationResult = _context.Api.AllocateCommandBuffers(_context.Device, &allocation, out CommandBuffer allocated);
+                    if (allocationResult != Result.Success)
+                        throw new VulkanException("Failed to allocate an additional async compute command buffer", allocationResult);
+                    _context.SetDebugName(allocated.Handle, ObjectType.CommandBuffer, $"Async Compute Command Buffer Frame {frameIndex} Segment {cursor}");
+                    extraBuffers.Add(allocated);
+                }
+                commandBuffer = extraBuffers[extraIndex];
+            }
 
             var beginInfo = new CommandBufferBeginInfo
             {
@@ -310,11 +342,74 @@ namespace Njulf.Rendering.Core
                 PInheritanceInfo = null
             };
 
-            Result beginResult = _context.Api.BeginCommandBuffer(_computeCommandBuffers[frameIndex], &beginInfo);
+            Result beginResult = _context.Api.BeginCommandBuffer(commandBuffer, &beginInfo);
             if (beginResult != Result.Success)
                 throw new VulkanException("Failed to begin async compute command buffer", beginResult);
 
-            return _computeCommandBuffers[frameIndex];
+            return commandBuffer;
+        }
+
+        /// <summary>
+        /// Resets the per-frame compute pool exactly once after its frame fence has completed.
+        /// Multiple compute segments can then be recorded without invalidating earlier command
+        /// buffers from the same frame.
+        /// </summary>
+        public void ResetAsyncComputeCommandPool(int frameIndex)
+        {
+            RenderingConstants.ValidateFrameIndex(frameIndex);
+            if (!_context.HasIndependentComputeQueue || _computeCommandPools[frameIndex].Handle == 0)
+                return;
+
+            Result resetResult = _context.Api.ResetCommandPool(
+                _context.Device,
+                _computeCommandPools[frameIndex],
+                CommandPoolResetFlags.None);
+            if (resetResult != Result.Success)
+                throw new VulkanException("Failed to reset async compute command pool", resetResult);
+
+            _computeCommandBufferCursors[frameIndex] = 0;
+            _computeCommandPoolsResetForFrame[frameIndex] = true;
+        }
+
+        public CommandBuffer BeginScheduledGraphicsCommand(int frameIndex)
+        {
+            RenderingConstants.ValidateFrameIndex(frameIndex);
+            List<CommandBuffer> buffers = _scheduledGraphicsCommandBuffers[frameIndex];
+            int cursor = _scheduledGraphicsCommandBufferCursors[frameIndex]++;
+            CommandBuffer commandBuffer;
+            if (cursor < buffers.Count)
+            {
+                commandBuffer = buffers[cursor];
+                Result reset = _context.Api.ResetCommandBuffer(commandBuffer, CommandBufferResetFlags.None);
+                if (reset != Result.Success)
+                    throw new VulkanException("Failed to reset scheduled graphics command buffer", reset);
+            }
+            else
+            {
+                var allocation = new CommandBufferAllocateInfo
+                {
+                    SType = StructureType.CommandBufferAllocateInfo,
+                    CommandPool = _graphicsCommandPool,
+                    Level = CommandBufferLevel.Primary,
+                    CommandBufferCount = 1
+                };
+                Result allocationResult = _context.Api.AllocateCommandBuffers(_context.Device, &allocation, out commandBuffer);
+                if (allocationResult != Result.Success)
+                    throw new VulkanException("Failed to allocate scheduled graphics command buffer", allocationResult);
+                _context.SetDebugName(commandBuffer.Handle, ObjectType.CommandBuffer, $"Scheduled Graphics Command Buffer Frame {frameIndex} Segment {cursor}");
+                buffers.Add(commandBuffer);
+            }
+
+            var beginInfo = new CommandBufferBeginInfo
+            {
+                SType = StructureType.CommandBufferBeginInfo,
+                Flags = CommandBufferUsageFlags.OneTimeSubmitBit,
+                PInheritanceInfo = null
+            };
+            Result beginResult = _context.Api.BeginCommandBuffer(commandBuffer, &beginInfo);
+            if (beginResult != Result.Success)
+                throw new VulkanException("Failed to begin scheduled graphics command buffer", beginResult);
+            return commandBuffer;
         }
 
         public Semaphore AsyncComputeTimelineSemaphore => _asyncComputeTimelineSemaphore;
@@ -335,6 +430,8 @@ namespace Njulf.Rendering.Core
             RenderingConstants.ValidateFrameIndex(frameIndex);
             ResetGraphicsCommandBuffer(_earlyGraphicsCommandBuffers[frameIndex], "early graphics command buffer");
             ResetGraphicsCommandBuffer(_lateGraphicsCommandBuffers[frameIndex], "late graphics command buffer");
+            _scheduledGraphicsCommandBufferCursors[frameIndex] = 0;
+            _computeCommandPoolsResetForFrame[frameIndex] = false;
         }
 
         private void ResetGraphicsCommandBuffer(CommandBuffer commandBuffer, string description)
@@ -628,6 +725,22 @@ namespace Njulf.Rendering.Core
                         _context.Device, _graphicsCommandPool,
                         RenderingConstants.FramesInFlight, commandBuffersPtr);
                 }
+
+                for (int i = 0; i < _scheduledGraphicsCommandBuffers.Length; i++)
+                {
+                    List<CommandBuffer> buffers = _scheduledGraphicsCommandBuffers[i];
+                    if (buffers.Count == 0)
+                        continue;
+                    CommandBuffer[] scheduledBuffers = buffers.ToArray();
+                    fixed (CommandBuffer* scheduledBuffersPtr = scheduledBuffers)
+                    {
+                        _context.Api.FreeCommandBuffers(
+                            _context.Device,
+                            _graphicsCommandPool,
+                            (uint)scheduledBuffers.Length,
+                            scheduledBuffersPtr);
+                    }
+                }
                 
                 _context.Api.DestroyCommandPool(_context.Device, _graphicsCommandPool, null);
             }
@@ -675,6 +788,20 @@ namespace Njulf.Rendering.Core
                 {
                     CommandBuffer commandBuffer = _computeCommandBuffers[i];
                     _context.Api.FreeCommandBuffers(_context.Device, _computeCommandPools[i], 1, &commandBuffer);
+                }
+
+                List<CommandBuffer> extraBuffers = _additionalComputeCommandBuffers[i];
+                if (extraBuffers is { Count: > 0 })
+                {
+                    CommandBuffer[] buffers = extraBuffers.ToArray();
+                    fixed (CommandBuffer* buffersPtr = buffers)
+                    {
+                        _context.Api.FreeCommandBuffers(
+                            _context.Device,
+                            _computeCommandPools[i],
+                            (uint)buffers.Length,
+                            buffersPtr);
+                    }
                 }
 
                 _context.Api.DestroyCommandPool(_context.Device, _computeCommandPools[i], null);

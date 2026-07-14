@@ -8,6 +8,7 @@ using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Memory;
 using Njulf.Rendering.Utilities;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
 using Njulf.Rendering.Resources;
 using VkBuffer = Silk.NET.Vulkan.Buffer;
 
@@ -217,6 +218,34 @@ namespace Njulf.Rendering.Pipeline
             DrawFoliageForward(cmd, sceneData);
             
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
+        }
+
+        /// <summary>
+        /// GPU timestamps cannot isolate instructions inside a fragment shader, but
+        /// this nested scope gives GI accounting a conservative, explicit owner for
+        /// the forward pass whenever its DDGI gather code is active.  The capture
+        /// records it as an inclusive forward-GI timing rather than pretending it is
+        /// a pure shader-instruction measurement.
+        /// </summary>
+        public override void Execute(
+            CommandBuffer cmd,
+            int frameIndex,
+            Data.SceneRenderingData sceneData,
+            GpuTimestampRecorder? timestamps)
+        {
+            bool giGatherActive = sceneData.GlobalIlluminationDdgiActive != 0 || sceneData.SimpleDdgiActive != 0;
+            if (giGatherActive)
+                timestamps?.BeginPass(cmd, frameIndex, "ForwardGiGatherPass");
+
+            try
+            {
+                Execute(cmd, frameIndex, sceneData);
+            }
+            finally
+            {
+                if (giGatherActive)
+                    timestamps?.EndPass(cmd, frameIndex);
+            }
         }
 
         internal static ForwardOpaqueVariantSelection ResolveOpaqueVariantSelection(Data.SceneRenderingData sceneData)

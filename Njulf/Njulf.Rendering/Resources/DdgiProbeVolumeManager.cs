@@ -321,6 +321,35 @@ namespace Njulf.Rendering.Resources
             _schedulerCounterReadbackBufferSize +
             _schedulerQueueReadbackBufferSize +
             _traceIndirectDispatchBufferSize;
+        // Allocation-level contracts for render-graph synchronization. These deliberately
+        // expose physical buffers rather than bindless descriptor slots so a queue-family
+        // transfer remains valid across descriptor table updates.
+        public BufferHandle VolumeMetadataBuffer => _volumeMetadataBuffer;
+        public BufferHandle ProbeStateBuffer => _probeStateBuffer;
+        public BufferHandle ProbeUpdateQueueBuffer => _probeUpdateQueueBuffer;
+        public BufferHandle ProbeRelocationClassificationBuffer => _probeRelocationClassificationBuffer;
+        public BufferHandle IrradianceAtlasBuffer => _irradianceAtlasBuffer;
+        public BufferHandle VisibilityAtlasBuffer => _visibilityAtlasBuffer;
+        public BufferHandle RayResultScratchBuffer => _rayResultScratchBuffer;
+        public BufferHandle SchedulerConstantsBuffer => _schedulerConstantsBuffer;
+        public BufferHandle DirtyRegionBuffer => _dirtyRegionBuffer;
+        public BufferHandle ProbeCandidateBuffer => _probeCandidateBuffer;
+        public BufferHandle SchedulerGroupCountBuffer => _schedulerGroupCountBuffer;
+        public BufferHandle SchedulerPrefixBuffer => _schedulerPrefixBuffer;
+        public BufferHandle SchedulerCounterBuffer => _schedulerCounterBuffer;
+        public BufferHandle TraceIndirectDispatchBuffer => _traceIndirectDispatchBuffer;
+
+        public BufferHandle GetSchedulerCounterReadbackBuffer(int frameIndex)
+        {
+            RenderingConstants.ValidateFrameIndex(frameIndex);
+            return _schedulerCounterReadbackBuffers[frameIndex % SchedulerReadbackRingSize];
+        }
+
+        public BufferHandle GetSchedulerQueueReadbackBuffer(int frameIndex)
+        {
+            RenderingConstants.ValidateFrameIndex(frameIndex);
+            return _schedulerQueueReadbackBuffers[frameIndex % SchedulerReadbackRingSize];
+        }
         public int GpuSchedulerDirtyRegionCapacity => _dirtyRegionCapacity;
         public int GpuSchedulerCandidateCapacity => _probeCandidateCapacity;
         public int GpuSchedulerGroupCountCapacity => _schedulerGroupCountCapacity;

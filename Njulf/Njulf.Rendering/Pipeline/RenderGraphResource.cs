@@ -26,6 +26,32 @@ namespace Njulf.Rendering.Pipeline
         SsgiHistoryLength,
         GiFinalDiffuse,
         DdgiProbeResources,
+        TlasStorage,
+        RayQueryInstanceMetadata,
+        MeshGeometryBuffers,
+        MaterialBuffers,
+        MaterialTextures,
+        LightBuffers,
+        EnvironmentData,
+        RendererDiagnosticsBuffer,
+        DdgiEmissiveSources,
+        FarFieldParameters,
+        FarFieldVoxels,
+        FarFieldInstances,
+        FarFieldJumpFlood,
+        FarFieldPageTable,
+        SimpleDdgiParameters,
+        SimpleDdgiIrradianceAtlas,
+        SimpleDdgiVisibilityAtlas,
+        SimpleDdgiRayScratch,
+        SimpleDdgiProbeState,
+        SimpleDdgiUpdateQueue,
+        SimpleDdgiRelocationData,
+        FullDdgiScheduler,
+        FullDdgiRayResources,
+        FullDdgiAtlases,
+        FullDdgiState,
+        FullDdgiPublishResources,
         FogOutput,
         DirectionalShadowMap,
         SpotShadowAtlas,
@@ -33,6 +59,15 @@ namespace Njulf.Rendering.Pipeline
         HiZPyramid,
         ParticleBuffers,
         GpuParticleBuffers,
+        GpuParticleState,
+        GpuParticleIndices,
+        GpuParticleEmitterData,
+        GpuParticleCounters,
+        GpuParticleUnsortedOutput,
+        GpuParticleRenderOutput,
+        GpuParticleIndirectArguments,
+        GpuParticleSortKeys,
+        GpuParticleCounterReadback,
         FoliageBuffers,
         SceneSubmissionBuffers,
         ForwardVisibilityBuffers,
@@ -124,7 +159,13 @@ namespace Njulf.Rendering.Pipeline
         PipelineStageFlags2 StageMask = PipelineStageFlags2.None,
         AccessFlags2 AccessMask = AccessFlags2.None,
         ImageLayout ImageLayout = ImageLayout.Undefined,
-        RenderGraphQueueIntent QueueIntent = RenderGraphQueueIntent.Graphics);
+        RenderGraphQueueIntent QueueIntent = RenderGraphQueueIntent.Graphics,
+        /// <summary>
+        /// The layout a pass leaves behind after its internal transitions. This is distinct from
+        /// <see cref="ImageLayout"/>, which describes the layout required when graph execution
+        /// enters the pass. Queue handoffs use this value for their release barrier.
+        /// </summary>
+        ImageLayout FinalImageLayout = ImageLayout.Undefined);
 
     public readonly record struct RenderGraphPlannedBarrier(
         string PassName,

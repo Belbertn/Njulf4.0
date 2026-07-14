@@ -302,6 +302,46 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        /// <summary>
+        /// Returns the complete allocation set touched by the GPU particle reset, simulation,
+        /// sort, and counter-readback sequence for one in-flight frame.  This is intentionally
+        /// richer than <see cref="GetBuffers"/>: emitter and curve uploads are read by simulation
+        /// and the host-visible counter target participates in the final copy.
+        /// </summary>
+        public GpuParticleAsyncResourceSet GetAsyncResourceSet(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+
+            lock (_lock)
+            {
+                return new GpuParticleAsyncResourceSet(
+                    _stateBuffers[frameIndex].Handle,
+                    _stateBuffers[frameIndex].ByteSize,
+                    _aliveIndexBuffers[frameIndex].Handle,
+                    _aliveIndexBuffers[frameIndex].ByteSize,
+                    _deadIndexBuffer.Handle,
+                    _deadIndexBuffer.ByteSize,
+                    _emitterBuffers[frameIndex].Handle,
+                    _emitterBuffers[frameIndex].ByteSize,
+                    _curveSampleBuffers[frameIndex].Handle,
+                    _curveSampleBuffers[frameIndex].ByteSize,
+                    _counterBuffers[frameIndex].Handle,
+                    _counterBuffers[frameIndex].ByteSize,
+                    _unsortedRenderInstanceBuffers[frameIndex].Handle,
+                    _unsortedRenderInstanceBuffers[frameIndex].ByteSize,
+                    _renderInstanceBuffers[frameIndex].Handle,
+                    _renderInstanceBuffers[frameIndex].ByteSize,
+                    _indirectDrawBuffers[frameIndex].Handle,
+                    _indirectDrawBuffers[frameIndex].ByteSize,
+                    _sortKeyBuffers[frameIndex].Handle,
+                    _sortKeyBuffers[frameIndex].ByteSize,
+                    _counterReadbackBuffers[frameIndex],
+                    _counterReadbackBuffers[frameIndex].IsValid
+                        ? _bufferManager.GetBufferSize(_counterReadbackBuffers[frameIndex])
+                        : 0UL);
+            }
+        }
+
         public void RegisterBuffers(BindlessHeap bindlessHeap)
         {
             if (bindlessHeap == null)
@@ -747,6 +787,30 @@ namespace Njulf.Rendering.Resources
         BufferHandle RenderInstanceBuffer,
         BufferHandle IndirectDrawBuffer,
         BufferHandle SortKeyBuffer);
+
+    public readonly record struct GpuParticleAsyncResourceSet(
+        BufferHandle StateBuffer,
+        ulong StateBufferBytes,
+        BufferHandle AliveIndexBuffer,
+        ulong AliveIndexBufferBytes,
+        BufferHandle DeadIndexBuffer,
+        ulong DeadIndexBufferBytes,
+        BufferHandle EmitterBuffer,
+        ulong EmitterBufferBytes,
+        BufferHandle CurveSampleBuffer,
+        ulong CurveSampleBufferBytes,
+        BufferHandle CounterBuffer,
+        ulong CounterBufferBytes,
+        BufferHandle UnsortedRenderInstanceBuffer,
+        ulong UnsortedRenderInstanceBufferBytes,
+        BufferHandle RenderInstanceBuffer,
+        ulong RenderInstanceBufferBytes,
+        BufferHandle IndirectDrawBuffer,
+        ulong IndirectDrawBufferBytes,
+        BufferHandle SortKeyBuffer,
+        ulong SortKeyBufferBytes,
+        BufferHandle CounterReadbackBuffer,
+        ulong CounterReadbackBufferBytes);
 
     public readonly record struct GpuParticleCounterSnapshot(
         int Valid,

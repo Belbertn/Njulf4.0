@@ -145,6 +145,7 @@ namespace Njulf.Rendering.Data
         private Matrix4x4 _previousHiZInverseViewMatrix = Matrix4x4.Identity;
         private bool _hasPreviousHiZFrameData;
         private bool _hasCachedPayload;
+        private ulong _sceneContentRevision;
         private uint _lastTileCountX;
         private uint _lastTileCountY;
         private ulong _lastUploadedBytes;
@@ -493,6 +494,12 @@ namespace Njulf.Rendering.Data
                     useCpuMeshletFrustumCulling);
                 _lastPayloadSignatureMicroseconds = ElapsedMicroseconds(signatureStart);
                 bool staticPayloadChanged = !_hasCachedPayload || !_lastStaticPayloadSignature.Equals(staticPayloadSignature);
+                if (staticPayloadChanged)
+                {
+                    _sceneContentRevision++;
+                    if (_sceneContentRevision == 0)
+                        _sceneContentRevision = 1;
+                }
                 bool cullingPayloadChanged = staticPayloadChanged || !_lastCullingSignature.Equals(cullingSignature);
                 bool cameraViewProjectionChanged = cameraDependentCpuPayload &&
                     (!_hasLastCameraDependentViewProjection || !_lastCameraDependentViewProjection.Equals(viewProjectionMatrix));
@@ -711,6 +718,7 @@ namespace Njulf.Rendering.Data
                     JointMatrixCount = animationStats.JointMatrixCount,
                     AnimatedBoundsMode = animationStats.SkinnedObjectCount > 0 ? "Conservative" : string.Empty,
                     CurrentFrameIndex = (uint)frameIndex,
+                    SceneContentRevision = _sceneContentRevision,
                     ViewMatrix = viewMatrix,
                     ProjectionMatrix = projectionMatrix,
                     ViewProjectionMatrix = viewProjectionMatrix,

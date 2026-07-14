@@ -50,6 +50,10 @@ namespace Njulf.Tests
             using var content = new ContentManager(Path.GetDirectoryName(path), uploader);
 
             Model asset = content.Load<Model>(Path.GetFileName(path));
+            var localMeshBounds = new Njulf.Core.Math.BoundingBox(
+                new Njulf.Core.Math.Vector3(-2f, -3f, -4f),
+                new Njulf.Core.Math.Vector3(5f, 6f, 7f));
+            asset.RenderObjects[0].LocalMeshBounds = localMeshBounds;
             Model firstInstance = asset.CreateInstance();
             Model secondInstance = asset.CreateInstance();
 
@@ -63,6 +67,8 @@ namespace Njulf.Tests
                 Assert.That(firstInstance.RenderObjects[0], Is.Not.SameAs(secondInstance.RenderObjects[0]));
                 Assert.That(firstInstance.RenderObjects[0].Mesh, Is.EqualTo(asset.RenderObjects[0].Mesh));
                 Assert.That(firstInstance.RenderObjects[0].Material, Is.EqualTo(asset.RenderObjects[0].Material));
+                Assert.That(firstInstance.RenderObjects[0].LocalMeshBounds, Is.EqualTo(localMeshBounds));
+                Assert.That(secondInstance.RenderObjects[0].LocalMeshBounds, Is.EqualTo(localMeshBounds));
                 Assert.That(secondInstance.RenderObjects[0].Visible, Is.True);
                 Assert.That(asset.RenderObjects[0].Visible, Is.True);
             });

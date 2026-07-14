@@ -36,6 +36,7 @@ namespace Njulf.Rendering.Resources
         private uint _materialBufferCapacity;
         private uint _materialExtensionBufferCapacity;
         private uint _materialDataRevision;
+        private uint _materialContentRevisionSerial;
         private bool _gpuUploadDirty = true;
         private ulong _lastUploadBytes;
         private ulong _lastExtensionUploadBytes;
@@ -190,6 +191,23 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        /// <summary>
+        /// Gets the revision of the material payload at a shader-visible material index.
+        /// This is per slot rather than the global upload revision so paged consumers can
+        /// invalidate only content that actually references the changed material.
+        /// </summary>
+        public uint GetMaterialContentRevision(int materialIndex)
+        {
+            lock (_lock)
+            {
+                if ((uint)materialIndex >= (uint)_materials.Count)
+                    return 0;
+
+                MaterialSlot slot = _materials[materialIndex];
+                return slot.Active ? slot.ContentRevision : 0;
+            }
+        }
+
         public MaterialManagerDiagnostics Diagnostics
         {
             get
@@ -311,6 +329,32 @@ namespace Njulf.Rendering.Resources
         {
             lock (_lock)
                 return GetValidatedSlotLocked(handle).TextureHandles;
+        }
+
+        /// <summary>
+        /// Returns the live material texture set once per physical texture handle. This is used
+        /// by render-graph imports; descriptor slots alone are not sufficient to synchronize a
+        /// DDGI ray-query pass with later graphics sampling.
+        /// </summary>
+        public IReadOnlyList<TextureHandle> GetReferencedTextureHandles()
+        {
+            lock (_lock)
+            {
+                var handles = new HashSet<TextureHandle>();
+                foreach (MaterialSlot slot in _materials)
+                {
+                    if (!slot.Active)
+                        continue;
+
+                    foreach (TextureHandle handle in slot.TextureHandles)
+                    {
+                        if (handle.IsValid)
+                            handles.Add(handle);
+                    }
+                }
+
+                return handles.ToArray();
+            }
         }
 
         public MaterialRenderMetadata GetMaterialMetadata(MaterialHandle handle)
@@ -455,6 +499,7 @@ namespace Njulf.Rendering.Resources
             {
                 Data = storedMaterial,
                 Generation = generation,
+                ContentRevision = NextMaterialContentRevisionLocked(),
                 Active = true,
                 Permanent = permanent,
                 ReferenceCount = 1,
@@ -484,6 +529,7 @@ namespace Njulf.Rendering.Resources
             slot.Generation = NextGeneration(slot.Generation);
             slot.TextureHandles = Array.Empty<TextureHandle>();
             slot.Data = CreateDefaultMaterial();
+            slot.ContentRevision = NextMaterialContentRevisionLocked();
             slot.Metadata = MaterialRenderMetadata.FromGpuMaterial(slot.Data);
             slot.RegistrationKey = default;
             _materials[handle.Index] = slot;
@@ -567,6 +613,14 @@ namespace Njulf.Rendering.Resources
             _materialDataRevision++;
             if (_materialDataRevision == 0)
                 _materialDataRevision = 1;
+        }
+
+        private uint NextMaterialContentRevisionLocked()
+        {
+            _materialContentRevisionSerial++;
+            if (_materialContentRevisionSerial == 0)
+                _materialContentRevisionSerial = 1;
+            return _materialContentRevisionSerial;
         }
 
         private BufferHandle CreateMaterialBuffer(uint materialCapacity)
@@ -859,6 +913,7 @@ namespace Njulf.Rendering.Resources
         {
             public GPUMaterialData Data;
             public uint Generation;
+            public uint ContentRevision;
             public bool Active;
             public bool Permanent;
             public int ReferenceCount;

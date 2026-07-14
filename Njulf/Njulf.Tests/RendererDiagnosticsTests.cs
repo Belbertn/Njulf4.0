@@ -118,6 +118,10 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.AsyncComputeRequested, Is.EqualTo(0));
                 Assert.That(diagnostics.AsyncComputeEnabled, Is.EqualTo(0));
                 Assert.That(diagnostics.AsyncComputeSupported, Is.EqualTo(0));
+                Assert.That(diagnostics.AsyncComputeIndependentQueueAvailable, Is.EqualTo(0));
+                Assert.That(diagnostics.AsyncComputeDedicatedQueueFamilyAvailable, Is.EqualTo(0));
+                Assert.That(diagnostics.AsyncComputePlannedGraphicsSegmentCount, Is.EqualTo(0));
+                Assert.That(diagnostics.AsyncComputeSubmittedGraphicsSegmentCount, Is.EqualTo(0));
                 Assert.That(diagnostics.AsyncComputeCandidatePassCount, Is.EqualTo(0));
                 Assert.That(diagnostics.AsyncComputeEnabledPassCount, Is.EqualTo(0));
                 Assert.That(diagnostics.AsyncComputeQueueOwnershipTransitionCount, Is.EqualTo(0));
@@ -311,6 +315,12 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.GlobalIlluminationDebugView, Is.EqualTo(GlobalIlluminationDebugView.None));
                 Assert.That(diagnostics.GlobalIlluminationRayQuerySupported, Is.EqualTo(0));
                 Assert.That(diagnostics.GlobalIlluminationRayQueryActive, Is.EqualTo(0));
+                Assert.That(diagnostics.SimpleDdgiSampledAtlasRequested, Is.EqualTo(0));
+                Assert.That(diagnostics.SimpleDdgiSampledAtlasActive, Is.EqualTo(0));
+                Assert.That(diagnostics.SimpleDdgiSampledAtlasGroupCount, Is.EqualTo(0));
+                Assert.That(diagnostics.SimpleDdgiSampledAtlasLayersPerTexture, Is.EqualTo(0));
+                Assert.That(diagnostics.SimpleDdgiSampledAtlasImageBytes, Is.EqualTo(0));
+                Assert.That(diagnostics.SimpleDdgiSampledAtlasFallbackReason, Is.EqualTo(string.Empty));
                 Assert.That(diagnostics.SsgiWidth, Is.EqualTo(0));
                 Assert.That(diagnostics.SsgiHeight, Is.EqualTo(0));
                 Assert.That(diagnostics.SsgiResolutionScale, Is.EqualTo(0));
@@ -344,6 +354,11 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.DdgiAverageProbeConfidence, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuSsgiRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuDdgiRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuSimpleDdgiRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuFarFieldRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuGlobalIlluminationRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuGlobalIlluminationRecordP95Microseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.GlobalIlluminationCpuTimingSampleCount, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuDdgiSchedulerMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuDdgiSchedulerP95Microseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiSchedulerTimingSampleCount, Is.EqualTo(0));
@@ -745,6 +760,11 @@ namespace Njulf.Tests
                 Assert.That(sceneData.CpuAmbientOcclusionBlurRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuSsgiRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuDdgiRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuSimpleDdgiRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuFarFieldRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuGlobalIlluminationRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuGlobalIlluminationRecordP95Microseconds, Is.EqualTo(0));
+                Assert.That(sceneData.GlobalIlluminationCpuTimingSampleCount, Is.EqualTo(0));
                 Assert.That(sceneData.DdgiGatherSelectedLocalTileFraction, Is.EqualTo(0));
                 Assert.That(sceneData.DdgiGatherSelectedClipmapTileFraction, Is.EqualTo(0));
                 Assert.That(sceneData.DdgiGatherFallbackTileFraction, Is.EqualTo(0));
@@ -928,6 +948,9 @@ namespace Njulf.Tests
                     "TransparentForwardPass",
                     "WeightedTransparentPass",
                     "WeightedOitCompositePass",
+                    "GpuParticleResetPass",
+                    "GpuParticleSimulatePass",
+                    "GpuParticleSortPass",
                     "ParticlePass",
                     "DebugDrawPass",
                     "FogPass",
@@ -1082,7 +1105,9 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiThinWallProxyThickness, Is.EqualTo(0.12f));
                 Assert.That(settings.GlobalIllumination.DdgiThinWallLeakClampStrength, Is.EqualTo(0.9f));
                 Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.False);
-                Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
+                Assert.That(settings.GlobalIllumination.DdgiSimpleEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.EffectiveUseSimpleDdgi, Is.True);
+                Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.False);
                 Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True);
                 Assert.That(settings.AntiAliasing.Mode, Is.EqualTo(AntiAliasingMode.SmaaHigh));
                 Assert.That(settings.AntiAliasing.EffectiveMode, Is.EqualTo(AntiAliasingMode.SmaaHigh));
@@ -1177,7 +1202,9 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.UseRayQueryBackend, Is.True);
                 Assert.That(settings.GlobalIllumination.DdgiCameraRelativeEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.False);
-                Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
+                Assert.That(settings.GlobalIllumination.DdgiSimpleEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.EffectiveUseSimpleDdgi, Is.True);
+                Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.False);
                 Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True);
                 Assert.That(settings.QualityPreset, Is.EqualTo(RenderQualityPreset.DdgiHigh));
                 Assert.That(settings.ResolutionScale, Is.EqualTo(1.0f));
@@ -1286,7 +1313,9 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiCascade2RaysPerProbe, Is.EqualTo(96));
                 Assert.That(settings.GlobalIllumination.DdgiCascade3RaysPerProbe, Is.EqualTo(64));
                 Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.True);
-                Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
+                Assert.That(settings.GlobalIllumination.DdgiSimpleEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.EffectiveUseSimpleDdgi, Is.True);
+                Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.False);
                 Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True);
                 Assert.That(settings.Bloom.Enabled, Is.True);
                 Assert.That(settings.Bloom.MipCount, Is.EqualTo(8));
@@ -1342,7 +1371,9 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiMaxShadedLights, Is.EqualTo(8));
                 Assert.That(settings.GlobalIllumination.DdgiMaterialTextureMaxCascade, Is.EqualTo(1));
                 Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.False);
-                Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
+                Assert.That(settings.GlobalIllumination.DdgiSimpleEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.EffectiveUseSimpleDdgi, Is.True);
+                Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.False);
                 Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True);
                 Assert.That(settings.AmbientOcclusion.Enabled, Is.True);
                 Assert.That(settings.Reflections.Enabled, Is.True);
@@ -1408,6 +1439,30 @@ namespace Njulf.Tests
                 Assert.That(high.DdgiProbeUpdateTimeBudgetMilliseconds, Is.EqualTo(1.5f));
                 Assert.That(high.DdgiGpuScheduleTimeBudgetMilliseconds, Is.EqualTo(0.25f));
                 Assert.That(high.DdgiGpuTotalUpdateTimeBudgetMilliseconds, Is.EqualTo(1.5f));
+                Assert.That(low.SimpleDdgiRingCount, Is.LessThanOrEqualTo(medium.SimpleDdgiRingCount));
+                Assert.That(medium.SimpleDdgiRingCount, Is.LessThanOrEqualTo(high.SimpleDdgiRingCount));
+                Assert.That(high.SimpleDdgiRingCount, Is.LessThanOrEqualTo(ultra.SimpleDdgiRingCount));
+                Assert.That(low.SimpleDdgiRingGridSizeX, Is.LessThan(medium.SimpleDdgiRingGridSizeX));
+                Assert.That(medium.SimpleDdgiRingGridSizeX, Is.LessThan(high.SimpleDdgiRingGridSizeX));
+                Assert.That(high.SimpleDdgiRingGridSizeX, Is.LessThan(ultra.SimpleDdgiRingGridSizeX));
+                Assert.That(low.SimpleDdgiRingGridSizeY, Is.LessThan(medium.SimpleDdgiRingGridSizeY));
+                Assert.That(medium.SimpleDdgiRingGridSizeY, Is.LessThan(high.SimpleDdgiRingGridSizeY));
+                Assert.That(high.SimpleDdgiRingGridSizeY, Is.LessThan(ultra.SimpleDdgiRingGridSizeY));
+                Assert.That(low.SimpleDdgiRaysPerProbe, Is.LessThan(medium.SimpleDdgiRaysPerProbe));
+                Assert.That(medium.SimpleDdgiRaysPerProbe, Is.LessThan(high.SimpleDdgiRaysPerProbe));
+                Assert.That(high.SimpleDdgiRaysPerProbe, Is.LessThan(ultra.SimpleDdgiRaysPerProbe));
+                Assert.That(low.SimpleDdgiProbeUpdatesPerFrame, Is.LessThan(medium.SimpleDdgiProbeUpdatesPerFrame));
+                Assert.That(medium.SimpleDdgiProbeUpdatesPerFrame, Is.LessThan(high.SimpleDdgiProbeUpdatesPerFrame));
+                Assert.That(high.SimpleDdgiProbeUpdatesPerFrame, Is.LessThan(ultra.SimpleDdgiProbeUpdatesPerFrame));
+                Assert.That(low.FarFieldClipmapResolution, Is.LessThan(medium.FarFieldClipmapResolution));
+                Assert.That(medium.FarFieldClipmapResolution, Is.LessThan(high.FarFieldClipmapResolution));
+                Assert.That(high.FarFieldClipmapResolution, Is.LessThan(ultra.FarFieldClipmapResolution));
+                Assert.That(high.SimpleDdgiStructuredGatherEnabled, Is.True);
+                Assert.That(high.SimpleDdgiReducedBlendEnabled, Is.True);
+                Assert.That(high.SimpleDdgiSampledAtlasEnabled, Is.False);
+                Assert.That(high.SimpleDdgiToroidalScrollingEnabled, Is.True);
+                Assert.That(high.SimpleDdgiRegionalInvalidationEnabled, Is.True);
+                Assert.That(high.SimpleDdgiRoughSpecularEnabled, Is.False);
             });
         }
 
@@ -1416,6 +1471,22 @@ namespace Njulf.Tests
             var settings = new GlobalIlluminationSettings();
             settings.ApplyDdgiQualityTier(tier);
             return settings;
+        }
+
+        [Test]
+        public void GlobalIlluminationSettings_DefaultsToSimpleDdgiWithoutSsgi()
+        {
+            var settings = new GlobalIlluminationSettings();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.UseSsgi, Is.False);
+                Assert.That(settings.EffectiveUseSsgi, Is.False);
+                Assert.That(settings.UseDdgi, Is.True);
+                Assert.That(settings.DdgiSimpleEnabled, Is.True);
+                Assert.That(settings.EffectiveUseSimpleDdgi, Is.True);
+                Assert.That(settings.EffectiveUseDdgi, Is.False);
+            });
         }
 
         [Test]
@@ -1538,6 +1609,12 @@ namespace Njulf.Tests
                 settings.GlobalIllumination.SimpleDdgiLightingDirtyBoostEnabled = false;
                 settings.GlobalIllumination.SimpleDdgiDynamicGeometryDirtyBoostEnabled = false;
                 settings.GlobalIllumination.SimpleDdgiAdaptiveRaysEnabled = false;
+                settings.GlobalIllumination.SimpleDdgiStructuredGatherEnabled = false;
+                settings.GlobalIllumination.SimpleDdgiReducedBlendEnabled = false;
+                settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled = true;
+                settings.GlobalIllumination.SimpleDdgiToroidalScrollingEnabled = false;
+                settings.GlobalIllumination.SimpleDdgiRegionalInvalidationEnabled = false;
+                settings.GlobalIllumination.SimpleDdgiRoughSpecularEnabled = true;
                 settings.GlobalIllumination.SimpleDdgiMaintenanceRaysPerProbe = 24;
                 settings.GlobalIllumination.SimpleDdgiHysteresisChangeThreshold = 0.20f;
                 settings.GlobalIllumination.SimpleDdgiHysteresisStepThreshold = 0.70f;
@@ -1693,6 +1770,12 @@ namespace Njulf.Tests
                     Assert.That(loaded.GlobalIllumination.SimpleDdgiLightingDirtyBoostEnabled, Is.False);
                     Assert.That(loaded.GlobalIllumination.SimpleDdgiDynamicGeometryDirtyBoostEnabled, Is.False);
                     Assert.That(loaded.GlobalIllumination.SimpleDdgiAdaptiveRaysEnabled, Is.False);
+                    Assert.That(loaded.GlobalIllumination.SimpleDdgiStructuredGatherEnabled, Is.False);
+                    Assert.That(loaded.GlobalIllumination.SimpleDdgiReducedBlendEnabled, Is.False);
+                    Assert.That(loaded.GlobalIllumination.SimpleDdgiSampledAtlasEnabled, Is.True);
+                    Assert.That(loaded.GlobalIllumination.SimpleDdgiToroidalScrollingEnabled, Is.False);
+                    Assert.That(loaded.GlobalIllumination.SimpleDdgiRegionalInvalidationEnabled, Is.False);
+                    Assert.That(loaded.GlobalIllumination.SimpleDdgiRoughSpecularEnabled, Is.True);
                     Assert.That(loaded.GlobalIllumination.SimpleDdgiMaintenanceRaysPerProbe, Is.EqualTo(24));
                     Assert.That(loaded.GlobalIllumination.SimpleDdgiHysteresisChangeThreshold, Is.EqualTo(0.20f));
                     Assert.That(loaded.GlobalIllumination.SimpleDdgiHysteresisStepThreshold, Is.EqualTo(0.70f));
@@ -1867,18 +1950,25 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void AsyncComputeSettings_DefaultDisabledWithCandidateTogglesEnabled()
+        public void AsyncComputeSettings_DefaultAutoWithDdgiFocusedCandidateToggles()
         {
             var settings = new RenderSettings();
 
             Assert.Multiple(() =>
             {
-                Assert.That(settings.AsyncCompute.Enabled, Is.False);
+                Assert.That(settings.AsyncCompute.Mode, Is.EqualTo(AsyncComputeMode.Auto));
                 Assert.That(settings.AsyncCompute.HiZBuildEnabled, Is.True);
                 Assert.That(settings.AsyncCompute.AmbientOcclusionBlurEnabled, Is.True);
                 Assert.That(settings.AsyncCompute.FogEnabled, Is.True);
                 Assert.That(settings.AsyncCompute.BloomEnabled, Is.True);
                 Assert.That(settings.AsyncCompute.GpuParticlesEnabled, Is.True);
+                Assert.That(settings.AsyncCompute.SimpleDdgiUpdateEnabled, Is.True);
+                Assert.That(settings.AsyncCompute.FullDdgiUpdateEnabled, Is.True);
+                Assert.That(settings.AsyncCompute.FarFieldClipmapBakeEnabled, Is.True);
+                Assert.That(settings.AsyncCompute.SsgiChainEnabled, Is.False);
+                Assert.That(settings.GlobalIllumination.UseSsgi, Is.False);
+                Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.False);
+                Assert.That(settings.GlobalIllumination.UseDdgi, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiSharedMemoryBlendEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiClassificationSchedulingEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiClassificationReadbackEnabled, Is.True);
@@ -1886,7 +1976,7 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.SimpleDdgiLightingDirtyBoostEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiDynamicGeometryDirtyBoostEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiAdaptiveRaysEnabled, Is.True);
-                Assert.That(settings.GlobalIllumination.SimpleDdgiMaintenanceRaysPerProbe, Is.EqualTo(32));
+                Assert.That(settings.GlobalIllumination.SimpleDdgiMaintenanceRaysPerProbe, Is.EqualTo(24));
                 Assert.That(settings.GlobalIllumination.SimpleDdgiHysteresisChangeThreshold, Is.EqualTo(0.25f));
                 Assert.That(settings.GlobalIllumination.SimpleDdgiHysteresisStepThreshold, Is.EqualTo(0.80f));
                 Assert.That(settings.GlobalIllumination.SimpleDdgiLightingDirtyFrameCount, Is.EqualTo(30));
@@ -2453,6 +2543,7 @@ namespace Njulf.Tests
             var settings = new GlobalIlluminationSettings
             {
                 Mode = GlobalIlluminationMode.RayQueryHybrid,
+                UseSsgi = true,
                 IndirectIntensity = 99f,
                 EnvironmentFallbackIntensity = -1f,
                 UseRayQueryBackend = true,
@@ -2581,7 +2672,8 @@ namespace Njulf.Tests
                 Assert.That(settings.DdgiRelocationBlendAlpha, Is.EqualTo(1.0f));
                 Assert.That(settings.DdgiCameraCutResetEnabled, Is.True);
                 Assert.That(settings.EffectiveUseSsgi, Is.True);
-                Assert.That(settings.EffectiveUseDdgi, Is.True);
+                Assert.That(settings.EffectiveUseSimpleDdgi, Is.True);
+                Assert.That(settings.EffectiveUseDdgi, Is.False);
                 Assert.That(settings.EffectiveUseRayQueryBackend, Is.True);
             });
 
@@ -2745,7 +2837,8 @@ namespace Njulf.Tests
                 Assert.That(settings.EffectiveUseRayQueryBackend, Is.False);
 
                 settings.UseDdgi = true;
-                Assert.That(settings.EffectiveUseDdgi, Is.True);
+                Assert.That(settings.EffectiveUseSimpleDdgi, Is.True);
+                Assert.That(settings.EffectiveUseDdgi, Is.False);
                 Assert.That(settings.EffectiveUseRayQueryBackend, Is.True);
 
                 settings.UseSsgi = true;
@@ -3081,14 +3174,16 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(ddgiOnly.EffectiveUseDdgi, Is.True);
+                Assert.That(ddgiOnly.EffectiveUseSimpleDdgi, Is.True);
+                Assert.That(ddgiOnly.EffectiveUseDdgi, Is.False);
                 Assert.That(ddgiOnly.EffectiveUseSsgi, Is.False);
                 Assert.That(ddgiOnlySsgiBytes, Is.EqualTo(0));
                 Assert.That(ddgiOnlySurfaceBytes, Is.EqualTo(0));
                 Assert.That(ssgiOnly.EffectiveUseSsgi, Is.True);
                 Assert.That(ssgiOnlyBytes, Is.GreaterThan(0));
                 Assert.That(hybrid.EffectiveUseSsgi, Is.True);
-                Assert.That(hybrid.EffectiveUseDdgi, Is.True);
+                Assert.That(hybrid.EffectiveUseSimpleDdgi, Is.True);
+                Assert.That(hybrid.EffectiveUseDdgi, Is.False);
                 Assert.That(hybridBytes, Is.EqualTo(ssgiOnlyBytes));
                 Assert.That(disabled.EffectiveUseSsgi, Is.False);
                 Assert.That(disabled.EffectiveUseDdgi, Is.False);
@@ -3241,6 +3336,7 @@ namespace Njulf.Tests
                 Enabled = true,
                 Mode = GlobalIlluminationMode.Ddgi,
                 UseDdgi = true,
+                DdgiSimpleEnabled = false,
                 UseRayQueryBackend = true
             };
             var sceneData = new SceneRenderingData

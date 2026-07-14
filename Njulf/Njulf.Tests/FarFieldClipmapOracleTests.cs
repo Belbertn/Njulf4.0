@@ -4,15 +4,39 @@ using System.Linq;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Memory;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
 using CoreVector3 = Njulf.Core.Math.Vector3;
+using CoreVector4 = Njulf.Core.Math.Vector4;
 
 namespace Njulf.Tests
 {
     [TestFixture]
     public sealed class FarFieldClipmapOracleTests
     {
+        [Test]
+        public void SharedPagedVoxelStorage_IsOneGenerationAwarePhysicalAllocation()
+        {
+            var active = new BufferHandle(97, 98);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    FarFieldClipmapManager.SharesVoxelAllocation(active, active),
+                    Is.True,
+                    "Paged active and bake roles must produce one render-graph binding.");
+                Assert.That(
+                    FarFieldClipmapManager.SharesVoxelAllocation(active, new BufferHandle(97, 99)),
+                    Is.False,
+                    "A recycled handle slot is a different Vulkan allocation lifetime.");
+                Assert.That(
+                    FarFieldClipmapManager.SharesVoxelAllocation(BufferHandle.Invalid, BufferHandle.Invalid),
+                    Is.False,
+                    "Invalid descriptor roles do not identify a physical allocation.");
+            });
+        }
+
         [Test]
         public void TraceFarFieldClipmap_HitsAnalyticOccupiedVoxelWithDda()
         {
@@ -98,9 +122,10 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiProbeUpdate>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiRelocationClassification>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiPushConstants>(), Is.EqualTo(76));
-                Assert.That(Marshal.SizeOf<GPUFarFieldClipmapParams>(), Is.EqualTo(96));
+                Assert.That(Marshal.SizeOf<GPUFarFieldClipmapParams>(), Is.EqualTo(144));
+                Assert.That(Marshal.SizeOf<GPUFarFieldPageTableEntry>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUFarFieldInstance>(), Is.EqualTo(80));
-                Assert.That(Marshal.SizeOf<GPUFarFieldVoxelizePushConstants>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUFarFieldVoxelizePushConstants>(), Is.EqualTo(56));
             });
         }
 
@@ -161,14 +186,20 @@ namespace Njulf.Tests
                 Assert.That(clipmap, Does.Contain("p.voxelBufferIndex = uint(max(diagnostics.x, 0.0));"));
                 Assert.That(clipmap, Does.Contain("p.distanceBufferIndex = uint(max(jumpFlood.x, 0.0));"));
                 Assert.That(clipmap, Does.Contain("ReadStorageWord(p.voxelBufferIndex, FarFieldVoxelIndex(voxel, p))"));
+                Assert.That(clipmap, Does.Contain("bool TraceFarFieldPaged("));
+                Assert.That(clipmap, Does.Contain("bool FindFarFieldPage("));
+                Assert.That(clipmap, Does.Contain("FAR_FIELD_PAGE_VALID_FLAG"));
+                Assert.That(clipmap, Does.Contain("FarFieldTraceMaximumDistance"));
                 string jumpFlood = ReadRepoText("Njulf.Shaders", "farfield_jumpflood.comp");
                 Assert.That(voxelize, Does.Contain("const uint FARFIELD_VOXELIZE_MODE_TRIANGLES = 1u;"));
                 Assert.That(voxelize, Does.Contain("const uint FARFIELD_VOXELIZE_MODE_PUBLISH = 2u;"));
                 Assert.That(voxelize, Does.Contain("uint CurrentFrameIndex;"));
+                Assert.That(voxelize, Does.Contain("uint PageVoxelOffset;"));
+                Assert.That(voxelize, Does.Contain("uint PageGeneration;"));
                 Assert.That(voxelize, Does.Contain("WriteStorageFloat(pc.ParamsBufferIndex, 16u, float(pc.VoxelBufferIndex));"));
                 Assert.That(voxelize, Does.Contain("bool FarFieldTriangleBoxOverlap(vec3 boxCenter, vec3 halfSize, vec3 p0, vec3 p1, vec3 p2)"));
                 Assert.That(voxelize, Does.Contain("if (!FarFieldTriangleBoxOverlap(voxelCenter, halfVoxel, p0, p1, p2))"));
-                Assert.That(voxelize, Does.Contain("atomicOr(BindlessStorageBuffers[nonuniformEXT(pc.VoxelBufferIndex)].Words[voxelIndex], packed);"));
+                Assert.That(voxelize, Does.Contain("Words[pc.PageVoxelOffset + voxelIndex], packed"));
                 Assert.That(common, Does.Contain("const uint FAR_FIELD_RAY_COUNTER = FAR_FIELD_COUNTER_BASE + 0u;"));
                 Assert.That(common, Does.Contain("const uint FAR_FIELD_HIT_COUNTER = FAR_FIELD_COUNTER_BASE + 1u;"));
                 Assert.That(common, Does.Contain("const uint FAR_FIELD_STEP_EXHAUSTED_COUNTER = FAR_FIELD_COUNTER_BASE + 2u;"));
@@ -183,17 +214,174 @@ namespace Njulf.Tests
                 Assert.That(jumpFlood, Does.Contain("FARFIELD_JUMP_FLOOD_MODE_PROPAGATE"));
                 Assert.That(jumpFlood, Does.Contain("WritePackedDistance(dispatchIndex, distance0, distance1);"));
                 Assert.That(jumpFlood, Does.Contain("WriteStorageFloat(pc.ParamsBufferIndex, 23u, 1.0);"));
-                Assert.That(voxelize, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_BAKED_TRIANGLE_COUNTER, 1u);"));
-                Assert.That(voxelize, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_OCCUPIED_VOXEL_WRITE_COUNTER, 1u);"));
+                Assert.That(voxelize, Does.Contain("uint DiagnosticFlags;"));
+                Assert.That(voxelize, Does.Contain("void AddFarFieldDiagnostic(uint counterIndex, uint value)"));
+                Assert.That(voxelize, Does.Contain("if ((pc.DiagnosticFlags & FARFIELD_DIAGNOSTIC_FLAG_DETAILED) != 0u)"));
+                Assert.That(voxelize, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, counterIndex, value);"));
+                Assert.That(voxelize, Does.Contain("AddFarFieldDiagnostic(FAR_FIELD_BAKED_TRIANGLE_COUNTER, 1u);"));
+                Assert.That(voxelize, Does.Contain("AddFarFieldDiagnostic(FAR_FIELD_OCCUPIED_VOXEL_WRITE_COUNTER, 1u);"));
                 Assert.That(renderer, Does.Contain("public const int FarFieldCounterBase = DdgiTraceRingMismatchSampleBase + DdgiTraceRingMismatchSampleCount;"));
                 Assert.That(renderer, Does.Contain("public const int FarFieldCounterCount = 10;"));
                 Assert.That(bakePass, Does.Contain("CurrentFrameIndex = sceneData.CurrentFrameIndex"));
                 Assert.That(bakePass, Does.Contain("private const uint VoxelizeModePublish = 2;"));
                 Assert.That(bakePass, Does.Contain("private const uint JumpFloodModePropagate = 1;"));
                 Assert.That(bakePass, Does.Contain("uint bakeVoxelBufferIndex = checked((uint)_manager.BakeVoxelBufferIndex);"));
-                Assert.That(bakePass, Does.Contain("BuildJumpFloodDistanceField(cmd, sceneData, resolution, bakeVoxelBufferIndex, voxelGroups);"));
+                Assert.That(bakePass, Does.Contain("BuildJumpFloodDistanceField("));
+                Assert.That(bakePass, Does.Contain("_manager.MarkPageBakePublished(work.Request);"));
+                Assert.That(bakePass, Does.Contain("PageVoxelOffset = pageVoxelOffset"));
                 Assert.That(bakePass, Does.Contain("Mode = VoxelizeModePublish"));
                 Assert.That(bakePass, Does.Contain("_manager.MarkBakePublished();"));
+            });
+        }
+
+        [Test]
+        public void FarFieldPageCache_EvictsDeterministicallyAndNeverLetsLowPriorityReplaceNearResidency()
+        {
+            var cache = new FarFieldPageCache();
+            cache.Configure(2);
+            cache.BeginFrame(1);
+            FarFieldPageKey near = new(0, 0, 0, 0);
+            FarFieldPageKey mid = new(1, 0, 0, 0);
+            FarFieldPageKey far = new(2, 0, 0, 0);
+            cache.Request(near, 11UL, priority: 100);
+            cache.Request(mid, 12UL, priority: 50);
+
+            Assert.That(cache.TryBeginBake(out FarFieldPageBakeRequest nearBake), Is.True);
+            cache.MarkBakePublished(nearBake);
+            Assert.That(cache.TryBeginBake(out FarFieldPageBakeRequest midBake), Is.True);
+            cache.MarkBakePublished(midBake);
+            cache.BeginFrame(4); // Conservative publication delay has elapsed.
+
+            cache.Request(far, 13UL, priority: 10);
+            Assert.That(cache.TryGetPhysicalPage(far, out _, out _), Is.False);
+            Assert.That(cache.IsResident(near), Is.True);
+            Assert.That(cache.IsResident(mid), Is.True);
+
+            cache.Request(far, 13UL, priority: 200);
+            Assert.Multiple(() =>
+            {
+                Assert.That(cache.IsResident(near), Is.True);
+                Assert.That(cache.TryGetPhysicalPage(mid, out _, out _), Is.False);
+                Assert.That(cache.TryGetPhysicalPage(far, out int physicalPage, out uint generation), Is.True);
+                Assert.That(physicalPage, Is.EqualTo(1));
+                Assert.That(generation, Is.GreaterThan(0u));
+                Assert.That(cache.EvictionCount, Is.EqualTo(1));
+            });
+        }
+
+        [Test]
+        public void FarFieldPageCache_RevisionChangeInvalidatesPublishedPageBeforeReuse()
+        {
+            var cache = new FarFieldPageCache();
+            cache.Configure(1);
+            cache.BeginFrame(10);
+            FarFieldPageKey key = new(1, -4, 2, 9);
+            cache.Request(key, 100UL, priority: 10);
+            Assert.That(cache.TryBeginBake(out FarFieldPageBakeRequest bake), Is.True);
+            cache.MarkBakePublished(bake);
+            cache.BeginFrame(13);
+            Assert.That(cache.IsResident(key), Is.True);
+
+            cache.Request(key, 101UL, priority: 10);
+            cache.BuildGpuTable(new GPUFarFieldPageTableEntry[cache.RequiredGpuTableCapacity]);
+            Assert.Multiple(() =>
+            {
+                Assert.That(cache.IsResident(key), Is.False);
+                Assert.That(cache.TryBeginBake(out FarFieldPageBakeRequest rebuilt), Is.True);
+                Assert.That(rebuilt.Generation, Is.Not.EqualTo(bake.Generation));
+                Assert.That(rebuilt.SourceRevision, Is.EqualTo(101UL));
+            });
+        }
+
+        [Test]
+        public void FarFieldPageCache_PublishingPageStaysGpuVisibleUntilItCanBeEvicted()
+        {
+            var cache = new FarFieldPageCache();
+            cache.Configure(1);
+            cache.BeginFrame(1);
+            FarFieldPageKey key = new(0, 2, -1, 4);
+            cache.Request(key, 123UL, priority: 50);
+            Assert.That(cache.TryBeginBake(out FarFieldPageBakeRequest bake), Is.True);
+            cache.MarkBakePublished(bake);
+
+            var table = new GPUFarFieldPageTableEntry[cache.RequiredGpuTableCapacity];
+            cache.BuildGpuTable(table);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(cache.IsResident(key), Is.False, "The conservative eviction delay remains active.");
+                Assert.That(
+                    table,
+                    Has.Some.Matches<GPUFarFieldPageTableEntry>(entry =>
+                        entry.WorldPageX == key.X &&
+                        entry.WorldPageY == key.Y &&
+                        entry.WorldPageZ == key.Z &&
+                        (entry.CascadeAndFlags & FarFieldPageCache.ValidFlag) != 0u),
+                    "A recorded publication must remain visible through the next CPU page-table upload.");
+            });
+        }
+
+        [Test]
+        public void FarFieldStaticSourceRevision_TracksMeshAndMaterialContentRevisions()
+        {
+            ulong baseline = FarFieldClipmapManager.CreateStaticInstanceSourceRevision(
+                new MeshHandle(7, 3),
+                materialContentRevision: 11);
+            ulong changedMesh = FarFieldClipmapManager.CreateStaticInstanceSourceRevision(
+                new MeshHandle(7, 4),
+                materialContentRevision: 11);
+            ulong changedMaterial = FarFieldClipmapManager.CreateStaticInstanceSourceRevision(
+                new MeshHandle(7, 3),
+                materialContentRevision: 12);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(changedMesh, Is.Not.EqualTo(baseline));
+                Assert.That(changedMaterial, Is.Not.EqualTo(baseline));
+            });
+        }
+
+        [Test]
+        public void FarFieldStaticSnapshotRefresh_ReusesStableSceneContent()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    FarFieldClipmapManager.ShouldRefreshStaticInstanceSnapshot(
+                        hasSnapshot: true,
+                        sameScene: true,
+                        previousSceneContentRevision: 42,
+                        sceneContentRevision: 42),
+                    Is.False);
+                Assert.That(
+                    FarFieldClipmapManager.ShouldRefreshStaticInstanceSnapshot(
+                        hasSnapshot: false,
+                        sameScene: true,
+                        previousSceneContentRevision: 42,
+                        sceneContentRevision: 42),
+                    Is.True);
+                Assert.That(
+                    FarFieldClipmapManager.ShouldRefreshStaticInstanceSnapshot(
+                        hasSnapshot: true,
+                        sameScene: false,
+                        previousSceneContentRevision: 42,
+                        sceneContentRevision: 42),
+                    Is.True);
+                Assert.That(
+                    FarFieldClipmapManager.ShouldRefreshStaticInstanceSnapshot(
+                        hasSnapshot: true,
+                        sameScene: true,
+                        previousSceneContentRevision: 42,
+                        sceneContentRevision: 43),
+                    Is.True);
+                Assert.That(
+                    FarFieldClipmapManager.ShouldRefreshStaticInstanceSnapshot(
+                        hasSnapshot: true,
+                        sameScene: true,
+                        previousSceneContentRevision: 42,
+                        sceneContentRevision: 0),
+                    Is.True,
+                    "The legacy overload intentionally refreshes because it has no revision contract.");
             });
         }
 
@@ -271,6 +459,97 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void SimpleDdgiToroidalAddressing_PreservesOverlappingPhysicalSlotsAcrossRandomScrolls()
+        {
+            const int countX = 7;
+            const int countY = 5;
+            const int countZ = 9;
+            var random = new Random(0x51D6);
+            GPUSimpleDdgiVolume current = CreateToroidalVolume(countX, countY, countZ, 0, 0, 0);
+
+            for (int step = 0; step < 2048; step++)
+            {
+                int deltaX = random.Next(-countX * 2, countX * 2 + 1);
+                int deltaY = random.Next(-countY * 2, countY * 2 + 1);
+                int deltaZ = random.Next(-countZ * 2, countZ * 2 + 1);
+                int nextOffsetX = PositiveModulo((int)current.RaysAndReserved.Y + deltaX, countX);
+                int nextOffsetY = PositiveModulo((int)current.RaysAndReserved.Z + deltaY, countY);
+                int nextOffsetZ = PositiveModulo((int)current.RaysAndReserved.W + deltaZ, countZ);
+                GPUSimpleDdgiVolume next = CreateToroidalVolume(countX, countY, countZ, nextOffsetX, nextOffsetY, nextOffsetZ);
+
+                for (int z = 0; z < countZ; z++)
+                for (int y = 0; y < countY; y++)
+                for (int x = 0; x < countX; x++)
+                {
+                    int nextLogicalX = x - deltaX;
+                    int nextLogicalY = y - deltaY;
+                    int nextLogicalZ = z - deltaZ;
+                    if (nextLogicalX < 0 || nextLogicalX >= countX ||
+                        nextLogicalY < 0 || nextLogicalY >= countY ||
+                        nextLogicalZ < 0 || nextLogicalZ >= countZ)
+                    {
+                        continue;
+                    }
+
+                    int previousPhysical = SimpleDdgiVolumeManager.CalculatePhysicalProbeLocalIndex(current, x, y, z);
+                    int nextPhysical = SimpleDdgiVolumeManager.CalculatePhysicalProbeLocalIndex(next, nextLogicalX, nextLogicalY, nextLogicalZ);
+                    Assert.That(nextPhysical, Is.EqualTo(previousPhysical),
+                        $"step={step}, logical=({x},{y},{z}), delta=({deltaX},{deltaY},{deltaZ})");
+                }
+
+                for (int physical = 0; physical < countX * countY * countZ; physical++)
+                {
+                    (int logicalX, int logicalY, int logicalZ) = SimpleDdgiVolumeManager.CalculateLogicalProbeCoordinate(next, physical);
+                    Assert.That(
+                        SimpleDdgiVolumeManager.CalculatePhysicalProbeLocalIndex(next, logicalX, logicalY, logicalZ),
+                        Is.EqualTo(physical),
+                        $"step={step}, physical={physical}");
+                }
+
+                current = next;
+            }
+        }
+
+        [Test]
+        public void SimpleDdgiProbeGenerationInvalidation_ReusesFreshSlotsOnlyOncePerEvent()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    SimpleDdgiVolumeManager.ShouldAdvanceProbeGenerationForInvalidation(
+                        wasFresh: false,
+                        previousInvalidationMarker: 11u,
+                        currentInvalidationMarker: 12u,
+                        forceGenerationAdvance: false),
+                    Is.True);
+                Assert.That(
+                    SimpleDdgiVolumeManager.ShouldAdvanceProbeGenerationForInvalidation(
+                        wasFresh: true,
+                        previousInvalidationMarker: 12u,
+                        currentInvalidationMarker: 12u,
+                        forceGenerationAdvance: true),
+                    Is.False,
+                    "Overlapping invalidation events in one frame must deduplicate.");
+                Assert.That(
+                    SimpleDdgiVolumeManager.ShouldAdvanceProbeGenerationForInvalidation(
+                        wasFresh: true,
+                        previousInvalidationMarker: 12u,
+                        currentInvalidationMarker: 13u,
+                        forceGenerationAdvance: true),
+                    Is.True,
+                    "A fresh physical slot re-exposed by a later scroll needs a new generation.");
+                Assert.That(
+                    SimpleDdgiVolumeManager.ShouldAdvanceProbeGenerationForInvalidation(
+                        wasFresh: true,
+                        previousInvalidationMarker: 12u,
+                        currentInvalidationMarker: 13u,
+                        forceGenerationAdvance: false),
+                    Is.False,
+                    "A persistent fresh slot is not a new logical assignment.");
+            });
+        }
+
+        [Test]
         public void FarFieldSceneClampedOrigin_AnchorsCubicClipmapWhenItCoversScene()
         {
             bool hasOrigin = false;
@@ -314,7 +593,8 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(renderer, Does.Contain("_farFieldClipmapManager!.Upload(scene, camera.Position, _stagingRing, _currentCommandBuffer);"));
+                Assert.That(renderer, Does.Contain("_farFieldClipmapManager!.Upload("));
+                Assert.That(renderer, Does.Contain("sceneData.SceneContentRevision);"));
                 Assert.That(renderer, Does.Contain("SimpleDdgiDirtySignature simpleDdgiDirtySignature = CreateSimpleDdgiDirtySignature(scene, lightSnapshot, _ddgiEmissiveSourceRevision);"));
                 Assert.That(renderer, Does.Contain("simpleDdgiDirtySignature.Signature"));
                 Assert.That(renderer, Does.Contain("simpleDdgiDirtySignature.ReasonFlags"));
@@ -340,8 +620,16 @@ namespace Njulf.Tests
                 Assert.That(simpleManager, Does.Contain("float target = SnapScalar(cameraPosition - latticeExtent * 0.5f, spacing);"));
                 Assert.That(simpleManager, Does.Contain("return sceneExtent > latticeExtent && (cameraPosition < innerMin || cameraPosition > innerMax);"));
                 Assert.That(simpleManager, Does.Contain("MathF.Floor(value / s) * s"));
+                Assert.That(simpleManager, Does.Contain("CalculatePhysicalProbeLocalIndex(GPUSimpleDdgiVolume volume, int logicalX, int logicalY, int logicalZ)"));
+                Assert.That(simpleManager, Does.Contain("CalculateLogicalProbeCoordinate(GPUSimpleDdgiVolume volume, int physicalLocalIndex)"));
+                Assert.That(simpleManager, Does.Contain("AdvanceProbeGeneration"));
+                Assert.That(simpleManager, Does.Contain("_probeStateReadbackUpdateMarkers"));
                 Assert.That(farFieldManager, Does.Contain("public void Upload(Scene scene, Vector3 cameraPosition, StagingRing stagingRing, CommandBuffer commandBuffer)"));
-                Assert.That(farFieldManager, Does.Contain("public int BakeVoxelBufferIndex => _bakeVoxelBufferIndex;"));
+                Assert.That(farFieldManager, Does.Contain("public int BakeVoxelBufferIndex => _pagedMode ? BindlessIndex.FarFieldClipmapVoxelBuffer : _bakeVoxelBufferIndex;"));
+                Assert.That(farFieldManager, Does.Contain("private void UploadPaged("));
+                Assert.That(farFieldManager, Does.Contain("EnsurePagedCapacity(pageResolution, pagePoolCapacity);"));
+                Assert.That(farFieldManager, Does.Contain("RequestCameraPages(cameraPosition, gi, settingsSignature, sceneContentChanged);"));
+                Assert.That(farFieldManager, Does.Contain("FarFieldPageBakeWork"));
                 Assert.That(farFieldManager, Does.Contain("public int DistanceBufferIndex => BindlessIndex.FarFieldClipmapDistanceBuffer;"));
                 Assert.That(farFieldManager, Does.Contain("Far Field Clipmap Distance Field R16"));
                 Assert.That(farFieldManager, Does.Contain("public void MarkBakePublished()"));
@@ -356,8 +644,27 @@ namespace Njulf.Tests
                 Assert.That(farFieldManager, Does.Contain("ResolveDesiredSceneClampedAxisOrigin(sceneMin.X, sceneMax.X, extent, voxelSize, cameraPosition.X)"));
                 Assert.That(farFieldManager, Does.Contain("return sceneMin - Math.Max(extent - sceneExtent, 0.0f) * 0.5f;"));
                 Assert.That(farFieldManager, Does.Contain("float target = SnapScalar(cameraPosition - extent * 0.5f, voxelSize);"));
-                Assert.That(farFieldManager, Does.Contain("CreateSignature(resolution, new BoundingBox(_clipmapOrigin, _clipmapOrigin + new Vector3(cubicExtent)), _gpuInstances)"));
+                Assert.That(farFieldManager, Does.Contain("CreateStaticInstanceSourceRevision"));
+                Assert.That(farFieldManager, Does.Contain("mesh.Generation"));
+                Assert.That(farFieldManager, Does.Contain("GetMaterialContentRevision"));
+                Assert.That(farFieldManager, Does.Contain("hash = HashAdd(hash, instance.World);"));
             });
+        }
+
+        private static GPUSimpleDdgiVolume CreateToroidalVolume(int countX, int countY, int countZ, int offsetX, int offsetY, int offsetZ)
+        {
+            return new GPUSimpleDdgiVolume
+            {
+                OriginAndSpacing = new CoreVector4(0.0f, 0.0f, 0.0f, 1.0f),
+                GridCountsAndFirstProbe = new CoreVector4(countX, countY, countZ, 0.0f),
+                RaysAndReserved = new CoreVector4(0.0f, offsetX, offsetY, offsetZ)
+            };
+        }
+
+        private static int PositiveModulo(int value, int modulus)
+        {
+            int result = value % modulus;
+            return result < 0 ? result + modulus : result;
         }
 
         private static bool TraceFarFieldClipmap(

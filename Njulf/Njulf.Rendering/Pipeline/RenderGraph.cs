@@ -17,6 +17,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly Dictionary<RenderGraphResourceId, RenderGraphResourceDescriptor> _resources = new();
         private readonly Dictionary<string, List<RenderGraphResourceUsage>> _passResourceUsages = new(StringComparer.Ordinal);
         private readonly Dictionary<RenderGraphResourceId, List<RenderTarget>> _ownedRenderTargets = new();
+        private readonly RenderGraphResourceBindings _concreteResourceBindings = new();
         private readonly Dictionary<RenderGraphResourceId, RenderGraphResourceUsage> _lastResourceUsages = new();
         private readonly List<RenderGraphPlannedBarrier> _framePlannedBarriers = new();
         private bool _disposed;
@@ -36,8 +37,12 @@ namespace Njulf.Rendering.Pipeline
         public IReadOnlyDictionary<string, IReadOnlyList<RenderGraphResourceUsage>> PassResourceUsages =>
             ToReadOnlyPassResourceUsages();
         public IReadOnlyList<RenderGraphPlannedBarrier> LastPlannedBarriers => _framePlannedBarriers.ToArray();
+        public RenderGraphResourceBindings ConcreteResourceBindings => _concreteResourceBindings;
 
-        public RenderGraphDiagnostics CreateDiagnostics(RenderFeatureIsolationMode featureIsolation, bool asyncComputeEnabled = false)
+        public RenderGraphDiagnostics CreateDiagnostics(
+            RenderFeatureIsolationMode featureIsolation,
+            bool asyncComputeEnabled = false,
+            SceneRenderingData? sceneData = null)
         {
             var resources = new List<RenderGraphResourceDiagnostics>(_resources.Count);
             int transientResourceCount = 0;
@@ -88,16 +93,18 @@ namespace Njulf.Rendering.Pipeline
             {
                 IReadOnlyList<RenderGraphResourceUsage> usages = GetPassResourceUsages(pass.Name);
                 bool enabledByFeatureIsolation = RenderFeatureIsolationPolicy.ShouldExecutePass(featureIsolation, pass.Name);
+                bool willExecute = enabledByFeatureIsolation &&
+                    (sceneData == null || pass.ShouldExecute(checked((int)sceneData.CurrentFrameIndex), sceneData));
                 bool asyncCandidate = pass.SupportsAsyncCompute;
-                bool asyncEnabled = asyncComputeEnabled && enabledByFeatureIsolation && asyncCandidate;
-                if (enabledByFeatureIsolation && asyncCandidate)
+                bool asyncEnabled = asyncComputeEnabled && willExecute && asyncCandidate;
+                if (willExecute && asyncCandidate)
                     asyncComputeCandidatePassCount++;
                 if (asyncEnabled)
                     asyncComputeEnabledPassCount++;
 
                 passes.Add(new RenderGraphPassDiagnostics(
                     pass.Name,
-                    enabledByFeatureIsolation,
+                    willExecute,
                     pass.QueueIntent.ToString(),
                     asyncCandidate,
                     asyncEnabled,
@@ -180,6 +187,27 @@ namespace Njulf.Rendering.Pipeline
             return _passResourceUsages.TryGetValue(passName, out List<RenderGraphResourceUsage>? usages)
                 ? usages
                 : Array.Empty<RenderGraphResourceUsage>();
+        }
+
+        /// <summary>
+        /// Resolves the same feature-isolation and per-pass predicate used by execution without
+        /// recording work. The async planner uses this to avoid moving an optional no-op pass to
+        /// another queue and, more importantly, to validate only the concrete resources a frame
+        /// will really touch.
+        /// </summary>
+        public bool WillExecutePass(string passName, int frameIndex, SceneRenderingData sceneData)
+        {
+            if (string.IsNullOrWhiteSpace(passName))
+                throw new ArgumentException("Pass name is required.", nameof(passName));
+            if (sceneData == null)
+                throw new ArgumentNullException(nameof(sceneData));
+
+            RenderPassBase? pass = _passes.Find(candidate => string.Equals(candidate.Name, passName, StringComparison.Ordinal));
+            if (pass == null)
+                throw new InvalidOperationException($"Render pass '{passName}' is not registered.");
+
+            return RenderFeatureIsolationPolicy.ShouldExecutePass(sceneData.ActiveFeatureIsolation, pass.Name) &&
+                   pass.ShouldExecute(frameIndex, sceneData);
         }
 
         public RenderTarget CreateOwnedRenderTarget(
@@ -337,6 +365,98 @@ namespace Njulf.Rendering.Pipeline
                 useSecondaryCommandBuffers);
         }
 
+        /// <summary>
+        /// Replaces all concrete Vulkan bindings in one generation.  Resize, scene reload, and
+        /// history ping-pong changes use this atomic operation so a scheduler can never retain a
+        /// stale allocation handle from an earlier frame.
+        /// </summary>
+        public void ReplaceConcreteResourceBindings(IEnumerable<RenderGraphConcreteResourceBinding> bindings)
+        {
+            if (bindings == null)
+                throw new ArgumentNullException(nameof(bindings));
+
+            RenderGraphConcreteResourceBinding[] materialized = bindings.ToArray();
+            foreach (RenderGraphConcreteResourceBinding binding in materialized)
+            {
+                if (!_resources.TryGetValue(binding.Resource, out RenderGraphResourceDescriptor? descriptor))
+                {
+                    throw new InvalidOperationException(
+                        $"Concrete binding '{binding.Name}' references undeclared graph resource '{binding.Resource}'.");
+                }
+
+                if (descriptor.Kind != RenderGraphResourceKind.External)
+                {
+                    bool expectsImage = IsImageResource(descriptor.Kind);
+                    bool isImage = binding.Kind == RenderGraphConcreteResourceKind.Image;
+                    if (expectsImage != isImage)
+                    {
+                        throw new InvalidOperationException(
+                            $"Concrete binding '{binding.Name}' has kind '{binding.Kind}', but graph resource " +
+                            $"'{binding.Resource}' is declared as '{descriptor.Kind}'.");
+                    }
+                }
+            }
+
+            _concreteResourceBindings.Replace(materialized);
+        }
+
+        public void InvalidateConcreteResourceBindings() => _concreteResourceBindings.Invalidate();
+
+        /// <summary>
+        /// Returns deterministic validation errors instead of throwing so the async scheduler can
+        /// reject just this frame and leave the graphics-only path intact.
+        /// </summary>
+        public IReadOnlyList<string> ValidateConcreteResourcePlan(
+            IEnumerable<string> passNames,
+            int frameIndex)
+        {
+            if (passNames == null)
+                throw new ArgumentNullException(nameof(passNames));
+
+            var errors = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string passName in passNames)
+            {
+                if (!_passResourceUsages.TryGetValue(passName, out List<RenderGraphResourceUsage>? usages))
+                {
+                    errors.Add($"Pass '{passName}' has no concrete resource declaration.");
+                    continue;
+                }
+
+                foreach (RenderGraphResourceUsage usage in usages)
+                {
+                    IReadOnlyList<RenderGraphConcreteResourceBinding> bindings =
+                        _concreteResourceBindings.GetBindings(usage.Resource, frameIndex);
+                    if (bindings.Count == 0)
+                    {
+                        string error = $"Pass '{passName}' has no concrete binding for '{usage.Resource}'.";
+                        if (seen.Add(error))
+                            errors.Add(error);
+                        continue;
+                    }
+
+                    if (usage.StageMask == PipelineStageFlags2.None || usage.AccessMask == AccessFlags2.None)
+                    {
+                        string error = $"Pass '{passName}' has no stage/access plan for '{usage.Resource}'.";
+                        if (seen.Add(error))
+                            errors.Add(error);
+                    }
+
+                    foreach (RenderGraphConcreteResourceBinding binding in bindings)
+                    {
+                        if (!_concreteResourceBindings.IsCurrent(binding))
+                        {
+                            string error = $"Pass '{passName}' resolved stale binding '{binding.Name}' for '{usage.Resource}'.";
+                            if (seen.Add(error))
+                                errors.Add(error);
+                        }
+                    }
+                }
+            }
+
+            return errors;
+        }
+
         public void BeginSplitExecution(SceneRenderingData sceneData)
         {
             ResetBarrierPlanning(sceneData);
@@ -349,7 +469,9 @@ namespace Njulf.Rendering.Pipeline
             Func<string, bool> includePass,
             GpuTimestampRecorder? timestamps = null,
             CommandBufferManager? commandBuffers = null,
-            bool useSecondaryCommandBuffers = false)
+            bool useSecondaryCommandBuffers = false,
+            bool isComputeQueue = false,
+            bool usesExplicitQueueTransfers = false)
         {
             if (includePass == null)
                 throw new ArgumentNullException(nameof(includePass));
@@ -372,13 +494,18 @@ namespace Njulf.Rendering.Pipeline
                     continue;
                 }
 
-                ExecuteGraphPlannedBarriers(cmd, pass.Name, sceneData);
+                ExecuteGraphPlannedBarriers(
+                    cmd,
+                    pass.Name,
+                    sceneData,
+                    isComputeQueue,
+                    usesExplicitQueueTransfers);
 
                 var barriers = pass.GetBarriers(frameIndex);
                 foreach (var barrier in barriers)
                     BarrierBuilder.ExecuteBarrier(cmd, barrier);
 
-                if (useSecondaryCommandBuffers && commandBuffers != null && pass.SupportsSecondaryCommandBuffer)
+                if (!isComputeQueue && useSecondaryCommandBuffers && commandBuffers != null && pass.SupportsSecondaryCommandBuffer)
                 {
                     ExecuteSecondaryPass(commandBuffers, cmd, pass, frameIndex, sceneData, timestamps);
                     continue;
@@ -386,7 +513,10 @@ namespace Njulf.Rendering.Pipeline
 
                 long passStart = Stopwatch.GetTimestamp();
                 pass.Context.BeginDebugLabel(cmd, pass.Name);
-                timestamps?.BeginPass(cmd, frameIndex, pass.Name);
+                if (isComputeQueue)
+                    timestamps?.BeginComputePass(cmd, frameIndex, pass.Name);
+                else
+                    timestamps?.BeginPass(cmd, frameIndex, pass.Name);
                 try
                 {
                     pass.Execute(cmd, frameIndex, sceneData, timestamps);
@@ -435,27 +565,55 @@ namespace Njulf.Rendering.Pipeline
         private void ExecuteGraphPlannedBarriers(
             CommandBuffer cmd,
             string passName,
-            SceneRenderingData sceneData)
+            SceneRenderingData sceneData,
+            bool isComputeQueue,
+            bool usesExplicitQueueTransfers)
         {
             if (!_passResourceUsages.TryGetValue(passName, out List<RenderGraphResourceUsage>? usages))
                 return;
 
             foreach (RenderGraphResourceUsage usage in usages)
             {
+                // Queue intent in the static declaration describes the preferred placement, not
+                // necessarily the queue that recorded this frame (for example, compute-capable
+                // passes remain on graphics in Disabled mode).  Track the actual recording
+                // queue so a split plan never emits a second ordinary barrier across queues.
+                RenderGraphResourceUsage effectiveUsage = usage with
+                {
+                    QueueIntent = isComputeQueue
+                        ? RenderGraphQueueIntent.Compute
+                        : RenderGraphQueueIntent.Graphics
+                };
+                bool hasPrevious = _lastResourceUsages.TryGetValue(usage.Resource, out RenderGraphResourceUsage previous);
+                bool crossesRecordedQueues = usesExplicitQueueTransfers &&
+                    hasPrevious &&
+                    previous.QueueIntent != effectiveUsage.QueueIntent &&
+                    previous.QueueIntent != RenderGraphQueueIntent.External &&
+                    effectiveUsage.QueueIntent != RenderGraphQueueIntent.External;
+
+                // QueueOwnershipTransferRecorder already emitted the matching release/acquire
+                // pair and semaphore edge. An ordinary barrier in the destination command buffer
+                // would both duplicate the dependency and can name source stages unsupported by
+                // a dedicated compute queue.
+                if (crossesRecordedQueues)
+                {
+                    _lastResourceUsages[usage.Resource] = effectiveUsage;
+                    continue;
+                }
+
                 if (usage.ImageLayout == ImageLayout.Undefined ||
                     !_resources.TryGetValue(usage.Resource, out RenderGraphResourceDescriptor? resource) ||
                     !IsImageResource(resource.Kind) ||
                     !_ownedRenderTargets.TryGetValue(usage.Resource, out List<RenderTarget>? targets))
                 {
-                    _lastResourceUsages[usage.Resource] = usage;
+                    _lastResourceUsages[usage.Resource] = effectiveUsage;
                     continue;
                 }
 
-                bool hasPrevious = _lastResourceUsages.TryGetValue(usage.Resource, out RenderGraphResourceUsage previous);
                 foreach (RenderTarget target in targets)
-                    PlanAndExecuteImageBarrier(cmd, passName, usage, previous, hasPrevious, target, sceneData);
+                    PlanAndExecuteImageBarrier(cmd, passName, effectiveUsage, previous, hasPrevious, target, sceneData);
 
-                _lastResourceUsages[usage.Resource] = usage;
+                _lastResourceUsages[usage.Resource] = effectiveUsage;
             }
         }
 
@@ -765,6 +923,9 @@ namespace Njulf.Rendering.Pipeline
         
         public void OnSwapchainRecreated()
         {
+            // Imported and graph-owned images may have been recreated. A plan compiled before
+            // this point must never retain the old handle or ownership state.
+            _concreteResourceBindings.Invalidate();
             foreach (var pass in _passes)
                 pass.OnSwapchainRecreated();
         }

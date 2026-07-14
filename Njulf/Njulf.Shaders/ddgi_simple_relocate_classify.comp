@@ -30,8 +30,8 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint Padding0;
 } pc;
 
-const float SIMPLE_DDGI_INACTIVE_BACKFACE_RATIO = 0.25;
-const float SIMPLE_DDGI_BACKFACE_ESCAPE_MARGIN = 0.10;
+const float SIMPLE_DDGI_RELOCATION_TARGET_DISTANCE = 0.10;
+const float SIMPLE_DDGI_RELOCATION_MAX_DISTANCE = 0.45;
 
 vec4 ReadSimpleRayRadianceDistance(uint rayResultIndex)
 {
@@ -66,6 +66,10 @@ void main()
     SimpleDdgiVolume volume;
     uint localProbeIndex;
     if (!ResolveSimpleDdgiProbeVolume(probeIndex, params, volume, localProbeIndex))
+        return;
+
+    SimpleDdgiProbeState previous = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
+    if (!SimpleDdgiUpdateMatchesProbeGeneration(update, previous))
         return;
 
     uint missCount = 0u;
@@ -116,41 +120,70 @@ void main()
     float hitRatio = float(hitCount) / rayCount;
     float backfaceRatio = float(backfaceCount) / rayCount;
     float closeRatio = float(closeCount) / rayCount;
-    bool activeProbe = backfaceRatio < SIMPLE_DDGI_INACTIVE_BACKFACE_RATIO;
+    float softInvalidProbeScore = max(
+        smoothstep(0.25, 0.45, closeRatio),
+        smoothstep(0.40, 0.60, backfaceRatio));
+    float hardInvalidProbeScore = max(
+        smoothstep(0.70, 0.90, closeRatio),
+        smoothstep(0.55, 0.75, backfaceRatio));
+    bool maintenanceUpdate = SimpleDdgiUpdateIsMaintenance(update);
 
-    SimpleDdgiProbeState previous = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
+    float previousActive = clamp(previous.activeWeight, 0.0, 1.0);
+    float hardInvalid = smoothstep(0.75, 0.95, hardInvalidProbeScore);
+    float activeFloor = volume.kind == SIMPLE_DDGI_VOLUME_KIND_AUTHORED ? 0.0 : 0.35;
+    float targetActive = max(1.0 - hardInvalid, activeFloor);
+    float stateBlendAlpha = (update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u ? 1.0 : 0.12;
+    if (targetActive > previousActive)
+        stateBlendAlpha = max(stateBlendAlpha, 0.35);
+    float activeWeight = maintenanceUpdate
+        ? previousActive
+        : mix(previousActive, targetActive, stateBlendAlpha);
+
     vec3 targetRelocation = vec3(0.0);
-    if (backfaceCount > 0u)
+    if (!maintenanceUpdate && backfaceCount > 0u)
     {
         vec3 direction = length(backfaceDirectionSum) > 0.00001 ? normalize(backfaceDirectionSum) : nearestBackfaceDirection;
-        float maxOffset = volume.spacing * 0.45;
-        float preferredOffset = nearestBackfaceDistance < 3.0e+38
-            ? clamp(nearestBackfaceDistance + volume.spacing * SIMPLE_DDGI_BACKFACE_ESCAPE_MARGIN, 0.0, maxOffset)
-            : maxOffset;
-        targetRelocation = direction * preferredOffset;
+        float targetSurfaceDistance = volume.spacing * SIMPLE_DDGI_RELOCATION_TARGET_DISTANCE;
+        float nearestDistance = nearestBackfaceDistance < 3.0e+38 ? nearestBackfaceDistance : targetSurfaceDistance;
+        float relocationEvidence = smoothstep(0.10, 0.35, closeRatio) * (1.0 - missRatio);
+        float neededPush = max(targetSurfaceDistance - nearestDistance, 0.0);
+        float closePush = closeRatio * volume.spacing * 0.12;
+        float targetDistance = clamp(
+            max(neededPush, closePush) * relocationEvidence,
+            0.0,
+            volume.spacing * SIMPLE_DDGI_RELOCATION_MAX_DISTANCE);
+        targetRelocation = direction * targetDistance;
     }
 
-    float relocationAlpha = (update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u ? 1.0 : 0.35;
-    vec3 blendedRelocation = mix(previous.relocation * 0.98, targetRelocation, relocationAlpha);
-    float maxRelocation = volume.spacing * 0.45;
+    float targetRelocationLength = length(targetRelocation);
+    float previousRelocationLength = length(previous.relocation);
+    float relocationAlpha = (update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u
+        ? 1.0
+        : (targetRelocationLength > previousRelocationLength ? 0.15 : 0.05);
+    vec3 blendedRelocation = maintenanceUpdate
+        ? previous.relocation
+        : mix(previous.relocation, targetRelocation, relocationAlpha);
+    float maxRelocation = volume.spacing * SIMPLE_DDGI_RELOCATION_MAX_DISTANCE;
     float relocationLength = length(blendedRelocation);
     if (relocationLength > maxRelocation)
         blendedRelocation *= maxRelocation / max(relocationLength, 0.00001);
 
     SimpleDdgiProbeState state;
     state.relocation = blendedRelocation;
-    state.activeWeight = activeProbe ? 1.0 : 0.0;
-    state.flags = previous.flags & ~SIMPLE_DDGI_PROBE_FLAG_FRESH;
-    if (!activeProbe)
+    state.activeWeight = activeWeight;
+    state.flags = previous.flags & ~(SIMPLE_DDGI_PROBE_FLAG_FRESH | SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED);
+    bool inactiveProbe = maintenanceUpdate
+        ? previous.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE
+        : activeWeight <= 0.05 && hardInvalidProbeScore >= 0.75;
+    if (inactiveProbe)
         state.flags |= SIMPLE_DDGI_PROBE_FLAG_INACTIVE;
     else
         state.flags &= ~SIMPLE_DDGI_PROBE_FLAG_INACTIVE;
     state.age = 0u;
-    state.classification = activeProbe ? SIMPLE_DDGI_CLASSIFICATION_ACTIVE : SIMPLE_DDGI_CLASSIFICATION_INACTIVE;
+    state.classification = inactiveProbe ? SIMPLE_DDGI_CLASSIFICATION_INACTIVE : SIMPLE_DDGI_CLASSIFICATION_ACTIVE;
     state.luminanceChangeEma = previous.luminanceChangeEma;
     WriteSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex, state);
 
     float nearestDistance = nearestHitDistance < 3.0e+38 ? nearestHitDistance : 0.0;
-    float invalidScore = activeProbe ? 0.0 : backfaceRatio;
-    WriteRelocationClassification(probeIndex, blendedRelocation, length(blendedRelocation), state.activeWeight, invalidScore, closeRatio, backfaceRatio, nearestDistance, missRatio, hitRatio);
+    WriteRelocationClassification(probeIndex, blendedRelocation, length(blendedRelocation), state.activeWeight, softInvalidProbeScore, closeRatio, backfaceRatio, nearestDistance, missRatio, hitRatio);
 }

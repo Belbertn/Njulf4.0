@@ -37,6 +37,7 @@ namespace Njulf.Rendering.Diagnostics
         int ReflectionProbeBudget,
         int DdgiProbeBudget,
         double GlobalIlluminationGpuBudgetMilliseconds,
+        double GlobalIlluminationCpuBudgetMilliseconds,
         ulong GlobalIlluminationMemoryBudgetBytes,
         int TransparentObjectBudget)
     {
@@ -64,6 +65,7 @@ namespace Njulf.Rendering.Diagnostics
             64,
             8_192,
             2.5,
+            0.25,
             96UL * 1024UL * 1024UL,
             4_096);
 
@@ -89,6 +91,7 @@ namespace Njulf.Rendering.Diagnostics
             ReflectionProbeBudget = 16,
             DdgiProbeBudget = 32_768,
             GlobalIlluminationGpuBudgetMilliseconds = 0.25,
+            GlobalIlluminationCpuBudgetMilliseconds = 0.5,
             GlobalIlluminationMemoryBudgetBytes = 1,
             TransparentObjectBudget = 1_024
         };
@@ -125,6 +128,7 @@ namespace Njulf.Rendering.Diagnostics
             ReflectionProbeBudget = 96,
             DdgiProbeBudget = 32_768,
             GlobalIlluminationGpuBudgetMilliseconds = 3.0,
+            GlobalIlluminationCpuBudgetMilliseconds = 0.25,
             GlobalIlluminationMemoryBudgetBytes = 192UL * 1024UL * 1024UL,
             TransparentObjectBudget = 6_144
         };
@@ -151,6 +155,7 @@ namespace Njulf.Rendering.Diagnostics
             ReflectionProbeBudget = 128,
             DdgiProbeBudget = 32_768,
             GlobalIlluminationGpuBudgetMilliseconds = 4.0,
+            GlobalIlluminationCpuBudgetMilliseconds = 0.35,
             GlobalIlluminationMemoryBudgetBytes = 384UL * 1024UL * 1024UL,
             TransparentObjectBudget = 8_192
         };
@@ -178,6 +183,7 @@ namespace Njulf.Rendering.Diagnostics
             int.MaxValue,
             int.MaxValue,
             int.MaxValue,
+            double.PositiveInfinity,
             double.PositiveInfinity,
             ulong.MaxValue,
             int.MaxValue);

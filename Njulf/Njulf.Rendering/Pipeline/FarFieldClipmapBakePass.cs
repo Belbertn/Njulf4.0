@@ -21,6 +21,7 @@ namespace Njulf.Rendering.Pipeline
         private const uint JumpFloodModeSeed = 0;
         private const uint JumpFloodModePropagate = 1;
         private const uint JumpFloodModePublish = 2;
+        private const uint DetailedDiagnosticsFlag = 1u << 0;
 
         private readonly RenderSettings _settings;
         private readonly FarFieldClipmapManager _manager;
@@ -71,25 +72,77 @@ namespace Njulf.Rendering.Pipeline
             if (!_manager.ConsumeBakePending())
                 return;
 
+            if (_manager.PagedMode)
+            {
+                try
+                {
+                    for (int pageIndex = 0; pageIndex < _manager.PageBakeCount; pageIndex++)
+                    {
+                        FarFieldPageBakeWork work = _manager.GetPageBakeWork(pageIndex);
+                        ExecuteBake(cmd, sceneData, work.Request, work.InstanceIndices, work.InstanceCount);
+                        _manager.MarkPageBakePublished(work.Request);
+                    }
+                }
+                catch
+                {
+                    for (int pageIndex = 0; pageIndex < _manager.PageBakeCount; pageIndex++)
+                        _manager.MarkPageBakeFailed(_manager.GetPageBakeWork(pageIndex).Request);
+                    throw;
+                }
+                finally
+                {
+                    _manager.CompletePagedBakeBatch();
+                }
+
+                return;
+            }
+
+            ExecuteBake(cmd, sceneData, request: null, instanceIndices: null, instanceIndexCount: 0);
+            _manager.MarkBakePublished();
+        }
+
+        private void ExecuteBake(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            FarFieldPageBakeRequest? request,
+            int[]? instanceIndices,
+            int instanceIndexCount)
+        {
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
             BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
 
             int resolution = Math.Max(1, _manager.Resolution);
             uint bakeVoxelBufferIndex = checked((uint)_manager.BakeVoxelBufferIndex);
-            uint voxelGroups = checked((uint)Math.Max(1, ((resolution * resolution * resolution) + 63) / 64));
+            uint voxelCount = checked((uint)resolution * (uint)resolution * (uint)resolution);
+            uint voxelGroups = Math.Max(1u, (voxelCount + 63u) / 64u);
+            uint pageVoxelOffset = request.HasValue ? _manager.GetPageVoxelOffset(request.Value) : 0u;
+            uint pageDistanceWordOffset = request.HasValue ? _manager.GetPageDistanceWordOffset(request.Value) : 0u;
+            uint pageTableEntryIndex = request.HasValue ? checked((uint)request.Value.GpuTableEntryIndex) : 0u;
+            uint pageGeneration = request?.Generation ?? 0u;
+            uint pageTableBufferIndex = checked((uint)_manager.PageTableBufferIndex);
+
             Push(cmd, new GPUFarFieldVoxelizePushConstants
             {
                 ParamsBufferIndex = BindlessIndex.FarFieldClipmapParamsBuffer,
                 VoxelBufferIndex = bakeVoxelBufferIndex,
                 InstanceBufferIndex = BindlessIndex.FarFieldClipmapInstanceBuffer,
                 Mode = VoxelizeModeClear,
-                CurrentFrameIndex = sceneData.CurrentFrameIndex
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                PageVoxelOffset = pageVoxelOffset,
+                PageDistanceWordOffset = pageDistanceWordOffset,
+                PageTableBufferIndex = pageTableBufferIndex,
+                PageTableEntryIndex = pageTableEntryIndex,
+                PageGeneration = pageGeneration
             });
             _context.Api.CmdDispatch(cmd, voxelGroups, 1, 1);
             InsertComputeBarrier(cmd);
 
-            for (int instanceIndex = 0; instanceIndex < _manager.InstanceCount; instanceIndex++)
+            int instanceCount = instanceIndices == null
+                ? _manager.InstanceCount
+                : Math.Min(Math.Max(instanceIndexCount, 0), instanceIndices.Length);
+            for (int bakeInstanceIndex = 0; bakeInstanceIndex < instanceCount; bakeInstanceIndex++)
             {
+                int instanceIndex = instanceIndices?[bakeInstanceIndex] ?? bakeInstanceIndex;
                 uint triangleCount = _manager.GetTriangleCount(instanceIndex);
                 if (triangleCount == 0)
                     continue;
@@ -104,24 +157,43 @@ namespace Njulf.Rendering.Pipeline
                     MaterialTextureMaxCascade = _settings.GlobalIllumination.DdgiMaterialTextureMaxCascade < 0
                         ? GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount
                         : checked((uint)Math.Clamp(_settings.GlobalIllumination.DdgiMaterialTextureMaxCascade, 0, GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount - 1)),
-                    CurrentFrameIndex = sceneData.CurrentFrameIndex
+                    CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                    PageVoxelOffset = pageVoxelOffset,
+                    PageDistanceWordOffset = pageDistanceWordOffset,
+                    PageTableBufferIndex = pageTableBufferIndex,
+                    PageTableEntryIndex = pageTableEntryIndex,
+                    PageGeneration = pageGeneration
                 });
                 _context.Api.CmdDispatch(cmd, Math.Max(1u, (triangleCount + 63u) / 64u), 1, 1);
             }
 
             InsertComputeBarrier(cmd);
-            BuildJumpFloodDistanceField(cmd, sceneData, resolution, bakeVoxelBufferIndex, voxelGroups);
+            BuildJumpFloodDistanceField(
+                cmd,
+                sceneData,
+                resolution,
+                bakeVoxelBufferIndex,
+                voxelGroups,
+                pageVoxelOffset,
+                pageDistanceWordOffset,
+                pageTableBufferIndex,
+                pageTableEntryIndex,
+                pageGeneration);
 
             Push(cmd, new GPUFarFieldVoxelizePushConstants
             {
                 ParamsBufferIndex = BindlessIndex.FarFieldClipmapParamsBuffer,
                 VoxelBufferIndex = bakeVoxelBufferIndex,
                 Mode = VoxelizeModePublish,
-                CurrentFrameIndex = sceneData.CurrentFrameIndex
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                PageVoxelOffset = pageVoxelOffset,
+                PageDistanceWordOffset = pageDistanceWordOffset,
+                PageTableBufferIndex = pageTableBufferIndex,
+                PageTableEntryIndex = pageTableEntryIndex,
+                PageGeneration = pageGeneration
             });
             _context.Api.CmdDispatch(cmd, 1, 1, 1);
             InsertComputeBarrier(cmd);
-            _manager.MarkBakePublished();
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
@@ -161,6 +233,9 @@ namespace Njulf.Rendering.Pipeline
 
         private void Push(CommandBuffer cmd, GPUFarFieldVoxelizePushConstants pushConstants)
         {
+            pushConstants.DiagnosticFlags = ShouldCollectDetailedDiagnostics()
+                ? DetailedDiagnosticsFlag
+                : 0u;
             _context.Api.CmdPushConstants(
                 cmd,
                 _pipelineLayout,
@@ -168,6 +243,12 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 (uint)Marshal.SizeOf<GPUFarFieldVoxelizePushConstants>(),
                 &pushConstants);
+        }
+
+        private bool ShouldCollectDetailedDiagnostics()
+        {
+            return _settings.Diagnostics.DdgiForwardEstimateCountersEnabled ||
+                   _settings.GlobalIllumination.DebugView != GlobalIlluminationDebugView.None;
         }
 
         private void CreatePipelineCache()
@@ -274,7 +355,17 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
-        private void BuildJumpFloodDistanceField(CommandBuffer cmd, SceneRenderingData sceneData, int resolution, uint voxelBufferIndex, uint voxelGroups)
+        private void BuildJumpFloodDistanceField(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            int resolution,
+            uint voxelBufferIndex,
+            uint voxelGroups,
+            uint pageVoxelOffset,
+            uint pageDistanceWordOffset,
+            uint pageTableBufferIndex,
+            uint pageTableEntryIndex,
+            uint pageGeneration)
         {
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _jumpFloodPipeline);
             BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
@@ -291,7 +382,12 @@ namespace Njulf.Rendering.Pipeline
                 InstanceIndex = scratch1,
                 Mode = JumpFloodModeSeed,
                 MaterialTextureMaxCascade = distanceBuffer,
-                CurrentFrameIndex = sceneData.CurrentFrameIndex
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                PageVoxelOffset = pageVoxelOffset,
+                PageDistanceWordOffset = pageDistanceWordOffset,
+                PageTableBufferIndex = pageTableBufferIndex,
+                PageTableEntryIndex = pageTableEntryIndex,
+                PageGeneration = pageGeneration
             });
             _context.Api.CmdDispatch(cmd, voxelGroups, 1, 1);
             InsertComputeBarrier(cmd);
@@ -309,7 +405,12 @@ namespace Njulf.Rendering.Pipeline
                     Mode = JumpFloodModePropagate,
                     TriangleCount = stride,
                     MaterialTextureMaxCascade = distanceBuffer,
-                    CurrentFrameIndex = sceneData.CurrentFrameIndex
+                    CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                    PageVoxelOffset = pageVoxelOffset,
+                    PageDistanceWordOffset = pageDistanceWordOffset,
+                    PageTableBufferIndex = pageTableBufferIndex,
+                    PageTableEntryIndex = pageTableEntryIndex,
+                    PageGeneration = pageGeneration
                 });
                 _context.Api.CmdDispatch(cmd, voxelGroups, 1, 1);
                 InsertComputeBarrier(cmd);
@@ -325,7 +426,12 @@ namespace Njulf.Rendering.Pipeline
                 InstanceIndex = dest,
                 Mode = JumpFloodModePublish,
                 MaterialTextureMaxCascade = distanceBuffer,
-                CurrentFrameIndex = sceneData.CurrentFrameIndex
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                PageVoxelOffset = pageVoxelOffset,
+                PageDistanceWordOffset = pageDistanceWordOffset,
+                PageTableBufferIndex = pageTableBufferIndex,
+                PageTableEntryIndex = pageTableEntryIndex,
+                PageGeneration = pageGeneration
             });
             _context.Api.CmdDispatch(cmd, packedDistanceGroups, 1, 1);
             InsertComputeBarrier(cmd);

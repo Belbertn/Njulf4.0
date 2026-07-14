@@ -122,7 +122,10 @@ namespace Njulf.Tests
             {
                 SkinIndex = 0,
                 Animator = new Animator(skeleton, new[] { skin }, new[] { clip }),
-                SkinningBindTransform = Matrix4x4.CreateTranslation(new Vector3(10f, 0f, 0f))
+                SkinningBindTransform = Matrix4x4.CreateTranslation(new Vector3(10f, 0f, 0f)),
+                LocalMeshBounds = new BoundingBox(
+                    new Vector3(-1f, -2f, -3f),
+                    new Vector3(4f, 5f, 6f))
             });
 
             Model first = model.CreateInstance();
@@ -139,6 +142,7 @@ namespace Njulf.Tests
                 Assert.That(firstObject.Animator!.TimeSeconds, Is.EqualTo(0.25f).Within(0.0001f));
                 Assert.That(secondObject.Animator!.TimeSeconds, Is.EqualTo(0f).Within(0.0001f));
                 Assert.That(secondObject.SkinningBindTransform.M41, Is.EqualTo(10f).Within(0.0001f));
+                Assert.That(secondObject.LocalMeshBounds, Is.EqualTo(model.RenderObjects[0].LocalMeshBounds));
             });
         }
 

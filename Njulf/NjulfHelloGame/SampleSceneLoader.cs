@@ -135,7 +135,8 @@ internal sealed class SampleSceneLoader
             {
                 Name = $"StaticStressObject_{i}",
                 WorldMatrix = transforms[i],
-                Visible = true
+                Visible = true,
+                IsStatic = true
             };
             scene.Add(renderObject);
             _stressObjects.Add(renderObject);
@@ -179,6 +180,7 @@ internal sealed class SampleSceneLoader
         {
             renderObject.WorldMatrix = modelWorld;
             renderObject.Visible = true;
+            renderObject.IsStatic = renderObject is not SkinnedRenderObject;
             scene.Add(renderObject);
             _modelObjects.Add(renderObject);
             IncludeRenderObjectBounds(renderObject);
@@ -199,6 +201,7 @@ internal sealed class SampleSceneLoader
             {
                 renderObject.WorldMatrix = modelWorld;
                 renderObject.Visible = true;
+                renderObject.IsStatic = true;
                 scene.Add(renderObject);
                 _modelObjects.Add(renderObject);
                 IncludeRenderObjectBounds(renderObject);

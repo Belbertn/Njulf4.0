@@ -186,6 +186,7 @@ namespace Njulf.Tests
                 ["FAR_FIELD_CLIPMAP_DISTANCE_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapDistanceBuffer,
                 ["FAR_FIELD_CLIPMAP_JUMP_FLOOD_SCRATCH0_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapJumpFloodScratch0Buffer,
                 ["FAR_FIELD_CLIPMAP_JUMP_FLOOD_SCRATCH1_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapJumpFloodScratch1Buffer,
+                ["FAR_FIELD_CLIPMAP_PAGE_TABLE_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapPageTableBuffer,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
@@ -258,6 +259,9 @@ namespace Njulf.Tests
                 ["REFLECTION_PROBE_DEBUG_TEXTURE_INDEX"] = BindlessIndex.ReflectionProbeDebugTexture,
                 ["WEIGHTED_OIT_ACCUMULATION_TEXTURE_INDEX"] = BindlessIndex.WeightedOitAccumulationTexture,
                 ["WEIGHTED_OIT_REVEALAGE_TEXTURE_INDEX"] = BindlessIndex.WeightedOitRevealageTexture,
+                ["SIMPLE_DDGI_SAMPLED_ATLAS_TEXTURE_GROUP_COUNT"] = BindlessIndex.MaxSimpleDdgiSampledAtlasTextureGroups,
+                ["SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX"] = BindlessIndex.SimpleDdgiSampledIrradianceTextureBase,
+                ["SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX"] = BindlessIndex.SimpleDdgiSampledVisibilityTextureBase,
                 ["FIRST_DYNAMIC_TEXTURE_INDEX"] = BindlessIndex.FirstDynamicTextureIndex,
                 ["MAX_TEXTURES"] = BindlessIndex.MaxTextures,
                 ["FRAMES_IN_FLIGHT"] = RenderingConstants.FramesInFlight
@@ -389,7 +393,11 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.ReflectionProbeDebugTexture, Is.EqualTo(BindlessIndex.ReflectionProbeCubemapArrayTexture + 1));
             Assert.That(BindlessIndex.WeightedOitAccumulationTexture, Is.EqualTo(BindlessIndex.ReflectionProbeDebugTexture + 1));
             Assert.That(BindlessIndex.WeightedOitRevealageTexture, Is.EqualTo(BindlessIndex.WeightedOitAccumulationTexture + 1));
-            Assert.That(BindlessIndex.FirstDynamicTextureIndex, Is.EqualTo(BindlessIndex.WeightedOitRevealageTexture + 1));
+            Assert.That(BindlessIndex.SimpleDdgiSampledIrradianceTextureBase, Is.EqualTo(BindlessIndex.WeightedOitRevealageTexture + 1));
+            Assert.That(BindlessIndex.SimpleDdgiSampledVisibilityTextureBase,
+                Is.EqualTo(BindlessIndex.SimpleDdgiSampledIrradianceTextureBase + BindlessIndex.MaxSimpleDdgiSampledAtlasTextureGroups));
+            Assert.That(BindlessIndex.FirstDynamicTextureIndex,
+                Is.EqualTo(BindlessIndex.SimpleDdgiSampledVisibilityTextureBase + BindlessIndex.MaxSimpleDdgiSampledAtlasTextureGroups));
         }
 
         [Test]
@@ -474,6 +482,7 @@ namespace Njulf.Tests
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapDistanceBuffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapDistanceBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapJumpFloodScratch0Buffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapJumpFloodScratch0Buffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapJumpFloodScratch1Buffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapJumpFloodScratch1Buffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapPageTableBuffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapPageTableBuffer)));
             });
         }
 
@@ -639,6 +648,7 @@ namespace Njulf.Tests
             yield return BindlessIndex.FarFieldClipmapDistanceBuffer;
             yield return BindlessIndex.FarFieldClipmapJumpFloodScratch0Buffer;
             yield return BindlessIndex.FarFieldClipmapJumpFloodScratch1Buffer;
+            yield return BindlessIndex.FarFieldClipmapPageTableBuffer;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;

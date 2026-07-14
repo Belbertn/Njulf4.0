@@ -8,9 +8,18 @@
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 const uint SIMPLE_DDGI_BLEND_FLAG_SHARED_RAY_CACHE = 1u << 3;
+const uint SIMPLE_DDGI_BLEND_FLAG_REDUCED_COMPLEXITY = 1u << 5;
 
 shared vec4 SharedSimpleRayRadianceDistance[256];
 shared vec4 SharedSimpleRayDirectionHit[256];
+shared float SharedSimpleIrradianceDelta[64];
+// The reduced path projects ray radiance once and splats visibility once.  The
+// old implementation evaluated every ray for every atlas texel; these bounded
+// shared tables make the production path O(rays + texels) per updated probe.
+shared vec3 SharedSimpleShCoefficients[9];
+shared float SharedSimpleVisibilityWeight[256];
+shared float SharedSimpleVisibilityDistance[256];
+shared float SharedSimpleVisibilityDistance2[256];
 
 layout(push_constant) uniform SimpleDdgiPushBlock
 {
@@ -35,6 +44,10 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint Padding0;
 } pc;
 
+// Atlas diagnostics can execute once per texel.  Preserve them for explicit
+// investigations, but eliminate the atomic traffic from normal production work.
+#define AddRendererDiagnostic(frameIndex, counterIndex, value) AddSimpleDdgiDiagnostic(params, frameIndex, counterIndex, value)
+
 vec4 ReadSimpleRayRadianceDistance(uint rayResultIndex)
 {
     return ReadStorageVec4(pc.RayResultScratchBufferIndex, rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 0u);
@@ -50,30 +63,65 @@ float SimpleDdgiLuminance(vec3 value)
     return dot(max(value, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
 }
 
-float SimpleDdgiAdaptiveIrradianceHysteresis(SimpleDdgiParams params, vec4 previous, vec3 irradiance, float probeHysteresis)
+float SimpleDdgiStableRelativeDelta(float current, float previous, float absoluteNoiseFloor)
+{
+    float absoluteDelta = abs(current - previous);
+    // Do not interpret the Monte-Carlo noise floor as lighting motion.  A purely
+    // relative metric is ill-conditioned around black and was forcing dark texels
+    // to accept almost every fresh estimate.
+    float meaningfulDelta = max(absoluteDelta - absoluteNoiseFloor, 0.0);
+    return meaningfulDelta / max(max(abs(current), abs(previous)), absoluteNoiseFloor);
+}
+
+float SimpleDdgiAdaptiveIrradianceHysteresis(SimpleDdgiParams params, vec4 previous, vec3 irradiance, float probeHysteresis, bool maintenanceUpdate)
 {
     if ((params.flags & SIMPLE_DDGI_FLAG_ADAPTIVE_HYSTERESIS) == 0u || probeHysteresis <= 0.0001 || previous.w <= 0.0001)
         return probeHysteresis;
 
+    // Maintenance estimates have materially higher variance.  Keep their fixed
+    // temporal filter instead of making the scheduler react to its own noise.
+    if (maintenanceUpdate)
+        return probeHysteresis;
+
     float previousLuma = SimpleDdgiLuminance(previous.rgb);
     float currentLuma = SimpleDdgiLuminance(irradiance);
-    float relativeDelta = abs(currentLuma - previousLuma) / max(max(previousLuma, currentLuma), 0.01);
+    float relativeDelta = SimpleDdgiStableRelativeDelta(currentLuma, previousLuma, 0.02);
     float changeT = smoothstep(params.hysteresisChangeThreshold, params.hysteresisStepThreshold, relativeDelta);
     float softHysteresis = probeHysteresis * 0.5;
     float stepHysteresis = min(probeHysteresis, 0.30);
     return mix(probeHysteresis, mix(softHysteresis, stepHysteresis, changeT), smoothstep(params.hysteresisChangeThreshold * 0.75, params.hysteresisChangeThreshold, relativeDelta));
 }
 
-float SimpleDdgiAdaptiveVisibilityHysteresis(SimpleDdgiParams params, vec4 previous, vec2 moments, float probeHysteresis)
+float SimpleDdgiAdaptiveVisibilityHysteresis(SimpleDdgiParams params, vec4 previous, vec2 moments, float probeHysteresis, bool maintenanceUpdate, float spacing)
 {
     if ((params.flags & SIMPLE_DDGI_FLAG_ADAPTIVE_HYSTERESIS) == 0u || probeHysteresis <= 0.0001 || previous.z <= 0.5)
         return probeHysteresis;
+    if (maintenanceUpdate)
+        return probeHysteresis;
 
-    float relativeDelta = abs(moments.x - previous.x) / max(max(abs(previous.x), abs(moments.x)), 0.01);
+    float relativeDelta = SimpleDdgiStableRelativeDelta(moments.x, previous.x, max(spacing * 0.02, 0.01));
     float changeT = smoothstep(params.hysteresisChangeThreshold, params.hysteresisStepThreshold, relativeDelta);
     float softHysteresis = probeHysteresis * 0.75;
     float stepHysteresis = max(min(probeHysteresis, 0.55), 0.0);
     return mix(probeHysteresis, mix(softHysteresis, stepHysteresis, changeT), smoothstep(params.hysteresisChangeThreshold * 0.75, params.hysteresisChangeThreshold, relativeDelta));
+}
+
+float SimpleDdgiCadenceAdjustedHysteresis(SimpleDdgiParams params, SimpleDdgiProbeUpdate update)
+{
+    if ((update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u)
+        return 0.0;
+
+    float baseHysteresis = clamp(params.hysteresis, 0.0, 1.0);
+    if (SimpleDdgiUpdateIsMaintenance(update))
+        return baseHysteresis;
+
+    // The near-ring cadence (roughly eight frames at production budgets) is the
+    // reference response. Full updates from sparse outer rings retain the same
+    // wall-clock convergence instead of applying one retention step every 30-60
+    // frames. Maintenance batches stay conservative because they use fewer rays.
+    float elapsedFrames = float(SimpleDdgiUpdateAge(update));
+    float cadenceExponent = clamp(elapsedFrames / 8.0, 1.0, 8.0);
+    return pow(baseHysteresis, cadenceExponent);
 }
 
 void LoadSimpleRayCache(SimpleDdgiParams params, uint localProbeOffset, uint activeRayCount)
@@ -117,7 +165,7 @@ vec3 ClampSimpleRadiance(vec3 v)
     return clamp(v * clampScale, vec3(0.0), vec3(65504.0));
 }
 
-float BlendIrradianceTexel(SimpleDdgiParams params, uint probeIndex, uint localProbeOffset, uint texel, float probeHysteresis, bool sharedRayCacheEnabled, uint activeRayCount)
+float BlendIrradianceTexel(SimpleDdgiParams params, uint probeIndex, uint localProbeOffset, uint texel, float probeHysteresis, bool sharedRayCacheEnabled, uint activeRayCount, bool maintenanceUpdate)
 {
     uint x = texel % params.irradianceTexels;
     uint y = texel / params.irradianceTexels;
@@ -136,11 +184,17 @@ float BlendIrradianceTexel(SimpleDdgiParams params, uint probeIndex, uint localP
         weightSum += weight;
     }
 
-    vec3 irradiance = weightSum > 0.000001
-        ? accumulated * (SIMPLE_DDGI_PI / max(weightSum, 0.000001))
-        : vec3(0.0);
     vec4 previous = ReadSimpleDdgiAtlasTexel(pc.IrradianceAtlasBufferIndex, probeIndex, texel, params.irradianceTexels);
-    float texelHysteresis = SimpleDdgiAdaptiveIrradianceHysteresis(params, previous, irradiance, probeHysteresis);
+    if (weightSum <= 0.000001 && previous.w > 0.0001)
+    {
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_ZERO_RAY_WEIGHT_PROBE_COUNTER, 1u);
+        return 0.0;
+    }
+
+    vec3 irradiance = weightSum > 0.000001
+        ? accumulated * (SIMPLE_DDGI_PI / weightSum)
+        : vec3(0.0);
+    float texelHysteresis = SimpleDdgiAdaptiveIrradianceHysteresis(params, previous, irradiance, probeHysteresis, maintenanceUpdate);
     vec4 blended = mix(vec4(irradiance, 1.0), previous, texelHysteresis);
     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_ATLAS_WRITE_TEXEL_COUNTER, 1u);
     if (weightSum <= 0.000001)
@@ -151,11 +205,11 @@ float BlendIrradianceTexel(SimpleDdgiParams params, uint probeIndex, uint localP
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_PREVIOUS_ATLAS_USED_COUNTER, 1u);
     WriteSimpleDdgiAtlasTexel(pc.IrradianceAtlasBufferIndex, probeIndex, texel, params.irradianceTexels, blended);
     return previous.w > 0.0001
-        ? abs(SimpleDdgiLuminance(irradiance) - SimpleDdgiLuminance(previous.rgb)) / max(max(SimpleDdgiLuminance(irradiance), SimpleDdgiLuminance(previous.rgb)), 0.01)
+        ? SimpleDdgiStableRelativeDelta(SimpleDdgiLuminance(irradiance), SimpleDdgiLuminance(previous.rgb), 0.02)
         : 1.0;
 }
 
-void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint probeIndex, uint localProbeOffset, uint texel, float probeHysteresis, bool sharedRayCacheEnabled, uint activeRayCount)
+void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint probeIndex, uint localProbeOffset, uint texel, float probeHysteresis, bool sharedRayCacheEnabled, uint activeRayCount, bool maintenanceUpdate)
 {
     uint x = texel % params.visibilityTexels;
     uint y = texel / params.visibilityTexels;
@@ -191,10 +245,164 @@ void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint
     {
         moments = vec2(volume.spacing * 4.0, volume.spacing * volume.spacing * 16.0);
     }
-    float texelHysteresis = SimpleDdgiAdaptiveVisibilityHysteresis(params, previous, moments, probeHysteresis);
+    float texelHysteresis = SimpleDdgiAdaptiveVisibilityHysteresis(params, previous, moments, probeHysteresis, maintenanceUpdate, volume.spacing);
     vec4 blended = mix(vec4(moments, 1.0, 1.0), previous, texelHysteresis);
     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_ATLAS_WRITE_TEXEL_COUNTER, 1u);
     WriteSimpleDdgiAtlasTexel(pc.VisibilityAtlasBufferIndex, probeIndex, texel, params.visibilityTexels, blended);
+}
+
+void AccumulateSimpleShBasis(vec3 direction, vec3 radiance, float normalization)
+{
+    float x = direction.x;
+    float y = direction.y;
+    float z = direction.z;
+    float basis[9] = float[](
+        0.2820947918,
+        -0.4886025119 * y,
+        0.4886025119 * z,
+        -0.4886025119 * x,
+        1.0925484306 * x * y,
+        -1.0925484306 * y * z,
+        0.3153915653 * (3.0 * z * z - 1.0),
+        -1.0925484306 * x * z,
+        0.5462742153 * (x * x - y * y));
+    for (uint coefficient = 0u; coefficient < 9u; coefficient++)
+        SharedSimpleShCoefficients[coefficient] += radiance * (basis[coefficient] * normalization);
+}
+
+void AccumulateSimpleVisibilityBin(ivec2 coordinate, uint texels, float weight, float distance)
+{
+    if (weight <= 0.0)
+        return;
+
+    uint index = SimpleDdgiMirrorOctTexelIndex(coordinate, texels);
+    float safeDistance = max(distance, 0.0);
+    SharedSimpleVisibilityWeight[index] += weight;
+    SharedSimpleVisibilityDistance[index] += safeDistance * weight;
+    SharedSimpleVisibilityDistance2[index] += safeDistance * safeDistance * weight;
+}
+
+void BuildReducedSimpleDdgiTables(SimpleDdgiParams params, uint localProbeOffset, uint activeRayCount)
+{
+    // A single invocation builds the compact tables deterministically.  It reads
+    // at most 256 cached rays, replacing 64*256 irradiance and 256*256 visibility
+    // ray evaluations while avoiding floating-point atomic portability hazards.
+    for (uint coefficient = 0u; coefficient < 9u; coefficient++)
+        SharedSimpleShCoefficients[coefficient] = vec3(0.0);
+    for (uint bin = 0u; bin < SIMPLE_DDGI_MAX_RAYS_PER_PROBE; bin++)
+    {
+        SharedSimpleVisibilityWeight[bin] = 0.0;
+        SharedSimpleVisibilityDistance[bin] = 0.0;
+        SharedSimpleVisibilityDistance2[bin] = 0.0;
+    }
+
+    uint rayCount = min(activeRayCount, SIMPLE_DDGI_MAX_RAYS_PER_PROBE);
+    float shNormalization = (4.0 * SIMPLE_DDGI_PI) / max(float(rayCount), 1.0);
+    for (uint ray = 0u; ray < rayCount; ray++)
+    {
+        vec4 directionHit = ReadCachedSimpleRayDirectionHit(params, localProbeOffset, ray, true);
+        vec4 radianceDistance = ReadCachedSimpleRayRadianceDistance(params, localProbeOffset, ray, true);
+        vec3 direction = normalize(directionHit.xyz);
+        AccumulateSimpleShBasis(direction, ClampSimpleRadiance(radianceDistance.rgb), shNormalization);
+
+        vec2 texelUv = SimpleDdgiOctEncode(direction) * float(params.visibilityTexels) - vec2(0.5);
+        ivec2 base = ivec2(floor(texelUv));
+        vec2 fraction = fract(texelUv);
+        float distance = max(radianceDistance.w, 0.0);
+        AccumulateSimpleVisibilityBin(base, params.visibilityTexels, (1.0 - fraction.x) * (1.0 - fraction.y), distance);
+        AccumulateSimpleVisibilityBin(base + ivec2(1, 0), params.visibilityTexels, fraction.x * (1.0 - fraction.y), distance);
+        AccumulateSimpleVisibilityBin(base + ivec2(0, 1), params.visibilityTexels, (1.0 - fraction.x) * fraction.y, distance);
+        AccumulateSimpleVisibilityBin(base + ivec2(1, 1), params.visibilityTexels, fraction.x * fraction.y, distance);
+    }
+}
+
+vec3 EvaluateReducedSimpleDdgiIrradiance(vec3 direction)
+{
+    float x = direction.x;
+    float y = direction.y;
+    float z = direction.z;
+    float basis[9] = float[](
+        0.2820947918,
+        -0.4886025119 * y,
+        0.4886025119 * z,
+        -0.4886025119 * x,
+        1.0925484306 * x * y,
+        -1.0925484306 * y * z,
+        0.3153915653 * (3.0 * z * z - 1.0),
+        -1.0925484306 * x * z,
+        0.5462742153 * (x * x - y * y));
+    float convolution[3] = float[](SIMPLE_DDGI_PI, 2.0 * SIMPLE_DDGI_PI / 3.0, SIMPLE_DDGI_PI / 4.0);
+    vec3 irradiance = vec3(0.0);
+    for (uint coefficient = 0u; coefficient < 9u; coefficient++)
+    {
+        uint band = coefficient == 0u ? 0u : (coefficient < 4u ? 1u : 2u);
+        irradiance += SharedSimpleShCoefficients[coefficient] * (basis[coefficient] * convolution[band]);
+    }
+    return max(irradiance, vec3(0.0));
+}
+
+float BlendReducedIrradianceTexel(SimpleDdgiParams params, uint probeIndex, uint texel, float probeHysteresis, bool maintenanceUpdate)
+{
+    uint x = texel % params.irradianceTexels;
+    uint y = texel / params.irradianceTexels;
+    vec3 texelDirection = SimpleDdgiOctDecode((vec2(x, y) + vec2(0.5)) / vec2(params.irradianceTexels));
+    vec3 irradiance = EvaluateReducedSimpleDdgiIrradiance(texelDirection);
+    vec4 previous = ReadSimpleDdgiAtlasTexel(pc.IrradianceAtlasBufferIndex, probeIndex, texel, params.irradianceTexels);
+    float texelHysteresis = SimpleDdgiAdaptiveIrradianceHysteresis(params, previous, irradiance, probeHysteresis, maintenanceUpdate);
+    vec4 blended = mix(vec4(irradiance, 1.0), previous, texelHysteresis);
+    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_ATLAS_WRITE_TEXEL_COUNTER, 1u);
+    if (SimpleDdgiLuminance(irradiance) > 0.00001)
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_NONZERO_IRRADIANCE_PROBE_COUNTER, 1u);
+    if (probeHysteresis > 0.0001 && previous.w > 0.0001)
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_PREVIOUS_ATLAS_USED_COUNTER, 1u);
+    WriteSimpleDdgiAtlasTexel(pc.IrradianceAtlasBufferIndex, probeIndex, texel, params.irradianceTexels, blended);
+    return previous.w > 0.0001
+        ? SimpleDdgiStableRelativeDelta(SimpleDdgiLuminance(irradiance), SimpleDdgiLuminance(previous.rgb), 0.02)
+        : 1.0;
+}
+
+void BlendReducedVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint probeIndex, uint texel, float probeHysteresis, bool maintenanceUpdate)
+{
+    uint x = texel % params.visibilityTexels;
+    uint y = texel / params.visibilityTexels;
+    float weightSum = 0.0;
+    float distanceSum = 0.0;
+    float distance2Sum = 0.0;
+    // A small seam-aware kernel suppresses binning noise without reintroducing
+    // ray-by-texel work.
+    for (int offsetY = -1; offsetY <= 1; offsetY++)
+    for (int offsetX = -1; offsetX <= 1; offsetX++)
+    {
+        float filterWeight = offsetX == 0 && offsetY == 0 ? 4.0 : 1.0;
+        uint index = SimpleDdgiMirrorOctTexelIndex(ivec2(int(x) + offsetX, int(y) + offsetY), params.visibilityTexels);
+        weightSum += SharedSimpleVisibilityWeight[index] * filterWeight;
+        distanceSum += SharedSimpleVisibilityDistance[index] * filterWeight;
+        distance2Sum += SharedSimpleVisibilityDistance2[index] * filterWeight;
+    }
+
+    vec4 previous = ReadSimpleDdgiAtlasTexel(pc.VisibilityAtlasBufferIndex, probeIndex, texel, params.visibilityTexels);
+    vec2 moments;
+    if (weightSum > 0.000001)
+    {
+        moments = vec2(distanceSum, distance2Sum) / weightSum;
+    }
+    else if (previous.z > 0.5)
+    {
+        return;
+    }
+    else
+    {
+        moments = vec2(volume.spacing * 4.0, volume.spacing * volume.spacing * 16.0);
+    }
+
+    float texelHysteresis = SimpleDdgiAdaptiveVisibilityHysteresis(params, previous, moments, probeHysteresis, maintenanceUpdate, volume.spacing);
+    WriteSimpleDdgiAtlasTexel(
+        pc.VisibilityAtlasBufferIndex,
+        probeIndex,
+        texel,
+        params.visibilityTexels,
+        mix(vec4(moments, 1.0, 1.0), previous, texelHysteresis));
+    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_ATLAS_WRITE_TEXEL_COUNTER, 1u);
 }
 
 void main()
@@ -213,10 +421,15 @@ void main()
     uint localProbeIndex;
     if (!ResolveSimpleDdgiProbeVolume(probeIndex, params, volume, localProbeIndex))
         return;
+    SimpleDdgiProbeState initialState = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
+    if (!SimpleDdgiUpdateMatchesProbeGeneration(update, initialState))
+        return;
     uint local = gl_LocalInvocationID.x;
     uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
-    float probeHysteresis = (update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u ? 0.0 : params.hysteresis;
-    bool sharedRayCacheEnabled = (pc.Flags & SIMPLE_DDGI_BLEND_FLAG_SHARED_RAY_CACHE) != 0u;
+    bool maintenanceUpdate = SimpleDdgiUpdateIsMaintenance(update);
+    float probeHysteresis = SimpleDdgiCadenceAdjustedHysteresis(params, update);
+    bool reducedComplexityEnabled = (pc.Flags & SIMPLE_DDGI_BLEND_FLAG_REDUCED_COMPLEXITY) != 0u;
+    bool sharedRayCacheEnabled = (pc.Flags & SIMPLE_DDGI_BLEND_FLAG_SHARED_RAY_CACHE) != 0u || reducedComplexityEnabled;
     if (sharedRayCacheEnabled)
         LoadSimpleRayCache(params, localProbeOffset, activeRayCount);
 
@@ -228,20 +441,50 @@ void main()
     }
 
     float localIrradianceDelta = 0.0;
-    for (uint texel = local; texel < params.irradianceTexels * params.irradianceTexels; texel += gl_WorkGroupSize.x)
+    if (reducedComplexityEnabled)
     {
-        float texelDelta = BlendIrradianceTexel(params, probeIndex, localProbeOffset, texel, probeHysteresis, sharedRayCacheEnabled, activeRayCount);
-        if (texel == 0u)
-            localIrradianceDelta = texelDelta;
+        if (local == 0u)
+            BuildReducedSimpleDdgiTables(params, localProbeOffset, activeRayCount);
+        barrier();
+
+        for (uint texel = local; texel < params.irradianceTexels * params.irradianceTexels; texel += gl_WorkGroupSize.x)
+        {
+            float texelDelta = BlendReducedIrradianceTexel(params, probeIndex, texel, probeHysteresis, maintenanceUpdate);
+            localIrradianceDelta = max(localIrradianceDelta, texelDelta);
+        }
+
+        for (uint texel = local; texel < params.visibilityTexels * params.visibilityTexels; texel += gl_WorkGroupSize.x)
+            BlendReducedVisibilityTexel(params, volume, probeIndex, texel, probeHysteresis, maintenanceUpdate);
+    }
+    else
+    {
+        for (uint texel = local; texel < params.irradianceTexels * params.irradianceTexels; texel += gl_WorkGroupSize.x)
+        {
+            float texelDelta = BlendIrradianceTexel(params, probeIndex, localProbeOffset, texel, probeHysteresis, sharedRayCacheEnabled, activeRayCount, maintenanceUpdate);
+            localIrradianceDelta = max(localIrradianceDelta, texelDelta);
+        }
+
+        for (uint texel = local; texel < params.visibilityTexels * params.visibilityTexels; texel += gl_WorkGroupSize.x)
+            BlendVisibilityTexel(params, volume, probeIndex, localProbeOffset, texel, probeHysteresis, sharedRayCacheEnabled, activeRayCount, maintenanceUpdate);
     }
 
-    for (uint texel = local; texel < params.visibilityTexels * params.visibilityTexels; texel += gl_WorkGroupSize.x)
-        BlendVisibilityTexel(params, volume, probeIndex, localProbeOffset, texel, probeHysteresis, sharedRayCacheEnabled, activeRayCount);
+    SharedSimpleIrradianceDelta[local] = localIrradianceDelta;
+    barrier();
 
     if (local == 0u)
     {
+        float aggregateIrradianceDelta = 0.0;
+        uint irradianceTexelCount = min(params.irradianceTexels * params.irradianceTexels, 64u);
+        for (uint texel = 0u; texel < irradianceTexelCount; texel++)
+            aggregateIrradianceDelta += SharedSimpleIrradianceDelta[texel];
+        aggregateIrradianceDelta /= max(float(irradianceTexelCount), 1.0);
         SimpleDdgiProbeState state = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
-        state.luminanceChangeEma = mix(max(state.luminanceChangeEma, 0.0), clamp(localIrradianceDelta, 0.0, 8.0), 0.20);
-        WriteSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex, state);
+        if (SimpleDdgiUpdateMatchesProbeGeneration(update, state))
+        {
+            state.luminanceChangeEma = mix(max(state.luminanceChangeEma, 0.0), clamp(aggregateIrradianceDelta, 0.0, 8.0), 0.20);
+            WriteSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex, state);
+        }
     }
 }
+
+#undef AddRendererDiagnostic

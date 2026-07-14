@@ -118,6 +118,7 @@ namespace Njulf.Rendering.Resources
                     : new RenderObject(meshHandles[i], materials[materialIndex]);
 
                 renderObject.Name = subMeshNames[i];
+                renderObject.LocalMeshBounds = subMeshes[i].BoundingBox;
                 model.Add(renderObject);
             }
 

@@ -52,11 +52,13 @@ namespace Njulf.Rendering.Core
         private uint _graphicsQueueFamilyIndex;
         private uint _transferQueueFamilyIndex;
         private uint _computeQueueFamilyIndex;
+        private uint _computeQueueIndex;
         private Queue _graphicsQueue;
         private Queue _transferQueue;
         private Queue _computeQueue;
         private bool _hasDedicatedTransferQueue;
         private bool _hasDedicatedComputeQueue;
+        private bool _hasIndependentComputeQueue;
         private float _timestampPeriodNanoseconds;
         private bool _timestampComputeAndGraphicsSupported;
         private bool _memoryBudgetExtensionEnabled;
@@ -92,6 +94,12 @@ namespace Njulf.Rendering.Core
         public Queue ComputeQueue => _computeQueue;
         public bool HasDedicatedTransferQueue => _hasDedicatedTransferQueue;
         public bool HasDedicatedComputeQueue => _hasDedicatedComputeQueue;
+        /// <summary>
+        /// True when compute work can be submitted on a queue distinct from the graphics queue.
+        /// This includes a second queue from the graphics family, which needs ordinary memory
+        /// dependencies but not queue-family ownership transfers.
+        /// </summary>
+        public bool HasIndependentComputeQueue => _hasIndependentComputeQueue;
         public float TimestampPeriodNanoseconds => _timestampPeriodNanoseconds;
         public bool TimestampComputeAndGraphicsSupported => _timestampComputeAndGraphicsSupported;
         public bool MemoryBudgetExtensionEnabled => _memoryBudgetExtensionEnabled;
@@ -309,6 +317,7 @@ namespace Njulf.Rendering.Core
             uint graphicsFamily = uint.MaxValue;
             uint transferFamily = uint.MaxValue;
             uint computeFamily = uint.MaxValue;
+            bool computeUsesSecondaryGraphicsQueue = false;
             bool memoryBudgetExtensionEnabled = false;
             bool imageCompressionControlEnabled = false;
             bool rayQuerySupported = false;
@@ -414,6 +423,10 @@ namespace Njulf.Rendering.Core
                 bool selectedHasDedicatedTransferQueue = transferFamily != graphicsFamily;
                 bool candidateHasDedicatedComputeQueue = computeIndex != graphicsIndex;
                 bool selectedHasDedicatedComputeQueue = computeFamily != graphicsFamily;
+                bool candidateHasIndependentComputeQueue = candidateHasDedicatedComputeQueue ||
+                    queueFamilies[graphicsIndex].QueueCount > 1;
+                bool selectedHasIndependentComputeQueue = selectedHasDedicatedComputeQueue ||
+                    computeUsesSecondaryGraphicsQueue;
                 bool shouldSelectDevice = selectedDevice == null ||
                     (requirements.RayQuerySupported && !rayQuerySupported) ||
                     (requirements.RayQuerySupported == rayQuerySupported &&
@@ -421,6 +434,11 @@ namespace Njulf.Rendering.Core
                      !selectedHasDedicatedComputeQueue) ||
                     (requirements.RayQuerySupported == rayQuerySupported &&
                      candidateHasDedicatedComputeQueue == selectedHasDedicatedComputeQueue &&
+                     candidateHasIndependentComputeQueue &&
+                     !selectedHasIndependentComputeQueue) ||
+                    (requirements.RayQuerySupported == rayQuerySupported &&
+                     candidateHasDedicatedComputeQueue == selectedHasDedicatedComputeQueue &&
+                     candidateHasIndependentComputeQueue == selectedHasIndependentComputeQueue &&
                      candidateHasDedicatedTransferQueue &&
                      !selectedHasDedicatedTransferQueue);
 
@@ -430,6 +448,8 @@ namespace Njulf.Rendering.Core
                     graphicsFamily = graphicsIndex;
                     transferFamily = transferIndex;
                     computeFamily = computeIndex;
+                    computeUsesSecondaryGraphicsQueue = !candidateHasDedicatedComputeQueue &&
+                        queueFamilies[graphicsIndex].QueueCount > 1;
                     memoryBudgetExtensionEnabled = requirements.MemoryBudgetExtensionAvailable;
                     imageCompressionControlEnabled = requirements.ImageCompressionControlAvailable;
                     rayQuerySupported = requirements.RayQuerySupported;
@@ -454,6 +474,8 @@ namespace Njulf.Rendering.Core
             _computeQueueFamilyIndex = computeFamily;
             _hasDedicatedTransferQueue = graphicsFamily != transferFamily;
             _hasDedicatedComputeQueue = graphicsFamily != computeFamily;
+            _hasIndependentComputeQueue = _hasDedicatedComputeQueue || computeUsesSecondaryGraphicsQueue;
+            _computeQueueIndex = computeUsesSecondaryGraphicsQueue ? 1u : 0u;
             _memoryBudgetExtensionEnabled = memoryBudgetExtensionEnabled;
             _imageCompressionControlEnabled = imageCompressionControlEnabled;
             _rayQuerySupported = rayQuerySupported;
@@ -754,13 +776,13 @@ namespace Njulf.Rendering.Core
         
         private void CreateLogicalDevice()
         {
-            var queuePriorities = stackalloc float[1] { 1.0f };
+            var queuePriorities = stackalloc float[2] { 1.0f, 0.9f };
             
             var graphicsQueueInfo = new DeviceQueueCreateInfo
             {
                 SType = StructureType.DeviceQueueCreateInfo,
                 QueueFamilyIndex = _graphicsQueueFamilyIndex,
-                QueueCount = 1,
+                QueueCount = _computeQueueIndex != 0 && _computeQueueFamilyIndex == _graphicsQueueFamilyIndex ? 2u : 1u,
                 PQueuePriorities = queuePriorities
             };
             
@@ -948,8 +970,8 @@ namespace Njulf.Rendering.Core
                 else
                     _transferQueue = _graphicsQueue;
 
-                if (_hasDedicatedComputeQueue)
-                    _vk.GetDeviceQueue(_device, _computeQueueFamilyIndex, 0, out _computeQueue);
+                if (_hasIndependentComputeQueue)
+                    _vk.GetDeviceQueue(_device, _computeQueueFamilyIndex, _computeQueueIndex, out _computeQueue);
                 else
                     _computeQueue = _graphicsQueue;
                 

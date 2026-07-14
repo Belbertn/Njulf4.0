@@ -40,6 +40,16 @@ namespace Njulf.Rendering.Resources
             ? ImageAspectFlags.DepthBit
             : ImageAspectFlags.ColorBit;
 
+        /// <summary>
+        /// Keeps the wrapper's layout tracking in sync when the render-graph queue handoff layer
+        /// emits a synchronization2 image barrier directly.  The barrier has already been recorded;
+        /// this method intentionally performs no Vulkan work.
+        /// </summary>
+        public void SetTrackedLayout(ImageLayout layout)
+        {
+            Layout = layout;
+        }
+
         internal void Recreate(Extent2D extent)
         {
             if (extent.Width == 0 || extent.Height == 0)

@@ -528,6 +528,9 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Second ping-pong scratch buffer used while building the far-field jump-flood distance field</summary>
         public const int FarFieldClipmapJumpFloodScratch1Buffer = FarFieldClipmapJumpFloodScratch0Buffer + 1;
+
+        /// <summary>Bounded virtual-page table for the streamed far-field cache.</summary>
+        public const int FarFieldClipmapPageTableBuffer = FarFieldClipmapJumpFloodScratch1Buffer + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -662,8 +665,23 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Fixed sampled weighted blended OIT revealage texture</summary>
         public const int WeightedOitRevealageTexture = WeightedOitAccumulationTexture + 1;
 
+        /// <summary>
+        /// Number of fixed sampled-image Simple-DDGI atlas groups reserved for the
+        /// optional A/B migration path.  Each group is a 2D-array texture and the
+        /// runtime selects a device-safe layer count for it.
+        /// </summary>
+        public const int MaxSimpleDdgiSampledAtlasTextureGroups = 128;
+
+        /// <summary>First fixed sampled Simple-DDGI irradiance atlas texture group.</summary>
+        public const int SimpleDdgiSampledIrradianceTextureBase = WeightedOitRevealageTexture + 1;
+
+        /// <summary>First fixed sampled Simple-DDGI visibility atlas texture group.</summary>
+        public const int SimpleDdgiSampledVisibilityTextureBase =
+            SimpleDdgiSampledIrradianceTextureBase + MaxSimpleDdgiSampledAtlasTextureGroups;
+
         /// <summary>First dynamically allocated material texture index</summary>
-        public const int FirstDynamicTextureIndex = WeightedOitRevealageTexture + 1;
+        public const int FirstDynamicTextureIndex =
+            SimpleDdgiSampledVisibilityTextureBase + MaxSimpleDdgiSampledAtlasTextureGroups;
         
         /// <summary>Maximum number of textures</summary>
         public const int MaxTextures = 65536;
@@ -673,7 +691,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = FarFieldClipmapJumpFloodScratch1Buffer + 1;
+        public const int StaticBufferCount = FarFieldClipmapPageTableBuffer + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -872,6 +890,7 @@ namespace Njulf.Rendering.Descriptors
                     FarFieldClipmapDistanceBuffer => nameof(FarFieldClipmapDistanceBuffer),
                     FarFieldClipmapJumpFloodScratch0Buffer => nameof(FarFieldClipmapJumpFloodScratch0Buffer),
                     FarFieldClipmapJumpFloodScratch1Buffer => nameof(FarFieldClipmapJumpFloodScratch1Buffer),
+                    FarFieldClipmapPageTableBuffer => nameof(FarFieldClipmapPageTableBuffer),
                     _ => "Unknown"
                 };
             }

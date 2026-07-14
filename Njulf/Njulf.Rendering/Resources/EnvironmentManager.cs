@@ -63,6 +63,21 @@ namespace Njulf.Rendering.Resources
         public ulong IrradianceMapBytes => EstimateCubeBytes(IrradianceSize, 1, EnvironmentFormat);
         public ulong PrefilteredEnvironmentBytes => EstimateCubeBytes(PrefilteredSize, _prefilteredMipCount, EnvironmentFormat);
         public ulong BrdfLutBytes => checked((ulong)BrdfLutSize * BrdfLutSize * GetBytesPerPixel(EnvironmentFormat));
+        public BufferHandle EnvironmentBuffer => _environmentBuffer;
+        public ulong EnvironmentBufferBytes => EnvironmentDataSize;
+
+        /// <summary>
+        /// The sampled images read by lighting and DDGI. Returning handles (rather than
+        /// descriptor indices) lets the caller resolve lifetime generation and subresource
+        /// ranges before constructing an ownership-transfer plan.
+        /// </summary>
+        public IReadOnlyList<TextureHandle> GetSampledTextureHandles() =>
+        [
+            _environmentCubemap,
+            _irradianceCubemap,
+            _prefilteredCubemap,
+            _brdfLut
+        ];
 
         public void EnsureResourcesCurrent(BindlessHeap? bindlessHeap = null, Action? waitIdle = null)
         {

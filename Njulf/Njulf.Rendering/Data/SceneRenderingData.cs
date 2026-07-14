@@ -12,6 +12,12 @@ namespace Njulf.Rendering.Data
         public int FrameIndex { get; set; }
         public uint TemporalSampleIndex { get; set; }
         public ulong DdgiFrameSerial { get; set; }
+        /// <summary>
+        /// Monotonic revision of the static scene payload. It changes only when scene content
+        /// that can affect rendered geometry/material data changes, and is intended for capture
+        /// correlation rather than frame-to-frame timing.
+        /// </summary>
+        public ulong SceneContentRevision { get; set; }
         public uint DdgiFrameSerialLow32 => unchecked((uint)DdgiFrameSerial);
         public uint ImageIndex { get; set; }
         public Vector4 ClearColor { get; set; } = new(0.2f, 0.2f, 0.2f, 1f);
@@ -310,6 +316,14 @@ namespace Njulf.Rendering.Data
         public long GpuHiZBuildMicroseconds { get; set; }
         public long GpuLightCullMicroseconds { get; set; }
         public long GpuForwardOpaqueMicroseconds { get; set; }
+        /// <summary>
+        /// Inclusive timestamp for the forward draw scope while DDGI gather is
+        /// active. GPU timestamps cannot isolate fragment-shader instructions, so
+        /// <see cref="GpuForwardGiGatherTimingCoverage"/> documents this boundary.
+        /// </summary>
+        public long GpuForwardGiGatherMicroseconds { get; set; }
+        /// <summary>0 unavailable; 1 inclusive forward draw scope containing GI gather.</summary>
+        public int GpuForwardGiGatherTimingCoverage { get; set; }
         public long GpuTransparentMicroseconds { get; set; }
         public long GpuDirectionalShadowMicroseconds { get; set; }
         public long GpuSpotShadowMicroseconds { get; set; }
@@ -535,6 +549,11 @@ namespace Njulf.Rendering.Data
         public long GpuAmbientOcclusionBlurMicroseconds { get; set; }
         public long CpuSsgiRecordMicroseconds { get; set; }
         public long CpuDdgiRecordMicroseconds { get; set; }
+        public long CpuSimpleDdgiRecordMicroseconds { get; set; }
+        public long CpuFarFieldRecordMicroseconds { get; set; }
+        public long CpuGlobalIlluminationRecordMicroseconds { get; set; }
+        public long CpuGlobalIlluminationRecordP95Microseconds { get; set; }
+        public int GlobalIlluminationCpuTimingSampleCount { get; set; }
         public long CpuDdgiSchedulerMicroseconds { get; set; }
         public long CpuDdgiSchedulerP95Microseconds { get; set; }
         public long CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds { get; set; }
@@ -675,7 +694,43 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiFullRayProbeUpdateCount { get; set; }
         public int SimpleDdgiMaintenanceRayProbeUpdateCount { get; set; }
         public ulong SimpleDdgiAdaptiveRaySavedRaysPerFrame { get; set; }
+        public int SimpleDdgiNearFullRayProbeUpdateCount { get; set; }
+        public int SimpleDdgiMidFullRayProbeUpdateCount { get; set; }
+        public int SimpleDdgiFarFullRayProbeUpdateCount { get; set; }
+        public int SimpleDdgiNearMaintenanceRayProbeUpdateCount { get; set; }
+        public int SimpleDdgiMidMaintenanceRayProbeUpdateCount { get; set; }
+        public int SimpleDdgiFarMaintenanceRayProbeUpdateCount { get; set; }
+        public ulong SimpleDdgiNearScheduledPrimaryRayCount { get; set; }
+        public ulong SimpleDdgiMidScheduledPrimaryRayCount { get; set; }
+        public ulong SimpleDdgiFarScheduledPrimaryRayCount { get; set; }
+        public int SimpleDdgiDirtyFirstUpdateLatencySampleCount { get; set; }
+        public int SimpleDdgiDirtyFirstUpdateLatencyP50Frames { get; set; }
+        public int SimpleDdgiDirtyFirstUpdateLatencyP95Frames { get; set; }
+        public int SimpleDdgiDirtyFirstUpdateLatencyMaxFrames { get; set; }
+        public int SimpleDdgiDirtyConvergenceLatencySampleCount { get; set; }
+        public int SimpleDdgiDirtyConvergenceLatencyP50Frames { get; set; }
+        public int SimpleDdgiDirtyConvergenceLatencyP95Frames { get; set; }
+        public int SimpleDdgiDirtyConvergenceLatencyMaxFrames { get; set; }
         public ulong SimpleDdgiAtlasBytes { get; set; }
+        public int SimpleDdgiSampledAtlasRequested { get; set; }
+        public int SimpleDdgiSampledAtlasActive { get; set; }
+        public int SimpleDdgiSampledAtlasGroupCount { get; set; }
+        public int SimpleDdgiSampledAtlasLayersPerTexture { get; set; }
+        public ulong SimpleDdgiSampledAtlasImageBytes { get; set; }
+        public string SimpleDdgiSampledAtlasFallbackReason { get; set; } = string.Empty;
+        public int FarFieldPagedMode { get; set; }
+        public int FarFieldPagePoolCapacity { get; set; }
+        public int FarFieldResidentPageCount { get; set; }
+        public int FarFieldPendingPageCount { get; set; }
+        public int FarFieldPageRequestCount { get; set; }
+        public int FarFieldPageMissCount { get; set; }
+        public int FarFieldPageRebuildCount { get; set; }
+        public int FarFieldPageEvictionCount { get; set; }
+        public int FarFieldScheduledPageBakeCount { get; set; }
+        public ulong FarFieldCacheBytes { get; set; }
+        public ulong FarFieldMemoryBudgetBytes { get; set; }
+        public ulong FarFieldInstanceBufferBytes { get; set; }
+        public ulong FarFieldPageTableBytes { get; set; }
         public int SimpleDdgiRecentered { get; set; }
         public int SimpleDdgiAtlasPreservedOnRecenter { get; set; }
         public int SimpleDdgiAtlasCleared { get; set; }
@@ -685,6 +740,7 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiAtlasPreserveOnRecenterCount { get; set; }
         public int SimpleDdgiFramesSinceLastClear { get; set; }
         public int SimpleDdgiFramesSinceLastRecenter { get; set; }
+        public int DdgiInvestigationCountersReadbackValid { get; set; }
         public uint SimpleDdgiFreshAtlasForwardSampleCount { get; set; }
         public uint SimpleDdgiZeroIrradianceSampleCount { get; set; }
         public uint SimpleDdgiNonzeroIrradianceSampleCount { get; set; }
@@ -882,6 +938,8 @@ namespace Njulf.Rendering.Data
         public long GpuDdgiUpdateMicroseconds { get; set; }
         public long GpuSimpleDdgiTraceMicroseconds { get; set; }
         public long GpuSimpleDdgiBlendMicroseconds { get; set; }
+        public long GpuFarFieldUpdateMicroseconds { get; set; }
+        public int GpuFarFieldUpdateTimingValid { get; set; }
         public long GpuGiCompositeMicroseconds { get; set; }
         public long CpuAccelerationStructureBuildMicroseconds { get; set; }
         public long CpuAccelerationStructureBlasBuildMicroseconds { get; set; }
@@ -895,6 +953,18 @@ namespace Njulf.Rendering.Data
         public int AccelerationStructureTlasBuildCount { get; set; }
         public int AccelerationStructureTlasUpdateCount { get; set; }
         public int AccelerationStructureTlasSkipCount { get; set; }
+        public int AccelerationStructureStreamingEnabled { get; set; }
+        public int AccelerationStructureStaticInstanceCandidateCount { get; set; }
+        public int AccelerationStructureStaticInstanceResidentCount { get; set; }
+        public int AccelerationStructureStaticInstanceCulledCount { get; set; }
+        public int AccelerationStructureBlasEvictionCount { get; set; }
+        public ulong AccelerationStructureBlasEvictionBytes { get; set; }
+        public int AccelerationStructureBlasBudgetRejectedCount { get; set; }
+        public ulong AccelerationStructureBlasBytes { get; set; }
+        public ulong AccelerationStructureTlasBytes { get; set; }
+        public ulong AccelerationStructureRetiredBytes { get; set; }
+        public ulong AccelerationStructureResidentBytes { get; set; }
+        public ulong AccelerationStructureMemoryBudgetBytes { get; set; }
         public ulong AccelerationStructureBytes { get; set; }
         public ulong AccelerationStructureScratchBytes { get; set; }
         public ulong AccelerationStructureInstanceBufferBytes { get; set; }
@@ -1025,6 +1095,7 @@ namespace Njulf.Rendering.Data
             FrameIndex = 0;
             TemporalSampleIndex = 0;
             DdgiFrameSerial = 0;
+            SceneContentRevision = 0;
             ImageIndex = 0;
             ObjectCount = 0;
             MeshletCount = 0;
@@ -1246,6 +1317,8 @@ namespace Njulf.Rendering.Data
             GpuHiZBuildMicroseconds = 0;
             GpuLightCullMicroseconds = 0;
             GpuForwardOpaqueMicroseconds = 0;
+            GpuForwardGiGatherMicroseconds = 0;
+            GpuForwardGiGatherTimingCoverage = 0;
             GpuTransparentMicroseconds = 0;
             GpuDirectionalShadowMicroseconds = 0;
             GpuSpotShadowMicroseconds = 0;
@@ -1539,6 +1612,11 @@ namespace Njulf.Rendering.Data
             GpuAmbientOcclusionBlurMicroseconds = 0;
             CpuSsgiRecordMicroseconds = 0;
             CpuDdgiRecordMicroseconds = 0;
+            CpuSimpleDdgiRecordMicroseconds = 0;
+            CpuFarFieldRecordMicroseconds = 0;
+            CpuGlobalIlluminationRecordMicroseconds = 0;
+            CpuGlobalIlluminationRecordP95Microseconds = 0;
+            GlobalIlluminationCpuTimingSampleCount = 0;
             CpuDdgiSchedulerMicroseconds = 0;
             CpuDdgiSchedulerP95Microseconds = 0;
             CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds = 0;
@@ -1679,7 +1757,43 @@ namespace Njulf.Rendering.Data
             SimpleDdgiFullRayProbeUpdateCount = 0;
             SimpleDdgiMaintenanceRayProbeUpdateCount = 0;
             SimpleDdgiAdaptiveRaySavedRaysPerFrame = 0;
+            SimpleDdgiNearFullRayProbeUpdateCount = 0;
+            SimpleDdgiMidFullRayProbeUpdateCount = 0;
+            SimpleDdgiFarFullRayProbeUpdateCount = 0;
+            SimpleDdgiNearMaintenanceRayProbeUpdateCount = 0;
+            SimpleDdgiMidMaintenanceRayProbeUpdateCount = 0;
+            SimpleDdgiFarMaintenanceRayProbeUpdateCount = 0;
+            SimpleDdgiNearScheduledPrimaryRayCount = 0;
+            SimpleDdgiMidScheduledPrimaryRayCount = 0;
+            SimpleDdgiFarScheduledPrimaryRayCount = 0;
+            SimpleDdgiDirtyFirstUpdateLatencySampleCount = 0;
+            SimpleDdgiDirtyFirstUpdateLatencyP50Frames = 0;
+            SimpleDdgiDirtyFirstUpdateLatencyP95Frames = 0;
+            SimpleDdgiDirtyFirstUpdateLatencyMaxFrames = 0;
+            SimpleDdgiDirtyConvergenceLatencySampleCount = 0;
+            SimpleDdgiDirtyConvergenceLatencyP50Frames = 0;
+            SimpleDdgiDirtyConvergenceLatencyP95Frames = 0;
+            SimpleDdgiDirtyConvergenceLatencyMaxFrames = 0;
             SimpleDdgiAtlasBytes = 0;
+            SimpleDdgiSampledAtlasRequested = 0;
+            SimpleDdgiSampledAtlasActive = 0;
+            SimpleDdgiSampledAtlasGroupCount = 0;
+            SimpleDdgiSampledAtlasLayersPerTexture = 0;
+            SimpleDdgiSampledAtlasImageBytes = 0;
+            SimpleDdgiSampledAtlasFallbackReason = string.Empty;
+            FarFieldPagedMode = 0;
+            FarFieldPagePoolCapacity = 0;
+            FarFieldResidentPageCount = 0;
+            FarFieldPendingPageCount = 0;
+            FarFieldPageRequestCount = 0;
+            FarFieldPageMissCount = 0;
+            FarFieldPageRebuildCount = 0;
+            FarFieldPageEvictionCount = 0;
+            FarFieldScheduledPageBakeCount = 0;
+            FarFieldCacheBytes = 0;
+            FarFieldMemoryBudgetBytes = 0;
+            FarFieldInstanceBufferBytes = 0;
+            FarFieldPageTableBytes = 0;
             SimpleDdgiRecentered = 0;
             SimpleDdgiAtlasPreservedOnRecenter = 0;
             SimpleDdgiAtlasCleared = 0;
@@ -1689,6 +1803,7 @@ namespace Njulf.Rendering.Data
             SimpleDdgiAtlasPreserveOnRecenterCount = 0;
             SimpleDdgiFramesSinceLastClear = 0;
             SimpleDdgiFramesSinceLastRecenter = 0;
+            DdgiInvestigationCountersReadbackValid = 0;
             SimpleDdgiFreshAtlasForwardSampleCount = 0;
             SimpleDdgiZeroIrradianceSampleCount = 0;
             SimpleDdgiNonzeroIrradianceSampleCount = 0;
@@ -1886,6 +2001,8 @@ namespace Njulf.Rendering.Data
             GpuDdgiUpdateMicroseconds = 0;
             GpuSimpleDdgiTraceMicroseconds = 0;
             GpuSimpleDdgiBlendMicroseconds = 0;
+            GpuFarFieldUpdateMicroseconds = 0;
+            GpuFarFieldUpdateTimingValid = 0;
             GpuGiCompositeMicroseconds = 0;
             CpuAccelerationStructureBuildMicroseconds = 0;
             CpuAccelerationStructureBlasBuildMicroseconds = 0;
@@ -1899,6 +2016,18 @@ namespace Njulf.Rendering.Data
             AccelerationStructureTlasBuildCount = 0;
             AccelerationStructureTlasUpdateCount = 0;
             AccelerationStructureTlasSkipCount = 0;
+            AccelerationStructureStreamingEnabled = 0;
+            AccelerationStructureStaticInstanceCandidateCount = 0;
+            AccelerationStructureStaticInstanceResidentCount = 0;
+            AccelerationStructureStaticInstanceCulledCount = 0;
+            AccelerationStructureBlasEvictionCount = 0;
+            AccelerationStructureBlasEvictionBytes = 0;
+            AccelerationStructureBlasBudgetRejectedCount = 0;
+            AccelerationStructureBlasBytes = 0;
+            AccelerationStructureTlasBytes = 0;
+            AccelerationStructureRetiredBytes = 0;
+            AccelerationStructureResidentBytes = 0;
+            AccelerationStructureMemoryBudgetBytes = 0;
             AccelerationStructureBytes = 0;
             AccelerationStructureScratchBytes = 0;
             AccelerationStructureInstanceBufferBytes = 0;

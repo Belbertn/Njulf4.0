@@ -76,7 +76,7 @@ internal sealed class SampleStressSceneBuilder
             SamplePerformanceScenario.MixedTreeLineFoliageNoShadows => BuildForestFoliage(SamplePerformanceScenario.MixedTreeLineFoliageNoShadows, shadowsEnabled: false),
             SamplePerformanceScenario.ForestFoliage => BuildForestFoliage(SamplePerformanceScenario.ForestFoliage, shadowsEnabled: true),
             SamplePerformanceScenario.ReflectionHeavy => BuildReflectionHeavy(),
-            SamplePerformanceScenario.GiSponzaRightWallStationary => ValidationSummary(
+            SamplePerformanceScenario.GiSponzaRightWallStationary => ExistingSceneValidationSummary(
                 SamplePerformanceScenario.GiSponzaRightWallStationary,
                 "Sponza Plaza right-wall fixed-camera GI baseline"),
             SamplePerformanceScenario.GiSimpleDdgiFurnace => BuildGiSimpleDdgiFurnace(),
@@ -1521,6 +1521,18 @@ internal sealed class SampleStressSceneBuilder
             0,
             0,
             _probes.Count,
+            notes);
+
+    private SamplePerformanceScenarioSummary ExistingSceneValidationSummary(
+        SamplePerformanceScenario scenario,
+        string notes) =>
+        new(
+            scenario,
+            _scene.RenderObjects.Count,
+            _lightManager.LightCount,
+            0,
+            0,
+            _scene.ReflectionProbes.Count,
             notes);
 
     private void Clear()

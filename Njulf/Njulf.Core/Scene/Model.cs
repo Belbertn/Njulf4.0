@@ -61,6 +61,7 @@ namespace Njulf.Core.Scene
                         Animator = animator,
                         SkinningBindTransform = skinned.SkinningBindTransform,
                         AnimatedBoundingBox = skinned.AnimatedBoundingBox,
+                        LocalMeshBounds = skinned.LocalMeshBounds,
                         SkinnedVertexOffset = skinned.SkinnedVertexOffset,
                         SkinningEnabled = skinned.SkinningEnabled,
                         Name = skinned.Name,
@@ -76,6 +77,7 @@ namespace Njulf.Core.Scene
                 {
                     Mesh = renderObject.Mesh,
                     Material = renderObject.Material,
+                    LocalMeshBounds = renderObject.LocalMeshBounds,
                     Name = renderObject.Name,
                     WorldMatrix = renderObject.WorldMatrix,
                     Visible = renderObject.Visible,

@@ -5,6 +5,12 @@ namespace NjulfHelloGame;
 
 public static class SampleGlobalIlluminationValidation
 {
+    private const ulong SponzaAccelerationStructureMemoryBudgetBytes = 512UL * 1024UL * 1024UL;
+    private static readonly SimpleDdgiAuthoredVolume SponzaUpperVolume = new(
+        new Vector3(-17.0f, 9.0f, -10.0f),
+        new Vector3(21.0f, 19.0f, 15.0f),
+        1.0f);
+
     public const float SimpleDdgiFurnaceAlbedo = 0.5f;
     public const float SimpleDdgiFurnaceEmittedRadiance = 0.25f;
     public const float SimpleDdgiFurnaceExpectedIrradianceLuminance =
@@ -387,7 +393,17 @@ public static class SampleGlobalIlluminationValidation
         gi.TemporalEnabled = false;
         gi.DenoiserEnabled = false;
 
-        if (scenario is SamplePerformanceScenario.GiCornellRoom or SamplePerformanceScenario.GiSimpleDdgiFurnace)
+        if (scenario == SamplePerformanceScenario.GiSponzaRightWallStationary)
+        {
+            // The main Sponza mesh reaches Y=18.757, while the camera-relative
+            // one-metre ring ends near Y=10.5. This overlapping upper slab adds
+            // 11,154 probes, keeping the three rings plus authored volume at
+            // 31,890 probes, below the 32,768 Simple DDGI hard limit.
+            gi.GiAccelerationStructureMemoryBudgetBytes = SponzaAccelerationStructureMemoryBudgetBytes;
+            gi.EnvironmentFallbackIntensity = 1.0f;
+            gi.SimpleDdgiAuthoredVolumes.Add(SponzaUpperVolume);
+        }
+        else if (scenario is SamplePerformanceScenario.GiCornellRoom or SamplePerformanceScenario.GiSimpleDdgiFurnace)
         {
             settings.Exposure = 0.85f;
             gi.IndirectIntensity = 0.85f;

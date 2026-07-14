@@ -31,6 +31,9 @@ public sealed class SamplePlazaGlobalIlluminationTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(gi.DdgiSimpleEnabled, Is.True);
+            Assert.That(gi.EffectiveUseSimpleDdgi, Is.True);
+            Assert.That(gi.EffectiveUseDdgi, Is.False);
             Assert.That(gi.DdgiCameraRelativeEnabled, Is.True);
             Assert.That(gi.DdgiSchedulerMode, Is.EqualTo(DdgiSchedulerMode.Gpu));
             Assert.That(gi.DdgiQualityTier, Is.EqualTo(DdgiQualityTier.DdgiHigh));
@@ -48,7 +51,7 @@ public sealed class SamplePlazaGlobalIlluminationTests
             Assert.That(totalClipmapProbes, Is.EqualTo(32_256));
             Assert.That(totalClipmapProbes, Is.LessThanOrEqualTo(gi.DdgiMaxActiveProbes));
             Assert.That(gi.IndirectIntensity, Is.EqualTo(1.0f));
-            Assert.That(gi.EnvironmentFallbackIntensity, Is.EqualTo(0.45f));
+            Assert.That(gi.EnvironmentFallbackIntensity, Is.EqualTo(1.0f));
             Assert.That(gi.DdgiMaxRaysPerProbe, Is.EqualTo(256));
             Assert.That(gi.DdgiCascade0RaysPerProbe, Is.EqualTo(256));
             Assert.That(gi.DdgiCascade1RaysPerProbe, Is.EqualTo(192));
@@ -65,6 +68,11 @@ public sealed class SamplePlazaGlobalIlluminationTests
             Assert.That(gi.DdgiMinimumProbeRefreshFrames, Is.EqualTo(120));
             Assert.That(gi.DdgiProbeUpdateTimeBudgetMilliseconds, Is.EqualTo(2.5f));
             Assert.That(gi.DdgiGpuTotalUpdateTimeBudgetMilliseconds, Is.EqualTo(2.5f));
+            Assert.That(gi.GiAccelerationStructureMemoryBudgetBytes, Is.EqualTo(512UL * 1024UL * 1024UL));
+            Assert.That(gi.SimpleDdgiAuthoredVolumes, Has.Count.EqualTo(1));
+            Assert.That(gi.SimpleDdgiAuthoredVolumes[0].Min.Y, Is.LessThanOrEqualTo(9.0f));
+            Assert.That(gi.SimpleDdgiAuthoredVolumes[0].Max.Y, Is.GreaterThanOrEqualTo(18.757229f));
+            Assert.That(gi.SimpleDdgiAuthoredVolumes[0].Spacing, Is.EqualTo(1.0f));
             Assert.That(settings.Environment.DiffuseIntensity, Is.EqualTo(0.10f));
             Assert.That(settings.Shadows.DirectionalShadowMapSize, Is.EqualTo(2048));
             Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(3));
@@ -88,11 +96,12 @@ public sealed class SamplePlazaGlobalIlluminationTests
     }
 
     [Test]
-    public void FrameLayout_EmitsOnlyCameraClipmaps()
+    public void LegacyFrameLayout_WhenExplicitlySelected_EmitsOnlyCameraClipmaps()
     {
         var settings = new RenderSettings();
         var scene = new Scene();
         ConfigurePlazaRenderSettings(settings);
+        settings.GlobalIllumination.DdgiSimpleEnabled = false;
         ConfigurePlazaSceneLighting(scene);
         var camera = new FirstPersonCamera(new Vector3(0.0f, 1.35f, 3.1f), -1.5707964f, -0.08f);
         var clipmaps = new CameraRelativeDdgiClipmapController();

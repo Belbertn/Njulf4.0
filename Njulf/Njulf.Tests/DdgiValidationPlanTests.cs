@@ -297,6 +297,7 @@ namespace Njulf.Tests
                 Enabled = true,
                 Mode = GlobalIlluminationMode.Ddgi,
                 UseDdgi = true,
+                DdgiSimpleEnabled = false,
                 DdgiCameraRelativeEnabled = true,
                 DdgiClipmapCascadeCount = cascadeCount,
                 DdgiClipmapProbeCountX = 6,

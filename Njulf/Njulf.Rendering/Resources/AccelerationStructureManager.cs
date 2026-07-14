@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Njulf.Core.Scene;
@@ -12,7 +13,9 @@ using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.KHR;
+using CoreBoundingBox = Njulf.Core.Math.BoundingBox;
 using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
+using CoreVector3 = Njulf.Core.Math.Vector3;
 using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Resources
@@ -32,12 +35,20 @@ namespace Njulf.Rendering.Resources
         private readonly MeshManager _meshManager;
         private readonly MaterialManager _materialManager;
         private readonly KhrAccelerationStructure? _khrAccelerationStructure;
+        private readonly ulong _scratchBufferAddressAlignment;
         private readonly Dictionary<MeshHandle, BottomLevelAccelerationStructure> _blasCache = new();
+        private readonly List<AccelerationStructureStorageBuffer> _rayQueryStorageScratch = new();
+        private readonly ReadOnlyCollection<AccelerationStructureStorageBuffer> _rayQueryStorageView;
         private readonly List<StaticOpaqueInstance> _instanceScratch = new();
+        private readonly List<StaticOpaqueInstance> _residentInstanceScratch = new();
+        private readonly List<StaticResidencyCandidate> _staticResidencyCandidateScratch = new();
+        private readonly HashSet<MeshHandle> _activeMeshScratch = new();
+        private readonly HashSet<MeshHandle> _unavailableMeshScratch = new();
         private readonly List<AccelerationStructureInstanceKHR> _gpuInstanceScratch = new();
         private readonly List<GPUDdgiRayQueryInstance> _rayQueryInstanceScratch = new();
         private readonly List<RetiredAccelerationStructureResource> _retiredAccelerationStructures = new();
         private readonly List<RetiredBufferResource> _retiredBuffers = new();
+        private ulong _retiredAccelerationStructureBytes;
 
         private TopLevelAccelerationStructure _tlas;
         private BufferHandle _instanceBuffer;
@@ -46,6 +57,8 @@ namespace Njulf.Rendering.Resources
         private ulong _rayQueryInstanceBufferSize;
         private BufferHandle _scratchBuffer;
         private ulong _scratchBufferSize;
+        private ulong _scratchBufferCapacity;
+        private ulong _scratchBufferDeviceAddress;
         private BufferHandle _lastVertexPositionBuffer;
         private BufferHandle _lastIndexBuffer;
         private bool _disposed;
@@ -61,6 +74,13 @@ namespace Njulf.Rendering.Resources
         private int _lastTlasSkipCount;
         private ulong _lastInstanceUploadBytes;
         private ulong _lastRayQueryInstanceMetadataUploadBytes;
+        private int _lastStaticInstanceCandidateCount;
+        private int _lastStaticInstanceResidentCount;
+        private int _lastStaticInstanceCulledCount;
+        private int _lastBlasEvictionCount;
+        private ulong _lastBlasEvictionBytes;
+        private int _lastBlasBudgetRejectedCount;
+        private AccelerationStructureResidencyPolicy _residencyPolicy;
         private ulong _lastTlasInstanceSignature;
         private bool _hasTlasInstanceSignature;
         private int _lastTlasInstanceCount;
@@ -76,7 +96,11 @@ namespace Njulf.Rendering.Resources
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
             _meshManager = meshManager ?? throw new ArgumentNullException(nameof(meshManager));
             _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
+            _rayQueryStorageView = _rayQueryStorageScratch.AsReadOnly();
             _khrAccelerationStructure = context.KhrAccelerationStructure;
+            _scratchBufferAddressAlignment = context.RayQuerySupported && _khrAccelerationStructure != null
+                ? QueryScratchBufferAddressAlignment(context)
+                : 1UL;
             if (!context.RayQuerySupported)
                 _lastFallbackReason = "Ray-query and acceleration-structure features are not supported by the selected Vulkan device.";
             else if (_khrAccelerationStructure == null)
@@ -87,15 +111,65 @@ namespace Njulf.Rendering.Resources
         public bool Supported => _context.RayQuerySupported && _khrAccelerationStructure != null;
         public bool Active => Supported && _tlas.Handle.Handle != 0 && TopLevelInstanceCount > 0 && string.IsNullOrEmpty(_lastFallbackReason);
         public AccelerationStructureKHR TopLevelAccelerationStructureHandle => _tlas.Handle;
+        /// <summary>Backing allocation for the TLAS; required for queue ownership handoffs.</summary>
+        public BufferHandle TopLevelAccelerationStructureStorageBuffer => _tlas.StorageBuffer;
+        public ulong TopLevelAccelerationStructureStorageBufferBytes => _tlas.Size;
+        public BufferHandle RayQueryInstanceMetadataBuffer => _rayQueryInstanceBuffer;
         public int BottomLevelCount => _blasCache.Count;
         public int TopLevelInstanceCount { get; private set; }
         public ulong AccelerationStructureBytes { get; private set; }
+        public ulong BottomLevelAccelerationStructureBytes { get; private set; }
+        public ulong TopLevelAccelerationStructureBytes => _tlas.Size;
+        /// <summary>
+        /// Bytes retained only until all in-flight frames can no longer reference a
+        /// replaced BLAS/TLAS. These allocations are physically live and are reported
+        /// separately from the current resident working set.
+        /// </summary>
+        public ulong RetiredAccelerationStructureBytes => _retiredAccelerationStructureBytes;
+        public ulong LiveAccelerationStructureBytes => checked(AccelerationStructureBytes + _retiredAccelerationStructureBytes);
         public ulong ScratchBufferBytes => _scratchBufferSize;
         public ulong InstanceBufferBytes => _instanceBufferSize;
         public ulong RayQueryInstanceMetadataBufferBytes => _rayQueryInstanceBufferSize;
-        public ulong TotalBytes => AccelerationStructureBytes + ScratchBufferBytes + InstanceBufferBytes + RayQueryInstanceMetadataBufferBytes;
+        public ulong TotalBytes => LiveAccelerationStructureBytes + ScratchBufferBytes + InstanceBufferBytes + RayQueryInstanceMetadataBufferBytes;
         public string LastFallbackReason => _lastFallbackReason;
         public long LastBuildMicroseconds => _lastBuildMicroseconds;
+
+        /// <summary>
+        /// Resolves every backing allocation traversed by a ray query. A TLAS descriptor reaches
+        /// its BLAS children indirectly, but Vulkan queue ownership still applies to each backing
+        /// buffer; exposing only the TLAS storage would leave those reads unsynchronized.
+        /// The returned read-only view is reused by the manager and is valid until the next call.
+        /// </summary>
+        public IReadOnlyList<AccelerationStructureStorageBuffer> GetRayQueryStorageBuffers()
+        {
+            // This is queried once for every async-plan refresh. Reuse a private scratch list so
+            // a scene with many BLAS allocations does not create a per-frame managed allocation.
+            // Callers consume it synchronously while building the immutable binding snapshot.
+            List<AccelerationStructureStorageBuffer> buffers = _rayQueryStorageScratch;
+            buffers.Clear();
+            if (buffers.Capacity < _blasCache.Count + 1)
+                buffers.Capacity = _blasCache.Count + 1;
+            if (_tlas.StorageBuffer.IsValid && _tlas.Size > 0)
+            {
+                buffers.Add(new AccelerationStructureStorageBuffer(
+                    _tlas.StorageBuffer,
+                    _tlas.Size,
+                    "TLAS storage"));
+            }
+
+            foreach (BottomLevelAccelerationStructure blas in _blasCache.Values)
+            {
+                if (!blas.StorageBuffer.IsValid || blas.Size == 0)
+                    continue;
+
+                buffers.Add(new AccelerationStructureStorageBuffer(
+                    blas.StorageBuffer,
+                    blas.Size,
+                    "BLAS storage"));
+            }
+
+            return _rayQueryStorageView;
+        }
 
         public void Register(BindlessHeap bindlessHeap)
         {
@@ -112,7 +186,8 @@ namespace Njulf.Rendering.Resources
             CommandBuffer commandBuffer,
             bool enabled,
             GpuTimestampRecorder? gpuTimestamps = null,
-            int frameIndex = 0)
+            int frameIndex = 0,
+            AccelerationStructureResidencyPolicy? residencyPolicy = null)
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
@@ -125,6 +200,7 @@ namespace Njulf.Rendering.Resources
             TopLevelInstanceCount = 0;
             ResetFrameDiagnostics();
             BeginFrameResourceRetirement();
+            _residencyPolicy = residencyPolicy ?? AccelerationStructureResidencyPolicy.Disabled;
 
             if (!enabled)
             {
@@ -139,23 +215,50 @@ namespace Njulf.Rendering.Resources
             {
                 InvalidateCachedStructuresIfMeshBuffersChanged();
                 CollectStaticOpaqueInstances(scene, _instanceScratch);
+                ApplyResidencyPolicy(_instanceScratch);
                 if (_instanceScratch.Count == 0)
                 {
                     _lastFallbackReason = "No opaque acceleration-structure instances were submitted.";
                     return CreateStats(false);
                 }
 
+                BuildActiveMeshSet(_instanceScratch);
+                PruneUnusedBottomLevelAccelerationStructures();
+
                 bool missingBlas = HasMissingBottomLevelAccelerationStructures(_instanceScratch);
+                ulong additionalTlasBudgetReservation = 0;
+                if (missingBlas)
+                {
+                    EnsureInstanceBufferCapacity(_instanceScratch.Count);
+                    ulong estimatedTlasBytes = EstimateTopLevelAccelerationStructureBytes(_instanceScratch.Count);
+                    additionalTlasBudgetReservation = CalculateAdditionalTopLevelReservation(
+                        estimatedTlasBytes,
+                        _tlas.Size);
+                }
                 if (missingBlas)
                     gpuTimestamps?.BeginPass(commandBuffer, frameIndex, "AccelerationStructureBlasPass");
                 try
                 {
-                    EnsureBottomLevelAccelerationStructures(_instanceScratch, commandBuffer);
+                    EnsureBottomLevelAccelerationStructures(
+                        _instanceScratch,
+                        commandBuffer,
+                        additionalTlasBudgetReservation);
                 }
                 finally
                 {
                     if (missingBlas)
                         gpuTimestamps?.EndPass(commandBuffer, frameIndex);
+                }
+
+                if (_unavailableMeshScratch.Count > 0)
+                {
+                    RemoveInstancesWithUnavailableBottomLevelAccelerationStructures(_instanceScratch);
+                    BuildActiveMeshSet(_instanceScratch);
+                    if (_instanceScratch.Count == 0)
+                    {
+                        _lastFallbackReason = "The GI acceleration-structure residency budget cannot hold any submitted opaque geometry.";
+                        return CreateStats(false);
+                    }
                 }
 
                 ulong instanceSignature = CreateInstanceSignature(_instanceScratch);
@@ -207,16 +310,30 @@ namespace Njulf.Rendering.Resources
                     continue;
                 if (renderObject.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
                     continue;
+                AccelerationStructureGeometryDomain requestedDomain = renderObject.IsStatic
+                    ? AccelerationStructureGeometryDomain.Static
+                    : AccelerationStructureGeometryDomain.Dynamic;
+                if (renderObject is SkinnedRenderObject)
+                    requestedDomain = AccelerationStructureGeometryDomain.Skinned;
                 if (!TryGetRayQueryMesh(
                     meshHandle,
                     renderObject.Material,
                     renderObject.Name,
-                    AccelerationStructureGeometryDomain.Dynamic,
+                    requestedDomain,
                     out MeshInfo meshInfo,
                     out uint materialIndex))
                     continue;
 
-                instances.Add(new StaticOpaqueInstance(meshHandle, meshInfo, materialIndex, renderObject.WorldMatrix));
+                AccelerationStructureGeometryDomain domain = meshInfo.IsSkinned
+                    ? AccelerationStructureGeometryDomain.Skinned
+                    : requestedDomain;
+
+                instances.Add(new StaticOpaqueInstance(
+                    meshHandle,
+                    meshInfo,
+                    materialIndex,
+                    renderObject.WorldMatrix,
+                    domain));
             }
 
             foreach (StaticInstanceBatch batch in scene.StaticInstanceBatches)
@@ -236,8 +353,161 @@ namespace Njulf.Rendering.Resources
 
                 IReadOnlyList<CoreMatrix4x4> worldMatrices = batch.WorldMatrices;
                 for (int i = 0; i < worldMatrices.Count; i++)
-                    instances.Add(new StaticOpaqueInstance(meshHandle, meshInfo, materialIndex, worldMatrices[i]));
+                    instances.Add(new StaticOpaqueInstance(
+                        meshHandle,
+                        meshInfo,
+                        materialIndex,
+                        worldMatrices[i],
+                        AccelerationStructureGeometryDomain.Static));
             }
+        }
+
+        /// <summary>
+        /// Keeps dynamic objects authoritative while selecting a stable, nearest-first
+        /// working set of static batches.  Static geometry is the streamable domain;
+        /// a normal render object is deliberately never silently culled from the
+        /// detailed ray-query representation by this policy.
+        /// </summary>
+        private void ApplyResidencyPolicy(List<StaticOpaqueInstance> instances)
+        {
+            _lastStaticInstanceCandidateCount = 0;
+            _lastStaticInstanceResidentCount = 0;
+            _lastStaticInstanceCulledCount = 0;
+
+            if (!_residencyPolicy.Enabled)
+            {
+                for (int i = 0; i < instances.Count; i++)
+                {
+                    if (instances[i].Domain == AccelerationStructureGeometryDomain.Static)
+                        _lastStaticInstanceCandidateCount++;
+                }
+
+                _lastStaticInstanceResidentCount = _lastStaticInstanceCandidateCount;
+                return;
+            }
+
+            _residentInstanceScratch.Clear();
+            _staticResidencyCandidateScratch.Clear();
+            float residentDistance = Math.Max(0.0f, _residencyPolicy.StaticResidentDistance);
+            float residentDistanceSquared = residentDistance >= MathF.Sqrt(float.MaxValue)
+                ? float.MaxValue
+                : residentDistance * residentDistance;
+
+            for (int i = 0; i < instances.Count; i++)
+            {
+                StaticOpaqueInstance instance = instances[i];
+                if (instance.Domain != AccelerationStructureGeometryDomain.Static)
+                {
+                    _residentInstanceScratch.Add(instance);
+                    continue;
+                }
+
+                _lastStaticInstanceCandidateCount++;
+                float distanceSquared = DistanceSquaredToBounds(
+                    _residencyPolicy.CameraPosition,
+                    GetInstanceWorldBounds(instance));
+                if (!float.IsFinite(distanceSquared) || distanceSquared > residentDistanceSquared)
+                {
+                    _lastStaticInstanceCulledCount++;
+                    continue;
+                }
+
+                _staticResidencyCandidateScratch.Add(new StaticResidencyCandidate(instance, distanceSquared));
+            }
+
+            _staticResidencyCandidateScratch.Sort(CompareStaticResidencyCandidates);
+            int staticResidentCount = Math.Min(
+                _staticResidencyCandidateScratch.Count,
+                Math.Max(0, _residencyPolicy.MaximumStaticInstances));
+            for (int i = 0; i < staticResidentCount; i++)
+                _residentInstanceScratch.Add(_staticResidencyCandidateScratch[i].Instance);
+
+            _lastStaticInstanceResidentCount = staticResidentCount;
+            _lastStaticInstanceCulledCount += _staticResidencyCandidateScratch.Count - staticResidentCount;
+            instances.Clear();
+            instances.AddRange(_residentInstanceScratch);
+        }
+
+        private static int CompareStaticResidencyCandidates(
+            StaticResidencyCandidate left,
+            StaticResidencyCandidate right)
+        {
+            int comparison = left.DistanceSquared.CompareTo(right.DistanceSquared);
+            if (comparison != 0)
+                return comparison;
+
+            comparison = left.Instance.Mesh.Index.CompareTo(right.Instance.Mesh.Index);
+            if (comparison != 0)
+                return comparison;
+            comparison = left.Instance.Mesh.Generation.CompareTo(right.Instance.Mesh.Generation);
+            if (comparison != 0)
+                return comparison;
+            comparison = left.Instance.MaterialIndex.CompareTo(right.Instance.MaterialIndex);
+            if (comparison != 0)
+                return comparison;
+
+            CoreMatrix4x4 leftMatrix = left.Instance.WorldMatrix;
+            CoreMatrix4x4 rightMatrix = right.Instance.WorldMatrix;
+            comparison = leftMatrix.M41.CompareTo(rightMatrix.M41);
+            if (comparison != 0)
+                return comparison;
+            comparison = leftMatrix.M42.CompareTo(rightMatrix.M42);
+            if (comparison != 0)
+                return comparison;
+            return leftMatrix.M43.CompareTo(rightMatrix.M43);
+        }
+
+        private static CoreBoundingBox GetInstanceWorldBounds(StaticOpaqueInstance instance)
+        {
+            CoreBoundingBox localBounds = new(
+                new CoreVector3(
+                    instance.MeshInfo.BoundingBoxMin.X,
+                    instance.MeshInfo.BoundingBoxMin.Y,
+                    instance.MeshInfo.BoundingBoxMin.Z),
+                new CoreVector3(
+                    instance.MeshInfo.BoundingBoxMax.X,
+                    instance.MeshInfo.BoundingBoxMax.Y,
+                    instance.MeshInfo.BoundingBoxMax.Z));
+            return CoreBoundingBox.Transform(localBounds, instance.WorldMatrix);
+        }
+
+        private static float DistanceSquaredToBounds(CoreVector3 position, CoreBoundingBox bounds)
+        {
+            float x = position.X < bounds.Min.X
+                ? bounds.Min.X - position.X
+                : position.X > bounds.Max.X ? position.X - bounds.Max.X : 0.0f;
+            float y = position.Y < bounds.Min.Y
+                ? bounds.Min.Y - position.Y
+                : position.Y > bounds.Max.Y ? position.Y - bounds.Max.Y : 0.0f;
+            float z = position.Z < bounds.Min.Z
+                ? bounds.Min.Z - position.Z
+                : position.Z > bounds.Max.Z ? position.Z - bounds.Max.Z : 0.0f;
+            return x * x + y * y + z * z;
+        }
+
+        private void BuildActiveMeshSet(IReadOnlyList<StaticOpaqueInstance> instances)
+        {
+            _activeMeshScratch.Clear();
+            for (int i = 0; i < instances.Count; i++)
+                _activeMeshScratch.Add(instances[i].Mesh);
+        }
+
+        private void RemoveInstancesWithUnavailableBottomLevelAccelerationStructures(List<StaticOpaqueInstance> instances)
+        {
+            if (_unavailableMeshScratch.Count == 0)
+                return;
+
+            int writeIndex = 0;
+            for (int readIndex = 0; readIndex < instances.Count; readIndex++)
+            {
+                StaticOpaqueInstance instance = instances[readIndex];
+                if (_unavailableMeshScratch.Contains(instance.Mesh))
+                    continue;
+                instances[writeIndex++] = instance;
+            }
+
+            if (writeIndex < instances.Count)
+                instances.RemoveRange(writeIndex, instances.Count - writeIndex);
         }
 
         private bool TryGetRayQueryMesh(
@@ -280,21 +550,149 @@ namespace Njulf.Rendering.Resources
 
         private void EnsureBottomLevelAccelerationStructures(
             IReadOnlyList<StaticOpaqueInstance> instances,
-            CommandBuffer commandBuffer)
+            CommandBuffer commandBuffer,
+            ulong additionalTlasBudgetReservation)
         {
+            _unavailableMeshScratch.Clear();
             foreach (StaticOpaqueInstance instance in instances)
             {
-                if (_blasCache.ContainsKey(instance.Mesh))
+                if (_unavailableMeshScratch.Contains(instance.Mesh))
                     continue;
+
+                if (_blasCache.TryGetValue(instance.Mesh, out BottomLevelAccelerationStructure? cachedBlas))
+                {
+                    cachedBlas.LastUsedFrameSerial = _frameSerial;
+                    continue;
+                }
+
+                ulong requiredBytes = EstimateBottomLevelAccelerationStructureBytes(instance.MeshInfo);
+                if (!EnsureBottomLevelResidencyBudget(requiredBytes, additionalTlasBudgetReservation))
+                {
+                    _unavailableMeshScratch.Add(instance.Mesh);
+                    _lastBlasBudgetRejectedCount++;
+                    continue;
+                }
 
                 long blasStart = Stopwatch.GetTimestamp();
                 BottomLevelAccelerationStructure blas = BuildBottomLevelAccelerationStructure(instance.Mesh, instance.MeshInfo, commandBuffer);
+                blas.LastUsedFrameSerial = _frameSerial;
                 _lastBlasBuildMicroseconds += ElapsedMicroseconds(blasStart);
                 _lastBlasBuildCount++;
                 _blasCache.Add(instance.Mesh, blas);
                 AccelerationStructureBytes = checked(AccelerationStructureBytes + blas.Size);
                 InsertAccelerationStructureBuildBarrier(commandBuffer);
             }
+        }
+
+        private ulong EstimateBottomLevelAccelerationStructureBytes(MeshInfo meshInfo)
+        {
+            uint primitiveCount = meshInfo.IndexCount / 3u;
+            if (primitiveCount == 0)
+                throw new InvalidOperationException("Cannot reserve BLAS memory for a mesh with no triangle primitives.");
+
+            AccelerationStructureGeometryKHR geometry = CreateBottomLevelGeometry(meshInfo);
+            AccelerationStructureBuildGeometryInfoKHR buildInfo = CreateBottomLevelBuildInfo(&geometry, default, default);
+            AccelerationStructureBuildSizesInfoKHR sizes = QueryBuildSizes(buildInfo, primitiveCount);
+            return Math.Max(MinResourceBufferSize, sizes.AccelerationStructureSize);
+        }
+
+        private bool EnsureBottomLevelResidencyBudget(
+            ulong requiredBytes,
+            ulong additionalTlasBudgetReservation)
+        {
+            if (!_residencyPolicy.Enabled)
+                return true;
+
+            ulong budgetBytes = _residencyPolicy.EffectiveMemoryBudgetBytes;
+            ulong requiredAndReservedBytes = checked(requiredBytes + additionalTlasBudgetReservation);
+            if (requiredAndReservedBytes > budgetBytes)
+                return false;
+
+            while (WouldExceedBudget(AccelerationStructureBytes, requiredAndReservedBytes, budgetBytes))
+            {
+                if (!TryEvictBottomLevelAccelerationStructure(force: true))
+                    return false;
+            }
+
+            return true;
+        }
+
+        private ulong EstimateTopLevelAccelerationStructureBytes(int instanceCount)
+        {
+            uint primitiveCount = checked((uint)Math.Max(0, instanceCount));
+            AccelerationStructureGeometryKHR geometry = CreateTopLevelGeometry();
+            AccelerationStructureBuildGeometryInfoKHR buildInfo = CreateTopLevelBuildInfo(
+                &geometry,
+                default,
+                default,
+                default,
+                BuildAccelerationStructureModeKHR.BuildKhr);
+            AccelerationStructureBuildSizesInfoKHR sizes = QueryBuildSizes(buildInfo, primitiveCount);
+            return Math.Max(MinResourceBufferSize, sizes.AccelerationStructureSize);
+        }
+
+        internal static ulong CalculateAdditionalTopLevelReservation(
+            ulong estimatedTopLevelBytes,
+            ulong currentTopLevelBytes) =>
+            estimatedTopLevelBytes > currentTopLevelBytes
+                ? estimatedTopLevelBytes - currentTopLevelBytes
+                : 0;
+
+        private void PruneUnusedBottomLevelAccelerationStructures()
+        {
+            if (!_residencyPolicy.Enabled || _blasCache.Count == 0)
+                return;
+
+            // The hard cap is enforced before every new allocation.  This pass also
+            // releases aged streamed chunks when memory pressure is absent, avoiding
+            // a cache that is bounded in theory but permanently retains travelled
+            // world content in practice.
+            while (TryEvictBottomLevelAccelerationStructure(force: false))
+            {
+            }
+        }
+
+        private bool TryEvictBottomLevelAccelerationStructure(bool force)
+        {
+            if (_blasCache.Count == 0)
+                return false;
+
+            MeshHandle selectedMesh = default;
+            BottomLevelAccelerationStructure? selectedBlas = null;
+            ulong minimumLastUsedFrame = ulong.MaxValue;
+            ulong graceFrames = (ulong)Math.Max(0, _residencyPolicy.EvictionGraceFrames);
+            foreach (KeyValuePair<MeshHandle, BottomLevelAccelerationStructure> pair in _blasCache)
+            {
+                if (_activeMeshScratch.Contains(pair.Key))
+                    continue;
+
+                BottomLevelAccelerationStructure candidate = pair.Value;
+                bool oldEnough = _frameSerial >= candidate.LastUsedFrameSerial &&
+                    _frameSerial - candidate.LastUsedFrameSerial >= graceFrames;
+                if (!force && !oldEnough)
+                    continue;
+                if (selectedBlas != null && candidate.LastUsedFrameSerial >= minimumLastUsedFrame)
+                    continue;
+
+                selectedMesh = pair.Key;
+                selectedBlas = candidate;
+                minimumLastUsedFrame = candidate.LastUsedFrameSerial;
+            }
+
+            if (selectedBlas == null)
+                return false;
+
+            _blasCache.Remove(selectedMesh);
+            RetireAccelerationStructureResource(selectedBlas.Handle, selectedBlas.StorageBuffer, selectedBlas.Size);
+            _lastBlasEvictionCount++;
+            _lastBlasEvictionBytes = checked(_lastBlasEvictionBytes + selectedBlas.Size);
+            RecalculateAccelerationStructureBytes();
+            return true;
+        }
+
+        private static bool WouldExceedBudget(ulong currentBytes, ulong additionalBytes, ulong budgetBytes)
+        {
+            return currentBytes > budgetBytes || additionalBytes > budgetBytes - currentBytes;
         }
 
         private bool HasMissingBottomLevelAccelerationStructures(IReadOnlyList<StaticOpaqueInstance> instances)
@@ -353,7 +751,7 @@ namespace Njulf.Rendering.Resources
             buildInfo = CreateBottomLevelBuildInfo(
                 &geometry,
                 accelerationStructure,
-                _bufferManager.GetBufferDeviceAddress(_scratchBuffer));
+                _scratchBufferDeviceAddress);
 
             var range = new AccelerationStructureBuildRangeInfoKHR
             {
@@ -480,7 +878,7 @@ namespace Njulf.Rendering.Resources
                 &geometry,
                 _tlas.Handle,
                 source,
-                _bufferManager.GetBufferDeviceAddress(_scratchBuffer),
+                _scratchBufferDeviceAddress,
                 useUpdate ? BuildAccelerationStructureModeKHR.UpdateKhr : BuildAccelerationStructureModeKHR.BuildKhr);
             var range = new AccelerationStructureBuildRangeInfoKHR
             {
@@ -603,6 +1001,27 @@ namespace Njulf.Rendering.Resources
             if (_tlas.Handle.Handle != 0 && _tlas.Size >= requiredSize)
                 return false;
 
+            if (_residencyPolicy.Enabled)
+            {
+                ulong budgetBytes = _residencyPolicy.EffectiveMemoryBudgetBytes;
+                ulong existingTlasBytes = _tlas.Size;
+                ulong activeBytesWithoutTlas = AccelerationStructureBytes >= existingTlasBytes
+                    ? AccelerationStructureBytes - existingTlasBytes
+                    : 0;
+                while (WouldExceedBudget(activeBytesWithoutTlas, requiredSize, budgetBytes))
+                {
+                    if (!TryEvictBottomLevelAccelerationStructure(force: true))
+                    {
+                        throw new InvalidOperationException(
+                            $"GI acceleration-structure residency budget ({budgetBytes} bytes) cannot accommodate the active TLAS and BLAS working set.");
+                    }
+
+                    activeBytesWithoutTlas = AccelerationStructureBytes >= existingTlasBytes
+                        ? AccelerationStructureBytes - existingTlasBytes
+                        : 0;
+                }
+            }
+
             DestroyTopLevelAccelerationStructure(defer: true);
             BufferHandle storageBuffer = _bufferManager.CreateDeviceBuffer(
                 requiredSize,
@@ -623,19 +1042,69 @@ namespace Njulf.Rendering.Resources
         private void EnsureScratchCapacity(ulong requiredSize)
         {
             requiredSize = Math.Max(MinResourceBufferSize, requiredSize);
-            if (_scratchBuffer.IsValid && _scratchBufferSize >= requiredSize)
+            if (_scratchBuffer.IsValid && _scratchBufferCapacity >= requiredSize)
                 return;
 
             if (_scratchBuffer.IsValid)
                 RetireBufferResource(_scratchBuffer);
 
-            _scratchBufferSize = requiredSize;
+            _scratchBufferCapacity = requiredSize;
+            _scratchBufferSize = CalculateScratchBufferAllocationSize(
+                requiredSize,
+                _scratchBufferAddressAlignment);
             _scratchBuffer = _bufferManager.CreateDeviceBuffer(
                 _scratchBufferSize,
                 BufferUsageFlags.StorageBufferBit | BufferUsageFlags.ShaderDeviceAddressBit,
                 requireDeviceAddress: true,
                 MemoryBudgetCategory.GlobalIllumination,
                 "Acceleration Structure Scratch Buffer");
+
+            ulong baseAddress = _bufferManager.GetBufferDeviceAddress(_scratchBuffer);
+            _scratchBufferDeviceAddress = AlignScratchBufferAddress(
+                baseAddress,
+                _scratchBufferAddressAlignment);
+            ulong alignedOffset = checked(_scratchBufferDeviceAddress - baseAddress);
+            if (alignedOffset > _scratchBufferSize || _scratchBufferSize - alignedOffset < requiredSize)
+            {
+                throw new InvalidOperationException(
+                    "The aligned acceleration-structure scratch address does not leave enough usable buffer capacity.");
+            }
+        }
+
+        private static ulong QueryScratchBufferAddressAlignment(VulkanContext context)
+        {
+            var accelerationStructureProperties = new PhysicalDeviceAccelerationStructurePropertiesKHR
+            {
+                SType = StructureType.PhysicalDeviceAccelerationStructurePropertiesKhr
+            };
+            var properties = new PhysicalDeviceProperties2
+            {
+                SType = StructureType.PhysicalDeviceProperties2,
+                PNext = &accelerationStructureProperties
+            };
+            context.Api.GetPhysicalDeviceProperties2(context.PhysicalDevice, &properties);
+            return Math.Max(
+                1UL,
+                accelerationStructureProperties.MinAccelerationStructureScratchOffsetAlignment);
+        }
+
+        internal static ulong AlignScratchBufferAddress(ulong address, ulong alignment)
+        {
+            if (alignment == 0)
+                throw new ArgumentOutOfRangeException(nameof(alignment));
+
+            ulong remainder = address % alignment;
+            return remainder == 0
+                ? address
+                : checked(address + alignment - remainder);
+        }
+
+        internal static ulong CalculateScratchBufferAllocationSize(ulong requiredSize, ulong alignment)
+        {
+            if (alignment == 0)
+                throw new ArgumentOutOfRangeException(nameof(alignment));
+
+            return checked(requiredSize + alignment - 1UL);
         }
 
         private void EnsureInstanceBufferCapacity(int instanceCount)
@@ -839,6 +1308,7 @@ namespace Njulf.Rendering.Resources
                 hash = HashAdd(hash, instance.MeshInfo.VertexCount);
                 hash = HashAdd(hash, instance.MeshInfo.IndexCount);
                 hash = HashAdd(hash, instance.MaterialIndex);
+                hash = HashAdd(hash, (int)instance.Domain);
                 hash = HashAdd(hash, instance.WorldMatrix);
             }
 
@@ -923,6 +1393,15 @@ namespace Njulf.Rendering.Resources
                 _lastTlasSkipCount,
                 _lastInstanceUploadBytes,
                 _lastRayQueryInstanceMetadataUploadBytes,
+                _lastStaticInstanceCandidateCount,
+                _lastStaticInstanceResidentCount,
+                _lastStaticInstanceCulledCount,
+                _lastBlasEvictionCount,
+                _lastBlasEvictionBytes,
+                _lastBlasBudgetRejectedCount,
+                BottomLevelAccelerationStructureBytes,
+                TopLevelAccelerationStructureBytes,
+                RetiredAccelerationStructureBytes,
                 _lastFallbackReason);
         }
 
@@ -938,13 +1417,24 @@ namespace Njulf.Rendering.Resources
             _lastTlasSkipCount = 0;
             _lastInstanceUploadBytes = 0;
             _lastRayQueryInstanceMetadataUploadBytes = 0;
+            _lastStaticInstanceCandidateCount = 0;
+            _lastStaticInstanceResidentCount = 0;
+            _lastStaticInstanceCulledCount = 0;
+            _lastBlasEvictionCount = 0;
+            _lastBlasEvictionBytes = 0;
+            _lastBlasBudgetRejectedCount = 0;
         }
 
         private void RecalculateAccelerationStructureBytes()
         {
             ulong bytes = _tlas.Size;
+            ulong bottomLevelBytes = 0;
             foreach (BottomLevelAccelerationStructure blas in _blasCache.Values)
+            {
+                bottomLevelBytes = checked(bottomLevelBytes + blas.Size);
                 bytes = checked(bytes + blas.Size);
+            }
+            BottomLevelAccelerationStructureBytes = bottomLevelBytes;
             AccelerationStructureBytes = bytes;
         }
 
@@ -954,7 +1444,7 @@ namespace Njulf.Rendering.Resources
                 return;
 
             if (defer)
-                RetireAccelerationStructureResource(_tlas.Handle, _tlas.StorageBuffer);
+                RetireAccelerationStructureResource(_tlas.Handle, _tlas.StorageBuffer, _tlas.Size);
             else
                 DestroyAccelerationStructureResource(_tlas.Handle, _tlas.StorageBuffer);
             _tlas = default;
@@ -971,7 +1461,7 @@ namespace Njulf.Rendering.Resources
             foreach (BottomLevelAccelerationStructure blas in _blasCache.Values)
             {
                 if (defer)
-                    RetireAccelerationStructureResource(blas.Handle, blas.StorageBuffer);
+                    RetireAccelerationStructureResource(blas.Handle, blas.StorageBuffer, blas.Size);
                 else
                     DestroyAccelerationStructureResource(blas.Handle, blas.StorageBuffer);
             }
@@ -984,12 +1474,17 @@ namespace Njulf.Rendering.Resources
             DrainRetiredResources(force: false);
         }
 
-        private void RetireAccelerationStructureResource(AccelerationStructureKHR accelerationStructure, BufferHandle storageBuffer)
+        private void RetireAccelerationStructureResource(
+            AccelerationStructureKHR accelerationStructure,
+            BufferHandle storageBuffer,
+            ulong size)
         {
             _retiredAccelerationStructures.Add(new RetiredAccelerationStructureResource(
                 accelerationStructure,
                 storageBuffer,
+                size,
                 _frameSerial + (ulong)RenderingConstants.FramesInFlight + 1UL));
+            _retiredAccelerationStructureBytes = checked(_retiredAccelerationStructureBytes + size);
         }
 
         private void RetireBufferResource(BufferHandle buffer)
@@ -1008,6 +1503,9 @@ namespace Njulf.Rendering.Resources
                     continue;
 
                 DestroyAccelerationStructureResource(retired.AccelerationStructure, retired.StorageBuffer);
+                _retiredAccelerationStructureBytes = _retiredAccelerationStructureBytes >= retired.Size
+                    ? _retiredAccelerationStructureBytes - retired.Size
+                    : 0;
                 _retiredAccelerationStructures.RemoveAt(i);
             }
 
@@ -1057,12 +1555,30 @@ namespace Njulf.Rendering.Resources
             MeshHandle Mesh,
             MeshInfo MeshInfo,
             uint MaterialIndex,
-            CoreMatrix4x4 WorldMatrix);
+            CoreMatrix4x4 WorldMatrix,
+            AccelerationStructureGeometryDomain Domain = AccelerationStructureGeometryDomain.Static);
 
-        private readonly record struct BottomLevelAccelerationStructure(
-            AccelerationStructureKHR Handle,
-            BufferHandle StorageBuffer,
-            ulong Size);
+        private sealed class BottomLevelAccelerationStructure
+        {
+            public BottomLevelAccelerationStructure(
+                AccelerationStructureKHR handle,
+                BufferHandle storageBuffer,
+                ulong size)
+            {
+                Handle = handle;
+                StorageBuffer = storageBuffer;
+                Size = size;
+            }
+
+            public AccelerationStructureKHR Handle { get; }
+            public BufferHandle StorageBuffer { get; }
+            public ulong Size { get; }
+            public ulong LastUsedFrameSerial { get; set; }
+        }
+
+        private readonly record struct StaticResidencyCandidate(
+            StaticOpaqueInstance Instance,
+            float DistanceSquared);
 
         private readonly record struct TopLevelAccelerationStructure(
             AccelerationStructureKHR Handle,
@@ -1072,11 +1588,44 @@ namespace Njulf.Rendering.Resources
         private readonly record struct RetiredAccelerationStructureResource(
             AccelerationStructureKHR AccelerationStructure,
             BufferHandle StorageBuffer,
+            ulong Size,
             ulong RetireAfterFrameSerial);
 
         private readonly record struct RetiredBufferResource(
             BufferHandle Buffer,
             ulong RetireAfterFrameSerial);
+    }
+
+    /// <summary>One acceleration-structure backing allocation used by ray queries.</summary>
+    public readonly record struct AccelerationStructureStorageBuffer(
+        BufferHandle Handle,
+        ulong ByteSize,
+        string DebugName);
+
+    /// <summary>
+    /// Bounds the streamable static portion of the GI ray-query representation.
+    /// Dynamic render objects bypass distance trimming so their detailed geometry
+    /// remains authoritative while they are present in the scene.
+    /// </summary>
+    public readonly record struct AccelerationStructureResidencyPolicy(
+        bool Enabled,
+        Njulf.Core.Math.Vector3 CameraPosition,
+        ulong MemoryBudgetBytes,
+        float StaticResidentDistance,
+        int MaximumStaticInstances,
+        int EvictionGraceFrames)
+    {
+        public static AccelerationStructureResidencyPolicy Disabled => new(
+            false,
+            Njulf.Core.Math.Vector3.Zero,
+            ulong.MaxValue,
+            float.MaxValue,
+            int.MaxValue,
+            0);
+
+        internal ulong EffectiveMemoryBudgetBytes => Enabled
+            ? Math.Max(MemoryBudgetBytes, 16UL)
+            : ulong.MaxValue;
     }
 
     internal enum AccelerationStructureGeometryDomain
@@ -1130,5 +1679,14 @@ namespace Njulf.Rendering.Resources
         int TlasSkipCount,
         ulong InstanceUploadBytes,
         ulong RayQueryInstanceMetadataUploadBytes,
+        int StaticInstanceCandidateCount,
+        int StaticInstanceResidentCount,
+        int StaticInstanceCulledCount,
+        int BlasEvictionCount,
+        ulong BlasEvictionBytes,
+        int BlasBudgetRejectedCount,
+        ulong BottomLevelAccelerationStructureBytes,
+        ulong TopLevelAccelerationStructureBytes,
+        ulong RetiredAccelerationStructureBytes,
         string FallbackReason);
 }

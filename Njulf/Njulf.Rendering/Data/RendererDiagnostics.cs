@@ -603,6 +603,12 @@ namespace Njulf.Rendering.Data
         public RenderBudgetProfileKind ActiveBudgetProfile { get; init; } = RenderBudgetProfileKind.Development;
         public string ActiveBudgetProfileName { get; init; } = RenderBudgetProfile.Development.Name;
         public RenderQualityPreset ActiveQualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
+        /// <summary>Stable capture metadata for correlating snapshots across machines and scenes.</summary>
+        public string CaptureGpuDeviceName { get; init; } = "unknown-device";
+        public string CaptureGpuDriverVersion { get; init; } = "unknown-driver";
+        public uint CaptureRenderWidth { get; init; }
+        public uint CaptureRenderHeight { get; init; }
+        public ulong CaptureSceneContentRevision { get; init; }
         public RenderFeatureIsolationMode ActiveFeatureIsolation { get; init; } = RenderFeatureIsolationMode.FullFrame;
         public int SkippedRenderPassCount { get; init; }
         public int GraphPlannedBarrierCount { get; init; }
@@ -620,14 +626,41 @@ namespace Njulf.Rendering.Data
         public int AsyncComputeRequested { get; init; }
         public int AsyncComputeEnabled { get; init; }
         public int AsyncComputeSupported { get; init; }
+        public int AsyncComputeIndependentQueueAvailable { get; init; }
+        public int AsyncComputeDedicatedQueueFamilyAvailable { get; init; }
+        public uint AsyncComputeGraphicsQueueFamily { get; init; }
+        public uint AsyncComputeComputeQueueFamily { get; init; }
         public int AsyncComputeCandidatePassCount { get; init; }
         public int AsyncComputeEnabledPassCount { get; init; }
         public int AsyncComputeQueueOwnershipTransitionCount { get; init; }
         public int AsyncComputeOwnershipTransferCount { get; init; }
         public long AsyncComputeEstimatedOverlapMicroseconds { get; init; }
+        public long AsyncComputeQueueBusyMicroseconds { get; init; }
+        public long AsyncComputeFirstConsumerWaitEstimateMicroseconds { get; init; }
+        public long AsyncComputeBarrierRecordMicroseconds { get; init; }
         public string AsyncComputeStatus { get; init; } = string.Empty;
         public IReadOnlyList<string> AsyncComputeCandidatePasses { get; init; } = [];
         public IReadOnlyList<string> AsyncComputeEnabledPasses { get; init; } = [];
+        public AsyncComputeMode AsyncComputeRequestedMode { get; init; } = AsyncComputeMode.Disabled;
+        public AsyncComputeMode AsyncComputeEffectiveMode { get; init; } = AsyncComputeMode.Disabled;
+        public int AsyncComputeGraphicsSegmentCount { get; init; }
+        public int AsyncComputeComputeSegmentCount { get; init; }
+        public int AsyncComputePlannedGraphicsSegmentCount { get; init; }
+        public int AsyncComputePlannedComputeSegmentCount { get; init; }
+        public int AsyncComputeSubmittedGraphicsSegmentCount { get; init; }
+        public int AsyncComputeSubmittedComputeSegmentCount { get; init; }
+        public int AsyncComputePlannedReleaseBarrierCount { get; init; }
+        public int AsyncComputePlannedAcquireBarrierCount { get; init; }
+        public int AsyncComputeEmittedReleaseBarrierCount { get; init; }
+        public int AsyncComputeEmittedAcquireBarrierCount { get; init; }
+        public ulong AsyncComputeTransferredBytes { get; init; }
+        public int AsyncComputeTransferredImageSubresources { get; init; }
+        public int AsyncComputeValidationFallbackCount { get; init; }
+        public string AsyncComputeLastFallbackReason { get; init; } = string.Empty;
+        public ulong AsyncComputeResourcePlanGeneration { get; init; }
+        public int AsyncComputeStalePlanRejectionCount { get; init; }
+        public IReadOnlyList<AsyncComputePathDiagnostic> AsyncComputePaths { get; init; } = [];
+        public IReadOnlyList<AsyncComputeSegmentDiagnostic> AsyncComputeSegments { get; init; } = [];
         public long CpuPrimaryCommandRecordMicroseconds { get; init; }
         public long CpuSecondaryCommandRecordMicroseconds { get; init; }
         public RenderBudgetStatus BudgetOverallStatus { get; init; } = RenderBudgetStatus.Unknown;
@@ -695,6 +728,20 @@ namespace Njulf.Rendering.Data
         public int GlobalIlluminationSsgiActive { get; init; }
         public int GlobalIlluminationDdgiActive { get; init; }
         public int SimpleDdgiActive { get; init; }
+        public int SimpleDdgiStructuredGatherEnabled { get; init; }
+        public int SimpleDdgiReducedBlendEnabled { get; init; }
+        public int SimpleDdgiToroidalScrollingEnabled { get; init; }
+        public int SimpleDdgiRegionalInvalidationEnabled { get; init; }
+        public int FarFieldPagedFeatureEnabled { get; init; }
+        public int StreamedGiAccelerationStructuresFeatureEnabled { get; init; }
+        /// <summary>Detailed GPU investigation atomics are enabled for this capture.</summary>
+        public int DdgiDetailedCountersEnabled { get; init; }
+        /// <summary>Inclusive forward draw scope containing active GI gather work.</summary>
+        public long GpuForwardGiGatherMicroseconds { get; init; }
+        /// <summary>0 unavailable; 1 inclusive forward draw scope.</summary>
+        public int GpuForwardGiGatherTimingCoverage { get; init; }
+        public long GpuFarFieldUpdateMicroseconds { get; init; }
+        public int GpuFarFieldUpdateTimingValid { get; init; }
         public int SimpleDdgiProbeCount { get; init; }
         public int SimpleDdgiProbesUpdated { get; init; }
         public ulong SimpleDdgiRaysPerFrame { get; init; }
@@ -707,7 +754,43 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiFullRayProbeUpdateCount { get; init; }
         public int SimpleDdgiMaintenanceRayProbeUpdateCount { get; init; }
         public ulong SimpleDdgiAdaptiveRaySavedRaysPerFrame { get; init; }
+        public int SimpleDdgiNearFullRayProbeUpdateCount { get; init; }
+        public int SimpleDdgiMidFullRayProbeUpdateCount { get; init; }
+        public int SimpleDdgiFarFullRayProbeUpdateCount { get; init; }
+        public int SimpleDdgiNearMaintenanceRayProbeUpdateCount { get; init; }
+        public int SimpleDdgiMidMaintenanceRayProbeUpdateCount { get; init; }
+        public int SimpleDdgiFarMaintenanceRayProbeUpdateCount { get; init; }
+        public ulong SimpleDdgiNearScheduledPrimaryRayCount { get; init; }
+        public ulong SimpleDdgiMidScheduledPrimaryRayCount { get; init; }
+        public ulong SimpleDdgiFarScheduledPrimaryRayCount { get; init; }
+        public int SimpleDdgiDirtyFirstUpdateLatencySampleCount { get; init; }
+        public int SimpleDdgiDirtyFirstUpdateLatencyP50Frames { get; init; }
+        public int SimpleDdgiDirtyFirstUpdateLatencyP95Frames { get; init; }
+        public int SimpleDdgiDirtyFirstUpdateLatencyMaxFrames { get; init; }
+        public int SimpleDdgiDirtyConvergenceLatencySampleCount { get; init; }
+        public int SimpleDdgiDirtyConvergenceLatencyP50Frames { get; init; }
+        public int SimpleDdgiDirtyConvergenceLatencyP95Frames { get; init; }
+        public int SimpleDdgiDirtyConvergenceLatencyMaxFrames { get; init; }
         public ulong SimpleDdgiAtlasBytes { get; init; }
+        public int SimpleDdgiSampledAtlasRequested { get; init; }
+        public int SimpleDdgiSampledAtlasActive { get; init; }
+        public int SimpleDdgiSampledAtlasGroupCount { get; init; }
+        public int SimpleDdgiSampledAtlasLayersPerTexture { get; init; }
+        public ulong SimpleDdgiSampledAtlasImageBytes { get; init; }
+        public string SimpleDdgiSampledAtlasFallbackReason { get; init; } = string.Empty;
+        public int FarFieldPagedMode { get; init; }
+        public int FarFieldPagePoolCapacity { get; init; }
+        public int FarFieldResidentPageCount { get; init; }
+        public int FarFieldPendingPageCount { get; init; }
+        public int FarFieldPageRequestCount { get; init; }
+        public int FarFieldPageMissCount { get; init; }
+        public int FarFieldPageRebuildCount { get; init; }
+        public int FarFieldPageEvictionCount { get; init; }
+        public int FarFieldScheduledPageBakeCount { get; init; }
+        public ulong FarFieldCacheBytes { get; init; }
+        public ulong FarFieldMemoryBudgetBytes { get; init; }
+        public ulong FarFieldInstanceBufferBytes { get; init; }
+        public ulong FarFieldPageTableBytes { get; init; }
         public int SimpleDdgiRecentered { get; init; }
         public int SimpleDdgiAtlasPreservedOnRecenter { get; init; }
         public int SimpleDdgiAtlasCleared { get; init; }
@@ -717,6 +800,8 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiAtlasPreserveOnRecenterCount { get; init; }
         public int SimpleDdgiFramesSinceLastClear { get; init; }
         public int SimpleDdgiFramesSinceLastRecenter { get; init; }
+        /// <summary>0 means detailed counter data is unavailable, not zero.</summary>
+        public int DdgiInvestigationCountersReadbackValid { get; init; }
         public uint SimpleDdgiFreshAtlasForwardSampleCount { get; init; }
         public uint SimpleDdgiZeroIrradianceSampleCount { get; init; }
         public uint SimpleDdgiNonzeroIrradianceSampleCount { get; init; }
@@ -954,6 +1039,11 @@ namespace Njulf.Rendering.Data
         public DdgiCameraMovementClass DdgiCameraMovementClass { get; init; } = DdgiCameraMovementClass.None;
         public long CpuSsgiRecordMicroseconds { get; init; }
         public long CpuDdgiRecordMicroseconds { get; init; }
+        public long CpuSimpleDdgiRecordMicroseconds { get; init; }
+        public long CpuFarFieldRecordMicroseconds { get; init; }
+        public long CpuGlobalIlluminationRecordMicroseconds { get; init; }
+        public long CpuGlobalIlluminationRecordP95Microseconds { get; init; }
+        public int GlobalIlluminationCpuTimingSampleCount { get; init; }
         public long CpuDdgiSchedulerMicroseconds { get; init; }
         public long CpuDdgiSchedulerP95Microseconds { get; init; }
         public long CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds { get; init; }
@@ -1057,6 +1147,18 @@ namespace Njulf.Rendering.Data
         public int AccelerationStructureTlasBuildCount { get; init; }
         public int AccelerationStructureTlasUpdateCount { get; init; }
         public int AccelerationStructureTlasSkipCount { get; init; }
+        public int AccelerationStructureStreamingEnabled { get; init; }
+        public int AccelerationStructureStaticInstanceCandidateCount { get; init; }
+        public int AccelerationStructureStaticInstanceResidentCount { get; init; }
+        public int AccelerationStructureStaticInstanceCulledCount { get; init; }
+        public int AccelerationStructureBlasEvictionCount { get; init; }
+        public ulong AccelerationStructureBlasEvictionBytes { get; init; }
+        public int AccelerationStructureBlasBudgetRejectedCount { get; init; }
+        public ulong AccelerationStructureBlasBytes { get; init; }
+        public ulong AccelerationStructureTlasBytes { get; init; }
+        public ulong AccelerationStructureRetiredBytes { get; init; }
+        public ulong AccelerationStructureResidentBytes { get; init; }
+        public ulong AccelerationStructureMemoryBudgetBytes { get; init; }
         public ulong AccelerationStructureInstanceUploadBytes { get; init; }
         public ulong AccelerationStructureRayQueryMetadataUploadBytes { get; init; }
         public long CpuAccelerationStructureBuildMicroseconds { get; init; }

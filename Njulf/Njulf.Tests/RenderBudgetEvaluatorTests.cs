@@ -96,6 +96,8 @@ namespace Njulf.Tests
                 GpuTimingValid = 1,
                 GpuSsgiTraceMicroseconds = 200,
                 GpuSsgiTemporalMicroseconds = 100,
+                CpuGlobalIlluminationRecordP95Microseconds = 501,
+                GlobalIlluminationCpuTimingSampleCount = 1,
                 GlobalIlluminationRenderTargetBytes = 2,
                 DdgiProbeCount = 32_769
             };
@@ -110,6 +112,7 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(Metric(snapshot, "GI GPU").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(Metric(snapshot, "GI CPU scheduling and upload").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
                 Assert.That(Metric(snapshot, "GI memory").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
                 Assert.That(Metric(snapshot, "DDGI probes").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
             });
@@ -233,6 +236,61 @@ namespace Njulf.Tests
                 Assert.That(Metric(snapshot, "DDGI atlas memory").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
                 Assert.That(Metric(snapshot, "DDGI gather fallback tiles").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
             });
+        }
+
+        [Test]
+        public void RenderBudgetEvaluator_EnforcesObservedSimpleDdgiDirtyLatencyTargets()
+        {
+            RenderBudgetProfile profile = RenderBudgetProfile.Development;
+            RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+            {
+                GlobalIlluminationEnabled = 1,
+                GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+                SimpleDdgiActive = 1,
+                SimpleDdgiDirtyFirstUpdateLatencySampleCount = 10,
+                SimpleDdgiDirtyFirstUpdateLatencyP95Frames = 2,
+                SimpleDdgiDirtyConvergenceLatencySampleCount = 10,
+                SimpleDdgiDirtyConvergenceLatencyP95Frames = 9
+            };
+
+            RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+                profile,
+                diagnostics,
+                MemoryBudgetSnapshot.Empty,
+                new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0, [], RenderBudgetStatus.WithinBudget),
+                new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Metric(snapshot, "DDGI dirty first-update latency").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(Metric(snapshot, "DDGI dirty convergence latency").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+            });
+        }
+
+        [Test]
+        public void RenderBudgetEvaluator_AccountsForCanonicalAndSampledSimpleDdgiAtlases()
+        {
+            RenderBudgetProfile profile = RenderBudgetProfile.Development;
+            RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+            {
+                GlobalIlluminationEnabled = 1,
+                GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+                SimpleDdgiActive = 1,
+                // Canonical SSBO atlas plus optional sampled image mirror.
+                SimpleDdgiAtlasBytes = 65,
+                DdgiTextureBytes = 32,
+                DdgiBufferBytes = 33,
+                DdgiAtlasMemoryBudgetBytes = 64
+            };
+
+            RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+                profile,
+                diagnostics,
+                MemoryBudgetSnapshot.Empty,
+                new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0, [], RenderBudgetStatus.WithinBudget),
+                new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+            Assert.That(Metric(snapshot, "DDGI atlas memory").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
         }
 
         private static BudgetMetric Metric(RenderBudgetSnapshot snapshot, string name)

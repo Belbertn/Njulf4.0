@@ -216,7 +216,12 @@ namespace Njulf.Tests
             {
                 Assert.That(settings.GlobalIllumination.SimpleDdgiFogEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiParticlesEnabled, Is.True);
-                Assert.That(settings.GlobalIllumination.SimpleDdgiRoughSpecularEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.SimpleDdgiRoughSpecularEnabled, Is.False);
+                Assert.That(settings.GlobalIllumination.SimpleDdgiStructuredGatherEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.SimpleDdgiReducedBlendEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled, Is.False);
+                Assert.That(settings.GlobalIllumination.SimpleDdgiToroidalScrollingEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.SimpleDdgiRegionalInvalidationEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.FarFieldSkyVisibilityEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.FarFieldSunShadowEnabled, Is.True);
                 Assert.That((uint)GlobalIlluminationDebugView.FarFieldSkyVisibility, Is.EqualTo(44u));
