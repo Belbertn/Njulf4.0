@@ -343,6 +343,21 @@ namespace Njulf.Rendering.Resources
         public int ProbeStateReadbackValid => _probeStateReadbackValid;
         public GPUSimpleDdgiParams LastParams => _lastParams;
         public ReadOnlySpan<GPUSimpleDdgiVolume> LastVolumes => new(_volumeScratch, 0, _volumeCount);
+        /// <summary>
+        /// Debug-only lookup against the bounded current-frame queue. Queue order is
+        /// intentionally priority based, so it must not be inferred from a single
+        /// contiguous probe-index range when visualizing multiple volumes.
+        /// </summary>
+        public bool IsProbeScheduledForUpdate(int probeIndex)
+        {
+            // BuildUpdateQueue clears this table once per frame and AddProbeUpdate
+            // sets exactly the entries represented by the bounded GPU queue.  The
+            // DDGI overlay can query hundreds of markers per frame, so scanning the
+            // priority-ordered queue here would turn a constant-time debug query
+            // into O(markers * scheduled probes).
+            return (uint)probeIndex < (uint)_probeCount &&
+                   _probeQueued[probeIndex] != 0;
+        }
         public bool HasPendingUpdateTransaction => _updateTransactionPending;
         public bool CanExecuteTraceTransaction => _updateTransactionPending && !_traceTransactionExecuted;
         public bool CanExecuteRelocateClassifyTransaction => _updateTransactionPending && _traceTransactionExecuted && !_relocateClassifyTransactionExecuted;
@@ -576,7 +591,7 @@ namespace Njulf.Rendering.Resources
                 ? _probeCount
                 : Math.Min(_probeCount, gi.SimpleDdgiProbeUpdatesPerFrame);
             int updateBudget = ResolveLightingDirtyUpdateBudget(gi, baseUpdateBudget);
-            EnsureCapacity(_probeCount, _raysPerProbe, updateBudget);
+            EnsureCapacity(_probeCount, _raysPerProbe, updateBudget, commandBuffer);
             MarkFreshForNewOrScrolledProbes();
             if (hasRegionalDirtyWork)
                 MarkRegionalDirtyProbes(dirtyRegions!);
@@ -600,7 +615,10 @@ namespace Njulf.Rendering.Resources
             SynchronizeSampledAtlasIfRequired(commandBuffer);
 
             float environmentIntensity = _settings.Environment.Enabled ? _settings.Environment.DiffuseIntensity : 0.0f;
-            float hysteresis = _atlasFresh ? 0.0f : gi.SimpleDdgiHysteresis;
+            // Fresh probes already force zero history in the blend shader. Do not
+            // discard history for every other probe just because an atlas update
+            // introduced a smaller set of fresh slots.
+            float hysteresis = gi.SimpleDdgiHysteresis;
             GPUSimpleDdgiVolume firstVolume = _volumeCount > 0 ? _volumeScratch[0] : default;
             _lastParams = new GPUSimpleDdgiParams
             {
@@ -2034,7 +2052,7 @@ namespace Njulf.Rendering.Resources
                     AccessFlags2.ShaderStorageReadBit));
         }
 
-        private void EnsureCapacity(int probeCount, int raysPerProbe, int probesToUpdate)
+        private void EnsureCapacity(int probeCount, int raysPerProbe, int probesToUpdate, CommandBuffer commandBuffer = default)
         {
             ulong irradianceBytes = checked(Math.Max(MinBufferSize, (ulong)Math.Max(1, probeCount) * IrradianceTexelsPerProbe * IrradianceTexelsPerProbe * AtlasTexelStride));
             ulong visibilityBytes = checked(Math.Max(MinBufferSize, (ulong)Math.Max(1, probeCount) * VisibilityTexelsPerProbe * VisibilityTexelsPerProbe * AtlasTexelStride));
@@ -2043,23 +2061,65 @@ namespace Njulf.Rendering.Resources
             ulong updateQueueBytes = checked(Math.Max(MinBufferSize, (ulong)Math.Max(1, probesToUpdate) * ProbeUpdateStride));
             ulong relocationClassificationBytes = checked(Math.Max(MinBufferSize, (ulong)Math.Max(1, probeCount) * RelocationClassificationStride));
 
-            EnsureBuffer(ref _irradianceAtlasBuffer, ref _irradianceAtlasBytes, irradianceBytes, "Simple DDGI Irradiance Atlas", invalidateAtlas: true);
-            EnsureBuffer(ref _visibilityAtlasBuffer, ref _visibilityAtlasBytes, visibilityBytes, "Simple DDGI Visibility Atlas", invalidateAtlas: true);
-            EnsureBuffer(ref _rayResultScratchBuffer, ref _rayScratchBytes, rayBytes, "Simple DDGI Ray Scratch", invalidateAtlas: false);
-            if (EnsureBuffer(ref _probeStateBuffer, ref _probeStateBytes, probeStateBytes, "Simple DDGI Probe State", invalidateAtlas: false))
+            // A growth can retain atlas history when every existing physical slot
+            // still describes the same volume. This also covers appending a new
+            // volume after unchanged existing volumes; its new slots are marked
+            // fresh below while the copied prefix remains valid.
+            bool preserveAtlasContents = CanPreserveAtlasContentsOnGrowth();
+            EnsureBuffer(ref _irradianceAtlasBuffer, ref _irradianceAtlasBytes, irradianceBytes, "Simple DDGI Irradiance Atlas", invalidateAtlas: true, commandBuffer: commandBuffer, preserveContents: preserveAtlasContents);
+            EnsureBuffer(ref _visibilityAtlasBuffer, ref _visibilityAtlasBytes, visibilityBytes, "Simple DDGI Visibility Atlas", invalidateAtlas: true, commandBuffer: commandBuffer, preserveContents: preserveAtlasContents);
+            EnsureBuffer(ref _rayResultScratchBuffer, ref _rayScratchBytes, rayBytes, "Simple DDGI Ray Scratch", invalidateAtlas: false, commandBuffer: commandBuffer, preserveContents: false);
+            if (EnsureBuffer(ref _probeStateBuffer, ref _probeStateBytes, probeStateBytes, "Simple DDGI Probe State", invalidateAtlas: false, commandBuffer: commandBuffer, preserveContents: false))
                 _probeStateUploadRequired = true;
-            EnsureBuffer(ref _probeUpdateQueueBuffer, ref _probeUpdateQueueBytes, updateQueueBytes, "Simple DDGI Probe Update Queue", invalidateAtlas: false);
-            EnsureBuffer(ref _relocationClassificationBuffer, ref _relocationClassificationBytes, relocationClassificationBytes, "Simple DDGI Relocation Classification", invalidateAtlas: false);
+            EnsureBuffer(ref _probeUpdateQueueBuffer, ref _probeUpdateQueueBytes, updateQueueBytes, "Simple DDGI Probe Update Queue", invalidateAtlas: false, commandBuffer: commandBuffer, preserveContents: false);
+            EnsureBuffer(ref _relocationClassificationBuffer, ref _relocationClassificationBytes, relocationClassificationBytes, "Simple DDGI Relocation Classification", invalidateAtlas: false, commandBuffer: commandBuffer, preserveContents: false);
             UpdateSampledAtlasCapacity(probeCount);
         }
 
-        private bool EnsureBuffer(ref BufferHandle handle, ref ulong currentBytes, ulong requiredBytes, string debugName, bool invalidateAtlas)
+        private bool CanPreserveAtlasContentsOnGrowth()
+        {
+            if (_atlasFresh || _atlasClearRequired || _previousVolumeCount == 0)
+                return false;
+
+            for (int previousIndex = 0; previousIndex < _previousVolumeCount; previousIndex++)
+            {
+                GPUSimpleDdgiVolume previous = _previousVolumeScratch[previousIndex];
+                bool foundCompatibleSlotRange = false;
+                for (int currentIndex = 0; currentIndex < _volumeCount; currentIndex++)
+                {
+                    GPUSimpleDdgiVolume current = _volumeScratch[currentIndex];
+                    if (Kind(previous) == Kind(current) &&
+                        SourceOrdinal(previous) == SourceOrdinal(current) &&
+                        FirstProbe(previous) == FirstProbe(current) &&
+                        VolumeProbeCount(previous) == VolumeProbeCount(current) &&
+                        NearlyEqual(Spacing(previous), Spacing(current), 0.0001f))
+                    {
+                        foundCompatibleSlotRange = true;
+                        break;
+                    }
+                }
+
+                if (!foundCompatibleSlotRange)
+                    return false;
+            }
+
+            return true;
+        }
+
+        private unsafe bool EnsureBuffer(
+            ref BufferHandle handle,
+            ref ulong currentBytes,
+            ulong requiredBytes,
+            string debugName,
+            bool invalidateAtlas,
+            CommandBuffer commandBuffer,
+            bool preserveContents)
         {
             if (handle.IsValid && currentBytes >= requiredBytes)
                 return false;
 
-            if (handle.IsValid)
-                RetireBufferResource(handle);
+            BufferHandle previousHandle = handle;
+            ulong previousBytes = currentBytes;
 
             handle = _bufferManager.CreateDeviceBuffer(
                 requiredBytes,
@@ -2067,10 +2127,43 @@ namespace Njulf.Rendering.Resources
                 category: MemoryBudgetCategory.GlobalIllumination,
                 debugName: debugName);
             currentBytes = requiredBytes;
+            bool contentsPreserved = preserveContents && previousHandle.IsValid && previousBytes > 0 && commandBuffer.Handle != 0;
+            if (contentsPreserved)
+            {
+                ulong copyBytes = Math.Min(previousBytes, requiredBytes);
+                Silk.NET.Vulkan.Buffer source = _bufferManager.GetBuffer(previousHandle);
+                Silk.NET.Vulkan.Buffer destination = _bufferManager.GetBuffer(handle);
+                BufferMemoryBarrier2 beforeCopy = BarrierBuilder.BufferBarrier(
+                    source,
+                    PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TransferBit,
+                    AccessFlags2.ShaderStorageWriteBit | AccessFlags2.TransferWriteBit,
+                    PipelineStageFlags2.TransferBit,
+                    AccessFlags2.TransferReadBit,
+                    0,
+                    copyBytes);
+                ExecuteBufferBarrier(commandBuffer, beforeCopy);
+                BufferCopy copy = new() { SrcOffset = 0, DstOffset = 0, Size = copyBytes };
+                _context.Api.CmdCopyBuffer(commandBuffer, source, destination, 1, &copy);
+                BufferMemoryBarrier2 afterCopy = BarrierBuilder.BufferBarrier(
+                    destination,
+                    PipelineStageFlags2.TransferBit,
+                    AccessFlags2.TransferWriteBit,
+                    PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+                    AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                    0,
+                    copyBytes);
+                ExecuteBufferBarrier(commandBuffer, afterCopy);
+            }
+
+            if (previousHandle.IsValid)
+                RetireBufferResource(previousHandle);
             if (invalidateAtlas)
             {
-                _atlasClearRequired = true;
-                _atlasFresh = true;
+                if (!contentsPreserved)
+                {
+                    _atlasClearRequired = true;
+                    _atlasFresh = true;
+                }
                 _sampledAtlas?.MarkFullSyncRequired();
             }
 
@@ -2366,6 +2459,17 @@ namespace Njulf.Rendering.Resources
             _atlasClearRequired = false;
             _atlasFresh = true;
             _sampledAtlas?.MarkFullSyncRequired();
+            TriggerAtlasRecoveryBoost();
+        }
+
+        private void TriggerAtlasRecoveryBoost()
+        {
+            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+            if (!gi.SimpleDdgiLightingDirtyBoostEnabled || _probeCount <= 0)
+                return;
+
+            _lightingDirtyFrames = Math.Max(_lightingDirtyFrames, gi.SimpleDdgiLightingDirtyFrameCount);
+            _activeDirtyReasonFlags |= 1u << 2;
         }
 
         private unsafe void FillBufferAndAddBarrier(BufferHandle handle, ulong size, BufferMemoryBarrier2* barriers, ref uint barrierCount, CommandBuffer commandBuffer)
@@ -2683,6 +2787,8 @@ namespace Njulf.Rendering.Resources
                 flags |= 1u << 4;
             if (settings.SimpleDdgiAdaptiveHysteresisEnabled)
                 flags |= 1u << 5;
+            if (_lightingDirtyFrames > 0)
+                flags |= 1u << 10;
             if (settings.FarFieldClipmapEnabled && settings.FarFieldSkyVisibilityEnabled)
                 flags |= 1u << 6;
             if (settings.FarFieldClipmapEnabled && settings.FarFieldSunShadowEnabled)

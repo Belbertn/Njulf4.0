@@ -158,6 +158,24 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
+    public void ForwardShader_SkipsNonContributingShadowWorkAndHonorsTheGlobalGiPassGate()
+    {
+        string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string sortedTransparency = ReadRepoText("Njulf.Rendering", "Pipeline", "TransparentForwardPass.cs");
+        string weightedTransparency = ReadRepoText("Njulf.Rendering", "Pipeline", "WeightedTransparentPass.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shader, Does.Contain("if (dot(normal, lightDirection) <= 0.0)"));
+            Assert.That(shader, Does.Contain("bool globalIlluminationEnabled = ForwardGlobalIlluminationEnabled() != 0u;"));
+            Assert.That(shader, Does.Contain("if (!globalIlluminationEnabled)"));
+            Assert.That(shader, Does.Contain("finalDiffuseIndirect = diffuseIbl * indirectAo;"));
+            Assert.That(sortedTransparency, Does.Contain("globalIlluminationEnabled: false"));
+            Assert.That(weightedTransparency, Does.Contain("globalIlluminationEnabled: false"));
+        });
+    }
+
+    [Test]
     public void ForwardShader_ScalesDdgiByCoverageAndComplementsFallback()
     {
         string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
@@ -1245,7 +1263,7 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_SAMPLED_IRRADIANCE)"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_SAMPLED_IRRADIANCE, clamp(ddgiSample.irradiance, vec3(0.0), vec3(64.0)));"));
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE)"));
-            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE, clamp(ddgiDiffuse, vec3(0.0), vec3(64.0)));"));
+            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE, clamp(finalDdgiDiffuse, vec3(0.0), vec3(64.0)));"));
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS)"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS, clamp(hybridDebugDiffuse, vec3(0.0), vec3(64.0)));"));
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_OCCUPANCY_SLICE)"));
@@ -1810,6 +1828,54 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
+    public void TiledLightStorage_IsPackedAndAllocatedOnlyWhenLocalLightsAreActive()
+    {
+        string common = ReadRepoText("Njulf.Shaders", "common.glsl");
+        string lightWriter = ExtractFunction(common, "void WriteTiledLightIndex(");
+        string sceneDataBuilder = ReadRepoText("Njulf.Rendering", "Data", "SceneDataBuilder.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(common, Does.Contain("const int SIZEOF_GPU_LIGHT_INDEX = 4;"));
+            Assert.That(lightWriter, Does.Contain("WriteStorageWord(uint(TILED_LIGHT_INDICES_BUFFER_INDEX), baseWord + 0u, lightIndex);"));
+            Assert.That(lightWriter, Does.Not.Contain("baseWord + 1u"));
+            Assert.That(sceneDataBuilder, Does.Contain("EnsureTiledLightBuffers(totalTiles, uploadCommandBuffer);"));
+            Assert.That(sceneDataBuilder, Does.Contain("ReleaseTiledLightBuffers();"));
+            Assert.That(sceneDataBuilder, Does.Not.Contain("CreateSceneBuffer(InitialTileCapacity"));
+            Assert.That(sceneDataBuilder, Does.Contain("SceneBuffer.Unallocated(\"Tiled Light Header Buffer\")"));
+        });
+    }
+
+    [Test]
+    public void StaticMeshStorage_UsesOneVertexRepresentationAndDoesNotFabricateLods()
+    {
+        string meshManager = ReadRepoText("Njulf.Rendering", "Resources", "MeshManager.cs");
+        string buildMeshletLods = ExtractFunction(meshManager, "private void BuildMeshletLods(");
+        string common = ReadRepoText("Njulf.Shaders", "common.glsl");
+        string skinning = ReadRepoText("Njulf.Shaders", "skinning.comp");
+        string sceneCompaction = ReadRepoText("Njulf.Shaders", "scene_opaque_compact.comp");
+
+        int baseOnlyLodGuard = sceneCompaction.IndexOf(
+            "if (meshInfo.MeshletLod1Count == 0u && meshInfo.MeshletLod2Count == 0u)",
+            StringComparison.Ordinal);
+        int lodSelection = sceneCompaction.IndexOf("uint requestedLod = SelectLodLevel", StringComparison.Ordinal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(meshManager, Does.Not.Contain("InitialVertexBufferSize"));
+            Assert.That(meshManager, Does.Not.Contain("UploadSpan(pending.Vertices"));
+            Assert.That(buildMeshletLods.Split("GenerateMeshlets(", StringSplitOptions.None).Length - 1, Is.EqualTo(1));
+            Assert.That(buildMeshletLods, Does.Contain("meshInfo.MeshletLod1Count = 0;"));
+            Assert.That(buildMeshletLods, Does.Contain("meshInfo.MeshletLod2Count = 0;"));
+            Assert.That(buildMeshletLods, Does.Contain("meshInfo.MeshletLodGeneratedCount = meshInfo.MeshletCount;"));
+            Assert.That(common, Does.Contain("return ReadSplitVertex(vertexIndex);"));
+            Assert.That(skinning, Does.Contain("GPUVertex source = ReadSplitVertex(dispatch.SourceVertexOffset + localVertexIndex);"));
+            Assert.That(baseOnlyLodGuard, Is.GreaterThanOrEqualTo(0));
+            Assert.That(lodSelection, Is.GreaterThan(baseOnlyLodGuard));
+        });
+    }
+
+    [Test]
     public void SceneDataBuilder_InvalidatesPerFrameUploadsWhenPayloadRebuilds()
     {
         string sceneDataBuilder = ReadRepoText("Njulf.Rendering", "Data", "SceneDataBuilder.cs");
@@ -1875,6 +1941,11 @@ public sealed class ShaderBuildTests
             Assert.That(forwardVisibilityPass, Does.Contain("ForwardVisibilityCompactionPass"));
             Assert.That(forwardVisibilityPass, Does.Contain("ForwardVisibilityCounterBufferBase"));
             Assert.That(forwardVisibilityPass, Does.Contain("ForwardVisibleFullOpaqueMeshletDrawBufferBase"));
+            Assert.That(forwardVisibilityPass, Does.Contain("Indirect dispatch counts are the authoritative bounds"));
+            Assert.That(forwardVisibilityPass, Does.Not.Contain("CmdFillBuffer(cmd, simple,"));
+            Assert.That(forwardVisibilityPass, Does.Not.Contain("CmdFillBuffer(cmd, simpleNormal,"));
+            Assert.That(forwardVisibilityPass, Does.Not.Contain("CmdFillBuffer(cmd, full,"));
+            Assert.That(forwardVisibilityPass, Does.Contain("ComputeToTaskBarrier"));
             Assert.That(pipeline, Does.Contain("_bindlessHeap.TextureSamplerSetLayout"));
             Assert.That(pipeline, Does.Contain("forward_visibility_compact.comp.spv"));
             Assert.That(renderer, Does.Contain("ResolveHiZConsumers"));
@@ -1920,6 +1991,7 @@ public sealed class ShaderBuildTests
             Assert.That(source, Does.Contain("? _renderTargets.SceneDepth.Extent"));
             Assert.That(source, Does.Contain("DescriptorSet DescriptorSet"));
             Assert.That(source, Does.Contain("GPUHiZBuildPushConstants PushConstants"));
+            Assert.That(source, Does.Contain("private static readonly uint PushConstantSize"));
             Assert.That(source, Does.Contain("uint DispatchGroupCountX"));
             Assert.That(source, Does.Contain("uint DispatchGroupCountY"));
             Assert.That(source, Does.Contain("ImageLayout sourceLayout = mip == 0"));
@@ -1934,6 +2006,7 @@ public sealed class ShaderBuildTests
             Assert.That(source, Does.Contain("CpuHiZDescriptorBindMicroseconds"));
             Assert.That(source, Does.Contain("CpuHiZPushDispatchMicroseconds"));
             Assert.That(source, Does.Contain("CpuHiZFinalBarrierMicroseconds"));
+            Assert.That(source, Does.Contain("serial per-mip dependencies"));
             Assert.That(sceneData, Does.Contain("CpuHiZDepthTransitionMicroseconds"));
             Assert.That(diagnostics, Does.Contain("CpuHiZDescriptorBindMicroseconds"));
             Assert.That(renderer, Does.Contain("CpuHiZFinalBarrierMicroseconds = sceneData.CpuHiZFinalBarrierMicroseconds"));

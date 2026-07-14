@@ -24,7 +24,11 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Scene mesh metadata buffer</summary>
         public const int SceneMeshMetadataBuffer = 2;
         
-        /// <summary>Consolidated vertex buffer</summary>
+        /// <summary>
+        /// Legacy vertex-buffer slot. Static mesh data is canonical split streams;
+        /// this slot aliases the position stream for compatibility and must not be
+        /// interpreted as interleaved <c>GPUVertex</c> data.
+        /// </summary>
         public const int VertexBuffer = 3;
         
         /// <summary>Consolidated index buffer</summary>

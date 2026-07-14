@@ -613,8 +613,9 @@ namespace Njulf.Tests
                 Assert.That(simpleManager, Does.Contain("ClearAtlasBuffersIfRequired(commandBuffer);"));
                 Assert.That(simpleManager, Does.Not.Contain("if (_recenteredThisFrame)\r\n                _atlasClearRequired = true;"));
                 Assert.That(simpleManager, Does.Contain("internal static Vector3 ResolveSceneClampedOrigin("));
-                Assert.That(simpleManager, Does.Contain("private static bool ShouldRecenter(Vector3 cameraPosition, Vector3 currentOrigin, Vector3 latticeSize, Vector3 sceneMin, Vector3 sceneMax)"));
-                Assert.That(simpleManager, Does.Contain("Vector3 quarter = latticeSize * 0.25f;"));
+                Assert.That(simpleManager, Does.Contain("private static float ResolveAlignedSceneClampedAxisOrigin("));
+                Assert.That(simpleManager, Does.Contain("float quarterExtent = latticeExtent * 0.25f;"));
+                Assert.That(simpleManager, Does.Contain("ShouldRecenterAxis("));
                 Assert.That(simpleManager, Does.Contain("ResolveDesiredSceneClampedAxisOrigin(sceneMin.X, sceneMax.X, latticeSize.X, spacing, cameraPosition.X)"));
                 Assert.That(simpleManager, Does.Contain("return sceneMin - Math.Max(latticeExtent - sceneExtent, 0.0f) * 0.5f;"));
                 Assert.That(simpleManager, Does.Contain("float target = SnapScalar(cameraPosition - latticeExtent * 0.5f, spacing);"));

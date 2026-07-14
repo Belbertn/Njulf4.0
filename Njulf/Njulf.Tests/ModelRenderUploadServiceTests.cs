@@ -183,6 +183,43 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void TextureImageCacheKey_SharesPhysicalImageAcrossSamplerStates()
+        {
+            string path = Path.Combine(TestContext.CurrentContext.WorkDirectory, "texture.png");
+            var repeat = TextureSamplerDescription.Default;
+            var clampNearest = new TextureSamplerDescription(
+                TextureWrapMode.ClampToEdge,
+                TextureWrapMode.ClampToEdge,
+                TextureFilterMode.Nearest,
+                TextureFilterMode.Nearest,
+                TextureMipFilterMode.Nearest,
+                1f);
+
+            string repeatDescriptorKey = TextureManager.CreateTextureCacheKey(
+                path,
+                generateMipmaps: true,
+                srgb: true,
+                samplerDescription: repeat);
+            string clampDescriptorKey = TextureManager.CreateTextureCacheKey(
+                path,
+                generateMipmaps: true,
+                srgb: true,
+                samplerDescription: clampNearest);
+            string imageKey = TextureManager.CreateTextureImageCacheKey(
+                path,
+                generateMipmaps: true,
+                srgb: true);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(repeatDescriptorKey, Is.Not.EqualTo(clampDescriptorKey));
+                Assert.That(repeatDescriptorKey, Does.StartWith(imageKey));
+                Assert.That(clampDescriptorKey, Does.StartWith(imageKey));
+                Assert.That(imageKey, Does.Not.Contain("sampler="));
+            });
+        }
+
+        [Test]
         public void BuildGpuMaterialData_PacksPerSlotTextureTransformsAndUvSets()
         {
             var material = new ModelMaterial

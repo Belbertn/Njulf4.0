@@ -219,7 +219,7 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.SimpleDdgiRoughSpecularEnabled, Is.False);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiStructuredGatherEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiReducedBlendEnabled, Is.True);
-                Assert.That(settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled, Is.False);
+                Assert.That(settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiToroidalScrollingEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiRegionalInvalidationEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.FarFieldSkyVisibilityEnabled, Is.True);
@@ -260,9 +260,11 @@ namespace Njulf.Tests
                 Assert.That(renderer, Does.Contain("DrawSimpleDdgiProbeVolumeOverlay(sceneData, depthMode, remainingDetailedProbeMarkers);"));
                 Assert.That(renderer, Does.Contain("Settings.GlobalIllumination.EffectiveUseSimpleDdgi"));
                 Assert.That(renderer, Does.Contain("_simpleDdgiVolumeManager.ProbeCount <= 0"));
-                Assert.That(renderer, Does.Contain("GPUSimpleDdgiParams parameters = _simpleDdgiVolumeManager.LastParams;"));
+                Assert.That(renderer, Does.Contain("ReadOnlySpan<GPUSimpleDdgiVolume> volumes = _simpleDdgiVolumeManager.LastVolumes;"));
+                Assert.That(renderer, Does.Contain("for (int volumeIndex = 0; volumeIndex < volumes.Length; volumeIndex++)"));
+                Assert.That(renderer, Does.Contain("ResolveSimpleDdgiVolumeDebugColor(volumeIndex, volume)"));
                 Assert.That(renderer, Does.Contain("sceneData.DebugDdgiProbeVolumesDrawn++;"));
-                Assert.That(renderer, Does.Contain("IsSimpleDdgiProbeInUpdateRange(probeIndex, updateStart, probesToUpdate, probeCount)"));
+                Assert.That(renderer, Does.Contain("_simpleDdgiVolumeManager?.IsProbeScheduledForUpdate(probeIndex) == true"));
             });
         }
 

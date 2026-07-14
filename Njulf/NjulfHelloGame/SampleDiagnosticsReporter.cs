@@ -210,10 +210,11 @@ internal sealed class SampleDiagnosticsReporter
             $"signatureUs={diagnostics.CpuPayloadSignatureMicroseconds}, objectCullUs={diagnostics.CpuObjectCullMicroseconds}, " +
             $"meshletCullUs={diagnostics.CpuMeshletCullMicroseconds}, materialUploadUs={diagnostics.CpuMaterialUploadMicroseconds}, " +
             $"uploadUs={diagnostics.CpuUploadMicroseconds}, payloadRebuilt={diagnostics.ScenePayloadRebuilt}.");
+        string gpuMemoryBudget = FormatGpuMemoryBudget(diagnostics);
         Console.WriteLine(
             $"Frame diagnostics budget: profile='{diagnostics.ActiveBudgetProfileName}', overall={diagnostics.BudgetOverallStatus}, " +
-            $"cpu={diagnostics.CpuFrameBudgetStatus}, gpu={diagnostics.GpuFrameBudgetStatus}, memory={diagnostics.GpuMemoryBudgetStatus}, " +
-            $"upload={diagnostics.UploadBudgetStatus}, trackedGpuMiB={diagnostics.TrackedGpuMemoryBytes / (1024.0 * 1024.0):F1}/{diagnostics.GpuMemoryBudgetBytes / (1024.0 * 1024.0):F1}, " +
+            $"cpu={diagnostics.CpuFrameBudgetStatus}, gpu={diagnostics.GpuFrameBudgetStatus}, {gpuMemoryBudget}, " +
+            $"upload={diagnostics.UploadBudgetStatus}, " +
             $"uploadMiB={diagnostics.UploadedBytes / (1024.0 * 1024.0):F2}/{diagnostics.UploadBudgetBytesPerFrame / (1024.0 * 1024.0):F2}, " +
             $"stagingMiB={diagnostics.StagingBytesUsedThisFrame / (1024.0 * 1024.0):F2}, peakStagingMiB={diagnostics.StagingBytesPeakThisSession / (1024.0 * 1024.0):F2}, " +
             $"stagingOverflow={diagnostics.StagingOverflowCountThisFrame}/{diagnostics.StagingOverflowCount}, retainedOverflow={diagnostics.StagingRetainedOverflowBufferCount}:{diagnostics.StagingRetainedOverflowBytes / (1024.0 * 1024.0):F2}MiB, " +
@@ -255,8 +256,9 @@ internal sealed class SampleDiagnosticsReporter
             $"{diagnostics.HiZPolicyAdaptiveEstimatedCostMicroseconds}/{diagnostics.HiZPolicyAdaptiveEstimatedNetMicroseconds}.");
         Console.WriteLine(
             $"Frame diagnostics CPU passes: depthRecordUs={diagnostics.CpuDepthPrePassRecordMicroseconds}, hizRecordUs={diagnostics.CpuHiZBuildRecordMicroseconds}, " +
-            $"hizBreakdownUs={diagnostics.CpuHiZDepthTransitionMicroseconds}/{diagnostics.CpuHiZPyramidTransitionMicroseconds}/" +
-            $"{diagnostics.CpuHiZDescriptorBindMicroseconds}/{diagnostics.CpuHiZPushDispatchMicroseconds}/{diagnostics.CpuHiZFinalBarrierMicroseconds}, " +
+            $"hizBreakdownUs=depthTransition:{diagnostics.CpuHiZDepthTransitionMicroseconds},pyramidTransition:{diagnostics.CpuHiZPyramidTransitionMicroseconds}," +
+            $"descriptorBinds:{diagnostics.CpuHiZDescriptorBindMicroseconds},dispatches:{diagnostics.CpuHiZPushDispatchMicroseconds}," +
+            $"mipDependenciesAndFinalLayout:{diagnostics.CpuHiZFinalBarrierMicroseconds}, " +
             $"shadowRecordUs={diagnostics.CpuDirectionalShadowRecordMicroseconds}, lightCullRecordUs={diagnostics.CpuLightCullRecordMicroseconds}, forwardRecordUs={diagnostics.CpuForwardOpaqueRecordMicroseconds}, " +
             $"transparentRecordUs={diagnostics.CpuTransparentRecordMicroseconds}, bloomExtractRecordUs={diagnostics.CpuBloomExtractRecordMicroseconds}, " +
             $"bloomDownsampleRecordUs={diagnostics.CpuBloomDownsampleRecordMicroseconds}, bloomUpsampleRecordUs={diagnostics.CpuBloomUpsampleRecordMicroseconds}, " +
@@ -719,6 +721,24 @@ internal sealed class SampleDiagnosticsReporter
     {
         if (textureIndex >= BindlessIndex.FirstDynamicTextureIndex)
             indices.Add(textureIndex);
+    }
+
+    private static string FormatGpuMemoryBudget(RendererDiagnostics diagnostics)
+    {
+        const double BytesPerMiB = 1024.0 * 1024.0;
+        string trackedUsage = (diagnostics.TrackedGpuMemoryBytes / BytesPerMiB).ToString("F1", CultureInfo.InvariantCulture);
+        string trackedBudget = (diagnostics.GpuMemoryBudgetBytes / BytesPerMiB).ToString("F1", CultureInfo.InvariantCulture);
+        RenderBudgetStatus trackedStatus = RenderBudgetEvaluator.Classify(
+            diagnostics.TrackedGpuMemoryBytes,
+            diagnostics.GpuMemoryBudgetBytes);
+
+        if (diagnostics.GpuMemoryBudgetQueryAvailable == 0 || diagnostics.ActualGpuMemoryBudgetBytes == 0)
+            return $"trackedMemory={diagnostics.GpuMemoryBudgetStatus}:{trackedUsage}/{trackedBudget}MiB";
+
+        string heapUsage = (diagnostics.ActualGpuMemoryUsageBytes / BytesPerMiB).ToString("F1", CultureInfo.InvariantCulture);
+        string heapBudget = (diagnostics.ActualGpuMemoryBudgetBytes / BytesPerMiB).ToString("F1", CultureInfo.InvariantCulture);
+        return $"heapMemory={diagnostics.GpuMemoryBudgetStatus}:{heapUsage}/{heapBudget}MiB, " +
+               $"trackedMemory={trackedStatus}:{trackedUsage}/{trackedBudget}MiB";
     }
 
     private static string FormatPendingUInt(int readbackValid, uint value)

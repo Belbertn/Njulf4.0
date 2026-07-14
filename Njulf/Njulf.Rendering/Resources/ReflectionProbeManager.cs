@@ -59,7 +59,12 @@ namespace Njulf.Rendering.Resources
         public uint ProbeMipCount => _probeMipCount;
         public ulong EstimatedBytes => _estimatedBytes;
         public ulong MetadataBufferBytes => MetadataBufferSize;
-        public ulong CubemapArrayBytes => _estimatedBytes > MetadataBufferSize ? _estimatedBytes - MetadataBufferSize : 0;
+        // Probe capture storage has not been implemented by this manager. Keep accounting tied to
+        // actual Vulkan allocations instead of charging a configured cubemap array that does not
+        // exist. The metadata buffer is tracked by BufferManager; this property is used by the
+        // renderer's image-memory reconciliation and must therefore remain zero until an image is
+        // actually created here.
+        public ulong CubemapArrayBytes => 0;
         public long LastUploadMicroseconds => _lastUploadMicroseconds;
         public int CapturesQueued => _pendingCaptureCount;
         public int CapturesCompleted => _capturesCompletedThisFrame;
@@ -152,10 +157,7 @@ namespace Njulf.Rendering.Resources
         private void UpdateResourceMetrics()
         {
             _probeMipCount = ReflectionProbeData.CalculateMipCount(_settings.Reflections.ProbeResolution);
-            _estimatedBytes = ReflectionProbeData.EstimateCubemapArrayBytes(
-                RuntimeProbeCapacity,
-                _settings.Reflections.ProbeResolution,
-                _probeMipCount) + MetadataBufferSize;
+            _estimatedBytes = MetadataBufferSize;
         }
 
         private int RuntimeProbeCapacity => Math.Min(

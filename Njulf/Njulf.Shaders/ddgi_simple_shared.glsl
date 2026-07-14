@@ -19,6 +19,9 @@ const uint SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED = 1u << 8;
 // Detailed investigation counters are disabled in normal production rendering
 // so per-ray/per-texel atomic traffic is never part of the steady-state cost.
 const uint SIMPLE_DDGI_FLAG_DETAILED_DIAGNOSTICS_ENABLED = 1u << 9;
+// The CPU knows when a real lighting edit is propagating.  Adaptive history must
+// not mistake ordinary low-sample Monte-Carlo variation for that edit.
+const uint SIMPLE_DDGI_FLAG_LIGHTING_CHANGE_ACTIVE = 1u << 10;
 const uint SIMPLE_DDGI_IRRADIANCE_TEXELS = 8u;
 const uint SIMPLE_DDGI_VISIBILITY_TEXELS = 16u;
 const uint SIMPLE_DDGI_MAX_RAYS_PER_PROBE = 256u;
@@ -436,6 +439,46 @@ vec3 SimpleDdgiRotateByQuaternion(vec3 v, vec4 q)
     return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
 }
 
+vec4 SimpleDdgiMultiplyQuaternions(vec4 left, vec4 right)
+{
+    return vec4(
+        left.w * right.xyz + right.w * left.xyz + cross(left.xyz, right.xyz),
+        left.w * right.w - dot(left.xyz, right.xyz));
+}
+
+uint SimpleDdgiHash(uint value)
+{
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    value ^= value >> 16u;
+    return value;
+}
+
+float SimpleDdgiHashToUnitFloat(uint value, uint salt)
+{
+    return float(SimpleDdgiHash(value ^ salt) >> 8u) * (1.0 / 16777216.0);
+}
+
+// Compose a stable, uniform rotation for every probe with the frame rotation.
+// This preserves per-probe temporal sampling while preventing all probes from
+// moving through the same Monte-Carlo error pattern together.
+vec4 SimpleDdgiPerProbeRayRotation(uint probeIndex, vec4 frameRotation)
+{
+    float u1 = SimpleDdgiHashToUnitFloat(probeIndex, 0x9e3779b9u);
+    float u2 = SimpleDdgiHashToUnitFloat(probeIndex, 0x7f4a7c15u);
+    float u3 = SimpleDdgiHashToUnitFloat(probeIndex, 0x94d049bbu);
+    float r1 = sqrt(max(0.0, 1.0 - u1));
+    float r2 = sqrt(max(0.0, u1));
+    float theta1 = 2.0 * SIMPLE_DDGI_PI * u2;
+    float theta2 = 2.0 * SIMPLE_DDGI_PI * u3;
+    vec4 probeRotation = vec4(
+        r1 * sin(theta1), r1 * cos(theta1),
+        r2 * sin(theta2), r2 * cos(theta2));
+    return normalize(SimpleDdgiMultiplyQuaternions(frameRotation, probeRotation));
+}
+
 vec3 SimpleDdgiFibonacciDirection(uint rayIndex, uint rayCount, vec4 rayRotation)
 {
     float i = float(rayIndex);
@@ -724,6 +767,12 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
             moments.y,
             max(distanceToProbe - visibilityBias, 0.0),
             volume.spacing);
+        // A probe behind occluding geometry has no usable transport for this
+        // receiver. Excluding it from both numerator and denominator lets
+        // actually visible neighbors own the cell instead of stamping a dark
+        // probe-aligned blob into the interpolation result.
+        if (transportVisibility < 0.05)
+            continue;
         float transportWeight = directionalTransportWeight * transportVisibility;
         accumulated += max(irradiance.rgb, vec3(0.0)) * transportWeight;
         validMass += dataWeight;

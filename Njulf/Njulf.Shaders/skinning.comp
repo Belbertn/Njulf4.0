@@ -34,7 +34,9 @@ void main()
     if (localVertexIndex >= dispatch.VertexCount)
         return;
 
-    GPUVertex source = ReadVertex(dispatch.SourceVertexOffset + localVertexIndex);
+    // Static meshes are stored in split streams; assemble once here before writing
+    // the interleaved per-frame skinned output.
+    GPUVertex source = ReadSplitVertex(dispatch.SourceVertexOffset + localVertexIndex);
     GPUVertexSkinningData skinning = ReadVertexSkinningData(dispatch.SourceSkinningDataOffset + localVertexIndex);
 
     vec4 weights = vec4(skinning.Weight0, skinning.Weight1, skinning.Weight2, skinning.Weight3);

@@ -995,9 +995,6 @@ struct GPUTiledLightHeader
 struct GPULightIndex
 {
     uint LightIndex;
-    uint Padding0;
-    uint Padding1;
-    uint Padding2;
 };
 
 struct GPUScreenToViewParams
@@ -1272,7 +1269,7 @@ const int SIZEOF_GPU_FORWARD_VISIBILITY_COMPACTION_PUSH_CONSTANTS = 92;
 const int SIZEOF_GPU_FOLIAGE_CULL_PUSH_CONSTANTS = 52;
 const int SIZEOF_GPU_FOLIAGE_DRAW_PUSH_CONSTANTS = 128;
 const int SIZEOF_GPU_TILED_LIGHT_HEADER = 16;
-const int SIZEOF_GPU_LIGHT_INDEX = 16;
+const int SIZEOF_GPU_LIGHT_INDEX = 4;
 const int SIZEOF_GPU_SCREEN_TO_VIEW_PARAMS = 32;
 const int SIZEOF_GPU_LIGHT_CULLING_PARAMS = 192;
 const int SIZEOF_GPU_DEPTH_PUSH_CONSTANTS = 96;
@@ -2435,7 +2432,9 @@ GPUVertexSimple ReadVertexSimpleFromBuffer(uint bufferIndex, uint vertexIndex)
 
 GPUVertex ReadVertex(uint vertexIndex)
 {
-    return ReadVertexFromBuffer(uint(VERTEX_BUFFER_INDEX), vertexIndex);
+    // Static source vertices are canonical split streams. Keeping this helper avoids
+    // an interleaved duplicate solely for skinning source reads.
+    return ReadSplitVertex(vertexIndex);
 }
 
 void WriteVertexToBuffer(uint bufferIndex, uint vertexIndex, GPUVertex vertex)
@@ -3126,9 +3125,6 @@ void WriteTiledLightIndex(uint lightListOffset, uint lightIndex)
 {
     uint baseWord = lightListOffset * uint(SIZEOF_GPU_LIGHT_INDEX / 4);
     WriteStorageWord(uint(TILED_LIGHT_INDICES_BUFFER_INDEX), baseWord + 0u, lightIndex);
-    WriteStorageWord(uint(TILED_LIGHT_INDICES_BUFFER_INDEX), baseWord + 1u, 0u);
-    WriteStorageWord(uint(TILED_LIGHT_INDICES_BUFFER_INDEX), baseWord + 2u, 0u);
-    WriteStorageWord(uint(TILED_LIGHT_INDICES_BUFFER_INDEX), baseWord + 3u, 0u);
 }
 
 #endif // NJULF_COMMON_GLSL

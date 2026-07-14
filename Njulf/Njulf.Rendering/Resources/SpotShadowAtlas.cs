@@ -50,7 +50,6 @@ namespace Njulf.Rendering.Resources
                 MemoryBudgetCategory.ShadowMaps,
                 "Local Light Shadow Index Buffer");
             _context.SetDebugName(_bufferManager.GetBuffer(_shadowIndexBuffer).Handle, ObjectType.Buffer, "Local Light Shadow Index Buffer");
-            Ensure(settings);
         }
 
         public uint AtlasSize { get; private set; }
@@ -74,11 +73,31 @@ namespace Njulf.Rendering.Resources
             (ulong)(MaxSpotShadowRecords * Marshal.SizeOf<GPUSpotShadow>()) +
             (ulong)(LightManager.MaxLights * Marshal.SizeOf<GPULocalLightShadowIndex>());
 
+        /// <summary>
+        /// Ensures the configured atlas is resident. This overload preserves the historical
+        /// configuration-driven behavior for standalone callers. Render-frame code should use the
+        /// selection-aware overload to avoid retaining the atlas when no spot shadow is selected.
+        /// </summary>
         public bool Ensure(ShadowSettings settings)
         {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
-            bool shouldAllocateImage = settings.SpotShadowsEnabled && settings.MaxShadowedSpotLights > 0;
+
+            return Ensure(settings, settings.SpotShadowsEnabled ? settings.MaxShadowedSpotLights : 0);
+        }
+
+        /// <summary>
+        /// Ensures the atlas only when at least one selected spot light needs it this frame.
+        /// Callers must re-register the resource after this method returns <see langword="true"/>
+        /// so a released atlas is replaced by the fallback depth descriptor.
+        /// </summary>
+        public bool Ensure(ShadowSettings settings, int requiredShadowCount)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+            ValidateRequiredShadowCount(settings, requiredShadowCount);
+
+            bool shouldAllocateImage = ShouldAllocateImage(settings, requiredShadowCount);
             if (!shouldAllocateImage)
             {
                 if (_workingImage.Handle == 0)
@@ -87,7 +106,7 @@ namespace Njulf.Rendering.Resources
                 WaitForOutstandingImageUse();
                 DestroyImageResources();
                 AtlasSize = 0;
-                TileSize = settings.SpotShadowTileSize;
+                TileSize = 0;
                 return true;
             }
 
@@ -96,6 +115,30 @@ namespace Njulf.Rendering.Resources
 
             Recreate(settings.SpotShadowAtlasSize, settings.SpotShadowTileSize);
             return true;
+        }
+
+        internal static bool ShouldAllocateImage(ShadowSettings settings, int requiredShadowCount)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+
+            return requiredShadowCount > 0 &&
+                   settings.SpotShadowsEnabled &&
+                   settings.MaxShadowedSpotLights > 0;
+        }
+
+        private static void ValidateRequiredShadowCount(ShadowSettings settings, int requiredShadowCount)
+        {
+            if (requiredShadowCount < 0 ||
+                requiredShadowCount > MaxSpotShadowRecords ||
+                requiredShadowCount > settings.MaxShadowedSpotLights ||
+                requiredShadowCount > settings.SpotShadowAtlasCapacity)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(requiredShadowCount),
+                    requiredShadowCount,
+                    "The selected spot shadow count must fit the configured spot shadow budget and atlas capacity.");
+            }
         }
 
         public void Register(

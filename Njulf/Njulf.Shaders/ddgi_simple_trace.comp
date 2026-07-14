@@ -102,7 +102,8 @@ void main()
     uint directionRayIndex = activeRayCount < params.raysPerProbe
         ? rayIndex * params.raysPerProbe / activeRayCount
         : rayIndex;
-    vec3 direction = SimpleDdgiFibonacciDirection(directionRayIndex, params.raysPerProbe, params.rayRotation);
+    vec4 rayRotation = SimpleDdgiPerProbeRayRotation(probeIndex, params.rayRotation);
+    vec3 direction = SimpleDdgiFibonacciDirection(directionRayIndex, params.raysPerProbe, rayRotation);
     float maxDistance = max(volume.spacing * float(max(max(volume.gridCount.x, volume.gridCount.y), volume.gridCount.z)), volume.spacing);
     // A valid probe owns its complete low-frequency field, including environment
     // misses.  Forward composition evaluates diffuse IBL only for probe ownership

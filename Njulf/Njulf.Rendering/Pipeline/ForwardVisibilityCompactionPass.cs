@@ -132,7 +132,7 @@ namespace Njulf.Rendering.Pipeline
                 counterBuffer.ByteSize +
                 indirectDispatchBuffer.ByteSize);
 
-            ResetOutputs(cmd, simpleVisible, simpleNormalVisible, fullVisible, counterBuffer, indirectDispatchBuffer);
+            ResetOutputs(cmd, counterBuffer, indirectDispatchBuffer);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _meshPipeline.ForwardVisibilityCompactionPipeline);
             var descriptorSets = stackalloc DescriptorSet[2];
@@ -285,21 +285,16 @@ namespace Njulf.Rendering.Pipeline
 
         private void ResetOutputs(
             CommandBuffer cmd,
-            RuntimeBuffer simpleVisible,
-            RuntimeBuffer simpleNormalVisible,
-            RuntimeBuffer fullVisible,
             RuntimeBuffer counterBuffer,
             RuntimeBuffer indirectDispatchBuffer)
         {
-            VkBuffer simple = _bufferManager.GetBuffer(simpleVisible.Handle);
-            VkBuffer simpleNormal = _bufferManager.GetBuffer(simpleNormalVisible.Handle);
-            VkBuffer full = _bufferManager.GetBuffer(fullVisible.Handle);
             VkBuffer counters = _bufferManager.GetBuffer(counterBuffer.Handle);
             VkBuffer indirect = _bufferManager.GetBuffer(indirectDispatchBuffer.Handle);
             _context.Api.CmdFillBuffer(cmd, counters, 0, counterBuffer.ByteSize, 0u);
-            _context.Api.CmdFillBuffer(cmd, simple, 0, simpleVisible.ByteSize, 0xffffffffu);
-            _context.Api.CmdFillBuffer(cmd, simpleNormal, 0, simpleNormalVisible.ByteSize, 0xffffffffu);
-            _context.Api.CmdFillBuffer(cmd, full, 0, fullVisible.ByteSize, 0xffffffffu);
+
+            // Indirect dispatch counts are the authoritative bounds for the append-only
+            // visible-command buffers. The forward task and mesh shaders cannot read their
+            // unwritten tails, so clearing those buffers every frame only consumes bandwidth.
             _context.Api.CmdFillBuffer(cmd, indirect, 0, indirectDispatchBuffer.ByteSize, 0u);
             for (uint slot = 0; slot < IndirectDispatchSlotCount; slot++)
             {
@@ -308,12 +303,9 @@ namespace Njulf.Rendering.Pipeline
                 _context.Api.CmdFillBuffer(cmd, indirect, slotOffset + 8, 4, 1u);
             }
 
-            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[5];
+            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[2];
             barriers[0] = TransferToComputeBarrier(counters, counterBuffer.ByteSize);
-            barriers[1] = TransferToComputeBarrier(simple, simpleVisible.ByteSize);
-            barriers[2] = TransferToComputeBarrier(simpleNormal, simpleNormalVisible.ByteSize);
-            barriers[3] = TransferToComputeBarrier(full, fullVisible.ByteSize);
-            barriers[4] = TransferToComputeBarrier(indirect, indirectDispatchBuffer.ByteSize);
+            barriers[1] = TransferToComputeBarrier(indirect, indirectDispatchBuffer.ByteSize);
             ExecuteBarriers(cmd, barriers);
         }
 
@@ -326,10 +318,10 @@ namespace Njulf.Rendering.Pipeline
             RuntimeBuffer indirectDispatchBuffer)
         {
             Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[5];
-            barriers[0] = ComputeToTaskAndTransferBarrier(_bufferManager.GetBuffer(counterBuffer.Handle), counterBuffer.ByteSize);
-            barriers[1] = ComputeToTaskAndTransferBarrier(_bufferManager.GetBuffer(simpleVisible.Handle), simpleVisible.ByteSize);
-            barriers[2] = ComputeToTaskAndTransferBarrier(_bufferManager.GetBuffer(simpleNormalVisible.Handle), simpleNormalVisible.ByteSize);
-            barriers[3] = ComputeToTaskAndTransferBarrier(_bufferManager.GetBuffer(fullVisible.Handle), fullVisible.ByteSize);
+            barriers[0] = ComputeToTransferBarrier(_bufferManager.GetBuffer(counterBuffer.Handle), counterBuffer.ByteSize);
+            barriers[1] = ComputeToTaskBarrier(_bufferManager.GetBuffer(simpleVisible.Handle), simpleVisible.ByteSize);
+            barriers[2] = ComputeToTaskBarrier(_bufferManager.GetBuffer(simpleNormalVisible.Handle), simpleNormalVisible.ByteSize);
+            barriers[3] = ComputeToTaskBarrier(_bufferManager.GetBuffer(fullVisible.Handle), fullVisible.ByteSize);
             barriers[4] = BarrierBuilder.BufferBarrier(
                 _bufferManager.GetBuffer(indirectDispatchBuffer.Handle),
                 PipelineStageFlags2.ComputeShaderBit,
@@ -353,14 +345,26 @@ namespace Njulf.Rendering.Pipeline
                 byteSize);
         }
 
-        private static BufferMemoryBarrier2 ComputeToTaskAndTransferBarrier(VkBuffer buffer, ulong byteSize)
+        private static BufferMemoryBarrier2 ComputeToTransferBarrier(VkBuffer buffer, ulong byteSize)
         {
             return BarrierBuilder.BufferBarrier(
                 buffer,
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
-                AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferReadBit,
+                0,
+                byteSize);
+        }
+
+        private static BufferMemoryBarrier2 ComputeToTaskBarrier(VkBuffer buffer, ulong byteSize)
+        {
+            return BarrierBuilder.BufferBarrier(
+                buffer,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt,
+                AccessFlags2.ShaderStorageReadBit,
                 0,
                 byteSize);
         }

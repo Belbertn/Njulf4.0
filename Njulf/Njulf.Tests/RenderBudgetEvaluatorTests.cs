@@ -56,6 +56,46 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void RenderBudgetEvaluator_SeparatesDriverHeapAndTrackedGpuMemoryBudgets()
+        {
+            RenderBudgetProfile profile = RenderBudgetProfile.Development;
+            var memory = new MemoryBudgetSnapshot(
+                profile.GpuMemoryBudgetBytes + 1,
+                profile.GpuMemoryBudgetBytes,
+                Array.Empty<MemoryBudgetEntry>(),
+                new MemoryHeapBudgetSnapshot(
+                    true,
+                    [
+                        new MemoryHeapBudgetEntry(
+                            0,
+                            true,
+                            profile.GpuMemoryBudgetBytes,
+                            profile.GpuMemoryBudgetBytes * 2,
+                            profile.GpuMemoryBudgetBytes,
+                            profile.GpuMemoryBudgetBytes,
+                            1,
+                            1)
+                    ]));
+
+            RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+                profile,
+                RendererDiagnostics.Empty,
+                memory,
+                new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0, [], RenderBudgetStatus.WithinBudget),
+                new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    Metric(snapshot, RenderBudgetEvaluator.EffectiveGpuMemoryMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.WithinBudget));
+                Assert.That(
+                    Metric(snapshot, RenderBudgetEvaluator.TrackedGpuMemoryMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.OverBudget));
+            });
+        }
+
+        [Test]
         public void RenderBudgetEvaluator_IncludesFoliageSpecificBudgets()
         {
             RenderBudgetProfile profile = RenderBudgetProfile.LowSpec1080p30;

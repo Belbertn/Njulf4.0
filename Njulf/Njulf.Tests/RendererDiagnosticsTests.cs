@@ -1459,7 +1459,10 @@ namespace Njulf.Tests
                 Assert.That(high.FarFieldClipmapResolution, Is.LessThan(ultra.FarFieldClipmapResolution));
                 Assert.That(high.SimpleDdgiStructuredGatherEnabled, Is.True);
                 Assert.That(high.SimpleDdgiReducedBlendEnabled, Is.True);
-                Assert.That(high.SimpleDdgiSampledAtlasEnabled, Is.False);
+                Assert.That(low.SimpleDdgiSampledAtlasEnabled, Is.False);
+                Assert.That(medium.SimpleDdgiSampledAtlasEnabled, Is.False);
+                Assert.That(high.SimpleDdgiSampledAtlasEnabled, Is.True);
+                Assert.That(ultra.SimpleDdgiSampledAtlasEnabled, Is.True);
                 Assert.That(high.SimpleDdgiToroidalScrollingEnabled, Is.True);
                 Assert.That(high.SimpleDdgiRegionalInvalidationEnabled, Is.True);
                 Assert.That(high.SimpleDdgiRoughSpecularEnabled, Is.False);
@@ -1977,7 +1980,7 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.SimpleDdgiDynamicGeometryDirtyBoostEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiAdaptiveRaysEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiMaintenanceRaysPerProbe, Is.EqualTo(24));
-                Assert.That(settings.GlobalIllumination.SimpleDdgiHysteresisChangeThreshold, Is.EqualTo(0.25f));
+                Assert.That(settings.GlobalIllumination.SimpleDdgiHysteresisChangeThreshold, Is.EqualTo(0.50f));
                 Assert.That(settings.GlobalIllumination.SimpleDdgiHysteresisStepThreshold, Is.EqualTo(0.80f));
                 Assert.That(settings.GlobalIllumination.SimpleDdgiLightingDirtyFrameCount, Is.EqualTo(30));
                 Assert.That(settings.HiZVisibilityPolicy.WarmupFrameCount, Is.EqualTo(1));

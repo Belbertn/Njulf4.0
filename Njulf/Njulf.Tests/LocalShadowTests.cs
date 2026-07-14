@@ -66,6 +66,79 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ShadowImageAllocationPolicy_RequiresAnActualSelectedShadow()
+        {
+            var settings = new ShadowSettings
+            {
+                DirectionalShadowsEnabled = true,
+                SpotShadowsEnabled = true,
+                PointShadowsEnabled = true,
+                MaxShadowedSpotLights = 2,
+                MaxShadowedPointLights = 2
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(DirectionalShadowResources.ShouldAllocateImage(settings, requiresShadowMap: false), Is.False);
+                Assert.That(DirectionalShadowResources.ShouldAllocateImage(settings, requiresShadowMap: true), Is.True);
+                Assert.That(SpotShadowAtlas.ShouldAllocateImage(settings, requiredShadowCount: 0), Is.False);
+                Assert.That(SpotShadowAtlas.ShouldAllocateImage(settings, requiredShadowCount: 1), Is.True);
+                Assert.That(PointShadowCubemapArray.ShouldAllocateImage(settings, requiredShadowCount: 0), Is.False);
+                Assert.That(PointShadowCubemapArray.ShouldAllocateImage(settings, requiredShadowCount: 1), Is.True);
+            });
+        }
+
+        [Test]
+        public void ShadowImageAllocationPolicy_HonorsDisabledFeatures()
+        {
+            var settings = new ShadowSettings
+            {
+                DirectionalShadowsEnabled = false,
+                SpotShadowsEnabled = false,
+                PointShadowsEnabled = false
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(DirectionalShadowResources.ShouldAllocateImage(settings, requiresShadowMap: true), Is.False);
+                Assert.That(SpotShadowAtlas.ShouldAllocateImage(settings, requiredShadowCount: 1), Is.False);
+                Assert.That(PointShadowCubemapArray.ShouldAllocateImage(settings, requiredShadowCount: 1), Is.False);
+            });
+        }
+
+        [Test]
+        public void PointShadowCapacityRetention_AvoidsRecreationWhenSelectionDrops()
+        {
+            var settings = new ShadowSettings
+            {
+                MaxShadowedPointLights = 2,
+                PointShadowMapSize = 512
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    PointShadowCubemapArray.CanRetainCapacity(512, currentCapacity: 2, settings: settings, requiredShadowCount: 1),
+                    Is.True,
+                    "A two-light allocation should remain valid when selection drops to one.");
+                Assert.That(
+                    PointShadowCubemapArray.CanRetainCapacity(512, currentCapacity: 1, settings: settings, requiredShadowCount: 2),
+                    Is.False,
+                    "A larger selection must grow the cubemap array.");
+                Assert.That(
+                    PointShadowCubemapArray.CanRetainCapacity(1024, currentCapacity: 2, settings: settings, requiredShadowCount: 1),
+                    Is.False,
+                    "A map-size change must recreate the image.");
+
+                settings.MaxShadowedPointLights = 1;
+                Assert.That(
+                    PointShadowCubemapArray.CanRetainCapacity(512, currentCapacity: 2, settings: settings, requiredShadowCount: 1),
+                    Is.False,
+                    "A lowered configured cap intentionally shrinks the array.");
+            });
+        }
+
+        [Test]
         public void Selector_EnforcesBudgetsAndPrefersPriority()
         {
             var camera = CreateCamera();

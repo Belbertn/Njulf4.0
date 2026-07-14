@@ -121,7 +121,9 @@ internal static class SamplePlazaGlobalIllumination
         settings.Shadows.DirectionalShadowMapSize = 2048;
         settings.Shadows.DirectionalCascadeCount = 3;
         settings.Shadows.MaxShadowDistance = 120.0f;
-        settings.Shadows.PcfRadius = 2;
+        // A 3x3 filter is the production 1080p60 setting: radius 2 expands every
+        // directional-shadow lookup to 25 taps in the already dominant forward pass.
+        settings.Shadows.PcfRadius = 1;
         settings.Shadows.SpotShadowsEnabled = false;
         settings.Shadows.MaxShadowedSpotLights = 0;
         settings.Shadows.PointShadowsEnabled = false;

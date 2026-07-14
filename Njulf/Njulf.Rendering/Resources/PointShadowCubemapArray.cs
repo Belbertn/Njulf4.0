@@ -44,7 +44,6 @@ namespace Njulf.Rendering.Resources
                 MemoryBudgetCategory.ShadowMaps,
                 "Point Shadow Data Buffer");
             _context.SetDebugName(_bufferManager.GetBuffer(_shadowDataBuffer).Handle, ObjectType.Buffer, "Point Shadow Data Buffer");
-            Ensure(settings);
         }
 
         public uint MapSize { get; private set; }
@@ -83,11 +82,30 @@ namespace Njulf.Rendering.Resources
             return _staticFaceViews[pointIndex * 6 + faceIndex];
         }
 
+        /// <summary>
+        /// Ensures the configured point-shadow capacity is resident. This overload preserves the
+        /// historical configuration-driven behavior for standalone callers. Render-frame code
+        /// should use the selection-aware overload to allocate only for selected point lights.
+        /// </summary>
         public bool Ensure(ShadowSettings settings)
         {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
-            bool shouldAllocateImage = settings.PointShadowsEnabled && settings.MaxShadowedPointLights > 0;
+
+            return Ensure(settings, settings.PointShadowsEnabled ? settings.MaxShadowedPointLights : 0);
+        }
+
+        /// <summary>
+        /// Ensures cubemap layers only for the selected point-shadow count. The array is released
+        /// when no point light is selected; callers must then register the fallback descriptor.
+        /// </summary>
+        public bool Ensure(ShadowSettings settings, int requiredShadowCount)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+            ValidateRequiredShadowCount(settings, requiredShadowCount);
+
+            bool shouldAllocateImage = ShouldAllocateImage(settings, requiredShadowCount);
             if (!shouldAllocateImage)
             {
                 if (_workingImage.Handle == 0)
@@ -95,16 +113,68 @@ namespace Njulf.Rendering.Resources
 
                 WaitForOutstandingImageUse();
                 DestroyImageResources();
-                MapSize = settings.PointShadowMapSize;
+                MapSize = 0;
                 PointCapacity = 0;
                 return true;
             }
 
-            if (_workingImage.Handle != 0 && MapSize == settings.PointShadowMapSize && PointCapacity == settings.MaxShadowedPointLights)
-                return false;
+            int configuredCapacity = Math.Min(settings.MaxShadowedPointLights, MaxPointShadowRecords);
+            if (_workingImage.Handle != 0 && MapSize == settings.PointShadowMapSize)
+            {
+                // Retain a sufficiently large array across selection jitter. Recreating a depth
+                // image waits for the device, so shrinking from (for example) two selected lights
+                // to one must not introduce a frame hitch. A settings cap reduction is the one
+                // intentional shrink path.
+                if (CanRetainCapacity(MapSize, PointCapacity, settings, requiredShadowCount))
+                    return false;
 
-            Recreate(settings.PointShadowMapSize, settings.MaxShadowedPointLights);
+                int targetCapacity = PointCapacity > configuredCapacity
+                    ? configuredCapacity
+                    : requiredShadowCount;
+                Recreate(settings.PointShadowMapSize, targetCapacity);
+                return true;
+            }
+
+            Recreate(settings.PointShadowMapSize, requiredShadowCount);
             return true;
+        }
+
+        internal static bool ShouldAllocateImage(ShadowSettings settings, int requiredShadowCount)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+
+            return requiredShadowCount > 0 &&
+                   settings.PointShadowsEnabled &&
+                   settings.MaxShadowedPointLights > 0;
+        }
+
+        internal static bool CanRetainCapacity(
+            uint currentMapSize,
+            int currentCapacity,
+            ShadowSettings settings,
+            int requiredShadowCount)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+
+            int configuredCapacity = Math.Min(settings.MaxShadowedPointLights, MaxPointShadowRecords);
+            return currentMapSize == settings.PointShadowMapSize &&
+                   currentCapacity >= requiredShadowCount &&
+                   currentCapacity <= configuredCapacity;
+        }
+
+        private static void ValidateRequiredShadowCount(ShadowSettings settings, int requiredShadowCount)
+        {
+            if (requiredShadowCount < 0 ||
+                requiredShadowCount > MaxPointShadowRecords ||
+                requiredShadowCount > settings.MaxShadowedPointLights)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(requiredShadowCount),
+                    requiredShadowCount,
+                    "The selected point shadow count must fit the configured point shadow budget.");
+            }
         }
 
         public void Register(

@@ -76,6 +76,7 @@ public sealed class SamplePlazaGlobalIlluminationTests
             Assert.That(settings.Environment.DiffuseIntensity, Is.EqualTo(0.10f));
             Assert.That(settings.Shadows.DirectionalShadowMapSize, Is.EqualTo(2048));
             Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(3));
+            Assert.That(settings.Shadows.PcfRadius, Is.EqualTo(1));
         });
     }
 

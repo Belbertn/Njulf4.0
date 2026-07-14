@@ -500,6 +500,15 @@ bool ApplyGpuLodSelection(inout GPUMeshletDrawCommand command, out uint effectiv
     if (lod0LocalIndex >= meshInfo.MeshletCount)
         return true;
 
+    // Mesh metadata with no alternate ranges intentionally represents a base-only
+    // mesh. Do not calculate a requested LOD or report a missing-LOD fallback for
+    // that normal, non-degraded case.
+    if (meshInfo.MeshletLod1Count == 0u && meshInfo.MeshletLod2Count == 0u)
+    {
+        effectiveLod = 0u;
+        return true;
+    }
+
     vec4 worldCenter = TransformRowMajorPoint(meshInfo.BoundingSphere.xyz, instanceBufferIndex, objectWordOffset);
     float worldRadius = meshInfo.BoundingSphere.w * ReadInstanceMaxScale(instanceBufferIndex, objectWordOffset);
     uint requestedLod = SelectLodLevel(pc.Push.CameraPosition.xyz, worldCenter.xyz, worldRadius);

@@ -53,6 +53,29 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void FibonacciDirections_PerProbeRotationBreaksFieldWideCorrelation()
+        {
+            Quaternion frameRotation = Quaternion.CreateFromYawPitchRoll(0.31f, 0.17f, 0.73f);
+            Vector3 first = SimpleDdgiFibonacciDirection(17u, 128u, SimpleDdgiPerProbeRayRotation(0u, frameRotation));
+            Vector3 sum = Vector3.Zero;
+            float greatestMatch = -1.0f;
+
+            for (uint probeIndex = 0u; probeIndex < 256u; probeIndex++)
+            {
+                Vector3 direction = SimpleDdgiFibonacciDirection(17u, 128u, SimpleDdgiPerProbeRayRotation(probeIndex, frameRotation));
+                sum += direction;
+                if (probeIndex != 0u)
+                    greatestMatch = Math.Max(greatestMatch, Vector3.Dot(first, direction));
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That((sum / 256.0f).Length(), Is.LessThan(0.15f));
+                Assert.That(greatestMatch, Is.LessThan(0.999f));
+            });
+        }
+
+        [Test]
         public void OctEncodeDecode_RoundTripsRepresentativeDirections()
         {
             Vector3[] directions =
@@ -138,17 +161,17 @@ namespace Njulf.Tests
         [Test]
         public void AdaptiveHysteresis_SmoothlyLowersHistoryForLightingSteps()
         {
-            float unchanged = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 1.0f, currentLuma: 1.05f, changeThreshold: 0.25f, stepThreshold: 0.80f);
-            float changed = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 1.0f, currentLuma: 1.35f, changeThreshold: 0.25f, stepThreshold: 0.80f);
-            float stepped = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 1.0f, currentLuma: 6.0f, changeThreshold: 0.25f, stepThreshold: 0.80f);
-            float boundaryA = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 1.0f, currentLuma: 1.249f, changeThreshold: 0.25f, stepThreshold: 0.80f);
-            float boundaryB = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 1.0f, currentLuma: 1.251f, changeThreshold: 0.25f, stepThreshold: 0.80f);
+            float unchanged = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 1.0f, currentLuma: 1.05f, changeThreshold: 0.50f, stepThreshold: 0.80f);
+            float changed = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 1.0f, currentLuma: 1.75f, changeThreshold: 0.50f, stepThreshold: 0.80f);
+            float stepped = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 1.0f, currentLuma: 6.0f, changeThreshold: 0.50f, stepThreshold: 0.80f);
+            float boundaryA = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 1.0f, currentLuma: 1.499f, changeThreshold: 0.50f, stepThreshold: 0.80f);
+            float boundaryB = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 1.0f, currentLuma: 1.501f, changeThreshold: 0.50f, stepThreshold: 0.80f);
 
             Assert.Multiple(() =>
             {
                 Assert.That(unchanged, Is.EqualTo(0.97f).Within(0.0001f));
-                Assert.That(changed, Is.LessThan(0.97f).And.GreaterThan(0.30f));
-                Assert.That(stepped, Is.EqualTo(0.30f).Within(0.01f));
+                Assert.That(changed, Is.LessThan(0.97f).And.GreaterThan(0.60f));
+                Assert.That(stepped, Is.EqualTo(0.60f).Within(0.01f));
                 Assert.That(Math.Abs(boundaryA - boundaryB), Is.LessThan(0.02f));
             });
         }
@@ -156,8 +179,8 @@ namespace Njulf.Tests
         [Test]
         public void AdaptiveHysteresis_DoesNotTreatDarkNoiseAsLightingMotion()
         {
-            float noisyDark = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 0.0f, currentLuma: 0.015f, changeThreshold: 0.25f, stepThreshold: 0.80f);
-            float meaningfulDarkChange = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 0.0f, currentLuma: 0.20f, changeThreshold: 0.25f, stepThreshold: 0.80f);
+            float noisyDark = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 0.0f, currentLuma: 0.015f, changeThreshold: 0.50f, stepThreshold: 0.80f);
+            float meaningfulDarkChange = SimpleDdgiAdaptiveIrradianceHysteresis(0.97f, previousLuma: 0.0f, currentLuma: 1.0f, changeThreshold: 0.50f, stepThreshold: 0.80f);
 
             Assert.Multiple(() =>
             {
@@ -542,6 +565,9 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED"));
                 Assert.That(shared, Does.Not.Contain("SIMPLE_DDGI_FLAG_ROUGH_SPECULAR_ENABLED"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_FLAG_ADAPTIVE_HYSTERESIS"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_FLAG_LIGHTING_CHANGE_ACTIVE"));
+                Assert.That(shared, Does.Contain("vec4 SimpleDdgiPerProbeRayRotation(uint probeIndex, vec4 frameRotation)"));
+                Assert.That(shared, Does.Contain("if (transportVisibility < 0.05)"));
                 Assert.That(shared, Does.Contain("float EstimateFarFieldSkyVisibility(vec3 worldPos)"));
                 Assert.That(shared, Does.Contain("DDGI_INVESTIGATION_SKY_VISIBILITY_SAMPLE_COUNTER"));
                 Assert.That(shared, Does.Contain("DDGI_INVESTIGATION_SKY_VISIBILITY_ACCUM_COUNTER"));
@@ -565,7 +591,8 @@ namespace Njulf.Tests
                 Assert.That(trace, Does.Contain("uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);"));
                 Assert.That(trace, Does.Contain("if (rayIndex >= activeRayCount)"));
                 Assert.That(trace, Does.Contain("rayIndex * params.raysPerProbe / activeRayCount"));
-                Assert.That(trace, Does.Contain("SimpleDdgiFibonacciDirection(directionRayIndex, params.raysPerProbe, params.rayRotation)"));
+                Assert.That(trace, Does.Contain("vec4 rayRotation = SimpleDdgiPerProbeRayRotation(probeIndex, params.rayRotation);"));
+                Assert.That(trace, Does.Contain("SimpleDdgiFibonacciDirection(directionRayIndex, params.raysPerProbe, rayRotation)"));
                 Assert.That(trace, Does.Contain("if (!SimpleDdgiUpdateMatchesProbeGeneration(update, probeState))"));
                 Assert.That(trace, Does.Contain("vec3 probePosition = SimpleDdgiProbeLogicalPosition(volume, localProbeIndex) + probeState.relocation;"));
                 Assert.That(trace, Does.Contain("vec3 radiance = SampleDdgiEnvironmentMissRadianceWithFallback"));
@@ -576,6 +603,8 @@ namespace Njulf.Tests
                 Assert.That(blend, Does.Contain("SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, localProbeOffset);"));
                 Assert.That(blend, Does.Contain("SimpleDdgiAdaptiveIrradianceHysteresis"));
                 Assert.That(blend, Does.Contain("SimpleDdgiAdaptiveVisibilityHysteresis"));
+                Assert.That(blend, Does.Contain("SIMPLE_DDGI_FLAG_LIGHTING_CHANGE_ACTIVE"));
+                Assert.That(blend, Does.Contain("float stepHysteresis = min(probeHysteresis, 0.60);"));
                 Assert.That(blend, Does.Contain("state.luminanceChangeEma = mix"));
                 Assert.That(blend, Does.Contain("shared vec4 SharedSimpleRayRadianceDistance[256];"));
                 Assert.That(blend, Does.Contain("void LoadSimpleRayCache(SimpleDdgiParams params, uint localProbeOffset, uint activeRayCount)"));
@@ -593,13 +622,14 @@ namespace Njulf.Tests
                 Assert.That(relocate, Does.Contain("uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);"));
                 Assert.That(relocate, Does.Contain("state.luminanceChangeEma = previous.luminanceChangeEma;"));
                 Assert.That(relocate, Does.Contain("float softInvalidProbeScore = max("));
-                Assert.That(relocate, Does.Contain("float activeFloor = volume.kind == SIMPLE_DDGI_VOLUME_KIND_AUTHORED ? 0.0 : 0.35;"));
+                Assert.That(relocate, Does.Contain("float activeFloor = (volume.kind == SIMPLE_DDGI_VOLUME_KIND_AUTHORED || hardInvalidProbeScore >= 0.95) ? 0.0 : 0.35;"));
                 Assert.That(relocate, Does.Contain("state.classification = inactiveProbe ? SIMPLE_DDGI_CLASSIFICATION_INACTIVE : SIMPLE_DDGI_CLASSIFICATION_ACTIVE;"));
                 Assert.That(relocate, Does.Contain("WriteRelocationClassification(probeIndex, blendedRelocation"));
                 Assert.That(shared, Does.Not.Contain("confidence chain").IgnoreCase);
                 Assert.That(shared, Does.Not.Contain("max(visibility, 0.03)"));
                 Assert.That(hitShading, Does.Contain("for (uint sourceIndex = 0u; sourceIndex < sourceCount; sourceIndex++)"));
                 Assert.That(hitShading, Does.Contain("ReadDdgiEmissiveSource(sourceIndex)"));
+                Assert.That(hitShading, Does.Contain("float dominantVisibility = TraceLightVisibility"));
                 Assert.That(hitShading, Does.Not.Contain("ReadDdgiEmissiveSource(0u)"));
                 Assert.That(forward, Does.Contain("bool simpleDdgiConfigured = (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_ENABLED) != 0u && simpleDdgiParams.probeCount > 0u;"));
                 Assert.That(forward, Does.Contain("(simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) != 0u;"));
@@ -812,7 +842,7 @@ namespace Njulf.Tests
                 Math.Max(Math.Max(Math.Abs(previousLuma), Math.Abs(currentLuma)), absoluteNoiseFloor);
             float changeT = SmoothStep(changeThreshold, stepThreshold, relativeDelta);
             float softHysteresis = probeHysteresis * 0.5f;
-            float stepHysteresis = Math.Min(probeHysteresis, 0.30f);
+            float stepHysteresis = Math.Min(probeHysteresis, 0.60f);
             return Lerp(probeHysteresis, Lerp(softHysteresis, stepHysteresis, changeT), SmoothStep(changeThreshold * 0.75f, changeThreshold, relativeDelta));
         }
 
@@ -1026,6 +1056,34 @@ namespace Njulf.Tests
             float radius = MathF.Sqrt(Math.Max(0.0f, 1.0f - z * z));
             float angle = golden * i;
             return Vector3.Normalize(Vector3.Transform(new Vector3(MathF.Cos(angle) * radius, MathF.Sin(angle) * radius, z), rotation));
+        }
+
+        private static Quaternion SimpleDdgiPerProbeRayRotation(uint probeIndex, Quaternion frameRotation)
+        {
+            float u1 = SimpleDdgiHashToUnitFloat(probeIndex, 0x9e3779b9u);
+            float u2 = SimpleDdgiHashToUnitFloat(probeIndex, 0x7f4a7c15u);
+            float u3 = SimpleDdgiHashToUnitFloat(probeIndex, 0x94d049bbu);
+            float r1 = MathF.Sqrt(Math.Max(0.0f, 1.0f - u1));
+            float r2 = MathF.Sqrt(Math.Max(0.0f, u1));
+            Quaternion probeRotation = new(
+                r1 * MathF.Sin(2.0f * MathF.PI * u2),
+                r1 * MathF.Cos(2.0f * MathF.PI * u2),
+                r2 * MathF.Sin(2.0f * MathF.PI * u3),
+                r2 * MathF.Cos(2.0f * MathF.PI * u3));
+            return Quaternion.Normalize(Quaternion.Multiply(frameRotation, probeRotation));
+        }
+
+        private static float SimpleDdgiHashToUnitFloat(uint value, uint salt) =>
+            (SimpleDdgiHash(value ^ salt) >> 8) * (1.0f / 16777216.0f);
+
+        private static uint SimpleDdgiHash(uint value)
+        {
+            value ^= value >> 16;
+            value *= 0x7feb352du;
+            value ^= value >> 15;
+            value *= 0x846ca68bu;
+            value ^= value >> 16;
+            return value;
         }
 
         private static Vector2 SimpleDdgiOctEncode(Vector3 n)

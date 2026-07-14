@@ -97,7 +97,10 @@ namespace Njulf.Rendering.Pipeline
                     ambientOcclusionDebugView: (uint)sceneData.AmbientOcclusionDebugView,
                     transparentReceiveShadows: sceneData.TransparentReceiveShadows,
                     transparencyDebugView: (uint)sceneData.TransparencyDebugView,
-                    ambientOcclusionForwardSamplingMode: (uint)AmbientOcclusionForwardSamplingMode.Disabled)
+                    ambientOcclusionForwardSamplingMode: (uint)AmbientOcclusionForwardSamplingMode.Disabled,
+                    // Transparent lighting keeps environment IBL but deliberately
+                    // avoids the high-cost DDGI gather per blended fragment.
+                    globalIlluminationEnabled: false)
             };
 
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();

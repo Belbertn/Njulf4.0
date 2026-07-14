@@ -130,7 +130,7 @@ void main()
 
     float previousActive = clamp(previous.activeWeight, 0.0, 1.0);
     float hardInvalid = smoothstep(0.75, 0.95, hardInvalidProbeScore);
-    float activeFloor = volume.kind == SIMPLE_DDGI_VOLUME_KIND_AUTHORED ? 0.0 : 0.35;
+    float activeFloor = (volume.kind == SIMPLE_DDGI_VOLUME_KIND_AUTHORED || hardInvalidProbeScore >= 0.95) ? 0.0 : 0.35;
     float targetActive = max(1.0 - hardInvalid, activeFloor);
     float stateBlendAlpha = (update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u ? 1.0 : 0.12;
     if (targetActive > previousActive)

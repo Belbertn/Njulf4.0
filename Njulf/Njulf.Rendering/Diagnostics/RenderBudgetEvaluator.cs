@@ -10,6 +10,11 @@ namespace Njulf.Rendering.Diagnostics
         public const double WarningRatio = 0.85;
         public const double MaxDefaultSsgiResolutionScale = 0.5;
         public const int MaxDefaultSsgiRayCount = 8;
+        // "GPU memory" remains the compatibility metric consumed by renderer diagnostics:
+        // driver heap usage when available, otherwise tracked allocations. When the driver
+        // reports a heap budget, the tracked allocation budget is emitted separately.
+        public const string EffectiveGpuMemoryMetricName = "GPU memory";
+        public const string TrackedGpuMemoryMetricName = "Tracked GPU memory";
 
         public static RenderBudgetStatus Classify(double value, double failureThreshold)
         {
@@ -82,7 +87,7 @@ namespace Njulf.Rendering.Diagnostics
                 CreateMetric("CPU renderer", diagnostics.CpuTotalDrawSceneMicroseconds / 1000.0, profile.CpuFrameBudgetMilliseconds, "ms"),
                 CreateMetric("GPU frame", diagnostics.GpuFrameMicroseconds / 1000.0, profile.GpuFrameBudgetMilliseconds, "ms",
                     diagnostics.GpuTimingValid == 0 ? RenderBudgetStatus.Unavailable : null),
-                CreateMetric("GPU memory", memory.EffectiveMemoryBytes, memory.EffectiveBudgetBytes, "bytes"),
+                CreateMetric(EffectiveGpuMemoryMetricName, memory.EffectiveMemoryBytes, memory.EffectiveBudgetBytes, "bytes"),
                 CreateMetric("Upload", upload.TotalBytes, profile.UploadBudgetBytesPerFrame, "bytes"),
                 CreateMetric("Objects", diagnostics.VisibleObjectCount, profile.ObjectBudget, "count"),
                 CreateMetric("Meshlets", diagnostics.MeshletCountTotal + diagnostics.FoliageVisibleMeshletDrawCount, profile.MeshletBudget, "count"),
@@ -141,7 +146,7 @@ namespace Njulf.Rendering.Diagnostics
             };
 
             if (hasActualGpuMemoryBudget)
-                metrics.Add(CreateMetric("Tracked GPU memory", memory.TotalTrackedBytes, profile.GpuMemoryBudgetBytes, "bytes"));
+                metrics.Add(CreateMetric(TrackedGpuMemoryMetricName, memory.TotalTrackedBytes, profile.GpuMemoryBudgetBytes, "bytes"));
 
             RenderBudgetStatus overall = Combine(metrics);
             return new RenderBudgetSnapshot(profile, metrics, memory, upload, stalls, overall);

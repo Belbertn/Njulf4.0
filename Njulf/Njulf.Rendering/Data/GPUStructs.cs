@@ -760,9 +760,6 @@ namespace Njulf.Rendering.Data
     public struct GPULightIndex
     {
         public uint LightIndex;
-        public uint Padding0;
-        public uint Padding1;
-        public uint Padding2;
     }
     
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

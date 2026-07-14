@@ -43,7 +43,6 @@ namespace Njulf.Rendering.Resources
                 MemoryBudgetCategory.ShadowMaps,
                 "Directional Shadow Data Buffer");
             _context.SetDebugName(_bufferManager.GetBuffer(_shadowDataBuffer).Handle, ObjectType.Buffer, "Directional Shadow Data Buffer");
-            Ensure(settings);
         }
 
         public uint MapSize { get; private set; }
@@ -84,11 +83,31 @@ namespace Njulf.Rendering.Resources
             return GetCascadeView(cascadeIndex);
         }
 
+        /// <summary>
+        /// Ensures the configured directional shadow images are resident. This overload preserves
+        /// the historical configuration-driven behavior for standalone callers. Render-frame code
+        /// should use the selection-aware overload so a scene with no shadow-casting directional
+        /// light does not retain two full cascade images.
+        /// </summary>
         public bool Ensure(ShadowSettings settings)
         {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
-            bool shouldAllocateImage = settings.DirectionalShadowsEnabled && settings.DirectionalCascadeCount > 0;
+
+            return Ensure(settings, settings.DirectionalShadowsEnabled && settings.DirectionalCascadeCount > 0);
+        }
+
+        /// <summary>
+        /// Ensures images only when the current frame has a shadow-casting directional light that
+        /// will use them. Releasing an idle image also resets the bindless resource to its fallback
+        /// when the caller subsequently invokes <see cref="Register"/>.
+        /// </summary>
+        public bool Ensure(ShadowSettings settings, bool requiresShadowMap)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+
+            bool shouldAllocateImage = ShouldAllocateImage(settings, requiresShadowMap);
             if (!shouldAllocateImage)
             {
                 if (_workingImage.Handle == 0)
@@ -96,7 +115,7 @@ namespace Njulf.Rendering.Resources
 
                 WaitForOutstandingImageUse();
                 DestroyImageResources();
-                MapSize = settings.DirectionalShadowMapSize;
+                MapSize = 0;
                 CascadeCount = 0;
                 return true;
             }
@@ -106,6 +125,16 @@ namespace Njulf.Rendering.Resources
 
             Recreate(settings.DirectionalShadowMapSize, settings.DirectionalCascadeCount);
             return true;
+        }
+
+        internal static bool ShouldAllocateImage(ShadowSettings settings, bool requiresShadowMap)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+
+            return requiresShadowMap &&
+                   settings.DirectionalShadowsEnabled &&
+                   settings.DirectionalCascadeCount > 0;
         }
 
         public void Register(

@@ -18,6 +18,7 @@ namespace Njulf.Rendering.Pipeline
     public sealed unsafe class HiZBuildPass : RenderPassBase
     {
         private const string EntryPoint = "main";
+        private static readonly uint PushConstantSize = checked((uint)Marshal.SizeOf<GPUHiZBuildPushConstants>());
 
         private readonly HiZDepthPyramid _pyramid;
         private readonly RenderTargetManager _renderTargets;
@@ -99,7 +100,7 @@ namespace Njulf.Rendering.Pipeline
                     _pipelineLayout,
                     ShaderStageFlags.ComputeBit,
                     0,
-                    (uint)Marshal.SizeOf<GPUHiZBuildPushConstants>(),
+                    PushConstantSize,
                     &pushConstants);
 
                 _context.Api.CmdDispatch(
@@ -123,6 +124,8 @@ namespace Njulf.Rendering.Pipeline
 
             sceneData.CpuHiZDescriptorBindMicroseconds = TicksToMicroseconds(descriptorBindTicks);
             sceneData.CpuHiZPushDispatchMicroseconds = TicksToMicroseconds(pushDispatchTicks);
+            // This existing diagnostics bucket includes the serial per-mip dependencies as
+            // well as the final layout transition; the reporter labels it accordingly.
             sceneData.CpuHiZFinalBarrierMicroseconds =
                 TicksToMicroseconds(dependencyBarrierTicks + finalBarrierTicks);
         }
@@ -222,7 +225,7 @@ namespace Njulf.Rendering.Pipeline
             {
                 StageFlags = ShaderStageFlags.ComputeBit,
                 Offset = 0,
-                Size = (uint)Marshal.SizeOf<GPUHiZBuildPushConstants>()
+                Size = PushConstantSize
             };
 
             var setLayout = _descriptorSetLayout;
@@ -522,7 +525,7 @@ namespace Njulf.Rendering.Pipeline
             var barrier = BarrierBuilder.CreateImageBarrier(
                 _pyramid.Image,
                 PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit | AccessFlags2.ShaderSampledReadBit,
+                AccessFlags2.ShaderStorageWriteBit,
                 PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
                 AccessFlags2.ShaderSampledReadBit,
                 ImageLayout.General,

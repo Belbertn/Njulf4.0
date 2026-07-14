@@ -24,6 +24,10 @@ namespace Njulf.Rendering.Resources
         private readonly BindlessHeap? _bindlessHeap;
         private readonly FenceBasedDeleter? _deleter;
         private readonly Dictionary<string, TextureHandle> _textureCache = new Dictionary<string, TextureHandle>(StringComparer.OrdinalIgnoreCase);
+        // A sampled image and a sampler are independent Vulkan objects. Keep physical images in a
+        // second cache so material slots that need different sampler states receive distinct
+        // bindless descriptors without uploading a duplicate image allocation.
+        private readonly Dictionary<string, SharedTextureImage> _textureImageCache = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<TextureSamplerDescription, Sampler> _samplerCache = new();
         private readonly List<TextureInfo> _textures = new List<TextureInfo>();
         private readonly Stack<int> _freeIndices = new Stack<int>();
@@ -38,8 +42,31 @@ namespace Njulf.Rendering.Resources
         private ulong _estimatedTextureBytes;
         private bool _disposed;
 
+        private sealed class SharedTextureImage
+        {
+            public Image Image;
+            public Allocation* Allocation;
+            public ImageView View;
+            public Format Format;
+            public Extent3D Extent;
+            public uint MipLevels;
+            public uint ArrayLayers;
+            public ulong EstimatedByteSize;
+            public bool WasDownscaled;
+            public int ReferenceCount = 1;
+            public string? CacheKey;
+            public string? SourcePath;
+            public string? SourceIdentity;
+            public TextureSourceKind SourceKind;
+            public int SourceEncodedByteLength;
+            public uint OriginalWidth;
+            public uint OriginalHeight;
+            public bool IsCompressed;
+        }
+
         private sealed class TextureInfo
         {
+            public SharedTextureImage? SharedImage;
             public Image Image;
             public Allocation* Allocation;
             public ImageView View;
@@ -83,10 +110,15 @@ namespace Njulf.Rendering.Resources
                 lock (_lock)
                 {
                     int count = 0;
+                    var seenImages = new HashSet<SharedTextureImage>();
                     foreach (TextureInfo textureInfo in _textures)
                     {
-                        if (textureInfo.Image.Handle != 0 && textureInfo.View.Handle != 0)
+                        if (IsLiveTexture(textureInfo) &&
+                            textureInfo.SharedImage != null &&
+                            seenImages.Add(textureInfo.SharedImage))
+                        {
                             count++;
+                        }
                     }
 
                     return count;
@@ -101,11 +133,13 @@ namespace Njulf.Rendering.Resources
                 lock (_lock)
                 {
                     int count = 0;
+                    var seenImages = new HashSet<SharedTextureImage>();
                     foreach (TextureInfo textureInfo in _textures)
                     {
-                        if (textureInfo.Image.Handle != 0 &&
-                            textureInfo.View.Handle != 0 &&
-                            !string.IsNullOrWhiteSpace(textureInfo.SourceIdentity))
+                        if (IsLiveTexture(textureInfo) &&
+                            textureInfo.SharedImage != null &&
+                            !string.IsNullOrWhiteSpace(textureInfo.SharedImage.SourceIdentity) &&
+                            seenImages.Add(textureInfo.SharedImage))
                         {
                             count++;
                         }
@@ -166,9 +200,10 @@ namespace Njulf.Rendering.Resources
                 lock (_lock)
                 {
                     ulong bytes = 0;
-                    AddTextureBytes(_defaultWhiteTexture, ref bytes);
-                    AddTextureBytes(_defaultNormalTexture, ref bytes);
-                    AddTextureBytes(_defaultBlackTexture, ref bytes);
+                    var seenImages = new HashSet<SharedTextureImage>();
+                    AddTextureBytes(_defaultWhiteTexture, ref bytes, seenImages);
+                    AddTextureBytes(_defaultNormalTexture, ref bytes, seenImages);
+                    AddTextureBytes(_defaultBlackTexture, ref bytes, seenImages);
                     return bytes;
                 }
             }
@@ -181,13 +216,15 @@ namespace Njulf.Rendering.Resources
                 lock (_lock)
                 {
                     ulong bytes = 0;
+                    var seenImages = new HashSet<SharedTextureImage>();
                     foreach (TextureInfo textureInfo in _textures)
                     {
-                        if (textureInfo.Image.Handle != 0 &&
-                            textureInfo.View.Handle != 0 &&
-                            !string.IsNullOrWhiteSpace(textureInfo.SourceIdentity))
+                        if (IsLiveTexture(textureInfo) &&
+                            textureInfo.SharedImage != null &&
+                            !string.IsNullOrWhiteSpace(textureInfo.SharedImage.SourceIdentity) &&
+                            seenImages.Add(textureInfo.SharedImage))
                         {
-                            bytes += textureInfo.EstimatedByteSize;
+                            bytes += textureInfo.SharedImage.EstimatedByteSize;
                         }
                     }
 
@@ -237,29 +274,32 @@ namespace Njulf.Rendering.Resources
             lock (_lock)
             {
                 var entries = new List<TextureAssetMemoryEntry>();
+                var seenImages = new HashSet<SharedTextureImage>();
                 foreach (TextureInfo textureInfo in _textures)
                 {
-                    if (textureInfo.Image.Handle == 0 ||
-                        textureInfo.View.Handle == 0 ||
-                        string.IsNullOrWhiteSpace(textureInfo.SourceIdentity))
+                    SharedTextureImage? sharedImage = textureInfo.SharedImage;
+                    if (!IsLiveTexture(textureInfo) ||
+                        sharedImage == null ||
+                        string.IsNullOrWhiteSpace(sharedImage.SourceIdentity) ||
+                        !seenImages.Add(sharedImage))
                     {
                         continue;
                     }
 
                     entries.Add(new TextureAssetMemoryEntry(
-                        textureInfo.SourceIdentity,
-                        textureInfo.Extent.Width,
-                        textureInfo.Extent.Height,
-                        textureInfo.MipLevels,
-                        textureInfo.EstimatedByteSize,
-                        textureInfo.WasDownscaled)
+                        sharedImage.SourceIdentity,
+                        sharedImage.Extent.Width,
+                        sharedImage.Extent.Height,
+                        sharedImage.MipLevels,
+                        sharedImage.EstimatedByteSize,
+                        sharedImage.WasDownscaled)
                     {
-                        SourceKind = textureInfo.SourceKind.ToString(),
-                        OriginalWidth = textureInfo.OriginalWidth == 0 ? textureInfo.Extent.Width : textureInfo.OriginalWidth,
-                        OriginalHeight = textureInfo.OriginalHeight == 0 ? textureInfo.Extent.Height : textureInfo.OriginalHeight,
-                        EncodedByteLength = textureInfo.SourceEncodedByteLength,
-                        Format = textureInfo.Format.ToString(),
-                        IsCompressed = textureInfo.IsCompressed
+                        SourceKind = sharedImage.SourceKind.ToString(),
+                        OriginalWidth = sharedImage.OriginalWidth == 0 ? sharedImage.Extent.Width : sharedImage.OriginalWidth,
+                        OriginalHeight = sharedImage.OriginalHeight == 0 ? sharedImage.Extent.Height : sharedImage.OriginalHeight,
+                        EncodedByteLength = sharedImage.SourceEncodedByteLength,
+                        Format = sharedImage.Format.ToString(),
+                        IsCompressed = sharedImage.IsCompressed
                     });
                 }
 
@@ -270,14 +310,19 @@ namespace Njulf.Rendering.Resources
             }
         }
 
-        private void AddTextureBytes(TextureHandle handle, ref ulong bytes)
+        private void AddTextureBytes(TextureHandle handle, ref ulong bytes, HashSet<SharedTextureImage> seenImages)
         {
             if (!handle.IsValid || handle.Index >= _textures.Count)
                 return;
 
             TextureInfo textureInfo = _textures[handle.Index];
-            if (textureInfo.Generation == handle.Generation && textureInfo.Image.Handle != 0 && textureInfo.View.Handle != 0)
-                bytes += textureInfo.EstimatedByteSize;
+            if (textureInfo.Generation == handle.Generation &&
+                IsLiveTexture(textureInfo) &&
+                textureInfo.SharedImage != null &&
+                seenImages.Add(textureInfo.SharedImage))
+            {
+                bytes += textureInfo.SharedImage.EstimatedByteSize;
+            }
         }
 
         public void InitializeDefaultTextures(BindlessHeap? bindlessHeap = null)
@@ -396,8 +441,21 @@ namespace Njulf.Rendering.Resources
 
                 int textureBindlessIndex = AllocateOrRegisterBindlessIndex(bindlessIndex, view, bindlessHeap, samplerDescription);
 
+                ulong estimatedByteSize = CalculateTextureByteSize(width, height, format, mipLevels, arrayLayers);
+                var sharedImage = new SharedTextureImage
+                {
+                    Image = image,
+                    Allocation = allocation,
+                    View = view,
+                    Format = format,
+                    Extent = imageInfo.Extent,
+                    MipLevels = mipLevels,
+                    ArrayLayers = arrayLayers,
+                    EstimatedByteSize = estimatedByteSize
+                };
                 var textureInfo = new TextureInfo
                 {
+                    SharedImage = sharedImage,
                     Image = image,
                     Allocation = allocation,
                     View = view,
@@ -407,7 +465,7 @@ namespace Njulf.Rendering.Resources
                     ArrayLayers = arrayLayers,
                     Generation = AllocateGeneration(index),
                     BindlessIndex = textureBindlessIndex,
-                    EstimatedByteSize = CalculateTextureByteSize(width, height, format, mipLevels, arrayLayers)
+                    EstimatedByteSize = estimatedByteSize
                 };
                 _estimatedTextureBytes = checked(_estimatedTextureBytes + textureInfo.EstimatedByteSize);
 
@@ -491,8 +549,21 @@ namespace Njulf.Rendering.Resources
                 }
 
                 int textureBindlessIndex = AllocateOrRegisterBindlessIndex(bindlessIndex, view, bindlessHeap);
+                ulong estimatedByteSize = CalculateTextureByteSize(size, size, format, mipLevels, 6);
+                var sharedImage = new SharedTextureImage
+                {
+                    Image = image,
+                    Allocation = allocation,
+                    View = view,
+                    Format = format,
+                    Extent = imageInfo.Extent,
+                    MipLevels = mipLevels,
+                    ArrayLayers = 6,
+                    EstimatedByteSize = estimatedByteSize
+                };
                 var textureInfo = new TextureInfo
                 {
+                    SharedImage = sharedImage,
                     Image = image,
                     Allocation = allocation,
                     View = view,
@@ -502,7 +573,7 @@ namespace Njulf.Rendering.Resources
                     ArrayLayers = 6,
                     Generation = AllocateGeneration(index),
                     BindlessIndex = textureBindlessIndex,
-                    EstimatedByteSize = CalculateTextureByteSize(size, size, format, mipLevels, 6)
+                    EstimatedByteSize = estimatedByteSize
                 };
                 _estimatedTextureBytes = checked(_estimatedTextureBytes + textureInfo.EstimatedByteSize);
 
@@ -558,6 +629,12 @@ namespace Njulf.Rendering.Resources
                 maxTextureDimension,
                 samplerDescription,
                 source.ContainerKind);
+            string imageCacheKey = CreateTextureImageCacheKey(
+                cacheIdentity,
+                generateMipmaps,
+                srgb,
+                maxTextureDimension,
+                source.ContainerKind);
             lock (_lock)
             {
                 if (_textureCache.TryGetValue(cacheKey, out TextureHandle cachedHandle))
@@ -566,6 +643,9 @@ namespace Njulf.Rendering.Resources
                     cachedTextureInfo.ReferenceCount++;
                     return cachedHandle;
                 }
+
+                if (_textureImageCache.TryGetValue(imageCacheKey, out SharedTextureImage? sharedImage))
+                    return CreateSharedTextureAliasLocked(sharedImage, samplerDescription, cacheKey);
             }
 
             byte[] imageBytes;
@@ -589,7 +669,14 @@ namespace Njulf.Rendering.Resources
             }
 
             if (IsKtx2Source(source, fullPath))
-                return LoadKtx2Texture(source, imageBytes, cacheIdentity, cacheKey, samplerDescription, requireWithinMemoryBudget);
+                return LoadKtx2Texture(
+                    source,
+                    imageBytes,
+                    cacheIdentity,
+                    cacheKey,
+                    imageCacheKey,
+                    samplerDescription,
+                    requireWithinMemoryBudget);
 
             ImageResult image;
             try
@@ -643,34 +730,24 @@ namespace Njulf.Rendering.Resources
             {
                 UploadTextureData(handle, textureData, width, height, format, generateMipmaps: mipLevels > 1);
 
-                TextureHandle racedHandle = TextureHandle.Invalid;
-                lock (_lock)
-                {
-                    if (!_textureCache.TryGetValue(cacheKey, out racedHandle))
-                    {
-                        racedHandle = TextureHandle.Invalid;
-                        TextureInfo textureInfo = GetTextureInfoLocked(handle);
-                        textureInfo.SourcePath = fullPath;
-                        textureInfo.SourceIdentity = cacheIdentity;
-                        textureInfo.SourceKind = ResolveSourceKind(source, fullPath);
-                        textureInfo.SourceEncodedByteLength = source.EncodedByteLength > 0 ? source.EncodedByteLength : imageBytes.Length;
-                        textureInfo.OriginalWidth = originalWidth;
-                        textureInfo.OriginalHeight = originalHeight;
-                        textureInfo.WasDownscaled = wasDownscaled;
-                        textureInfo.IsCompressed = false;
-                        string fileName = !string.IsNullOrWhiteSpace(fullPath) ? Path.GetFileName(fullPath) : source.DebugName;
-                        _context.SetDebugName(textureInfo.Image.Handle, ObjectType.Image, $"Texture Image '{fileName}'");
-                        _context.SetDebugName(textureInfo.View.Handle, ObjectType.ImageView, $"Texture Image View '{fileName}'");
-                        _textureCache[cacheKey] = handle;
-                        if (wasDownscaled)
-                            _downscaledTextureCount++;
-                    }
-                }
-
-                if (racedHandle.IsValid)
+                TextureHandle resolvedHandle = RegisterLoadedTexture(
+                    handle,
+                    cacheKey,
+                    imageCacheKey,
+                    samplerDescription,
+                    fullPath,
+                    cacheIdentity,
+                    ResolveSourceKind(source, fullPath),
+                    source.EncodedByteLength > 0 ? source.EncodedByteLength : imageBytes.Length,
+                    originalWidth,
+                    originalHeight,
+                    wasDownscaled,
+                    isCompressed: false,
+                    CreateLoadedTextureDebugName(fullPath, source.DebugName, format));
+                if (resolvedHandle != handle)
                 {
                     DestroyTexture(handle);
-                    return racedHandle;
+                    return resolvedHandle;
                 }
             }
             catch
@@ -817,6 +894,7 @@ namespace Njulf.Rendering.Resources
             byte[] imageBytes,
             string cacheIdentity,
             string cacheKey,
+            string imageCacheKey,
             TextureSamplerDescription samplerDescription,
             bool requireWithinMemoryBudget)
         {
@@ -837,31 +915,25 @@ namespace Njulf.Rendering.Resources
             {
                 UploadTextureDataMipLevels(handle, texture.Bytes.Span, texture.Levels);
 
-                TextureHandle racedHandle = TextureHandle.Invalid;
-                lock (_lock)
-                {
-                    if (!_textureCache.TryGetValue(cacheKey, out racedHandle))
-                    {
-                        racedHandle = TextureHandle.Invalid;
-                        TextureInfo textureInfo = GetTextureInfoLocked(handle);
-                        textureInfo.SourcePath = string.IsNullOrWhiteSpace(source.FilePath) ? source.DebugName : Path.GetFullPath(source.FilePath);
-                        textureInfo.SourceIdentity = cacheIdentity;
-                        textureInfo.SourceKind = ResolveSourceKind(source, source.FilePath);
-                        textureInfo.SourceEncodedByteLength = source.EncodedByteLength > 0 ? source.EncodedByteLength : imageBytes.Length;
-                        textureInfo.OriginalWidth = texture.Width;
-                        textureInfo.OriginalHeight = texture.Height;
-                        textureInfo.IsCompressed = IsBlockCompressedFormat(texture.Format);
-                        string fileName = !string.IsNullOrWhiteSpace(source.FilePath) ? Path.GetFileName(source.FilePath) : source.DebugName;
-                        _context.SetDebugName(textureInfo.Image.Handle, ObjectType.Image, $"Texture Image '{fileName}' {texture.Format}");
-                        _context.SetDebugName(textureInfo.View.Handle, ObjectType.ImageView, $"Texture Image View '{fileName}'");
-                        _textureCache[cacheKey] = handle;
-                    }
-                }
-
-                if (racedHandle.IsValid)
+                string? fullPath = string.IsNullOrWhiteSpace(source.FilePath) ? null : Path.GetFullPath(source.FilePath);
+                TextureHandle resolvedHandle = RegisterLoadedTexture(
+                    handle,
+                    cacheKey,
+                    imageCacheKey,
+                    samplerDescription,
+                    fullPath ?? source.DebugName,
+                    cacheIdentity,
+                    ResolveSourceKind(source, fullPath),
+                    source.EncodedByteLength > 0 ? source.EncodedByteLength : imageBytes.Length,
+                    texture.Width,
+                    texture.Height,
+                    wasDownscaled: false,
+                    isCompressed: IsBlockCompressedFormat(texture.Format),
+                    CreateLoadedTextureDebugName(fullPath, source.DebugName, texture.Format));
+                if (resolvedHandle != handle)
                 {
                     DestroyTexture(handle);
-                    return racedHandle;
+                    return resolvedHandle;
                 }
             }
             catch
@@ -871,6 +943,136 @@ namespace Njulf.Rendering.Resources
             }
 
             return handle;
+        }
+
+        private TextureHandle RegisterLoadedTexture(
+            TextureHandle createdHandle,
+            string descriptorCacheKey,
+            string imageCacheKey,
+            TextureSamplerDescription samplerDescription,
+            string? sourcePath,
+            string sourceIdentity,
+            TextureSourceKind sourceKind,
+            int sourceEncodedByteLength,
+            uint originalWidth,
+            uint originalHeight,
+            bool wasDownscaled,
+            bool isCompressed,
+            string imageDebugName)
+        {
+            lock (_lock)
+            {
+                // A concurrent request for the exact descriptor owns another logical reference to
+                // the existing bindless descriptor, not a new physical image.
+                if (_textureCache.TryGetValue(descriptorCacheKey, out TextureHandle cachedHandle))
+                {
+                    GetTextureInfoLocked(cachedHandle).ReferenceCount++;
+                    return cachedHandle;
+                }
+
+                TextureInfo createdTexture = GetTextureInfoLocked(createdHandle);
+                SharedTextureImage createdImage = createdTexture.SharedImage
+                    ?? throw new InvalidOperationException("A newly-created texture must own a shared image resource.");
+
+                // Another sampler state may have finished loading the same source while this
+                // request decoded and uploaded. Reuse its image and retain only this descriptor.
+                if (_textureImageCache.TryGetValue(imageCacheKey, out SharedTextureImage? cachedImage))
+                    return CreateSharedTextureAliasLocked(cachedImage, samplerDescription, descriptorCacheKey);
+
+                createdImage.CacheKey = imageCacheKey;
+                createdImage.SourcePath = sourcePath;
+                createdImage.SourceIdentity = sourceIdentity;
+                createdImage.SourceKind = sourceKind;
+                createdImage.SourceEncodedByteLength = sourceEncodedByteLength;
+                createdImage.OriginalWidth = originalWidth;
+                createdImage.OriginalHeight = originalHeight;
+                createdImage.WasDownscaled = wasDownscaled;
+                createdImage.IsCompressed = isCompressed;
+
+                CopySourceMetadata(createdImage, createdTexture);
+                _context.SetDebugName(createdImage.Image.Handle, ObjectType.Image, imageDebugName);
+                _context.SetDebugName(createdImage.View.Handle, ObjectType.ImageView, $"{imageDebugName} View");
+                _textureImageCache.Add(imageCacheKey, createdImage);
+                _textureCache.Add(descriptorCacheKey, createdHandle);
+                if (wasDownscaled)
+                    _downscaledTextureCount++;
+
+                return createdHandle;
+            }
+        }
+
+        private TextureHandle CreateSharedTextureAliasLocked(
+            SharedTextureImage sharedImage,
+            TextureSamplerDescription samplerDescription,
+            string descriptorCacheKey)
+        {
+            if (sharedImage.Image.Handle == 0 || sharedImage.View.Handle == 0)
+                throw new InvalidOperationException("The cached shared texture image has already been released.");
+            if (_textureCache.ContainsKey(descriptorCacheKey))
+                throw new InvalidOperationException("A descriptor cache entry already exists for this texture alias.");
+
+            int index = _freeIndices.Count > 0 ? _freeIndices.Pop() : _textures.Count;
+            try
+            {
+                int textureBindlessIndex = AllocateOrRegisterBindlessIndex(
+                    UnassignedBindlessIndex,
+                    sharedImage.View,
+                    bindlessHeap: null,
+                    samplerDescription);
+                var textureInfo = new TextureInfo
+                {
+                    SharedImage = sharedImage,
+                    Image = sharedImage.Image,
+                    Allocation = sharedImage.Allocation,
+                    View = sharedImage.View,
+                    Format = sharedImage.Format,
+                    Extent = sharedImage.Extent,
+                    MipLevels = sharedImage.MipLevels,
+                    ArrayLayers = sharedImage.ArrayLayers,
+                    Generation = AllocateGeneration(index),
+                    BindlessIndex = textureBindlessIndex,
+                    EstimatedByteSize = sharedImage.EstimatedByteSize,
+                    WasDownscaled = sharedImage.WasDownscaled,
+                    IsCompressed = sharedImage.IsCompressed
+                };
+                CopySourceMetadata(sharedImage, textureInfo);
+
+                if (index == _textures.Count)
+                    _textures.Add(textureInfo);
+                else
+                    _textures[index] = textureInfo;
+
+                sharedImage.ReferenceCount++;
+                _textureCache.Add(descriptorCacheKey, new TextureHandle(index, textureInfo.Generation));
+                return new TextureHandle(index, textureInfo.Generation);
+            }
+            catch
+            {
+                _freeIndices.Push(index);
+                throw;
+            }
+        }
+
+        private static void CopySourceMetadata(SharedTextureImage source, TextureInfo destination)
+        {
+            destination.SourcePath = source.SourcePath;
+            destination.SourceIdentity = source.SourceIdentity;
+            destination.SourceKind = source.SourceKind;
+            destination.SourceEncodedByteLength = source.SourceEncodedByteLength;
+            destination.OriginalWidth = source.OriginalWidth;
+            destination.OriginalHeight = source.OriginalHeight;
+            destination.WasDownscaled = source.WasDownscaled;
+            destination.IsCompressed = source.IsCompressed;
+        }
+
+        private static string CreateLoadedTextureDebugName(string? fullPath, string? debugName, Format format)
+        {
+            string fileName = !string.IsNullOrWhiteSpace(fullPath)
+                ? Path.GetFileName(fullPath)
+                : string.IsNullOrWhiteSpace(debugName)
+                    ? "Unnamed"
+                    : debugName;
+            return $"Texture Image '{fileName}' {format}";
         }
 
         private static bool IsKtx2Source(ModelTextureSource source, string? fullPath)
@@ -1713,9 +1915,27 @@ namespace Njulf.Rendering.Resources
             if (string.IsNullOrWhiteSpace(fullPath))
                 throw new ArgumentException("Texture cache path cannot be null or empty.", nameof(fullPath));
 
-            string identity = Path.IsPathRooted(fullPath) ? Path.GetFullPath(fullPath) : fullPath;
             string sampler = samplerDescription.HasValue ? samplerDescription.Value.ToString() : TextureSamplerDescription.Default.ToString();
-            return $"{identity}|container={containerKind}|mips={generateMipmaps}|srgb={srgb}|max={maxDimension}|sampler={sampler}";
+            return $"{CreateTextureImageCacheKey(fullPath, generateMipmaps, srgb, maxDimension, containerKind)}|sampler={sampler}";
+        }
+
+        /// <summary>
+        /// Builds the cache identity for the immutable image allocation. Sampler state is
+        /// deliberately excluded: Vulkan descriptors can combine one image view with multiple
+        /// cached samplers without duplicating the image and its mip chain.
+        /// </summary>
+        internal static string CreateTextureImageCacheKey(
+            string fullPath,
+            bool generateMipmaps,
+            bool srgb,
+            uint maxDimension = 0,
+            TextureContainerKind containerKind = TextureContainerKind.StandardImage)
+        {
+            if (string.IsNullOrWhiteSpace(fullPath))
+                throw new ArgumentException("Texture cache path cannot be null or empty.", nameof(fullPath));
+
+            string identity = Path.IsPathRooted(fullPath) ? Path.GetFullPath(fullPath) : fullPath;
+            return $"{identity}|container={containerKind}|mips={generateMipmaps}|srgb={srgb}|max={maxDimension}";
         }
 
         private static ulong CalculateRequiredStagingSize(uint width, uint height, Format format)
@@ -1835,6 +2055,12 @@ namespace Njulf.Rendering.Resources
 
             textureInfo = _textures[handle.Index];
             return textureInfo.Generation == handle.Generation &&
+                   IsLiveTexture(textureInfo);
+        }
+
+        private static bool IsLiveTexture(TextureInfo textureInfo)
+        {
+            return textureInfo.SharedImage != null &&
                    textureInfo.Image.Handle != 0 &&
                    textureInfo.View.Handle != 0;
         }
@@ -1866,28 +2092,60 @@ namespace Njulf.Rendering.Resources
 
         private void DestroyTextureResources(TextureInfo textureInfo, Fence retireFence)
         {
-            Image image = textureInfo.Image;
-            Allocation* allocation = textureInfo.Allocation;
-            ImageView view = textureInfo.View;
+            Image image = default;
+            Allocation* allocation = null;
+            ImageView view = default;
+            bool releasePhysicalImage = false;
 
-            textureInfo.Image = default;
-            textureInfo.Allocation = null;
-            textureInfo.View = default;
-            textureInfo.BindlessIndex = UnassignedBindlessIndex;
-            textureInfo.SourcePath = null;
-            textureInfo.SourceIdentity = null;
-            textureInfo.SourceKind = TextureSourceKind.Unknown;
-            textureInfo.SourceEncodedByteLength = 0;
-            textureInfo.OriginalWidth = 0;
-            textureInfo.OriginalHeight = 0;
-            textureInfo.IsCompressed = false;
-            _estimatedTextureBytes -= textureInfo.EstimatedByteSize;
-            textureInfo.EstimatedByteSize = 0;
-            if (textureInfo.WasDownscaled)
+            lock (_lock)
             {
-                _downscaledTextureCount--;
+                SharedTextureImage? sharedImage = textureInfo.SharedImage;
+                textureInfo.SharedImage = null;
+                textureInfo.Image = default;
+                textureInfo.Allocation = null;
+                textureInfo.View = default;
+                textureInfo.BindlessIndex = UnassignedBindlessIndex;
+                textureInfo.SourcePath = null;
+                textureInfo.SourceIdentity = null;
+                textureInfo.SourceKind = TextureSourceKind.Unknown;
+                textureInfo.SourceEncodedByteLength = 0;
+                textureInfo.OriginalWidth = 0;
+                textureInfo.OriginalHeight = 0;
+                textureInfo.IsCompressed = false;
                 textureInfo.WasDownscaled = false;
+                textureInfo.EstimatedByteSize = 0;
+
+                if (sharedImage == null)
+                    return;
+
+                if (sharedImage.ReferenceCount <= 0)
+                    throw new InvalidOperationException("A shared texture image was released more than once.");
+
+                sharedImage.ReferenceCount--;
+                if (sharedImage.ReferenceCount != 0)
+                    return;
+
+                if (!string.IsNullOrWhiteSpace(sharedImage.CacheKey) &&
+                    _textureImageCache.TryGetValue(sharedImage.CacheKey, out SharedTextureImage? cachedImage) &&
+                    ReferenceEquals(cachedImage, sharedImage))
+                {
+                    _textureImageCache.Remove(sharedImage.CacheKey);
+                }
+
+                image = sharedImage.Image;
+                allocation = sharedImage.Allocation;
+                view = sharedImage.View;
+                sharedImage.Image = default;
+                sharedImage.Allocation = null;
+                sharedImage.View = default;
+                _estimatedTextureBytes -= sharedImage.EstimatedByteSize;
+                if (sharedImage.WasDownscaled)
+                    _downscaledTextureCount--;
+                releasePhysicalImage = true;
             }
+
+            if (!releasePhysicalImage)
+                return;
 
             if (_deleter != null && retireFence.Handle != 0)
             {
@@ -1929,16 +2187,23 @@ namespace Njulf.Rendering.Resources
 
             lock (_lock)
             {
+                var sharedImages = new HashSet<SharedTextureImage>();
                 foreach (TextureInfo textureInfo in _textures)
                 {
-                    if (textureInfo.View.Handle != 0)
-                        _context.Api.DestroyImageView(_context.Device, textureInfo.View, null);
+                    if (textureInfo.SharedImage != null)
+                        sharedImages.Add(textureInfo.SharedImage);
+                }
 
-                    if (textureInfo.Image.Handle != 0)
+                foreach (SharedTextureImage sharedImage in sharedImages)
+                {
+                    if (sharedImage.View.Handle != 0)
+                        _context.Api.DestroyImageView(_context.Device, sharedImage.View, null);
+
+                    if (sharedImage.Image.Handle != 0)
                         GpuAllocator.Apis.DestroyImage(
                             _context.Allocator,
-                            textureInfo.Image,
-                            textureInfo.Allocation);
+                            sharedImage.Image,
+                            sharedImage.Allocation);
                 }
 
                 foreach (Sampler sampler in _samplerCache.Values)
@@ -1949,6 +2214,7 @@ namespace Njulf.Rendering.Resources
 
                 _textures.Clear();
                 _textureCache.Clear();
+                _textureImageCache.Clear();
                 _samplerCache.Clear();
                 _freeIndices.Clear();
             }

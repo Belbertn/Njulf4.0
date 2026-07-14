@@ -2775,6 +2775,12 @@ void AccumulateLight(
     if (light.Type == 1)
     {
         lightDirection = normalize(-light.Direction);
+        // A light below the geometric horizon cannot contribute diffuse or
+        // specular BRDF energy.  Skip its shadow lookup before entering the
+        // expensive directional PCF path; this is particularly important for
+        // the large number of back-facing fragments in dense meshlet scenes.
+        if (dot(normal, lightDirection) <= 0.0)
+            return;
         shadowFactor = EvaluateDirectionalShadow(lightIndex, worldPosition, shadowNormal, shadowCascade);
     }
     else
@@ -2785,6 +2791,8 @@ void AccumulateLight(
             return;
 
         lightDirection = toLight / max(distanceToLight, 0.0001);
+        if (dot(normal, lightDirection) <= 0.0)
+            return;
         float rangeFactor = clamp(1.0 - distanceToLight / light.Range, 0.0, 1.0);
         attenuation = rangeFactor * rangeFactor;
 
@@ -3494,6 +3502,10 @@ void main()
         directLighting = mix(directLighting, cascadeColor, 0.35);
     }
 
+    // Transparent passes deliberately disable the global-GI flag.  The simple
+    // DDGI path must honour that same contract; previously it ignored the flag
+    // and performed the full eight-probe gather for alpha-blended fragments.
+    bool globalIlluminationEnabled = ForwardGlobalIlluminationEnabled() != 0u;
     SimpleDdgiParams simpleDdgiParams = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
     bool simpleDdgiConfigured = (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_ENABLED) != 0u && simpleDdgiParams.probeCount > 0u;
     bool simpleDdgiActive = simpleDdgiConfigured &&
@@ -3509,7 +3521,17 @@ void main()
     vec3 hybridSuppressionMask = vec3(0.0);
     float hybridEffectiveDdgiWeight = 0.0;
 
-    if (simpleDdgiActive)
+    if (!globalIlluminationEnabled)
+    {
+        // Preserve inexpensive environment diffuse for transparent materials
+        // while avoiding DDGI/legacy probe work that the pass explicitly opted
+        // out of.  This also gives feature-isolated rendering a stable fallback.
+        fallbackWeight = 1.0;
+        finalDiffuseIndirect = diffuseIbl * indirectAo;
+        hybridDebugDiffuse = finalDiffuseIndirect;
+        hybridSuppressionMask = vec3(0.0);
+    }
+    else if (simpleDdgiActive)
     {
         // A support-aware result distinguishes an unavailable probe field from
         // legitimate zero irradiance.  Fresh, exposed, and invalid slots

@@ -364,6 +364,10 @@ vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(vec3 worldPosition, vec3 n
     const uint MaxEvaluatedEmissiveSources = 64u;
     uint sourceCount = min(pc.EmissiveSourceCount, MaxEvaluatedEmissiveSources);
     vec3 diffuseRadiance = vec3(0.0);
+    vec3 dominantContribution = vec3(0.0);
+    vec3 dominantLightDirection = vec3(0.0, 1.0, 0.0);
+    float dominantDistance = 0.0;
+    float dominantLuminance = 0.0;
     for (uint sourceIndex = 0u; sourceIndex < sourceCount; sourceIndex++)
     {
         GPUDdgiEmissiveSource source = ReadDdgiEmissiveSource(sourceIndex);
@@ -381,9 +385,25 @@ vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(vec3 worldPosition, vec3 n
         float radiusAttenuation = 1.0 - distanceToSource / radius;
         radiusAttenuation *= radiusAttenuation;
         vec3 sourceRadiance = max(source.RadianceImportance.rgb, vec3(0.0));
-        diffuseRadiance += sourceRadiance * nDotL * radiusAttenuation * (albedo / PI);
+        vec3 contribution = sourceRadiance * nDotL * radiusAttenuation * (albedo / PI);
+        diffuseRadiance += contribution;
+        float contributionLuminance = DdgiHitLuminance(contribution);
+        if (contributionLuminance > dominantLuminance)
+        {
+            dominantContribution = contribution;
+            dominantLightDirection = lightDirection;
+            dominantDistance = distanceToSource;
+            dominantLuminance = contributionLuminance;
+        }
     }
 
+    // Bound emissive occlusion to one ray per shaded hit. Shadowing the largest
+    // contribution removes the perceptually dominant through-wall leak without
+    // scaling ray-query cost with the source count.
+    if (dominantLuminance <= 0.0001)
+        return diffuseRadiance;
+    float dominantVisibility = TraceLightVisibility(worldPosition, normal, dominantLightDirection, dominantDistance);
+    diffuseRadiance += dominantContribution * (dominantVisibility - 1.0);
     return diffuseRadiance;
 }
 

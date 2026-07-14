@@ -38,7 +38,6 @@ namespace Njulf.Rendering.Data
         private const uint InitialTransparentMeshletDrawCapacity = 4096;
         private const uint InitialDirectionalShadowMeshletDrawCapacity = 32768;
         private const uint InitialLocalShadowMeshletDrawCapacity = 8192;
-        private const uint InitialTileCapacity = 4096;
         private const uint CpuMeshletCullingThreshold = 128;
         private const float MeshletLod1DistanceRatio = 12f;
         private const float MeshletLod2DistanceRatio = 32f;
@@ -389,9 +388,6 @@ namespace Njulf.Rendering.Data
                     SceneUploadCategory.PackedMaskedDepthMeshletDraw)
             ];
 
-            _tiledLightHeaderBuffer = CreateSceneBuffer(InitialTileCapacity, TiledLightHeaderStride, "Tiled Light Header Buffer");
-            _tiledLightIndexBuffer = CreateSceneBuffer(InitialTileCapacity * MaxLightsPerTile, TiledLightIndexStride, "Tiled Light Index Buffer");
-
             System.Diagnostics.Debug.WriteLine("Scene data builder created.");
         }
 
@@ -614,10 +610,9 @@ namespace Njulf.Rendering.Data
                     stream.EnsureCapacity(this, frameIndex, uploadCommandBuffer);
                 EnsureCapacity(ref _meshletTaskFrameDataBuffers[frameIndex], 1, MeshletTaskFrameDataStride, uploadCommandBuffer);
                 if (useTiledLightCulling)
-                {
-                    EnsureCapacity(ref _tiledLightHeaderBuffer, totalTiles, TiledLightHeaderStride, uploadCommandBuffer);
-                    EnsureCapacity(ref _tiledLightIndexBuffer, checked(totalTiles * MaxLightsPerTile), TiledLightIndexStride, uploadCommandBuffer);
-                }
+                    EnsureTiledLightBuffers(totalTiles, uploadCommandBuffer);
+                else
+                    ReleaseTiledLightBuffers();
 
                 if (payloadRebuilt)
                     InvalidateDrawStreamUploadStates();
@@ -1950,6 +1945,47 @@ namespace Njulf.Rendering.Data
             return true;
         }
 
+        private void EnsureTiledLightBuffers(uint totalTiles, CommandBuffer commandBuffer)
+        {
+            if (totalTiles == 0)
+                throw new ArgumentOutOfRangeException(nameof(totalTiles));
+
+            if (!_tiledLightHeaderBuffer.Handle.IsValid || !_tiledLightIndexBuffer.Handle.IsValid)
+            {
+                // The pair is allocated and retired atomically: the compute pass always
+                // consumes matching header and index ranges.
+                ReleaseTiledLightBuffers();
+                _tiledLightHeaderBuffer = CreateSceneBuffer(totalTiles, TiledLightHeaderStride, "Tiled Light Header Buffer");
+                _tiledLightIndexBuffer = CreateSceneBuffer(
+                    checked(totalTiles * MaxLightsPerTile),
+                    TiledLightIndexStride,
+                    "Tiled Light Index Buffer");
+                return;
+            }
+
+            EnsureCapacity(ref _tiledLightHeaderBuffer, totalTiles, TiledLightHeaderStride, commandBuffer);
+            EnsureCapacity(
+                ref _tiledLightIndexBuffer,
+                checked(totalTiles * MaxLightsPerTile),
+                TiledLightIndexStride,
+                commandBuffer);
+        }
+
+        private void ReleaseTiledLightBuffers()
+        {
+            if (!_tiledLightHeaderBuffer.Handle.IsValid && !_tiledLightIndexBuffer.Handle.IsValid)
+                return;
+
+            // Previous frames can still reference the tiled lists. Wait before
+            // destroying them, then rebind the descriptor slots to the always-live
+            // object buffer in UpdateRegisteredBindlessBuffers.
+            WaitForOtherInFlightFrames();
+            DestroyIfValid(_tiledLightHeaderBuffer.Handle);
+            DestroyIfValid(_tiledLightIndexBuffer.Handle);
+            _tiledLightHeaderBuffer = SceneBuffer.Unallocated("Tiled Light Header Buffer");
+            _tiledLightIndexBuffer = SceneBuffer.Unallocated("Tiled Light Index Buffer");
+        }
+
         private void WaitForOtherInFlightFrames()
         {
             int currentFrame = _stagingRing.CurrentFrameIndex;
@@ -2262,8 +2298,16 @@ namespace Njulf.Rendering.Data
             RegisterStorageBuffer(BindlessIndex.LocalStaticShadowMeshletDrawBufferFrame1, _localStaticShadowMeshletDrawBuffers[1].Handle);
             RegisterStorageBuffer(BindlessIndex.LocalDynamicShadowMeshletDrawBufferBase, _localDynamicShadowMeshletDrawBuffers[0].Handle);
             RegisterStorageBuffer(BindlessIndex.LocalDynamicShadowMeshletDrawBufferFrame1, _localDynamicShadowMeshletDrawBuffers[1].Handle);
-            RegisterStorageBuffer(BindlessIndex.TiledLightHeaderBuffer, _tiledLightHeaderBuffer.Handle);
-            RegisterStorageBuffer(BindlessIndex.TiledLightIndicesBuffer, _tiledLightIndexBuffer.Handle);
+            // Partially-bound descriptors are legal, but retaining descriptors to
+            // released buffers is not. When local-light culling is inactive, bind the
+            // slots to an always-live buffer; the forward shader gates all reads on
+            // LocalLightCount and the tiled-light pass returns before binding them.
+            RegisterStorageBuffer(
+                BindlessIndex.TiledLightHeaderBuffer,
+                _tiledLightHeaderBuffer.Handle.IsValid ? _tiledLightHeaderBuffer.Handle : _objectDataBuffer.Handle);
+            RegisterStorageBuffer(
+                BindlessIndex.TiledLightIndicesBuffer,
+                _tiledLightIndexBuffer.Handle.IsValid ? _tiledLightIndexBuffer.Handle : _objectDataBuffer.Handle);
         }
 
         private void RegisterStorageBuffer(int bindlessIndex, BufferHandle handle)
@@ -2637,6 +2681,11 @@ namespace Njulf.Rendering.Data
 
         private readonly struct SceneBuffer
         {
+            public static SceneBuffer Unallocated(string debugName)
+            {
+                return new SceneBuffer(BufferHandle.Invalid, 0, 0, debugName);
+            }
+
             public SceneBuffer(BufferHandle handle, uint elementCapacity, ulong byteSize, string debugName)
             {
                 Handle = handle;

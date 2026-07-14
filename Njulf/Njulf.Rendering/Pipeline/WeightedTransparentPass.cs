@@ -106,7 +106,10 @@ namespace Njulf.Rendering.Pipeline
                     ambientOcclusionDebugView: (uint)sceneData.AmbientOcclusionDebugView,
                     transparentReceiveShadows: sceneData.TransparentReceiveShadows,
                     transparencyDebugView: (uint)sceneData.TransparencyDebugView,
-                    ambientOcclusionForwardSamplingMode: (uint)AmbientOcclusionForwardSamplingMode.Disabled)
+                    ambientOcclusionForwardSamplingMode: (uint)AmbientOcclusionForwardSamplingMode.Disabled,
+                    // Weighted OIT has the same per-fragment cost constraint as
+                    // sorted alpha; use its environment fallback rather than DDGI.
+                    globalIlluminationEnabled: false)
             };
 
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();

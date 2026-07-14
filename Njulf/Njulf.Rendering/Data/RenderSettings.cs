@@ -1480,7 +1480,7 @@ namespace Njulf.Rendering.Data
         private int _simpleDdgiRaysPerProbe = 128;
         private int _simpleDdgiMaintenanceRaysPerProbe = 32;
         private float _simpleDdgiHysteresis = 0.97f;
-        private float _simpleDdgiHysteresisChangeThreshold = 0.25f;
+        private float _simpleDdgiHysteresisChangeThreshold = 0.50f;
         private float _simpleDdgiHysteresisStepThreshold = 0.80f;
         private int _simpleDdgiLightingDirtyFrameCount = 30;
         private int _simpleDdgiStableMaintenanceUpdateCount = 3;
@@ -1584,9 +1584,9 @@ namespace Njulf.Rendering.Data
         public bool SimpleDdgiReducedBlendEnabled { get; set; } = true;
         /// <summary>
         /// Enables the sampled-image mirror of the canonical Simple-DDGI SSBO
-        /// atlases for controlled A/B captures. The SSBO remains the writer and
-        /// safety fallback; this stays opt-in until target-device validation is
-        /// complete.
+        /// atlases. The SSBO remains the writer and safety fallback; high and
+        /// ultra tiers request this path, while the manager admits it only when
+        /// the configured DDGI memory budget can safely accommodate it.
         /// </summary>
         public bool SimpleDdgiSampledAtlasEnabled { get; set; }
         /// <summary>
@@ -2448,7 +2448,12 @@ namespace Njulf.Rendering.Data
             DdgiExhaustiveGatherFallbackEnabled = true;
             SimpleDdgiStructuredGatherEnabled = true;
             SimpleDdgiReducedBlendEnabled = true;
-            SimpleDdgiSampledAtlasEnabled = false;
+            // The sampled mirror replaces dozens of random SSBO reads per shaded
+            // pixel with filtered image fetches.  It is a net production win on
+            // high/ultra tiers and remains protected by the manager's strict
+            // atlas-memory admission check; low and medium retain the lean SSBO
+            // path.
+            SimpleDdgiSampledAtlasEnabled = tier is DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra;
             SimpleDdgiToroidalScrollingEnabled = true;
             SimpleDdgiRegionalInvalidationEnabled = true;
             SimpleDdgiRoughSpecularEnabled = false;
@@ -3789,7 +3794,7 @@ namespace Njulf.Rendering.Data
             public int SimpleDdgiMidMaxShadedLights { get; init; } = 4;
             public int SimpleDdgiFarMaxShadedLights { get; init; } = 2;
             public float SimpleDdgiHysteresis { get; init; } = 0.97f;
-            public float SimpleDdgiHysteresisChangeThreshold { get; init; } = 0.25f;
+            public float SimpleDdgiHysteresisChangeThreshold { get; init; } = 0.50f;
             public float SimpleDdgiHysteresisStepThreshold { get; init; } = 0.80f;
             public int SimpleDdgiLightingDirtyFrameCount { get; init; } = 30;
             public int SimpleDdgiStableMaintenanceUpdateCount { get; init; } = 3;

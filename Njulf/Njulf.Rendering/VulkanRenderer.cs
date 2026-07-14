@@ -1315,13 +1315,15 @@ namespace Njulf.Rendering
             int shadowedDirectionalLightIndex = -1;
             if (shadowsAllowed)
             {
-                EnsureLocalShadowResources();
                 localShadowSelection = _localShadowSelector.Select(
                     lightSnapshot.Lights.Span,
                     camera,
                     Settings.Shadows,
-                    _spotShadowAtlas?.Capacity ?? Settings.Shadows.SpotShadowAtlasCapacity,
-                    _pointShadowCubemapArray?.PointCapacity ?? Settings.Shadows.MaxShadowedPointLights);
+                    Settings.Shadows.SpotShadowAtlasCapacity,
+                    Settings.Shadows.MaxShadowedPointLights);
+                EnsureLocalShadowResources(
+                    localShadowSelection.SpotLights.Length,
+                    localShadowSelection.PointLights.Length);
                 hasLocalShadows = localShadowSelection.SpotLights.Length > 0 || localShadowSelection.PointLights.Length > 0;
                 shadowData = CreateDirectionalShadowData(camera, lightSnapshot, out directionalShadowsEnabled, out shadowedDirectionalLightIndex);
             }
@@ -1329,6 +1331,10 @@ namespace Njulf.Rendering
             {
                 localShadowSelection = new LocalShadowSelection();
                 hasLocalShadows = false;
+                // Feature isolation must not retain maps that no pass can sample. Re-registering
+                // after a release also prevents a descriptor from referencing a destroyed image.
+                EnsureLocalShadowResources(0, 0);
+                EnsureDirectionalShadowResources(requiresShadowMap: false);
             }
 
             GPUShadowData? enabledShadowData = directionalShadowsEnabled ? shadowData : null;
@@ -1974,38 +1980,61 @@ namespace Njulf.Rendering
                 return;
             }
 
-            GPUSimpleDdgiParams parameters = _simpleDdgiVolumeManager.LastParams;
-            float spacing = Math.Max(parameters.GridOriginAndSpacing.W, 0.001f);
-            Vector3 origin = new(
-                parameters.GridOriginAndSpacing.X,
-                parameters.GridOriginAndSpacing.Y,
-                parameters.GridOriginAndSpacing.Z);
-            int probeCountX = Math.Max(1, _simpleDdgiVolumeManager.ProbeCountX);
-            int probeCountY = Math.Max(1, _simpleDdgiVolumeManager.ProbeCountY);
-            int probeCountZ = Math.Max(1, _simpleDdgiVolumeManager.ProbeCountZ);
-            Vector3 latticeExtent = new(
-                Math.Max(probeCountX - 1, 1) * spacing,
-                Math.Max(probeCountY - 1, 1) * spacing,
-                Math.Max(probeCountZ - 1, 1) * spacing);
-
-            _debugDraw.Box(
-                new BoundingBox(origin, origin + latticeExtent),
-                new Vector4(0.2f, 0.75f, 1.0f, 0.9f),
-                depthMode);
-            sceneData.DebugDdgiProbeVolumesDrawn++;
-
-            if (maxProbeMarkers > 0)
+            ReadOnlySpan<GPUSimpleDdgiVolume> volumes = _simpleDdgiVolumeManager.LastVolumes;
+            int remainingProbeMarkers = maxProbeMarkers;
+            for (int volumeIndex = 0; volumeIndex < volumes.Length; volumeIndex++)
             {
-                DrawSimpleDdgiProbeSamples(
+                GPUSimpleDdgiVolume volume = volumes[volumeIndex];
+                float spacing = Math.Max(volume.OriginAndSpacing.W, 0.001f);
+                Vector3 origin = new(
+                    volume.OriginAndSpacing.X,
+                    volume.OriginAndSpacing.Y,
+                    volume.OriginAndSpacing.Z);
+                int probeCountX = Math.Max(1, (int)MathF.Round(volume.GridCountsAndFirstProbe.X));
+                int probeCountY = Math.Max(1, (int)MathF.Round(volume.GridCountsAndFirstProbe.Y));
+                int probeCountZ = Math.Max(1, (int)MathF.Round(volume.GridCountsAndFirstProbe.Z));
+                int firstProbeIndex = Math.Max(0, (int)MathF.Round(volume.GridCountsAndFirstProbe.W));
+                Vector3 latticeExtent = new(
+                    Math.Max(probeCountX - 1, 1) * spacing,
+                    Math.Max(probeCountY - 1, 1) * spacing,
+                    Math.Max(probeCountZ - 1, 1) * spacing);
+
+                _debugDraw.Box(
+                    new BoundingBox(origin, origin + latticeExtent),
+                    ResolveSimpleDdgiVolumeDebugColor(volumeIndex, volume),
+                    depthMode);
+                sceneData.DebugDdgiProbeVolumesDrawn++;
+
+                if (remainingProbeMarkers <= 0)
+                    continue;
+
+                remainingProbeMarkers -= DrawSimpleDdgiProbeSamples(
                     origin,
                     spacing,
                     probeCountX,
                     probeCountY,
                     probeCountZ,
+                    firstProbeIndex,
                     sceneData.DebugOverlayMode,
                     depthMode,
-                    maxProbeMarkers);
+                    remainingProbeMarkers);
             }
+        }
+
+        private static Vector4 ResolveSimpleDdgiVolumeDebugColor(int volumeIndex, GPUSimpleDdgiVolume volume)
+        {
+            // Authored volumes sort before same-spacing rings. Give them a distinct
+            // colour so Ctrl+9 makes the overlap and camera-relative coverage clear.
+            int kind = (int)MathF.Round(volume.WorldMaxAndKind.W);
+            if (kind == 1)
+                return new Vector4(0.95f, 0.9f, 0.25f, 0.95f);
+
+            return (volumeIndex % 3) switch
+            {
+                0 => new Vector4(0.2f, 0.75f, 1.0f, 0.9f),
+                1 => new Vector4(0.3f, 0.95f, 0.55f, 0.9f),
+                _ => new Vector4(0.95f, 0.3f, 0.85f, 0.9f)
+            };
         }
 
         private int DrawSimpleDdgiProbeSamples(
@@ -2014,6 +2043,7 @@ namespace Njulf.Rendering
             int probeCountX,
             int probeCountY,
             int probeCountZ,
+            int firstProbeIndex,
             DebugOverlayMode overlayMode,
             DebugDrawDepthMode depthMode,
             int maxProbeMarkers)
@@ -2025,10 +2055,6 @@ namespace Njulf.Rendering
                 probeCountY,
                 probeCountZ,
                 maxProbeMarkers);
-            int updateStart = Math.Max(0, _simpleDdgiVolumeManager?.UpdateStartProbe ?? 0);
-            int probesToUpdate = Math.Max(0, _simpleDdgiVolumeManager?.ProbesToUpdate ?? 0);
-            int probeCount = Math.Max(1, probeCountX * probeCountY * probeCountZ);
-
             for (int z = 0; z < probeCountZ; z++)
             {
                 for (int y = 0; y < probeCountY; y++)
@@ -2040,8 +2066,9 @@ namespace Njulf.Rendering
                         if (!ShouldDrawDdgiProbeMarker(x, y, z, markerSampling))
                             continue;
 
-                        int probeIndex = x + y * probeCountX + z * probeCountX * probeCountY;
-                        bool updated = IsSimpleDdgiProbeInUpdateRange(probeIndex, updateStart, probesToUpdate, probeCount);
+                        int localProbeIndex = x + y * probeCountX + z * probeCountX * probeCountY;
+                        int probeIndex = firstProbeIndex + localProbeIndex;
+                        bool updated = _simpleDdgiVolumeManager?.IsProbeScheduledForUpdate(probeIndex) == true;
                         if (!TryResolveSimpleDdgiProbeMarkerColor(overlayMode, probeIndex, updated, out Vector4 markerColor))
                             continue;
 
@@ -2055,25 +2082,6 @@ namespace Njulf.Rendering
             }
 
             return markersDrawn;
-        }
-
-        private static bool IsSimpleDdgiProbeInUpdateRange(
-            int probeIndex,
-            int updateStart,
-            int probesToUpdate,
-            int probeCount)
-        {
-            if (probeIndex < 0 || probeCount <= 0 || probesToUpdate <= 0)
-                return false;
-            if (probesToUpdate >= probeCount)
-                return true;
-
-            int normalizedStart = updateStart % probeCount;
-            int normalizedProbe = probeIndex % probeCount;
-            int relative = normalizedProbe - normalizedStart;
-            if (relative < 0)
-                relative += probeCount;
-            return relative < probesToUpdate;
         }
 
         private static bool TryResolveSimpleDdgiProbeMarkerColor(
@@ -2920,9 +2928,6 @@ namespace Njulf.Rendering
                 return default;
 
             ShadowSettings shadowSettings = Settings.Shadows;
-            if (_directionalShadowResources.Ensure(shadowSettings))
-                _directionalShadowResources.Register(_bindlessHeap, _swapchain.DepthImageView);
-
             Light shadowLight = default;
             bool hasShadowLight = lightSnapshot.DirectionalLightCount > 0 && lightSnapshot.HasShadowCastingDirectionalLight;
             if (hasShadowLight)
@@ -2930,6 +2935,8 @@ namespace Njulf.Rendering
                 lightIndex = lightSnapshot.FirstShadowCastingDirectionalLightIndex;
                 shadowLight = lightSnapshot.FirstShadowCastingDirectionalLight;
             }
+
+            EnsureDirectionalShadowResources(hasShadowLight);
             enabled = shadowSettings.DirectionalShadowsEnabled && hasShadowLight && _directionalShadowResources.HasImage;
 
             GPUShadowData shadowData = enabled
@@ -3001,20 +3008,29 @@ namespace Njulf.Rendering
             sceneData.ShadowData = shadowData;
         }
 
-        private void EnsureLocalShadowResources()
+        private void EnsureDirectionalShadowResources(bool requiresShadowMap)
+        {
+            if (_directionalShadowResources == null)
+                return;
+
+            if (_directionalShadowResources.Ensure(Settings.Shadows, requiresShadowMap))
+                _directionalShadowResources.Register(_bindlessHeap, _swapchain.DepthImageView);
+        }
+
+        private void EnsureLocalShadowResources(int selectedSpotShadowCount, int selectedPointShadowCount)
         {
             if (_spotShadowAtlas == null || _pointShadowCubemapArray == null)
                 return;
 
             ShadowSettings shadowSettings = Settings.Shadows;
-            if (_spotShadowAtlas.Ensure(shadowSettings))
+            if (_spotShadowAtlas.Ensure(shadowSettings, selectedSpotShadowCount))
             {
                 _spotShadowAtlas.Register(_bindlessHeap, _swapchain.DepthImageView);
                 _hasUploadedSpotShadows = false;
                 _hasUploadedLocalShadowIndices = false;
             }
 
-            if (_pointShadowCubemapArray.Ensure(shadowSettings))
+            if (_pointShadowCubemapArray.Ensure(shadowSettings, selectedPointShadowCount))
             {
                 _pointShadowCubemapArray.Register(_bindlessHeap, _swapchain.DepthImageView);
                 _hasUploadedPointShadows = false;
@@ -9613,8 +9629,8 @@ namespace Njulf.Rendering
             _ssgiCompositePipeline?.Recreate(RenderTargetManager.SceneColorFormat);
             _skyboxPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
             _directionalShadowResources?.Register(_bindlessHeap, _swapchain.DepthImageView);
-            _spotShadowAtlas?.Register(_bindlessHeap);
-            _pointShadowCubemapArray?.Register(_bindlessHeap);
+            _spotShadowAtlas?.Register(_bindlessHeap, _swapchain.DepthImageView);
+            _pointShadowCubemapArray?.Register(_bindlessHeap, _swapchain.DepthImageView);
             _environmentManager?.Register(_bindlessHeap);
             _environmentManager?.RegisterReflectionProbeFallback(_bindlessHeap);
             _reflectionProbeManager?.Register(_bindlessHeap);

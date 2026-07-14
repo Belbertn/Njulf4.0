@@ -75,7 +75,9 @@ float SimpleDdgiStableRelativeDelta(float current, float previous, float absolut
 
 float SimpleDdgiAdaptiveIrradianceHysteresis(SimpleDdgiParams params, vec4 previous, vec3 irradiance, float probeHysteresis, bool maintenanceUpdate)
 {
-    if ((params.flags & SIMPLE_DDGI_FLAG_ADAPTIVE_HYSTERESIS) == 0u || probeHysteresis <= 0.0001 || previous.w <= 0.0001)
+    if ((params.flags & (SIMPLE_DDGI_FLAG_ADAPTIVE_HYSTERESIS | SIMPLE_DDGI_FLAG_LIGHTING_CHANGE_ACTIVE)) !=
+            (SIMPLE_DDGI_FLAG_ADAPTIVE_HYSTERESIS | SIMPLE_DDGI_FLAG_LIGHTING_CHANGE_ACTIVE) ||
+        probeHysteresis <= 0.0001 || previous.w <= 0.0001)
         return probeHysteresis;
 
     // Maintenance estimates have materially higher variance.  Keep their fixed
@@ -88,13 +90,15 @@ float SimpleDdgiAdaptiveIrradianceHysteresis(SimpleDdgiParams params, vec4 previ
     float relativeDelta = SimpleDdgiStableRelativeDelta(currentLuma, previousLuma, 0.02);
     float changeT = smoothstep(params.hysteresisChangeThreshold, params.hysteresisStepThreshold, relativeDelta);
     float softHysteresis = probeHysteresis * 0.5;
-    float stepHysteresis = min(probeHysteresis, 0.30);
+    float stepHysteresis = min(probeHysteresis, 0.60);
     return mix(probeHysteresis, mix(softHysteresis, stepHysteresis, changeT), smoothstep(params.hysteresisChangeThreshold * 0.75, params.hysteresisChangeThreshold, relativeDelta));
 }
 
 float SimpleDdgiAdaptiveVisibilityHysteresis(SimpleDdgiParams params, vec4 previous, vec2 moments, float probeHysteresis, bool maintenanceUpdate, float spacing)
 {
-    if ((params.flags & SIMPLE_DDGI_FLAG_ADAPTIVE_HYSTERESIS) == 0u || probeHysteresis <= 0.0001 || previous.z <= 0.5)
+    if ((params.flags & (SIMPLE_DDGI_FLAG_ADAPTIVE_HYSTERESIS | SIMPLE_DDGI_FLAG_LIGHTING_CHANGE_ACTIVE)) !=
+            (SIMPLE_DDGI_FLAG_ADAPTIVE_HYSTERESIS | SIMPLE_DDGI_FLAG_LIGHTING_CHANGE_ACTIVE) ||
+        probeHysteresis <= 0.0001 || previous.z <= 0.5)
         return probeHysteresis;
     if (maintenanceUpdate)
         return probeHysteresis;

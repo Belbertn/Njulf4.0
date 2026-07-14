@@ -52,16 +52,13 @@ namespace Njulf.Rendering.Resources
 
     public sealed unsafe class MeshManager : IDisposable
     {
+        // The task/mesh shader contract permits up to 64 vertices. LOD0 deliberately
+        // uses a tighter cap for work distribution, while range validation retains the
+        // shader-wide limit.
         private const int MaxVerticesPerMeshlet = 64;
-        private const int MaxTrianglesPerMeshlet = 126;
         private const int Lod0MaxVerticesPerMeshlet = 48;
         private const int Lod0MaxTrianglesPerMeshlet = 64;
-        private const int Lod1MaxVerticesPerMeshlet = 56;
-        private const int Lod1MaxTrianglesPerMeshlet = 96;
-        private const int Lod2MaxVerticesPerMeshlet = MaxVerticesPerMeshlet;
-        private const int Lod2MaxTrianglesPerMeshlet = MaxTrianglesPerMeshlet;
         private const int GreedyFallbackTriangleSearchWindow = 512;
-        private const ulong InitialVertexBufferSize = 16 * 1024 * 1024;
         private const ulong InitialIndexBufferSize = 16 * 1024 * 1024;
         private const ulong InitialMeshMetadataBufferSize = 1 * 1024 * 1024;
         private const ulong InitialMeshletBufferSize = 4 * 1024 * 1024;
@@ -74,7 +71,6 @@ namespace Njulf.Rendering.Resources
         private const ulong BufferGrowthFactor = 2;
         private const ulong UploadStagingAlignment = StagingRing.DefaultMinAlignment;
 
-        private static readonly ulong VertexStride = (ulong)Marshal.SizeOf<GPUVertex>();
         private static readonly ulong VertexPositionStride = (ulong)Marshal.SizeOf<GPUVertexPositionStream>();
         private static readonly ulong VertexNormalTangentStride = (ulong)Marshal.SizeOf<GPUVertexNormalTangentStream>();
         private static readonly ulong VertexUvColorStride = (ulong)Marshal.SizeOf<GPUVertexUvColorStream>();
@@ -98,7 +94,6 @@ namespace Njulf.Rendering.Resources
         private readonly FenceBasedDeleter? _deleter;
         private readonly object _lock = new object();
 
-        private BufferHandle _vertexBuffer;
         private BufferHandle _indexBuffer;
         private BufferHandle _meshMetadataBuffer;
         private BufferHandle _meshletBuffer;
@@ -109,7 +104,6 @@ namespace Njulf.Rendering.Resources
         private BufferHandle _vertexNormalTangentBuffer;
         private BufferHandle _vertexUvColorBuffer;
 
-        private ulong _vertexBytesUsed;
         private ulong _vertexPositionBytesUsed;
         private ulong _vertexNormalTangentBytesUsed;
         private ulong _vertexUvColorBytesUsed;
@@ -206,7 +200,6 @@ namespace Njulf.Rendering.Resources
 
         private void CreateConsolidatedBuffers()
         {
-            _vertexBuffer = CreateMeshBuffer(InitialVertexBufferSize, BufferUsageFlags.StorageBufferBit, "Mesh Vertex Storage Buffer");
             _vertexPositionBuffer = CreateMeshBuffer(InitialVertexPositionBufferSize, VertexPositionBufferUsage, "Mesh Vertex Position Storage Buffer");
             _vertexNormalTangentBuffer = CreateMeshBuffer(InitialVertexNormalTangentBufferSize, BufferUsageFlags.StorageBufferBit, "Mesh Vertex Normal/Tangent Storage Buffer");
             _vertexUvColorBuffer = CreateMeshBuffer(InitialVertexUvColorBufferSize, BufferUsageFlags.StorageBufferBit, "Mesh Vertex UV/Color Storage Buffer");
@@ -291,7 +284,6 @@ namespace Njulf.Rendering.Resources
             {
                 var pendingUploads = new List<PendingMeshUpload>(meshes.Count);
                 var handles = new MeshHandle[meshes.Count];
-                ulong finalVertexBytesUsed = _vertexBytesUsed;
                 ulong finalVertexPositionBytesUsed = _vertexPositionBytesUsed;
                 ulong finalVertexNormalTangentBytesUsed = _vertexNormalTangentBytesUsed;
                 ulong finalVertexUvColorBytesUsed = _vertexUvColorBytesUsed;
@@ -314,7 +306,7 @@ namespace Njulf.Rendering.Resources
                         meshIndex,
                         mesh.Positions,
                         mesh.Indices,
-                        finalVertexBytesUsed,
+                        finalVertexPositionBytesUsed,
                         finalIndexBytesUsed,
                         finalMeshletBytesUsed,
                         finalMeshletVertexIndexBytesUsed,
@@ -351,7 +343,6 @@ namespace Njulf.Rendering.Resources
                     GPUVertexPositionStream[] vertexPositions = BuildVertexPositionStream(mesh.Vertices);
                     GPUVertexNormalTangentStream[] vertexNormalTangents = BuildVertexNormalTangentStream(mesh.Vertices);
                     GPUVertexUvColorStream[] vertexUvColors = BuildVertexUvColorStream(mesh.Vertices);
-                    ulong vertexBytes = CheckedByteSize(mesh.Vertices.Length, VertexStride);
                     ulong vertexPositionBytes = CheckedByteSize(vertexPositions.Length, VertexPositionStride);
                     ulong vertexNormalTangentBytes = CheckedByteSize(vertexNormalTangents.Length, VertexNormalTangentStride);
                     ulong vertexUvColorBytes = CheckedByteSize(vertexUvColors.Length, VertexUvColorStride);
@@ -361,7 +352,6 @@ namespace Njulf.Rendering.Resources
                     ulong localTriangleIndexBytes = CheckedByteSize(localTriangleIndices.Count, IndexStride);
                     ulong skinningDataBytes = CheckedByteSize(mesh.SkinningData.Length, SkinningDataStride);
 
-                    uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, vertexBytes);
                     uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, vertexPositionBytes);
                     uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, vertexNormalTangentBytes);
                     uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, vertexUvColorBytes);
@@ -371,7 +361,6 @@ namespace Njulf.Rendering.Resources
                     uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, localVertexIndexBytes);
                     uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, localTriangleIndexBytes);
                     uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, skinningDataBytes);
-                    finalVertexBytesUsed = checked(finalVertexBytesUsed + vertexBytes);
                     finalVertexPositionBytesUsed = checked(finalVertexPositionBytesUsed + vertexPositionBytes);
                     finalVertexNormalTangentBytesUsed = checked(finalVertexNormalTangentBytesUsed + vertexNormalTangentBytes);
                     finalVertexUvColorBytesUsed = checked(finalVertexUvColorBytesUsed + vertexUvColorBytes);
@@ -385,7 +374,6 @@ namespace Njulf.Rendering.Resources
                     pendingUploads.Add(new PendingMeshUpload(
                         meshIndex,
                         generation,
-                        mesh.Vertices,
                         vertexPositions,
                         vertexNormalTangents,
                         vertexUvColors,
@@ -404,15 +392,6 @@ namespace Njulf.Rendering.Resources
 
                 try
                 {
-                    EnsureBufferCapacity(
-                        ref _vertexBuffer,
-                        _vertexBytesUsed,
-                        finalVertexBytesUsed,
-                        BufferUsageFlags.StorageBufferBit,
-                        "Mesh Vertex Storage Buffer",
-                        upload,
-                        retiredBuffers);
-
                     EnsureBufferCapacity(
                         ref _vertexPositionBuffer,
                         _vertexPositionBytesUsed,
@@ -497,7 +476,6 @@ namespace Njulf.Rendering.Resources
                     Span<GPUMeshInfo> meshMetadataSpan = stackalloc GPUMeshInfo[1];
                     foreach (PendingMeshUpload pending in pendingUploads)
                     {
-                        UploadSpan(pending.Vertices, _vertexBuffer, pending.MeshInfo.VertexOffset * VertexStride, upload);
                         UploadSpan(pending.VertexPositions, _vertexPositionBuffer, pending.MeshInfo.VertexOffset * VertexPositionStride, upload);
                         UploadSpan(pending.VertexNormalTangents, _vertexNormalTangentBuffer, pending.MeshInfo.VertexOffset * VertexNormalTangentStride, upload);
                         UploadSpan(pending.VertexUvColors, _vertexUvColorBuffer, pending.MeshInfo.VertexOffset * VertexUvColorStride, upload);
@@ -518,7 +496,6 @@ namespace Njulf.Rendering.Resources
                     RecordUploadShaderReadBarriers(upload);
                     Fence uploadFence = EndUploadCommands(upload);
 
-                    _vertexBytesUsed = finalVertexBytesUsed;
                     _vertexPositionBytesUsed = finalVertexPositionBytesUsed;
                     _vertexNormalTangentBytesUsed = finalVertexNormalTangentBytesUsed;
                     _vertexUvColorBytesUsed = finalVertexUvColorBytesUsed;
@@ -561,7 +538,7 @@ namespace Njulf.Rendering.Resources
                 meshIndex,
                 vertices,
                 indices,
-                _vertexBytesUsed,
+                _vertexPositionBytesUsed,
                 _indexBytesUsed,
                 _meshletBytesUsed,
                 _meshletVertexIndexBytesUsed,
@@ -574,7 +551,7 @@ namespace Njulf.Rendering.Resources
             int meshIndex,
             Vector3[] vertices,
             uint[] indices,
-            ulong vertexBytesUsed,
+            ulong vertexPositionBytesUsed,
             ulong indexBytesUsed,
             ulong meshletBytesUsed,
             ulong meshletVertexIndexBytesUsed,
@@ -582,7 +559,7 @@ namespace Njulf.Rendering.Resources
             ulong skinningDataBytesUsed,
             int skinningDataCount)
         {
-            if (vertexBytesUsed % VertexStride != 0 ||
+            if (vertexPositionBytesUsed % VertexPositionStride != 0 ||
                 indexBytesUsed % IndexStride != 0 ||
                 meshletBytesUsed % MeshletStride != 0 ||
                 meshletVertexIndexBytesUsed % IndexStride != 0 ||
@@ -594,7 +571,7 @@ namespace Njulf.Rendering.Resources
 
             var meshInfo = new MeshInfo
             {
-                VertexOffset = CheckedElementOffset(vertexBytesUsed, VertexStride),
+                VertexOffset = CheckedElementOffset(vertexPositionBytesUsed, VertexPositionStride),
                 VertexCount = CheckedCount(vertices.Length),
                 IndexOffset = CheckedElementOffset(indexBytesUsed, IndexStride),
                 IndexCount = CheckedCount(indices.Length),
@@ -1367,7 +1344,9 @@ namespace Njulf.Rendering.Resources
                 return;
 
             RegisterStorageBufferIfChanged(BindlessIndex.SceneMeshMetadataBuffer, _meshMetadataBuffer, ref _registeredMeshMetadataBuffer);
-            RegisterStorageBufferIfChanged(BindlessIndex.VertexBuffer, _vertexBuffer, ref _registeredVertexBuffer);
+            // Keep the legacy bindless slot valid for third-party shaders while all
+            // renderer-owned static vertex reads use the split streams below.
+            RegisterStorageBufferIfChanged(BindlessIndex.VertexBuffer, _vertexPositionBuffer, ref _registeredVertexBuffer);
             RegisterStorageBufferIfChanged(BindlessIndex.VertexPositionBuffer, _vertexPositionBuffer, ref _registeredVertexPositionBuffer);
             RegisterStorageBufferIfChanged(BindlessIndex.VertexNormalTangentBuffer, _vertexNormalTangentBuffer, ref _registeredVertexNormalTangentBuffer);
             RegisterStorageBufferIfChanged(BindlessIndex.VertexUvColorBuffer, _vertexUvColorBuffer, ref _registeredVertexUvColorBuffer);
@@ -1467,30 +1446,15 @@ namespace Njulf.Rendering.Resources
                 localTriangleIndices);
             meshInfo.MeshletCount = CheckedCount(meshlets.Count - lod0Start);
 
-            meshInfo.MeshletLod1Offset = CheckedAdd(baseMeshletOffset, meshInfo.MeshletCount);
-            int lod1Start = meshlets.Count;
-            GenerateMeshlets(
-                vertices,
-                indices,
-                Lod1MaxVerticesPerMeshlet,
-                Lod1MaxTrianglesPerMeshlet,
-                meshlets,
-                localVertexIndices,
-                localTriangleIndices);
-            meshInfo.MeshletLod1Count = CheckedCount(meshlets.Count - lod1Start);
-
-            meshInfo.MeshletLod2Offset = CheckedAdd(meshInfo.MeshletLod1Offset, meshInfo.MeshletLod1Count);
-            int lod2Start = meshlets.Count;
-            GenerateMeshlets(
-                vertices,
-                indices,
-                Lod2MaxVerticesPerMeshlet,
-                Lod2MaxTrianglesPerMeshlet,
-                meshlets,
-                localVertexIndices,
-                localTriangleIndices);
-            meshInfo.MeshletLod2Count = CheckedCount(meshlets.Count - lod2Start);
-            meshInfo.MeshletLodGeneratedCount = CheckedCount(meshlets.Count);
+            // Meshlet packing alone does not reduce triangle or fragment work.  Until
+            // the asset pipeline provides genuinely simplified index streams, expose
+            // only LOD0 rather than storing duplicate meshlet/index ranges that render
+            // the same source geometry at a different meshlet granularity.
+            meshInfo.MeshletLod1Offset = 0;
+            meshInfo.MeshletLod1Count = 0;
+            meshInfo.MeshletLod2Offset = 0;
+            meshInfo.MeshletLod2Count = 0;
+            meshInfo.MeshletLodGeneratedCount = meshInfo.MeshletCount;
         }
 
         private void GenerateMeshlets(
@@ -1846,7 +1810,13 @@ namespace Njulf.Rendering.Resources
             return new BoundingSphere { Center = center, Radius = radius };
         }
 
-        public BufferHandle VertexBuffer => _vertexBuffer;
+        /// <summary>
+        /// Legacy bindless vertex-buffer alias. Static geometry is stored in the split
+        /// position, normal/tangent, and UV/color streams; consumers must use those
+        /// streams rather than interpreting this buffer as <see cref="GPUVertex"/> data.
+        /// </summary>
+        [Obsolete("Static vertex data is split across VertexPositionBuffer, VertexNormalTangentBuffer, and VertexUvColorBuffer.")]
+        public BufferHandle VertexBuffer => _vertexPositionBuffer;
         public BufferHandle VertexPositionBuffer => _vertexPositionBuffer;
         public BufferHandle VertexNormalTangentBuffer => _vertexNormalTangentBuffer;
         public BufferHandle VertexUvColorBuffer => _vertexUvColorBuffer;
@@ -1857,7 +1827,8 @@ namespace Njulf.Rendering.Resources
         public BufferHandle MeshletTriangleIndexBuffer => _meshletTriangleIndexBuffer;
         public BufferHandle SkinningDataBuffer => _skinningDataBuffer;
 
-        public ulong VertexBytesUsed => _vertexBytesUsed;
+        /// <summary>Interleaved static vertex storage has been eliminated.</summary>
+        public ulong VertexBytesUsed => 0;
         public ulong VertexPositionBytesUsed => _vertexPositionBytesUsed;
         public ulong VertexNormalTangentBytesUsed => _vertexNormalTangentBytesUsed;
         public ulong VertexUvColorBytesUsed => _vertexUvColorBytesUsed;
@@ -1868,7 +1839,6 @@ namespace Njulf.Rendering.Resources
         public ulong MeshletTriangleIndexBytesUsed => _meshletTriangleIndexBytesUsed;
         public ulong SkinningDataBytesUsed => _skinningDataBytesUsed;
         public ulong MeshBufferAllocatedBytes =>
-            SafeGetBufferSize(_vertexBuffer) +
             SafeGetBufferSize(_vertexPositionBuffer) +
             SafeGetBufferSize(_vertexNormalTangentBuffer) +
             SafeGetBufferSize(_vertexUvColorBuffer) +
@@ -1879,7 +1849,6 @@ namespace Njulf.Rendering.Resources
             SafeGetBufferSize(_meshletTriangleIndexBuffer) +
             SafeGetBufferSize(_skinningDataBuffer);
         public ulong MeshBufferUsedBytes =>
-            _vertexBytesUsed +
             _vertexPositionBytesUsed +
             _vertexNormalTangentBytesUsed +
             _vertexUvColorBytesUsed +
@@ -1903,8 +1872,7 @@ namespace Njulf.Rendering.Resources
             lock (_lock)
             {
                 ulong beforeBytes = MeshBufferAllocatedBytes;
-                if (!ShouldCompactBuffer(_vertexBuffer, _vertexBytesUsed, InitialVertexBufferSize, headroomFactor) &&
-                    !ShouldCompactBuffer(_vertexPositionBuffer, _vertexPositionBytesUsed, InitialVertexPositionBufferSize, headroomFactor) &&
+                if (!ShouldCompactBuffer(_vertexPositionBuffer, _vertexPositionBytesUsed, InitialVertexPositionBufferSize, headroomFactor) &&
                     !ShouldCompactBuffer(_vertexNormalTangentBuffer, _vertexNormalTangentBytesUsed, InitialVertexNormalTangentBufferSize, headroomFactor) &&
                     !ShouldCompactBuffer(_vertexUvColorBuffer, _vertexUvColorBytesUsed, InitialVertexUvColorBufferSize, headroomFactor) &&
                     !ShouldCompactBuffer(_indexBuffer, _indexBytesUsed, InitialIndexBufferSize, headroomFactor) &&
@@ -1922,15 +1890,6 @@ namespace Njulf.Rendering.Resources
 
                 try
                 {
-                    CompactBufferIfNeeded(
-                        ref _vertexBuffer,
-                        _vertexBytesUsed,
-                        InitialVertexBufferSize,
-                        BufferUsageFlags.StorageBufferBit,
-                        "Mesh Vertex Storage Buffer",
-                        headroomFactor,
-                        upload,
-                        retiredBuffers);
                     CompactBufferIfNeeded(
                         ref _vertexPositionBuffer,
                         _vertexPositionBytesUsed,
@@ -2103,7 +2062,6 @@ namespace Njulf.Rendering.Resources
         {
             lock (_lock)
             {
-                ValidateElementRange(nameof(meshInfo.VertexOffset), meshInfo.VertexOffset, meshInfo.VertexCount, _vertexBytesUsed / VertexStride);
                 ValidateElementRange(nameof(meshInfo.VertexOffset), meshInfo.VertexOffset, meshInfo.VertexCount, _vertexPositionBytesUsed / VertexPositionStride);
                 ValidateElementRange(nameof(meshInfo.VertexOffset), meshInfo.VertexOffset, meshInfo.VertexCount, _vertexNormalTangentBytesUsed / VertexNormalTangentStride);
                 ValidateElementRange(nameof(meshInfo.VertexOffset), meshInfo.VertexOffset, meshInfo.VertexCount, _vertexUvColorBytesUsed / VertexUvColorStride);
@@ -2134,7 +2092,7 @@ namespace Njulf.Rendering.Resources
             _registeredBindlessHeap = bindlessHeap;
 
             RegisterStorageBuffer(bindlessHeap, BindlessIndex.SceneMeshMetadataBuffer, _meshMetadataBuffer);
-            RegisterStorageBuffer(bindlessHeap, BindlessIndex.VertexBuffer, _vertexBuffer);
+            RegisterStorageBuffer(bindlessHeap, BindlessIndex.VertexBuffer, _vertexPositionBuffer);
             RegisterStorageBuffer(bindlessHeap, BindlessIndex.VertexPositionBuffer, _vertexPositionBuffer);
             RegisterStorageBuffer(bindlessHeap, BindlessIndex.VertexNormalTangentBuffer, _vertexNormalTangentBuffer);
             RegisterStorageBuffer(bindlessHeap, BindlessIndex.VertexUvColorBuffer, _vertexUvColorBuffer);
@@ -2144,7 +2102,7 @@ namespace Njulf.Rendering.Resources
             RegisterStorageBuffer(bindlessHeap, BindlessIndex.MeshletTriangleIndexBuffer, _meshletTriangleIndexBuffer);
             RegisterStorageBuffer(bindlessHeap, BindlessIndex.SkinningVertexDataBuffer, _skinningDataBuffer);
             _registeredMeshMetadataBuffer = _meshMetadataBuffer;
-            _registeredVertexBuffer = _vertexBuffer;
+            _registeredVertexBuffer = _vertexPositionBuffer;
             _registeredVertexPositionBuffer = _vertexPositionBuffer;
             _registeredVertexNormalTangentBuffer = _vertexNormalTangentBuffer;
             _registeredVertexUvColorBuffer = _vertexUvColorBuffer;
@@ -2311,7 +2269,6 @@ namespace Njulf.Rendering.Resources
 
             lock (_lock)
             {
-                DestroyIfValid(_vertexBuffer);
                 DestroyIfValid(_vertexPositionBuffer);
                 DestroyIfValid(_vertexNormalTangentBuffer);
                 DestroyIfValid(_vertexUvColorBuffer);
@@ -2406,7 +2363,6 @@ namespace Njulf.Rendering.Resources
             public PendingMeshUpload(
                 int meshIndex,
                 uint generation,
-                GPUVertex[] vertices,
                 GPUVertexPositionStream[] vertexPositions,
                 GPUVertexNormalTangentStream[] vertexNormalTangents,
                 GPUVertexUvColorStream[] vertexUvColors,
@@ -2420,7 +2376,6 @@ namespace Njulf.Rendering.Resources
             {
                 MeshIndex = meshIndex;
                 Generation = generation;
-                Vertices = vertices;
                 VertexPositions = vertexPositions;
                 VertexNormalTangents = vertexNormalTangents;
                 VertexUvColors = vertexUvColors;
@@ -2435,7 +2390,6 @@ namespace Njulf.Rendering.Resources
 
             public int MeshIndex { get; }
             public uint Generation { get; }
-            public GPUVertex[] Vertices { get; }
             public GPUVertexPositionStream[] VertexPositions { get; }
             public GPUVertexNormalTangentStream[] VertexNormalTangents { get; }
             public GPUVertexUvColorStream[] VertexUvColors { get; }
