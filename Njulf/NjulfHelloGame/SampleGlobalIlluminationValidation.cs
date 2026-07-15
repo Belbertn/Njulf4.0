@@ -6,10 +6,21 @@ namespace NjulfHelloGame;
 public static class SampleGlobalIlluminationValidation
 {
     private const ulong SponzaAccelerationStructureMemoryBudgetBytes = 512UL * 1024UL * 1024UL;
-    private static readonly SimpleDdgiAuthoredVolume SponzaUpperVolume = new(
-        new Vector3(-17.0f, 9.0f, -10.0f),
-        new Vector3(21.0f, 19.0f, 15.0f),
-        1.0f);
+    private static readonly SimpleDdgiAuthoredVolume[] SponzaNavigableAuthoredVolumes =
+    [
+        // The lower arcades are the darkest navigable spaces. Their half-cell
+        // phases keep repeated probe planes from coinciding with the stone walls.
+        new(new Vector3(-15.5f, -0.75f, -8.5f), new Vector3(-7.5f, 4.25f, 13.5f), 1.0f, new Vector3(0.50f, 0.25f, 0.50f)),
+        new(new Vector3(10.5f, -0.75f, -8.5f), new Vector3(19.5f, 4.25f, 13.5f), 1.0f, new Vector3(0.50f, 0.25f, 0.50f)),
+        new(new Vector3(-6.75f, -0.75f, -6.5f), new Vector3(9.75f, 4.25f, 11.5f), 1.0f, new Vector3(0.25f, 0.25f, 0.50f)),
+
+        // Compact balcony/walkway volumes replace the former scene-wide upper
+        // slab, concentrating the remaining authored budget where players can
+        // actually see and receive indirect lighting.
+        new(new Vector3(-15.5f, 4.5f, -8.5f), new Vector3(-7.5f, 8.5f, 13.5f), 1.0f, new Vector3(0.50f, 0.50f, 0.50f)),
+        new(new Vector3(10.5f, 4.5f, -8.5f), new Vector3(19.5f, 8.5f, 13.5f), 1.0f, new Vector3(0.50f, 0.50f, 0.50f)),
+        new(new Vector3(-6.75f, 4.5f, -6.5f), new Vector3(9.75f, 8.5f, 11.5f), 1.0f, new Vector3(0.25f, 0.50f, 0.50f))
+    ];
 
     public const float SimpleDdgiFurnaceAlbedo = 0.5f;
     public const float SimpleDdgiFurnaceEmittedRadiance = 0.25f;
@@ -384,24 +395,37 @@ public static class SampleGlobalIlluminationValidation
         gi.DdgiHysteresisResponse = 1.0f;
         gi.SimpleDdgiAuthoredVolumes.Clear();
         gi.SimpleDdgiRingCount = 3;
-        gi.SimpleDdgiRingBaseSpacing = 1.0f;
-        gi.SimpleDdgiRingSpacingMultiplier = 4.0f;
-        gi.SimpleDdgiRingGridSizeX = 24;
-        gi.SimpleDdgiRingGridSizeY = 12;
-        gi.SimpleDdgiRingGridSizeZ = 24;
+        gi.SimpleDdgiRingBaseSpacing = 1.25f;
+        gi.SimpleDdgiRingSpacingMultiplier = 3.0f;
+        gi.SimpleDdgiNearRingGridSizeX = 28;
+        gi.SimpleDdgiNearRingGridSizeY = 14;
+        gi.SimpleDdgiNearRingGridSizeZ = 28;
+        gi.SimpleDdgiMidRingGridSizeX = 18;
+        gi.SimpleDdgiMidRingGridSizeY = 10;
+        gi.SimpleDdgiMidRingGridSizeZ = 18;
+        gi.SimpleDdgiFarRingGridSizeX = 12;
+        gi.SimpleDdgiFarRingGridSizeY = 8;
+        gi.SimpleDdgiFarRingGridSizeZ = 12;
         gi.SimpleDdgiProbeUpdatesPerFrame = 2_048;
+        gi.SimpleDdgiNearFullRaysPerProbe = 64;
+        gi.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = 0.95f;
+        gi.SimpleDdgiSampledAtlasEnabled = true;
         gi.TemporalEnabled = false;
         gi.DenoiserEnabled = false;
 
         if (scenario == SamplePerformanceScenario.GiSponzaRightWallStationary)
         {
-            // The main Sponza mesh reaches Y=18.757, while the camera-relative
-            // one-metre ring ends near Y=10.5. This overlapping upper slab adds
-            // 11,154 probes, keeping the three rings plus authored volume at
-            // 31,890 probes, below the 32,768 Simple DDGI hard limit.
+            // Recover 1 m near-ring resolution while preserving approximately the
+            // former horizontal reach. The displaced authored budget goes to the
+            // compact navigable spaces above rather than a monolithic upper slab.
             gi.GiAccelerationStructureMemoryBudgetBytes = SponzaAccelerationStructureMemoryBudgetBytes;
             gi.EnvironmentFallbackIntensity = 1.0f;
-            gi.SimpleDdgiAuthoredVolumes.Add(SponzaUpperVolume);
+            gi.SimpleDdgiRingBaseSpacing = 1.0f;
+            gi.SimpleDdgiNearRingGridSizeX = 32;
+            gi.SimpleDdgiNearRingGridSizeY = 12;
+            gi.SimpleDdgiNearRingGridSizeZ = 32;
+            foreach (SimpleDdgiAuthoredVolume volume in SponzaNavigableAuthoredVolumes)
+                gi.SimpleDdgiAuthoredVolumes.Add(volume);
         }
         else if (scenario is SamplePerformanceScenario.GiCornellRoom or SamplePerformanceScenario.GiSimpleDdgiFurnace)
         {
@@ -448,7 +472,9 @@ public static class SampleGlobalIlluminationValidation
             gi.SimpleDdgiAuthoredVolumes.Clear();
             gi.IndirectIntensity = 1.1f;
             gi.EnvironmentFallbackIntensity = 0.35f;
-            gi.SimpleDdgiRingGridSizeY = 16;
+            gi.SimpleDdgiNearRingGridSizeY = 16;
+            gi.SimpleDdgiMidRingGridSizeY = 16;
+            gi.SimpleDdgiFarRingGridSizeY = 16;
             settings.Environment.Enabled = true;
             settings.Environment.DiffuseIntensity = 0.25f;
         }
@@ -457,9 +483,15 @@ public static class SampleGlobalIlluminationValidation
             gi.SimpleDdgiAuthoredVolumes.Clear();
             gi.IndirectIntensity = 1.15f;
             gi.EnvironmentFallbackIntensity = 0.30f;
-            gi.SimpleDdgiRingGridSizeX = 32;
-            gi.SimpleDdgiRingGridSizeZ = 32;
-            gi.SimpleDdgiRingGridSizeY = 14;
+            gi.SimpleDdgiNearRingGridSizeX = 32;
+            gi.SimpleDdgiNearRingGridSizeY = 14;
+            gi.SimpleDdgiNearRingGridSizeZ = 32;
+            gi.SimpleDdgiMidRingGridSizeX = 21;
+            gi.SimpleDdgiMidRingGridSizeY = 10;
+            gi.SimpleDdgiMidRingGridSizeZ = 21;
+            gi.SimpleDdgiFarRingGridSizeX = 14;
+            gi.SimpleDdgiFarRingGridSizeY = 8;
+            gi.SimpleDdgiFarRingGridSizeZ = 14;
             gi.SimpleDdgiProbeUpdatesPerFrame = 3_072;
             gi.FarFieldStartDistance = 12.0f;
             settings.Environment.Enabled = true;

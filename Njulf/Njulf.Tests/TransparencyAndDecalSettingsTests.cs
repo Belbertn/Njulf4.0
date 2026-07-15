@@ -1,4 +1,5 @@
 using Njulf.Rendering.Data;
+using Njulf.Rendering;
 using NUnit.Framework;
 
 namespace Njulf.Tests;
@@ -39,6 +40,17 @@ public sealed class TransparencyAndDecalSettingsTests
             Assert.That(settings.Decals.MaxProjectedDecals, Is.EqualTo(256));
             Assert.That(settings.Decals.MaxProjectedDecalsPerTile, Is.EqualTo(64));
             Assert.That(settings.Decals.MaxProjectedDecalsPerPixel, Is.EqualTo(8));
+        });
+    }
+
+    [Test]
+    public void GeometryDecals_AreSuppressedForForwardDebugViews()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(VulkanRenderer.ShouldRenderGeometryDecals(0u), Is.True);
+            Assert.That(VulkanRenderer.ShouldRenderGeometryDecals(80u), Is.False);
+            Assert.That(VulkanRenderer.ShouldRenderGeometryDecals(97u), Is.False);
         });
     }
 

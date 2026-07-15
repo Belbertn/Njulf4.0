@@ -16,6 +16,10 @@ namespace Njulf.Rendering.Pipeline
 {
     public sealed unsafe class DirectionalShadowPass : RenderPassBase
     {
+        private static readonly string[] StaticCascadeDebugLabels = CreateCascadeDebugLabels("Static");
+        private static readonly string[] DynamicCascadeDebugLabels = CreateCascadeDebugLabels("Dynamic");
+        private static readonly string[] FoliageCascadeDebugLabels = CreateCascadeDebugLabels("Foliage");
+
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly FoliagePipeline? _foliagePipeline;
         private readonly BufferManager? _bufferManager;
@@ -108,7 +112,7 @@ namespace Njulf.Rendering.Pipeline
             int cascadeCount = Math.Min(sceneData.DirectionalShadowCascadeCount, _shadowResources.CascadeCount);
             for (int cascade = 0; cascade < cascadeCount; cascade++)
             {
-                _context.BeginDebugLabel(cmd, $"DirectionalShadowPass Static Cascade {cascade}");
+                _context.BeginDebugLabel(cmd, StaticCascadeDebugLabels[cascade]);
                 try
                 {
                     RenderCascade(
@@ -135,7 +139,7 @@ namespace Njulf.Rendering.Pipeline
             int cascadeCount = Math.Min(sceneData.DirectionalShadowCascadeCount, _shadowResources.CascadeCount);
             for (int cascade = 0; cascade < cascadeCount; cascade++)
             {
-                _context.BeginDebugLabel(cmd, $"DirectionalShadowPass Dynamic Cascade {cascade}");
+                _context.BeginDebugLabel(cmd, DynamicCascadeDebugLabels[cascade]);
                 try
                 {
                     RenderCascade(
@@ -164,7 +168,7 @@ namespace Njulf.Rendering.Pipeline
             int cascadeCount = Math.Min(sceneData.DirectionalShadowCascadeCount, _shadowResources.CascadeCount);
             for (int cascade = 0; cascade < cascadeCount; cascade++)
             {
-                _context.BeginDebugLabel(cmd, $"DirectionalShadowPass Foliage Cascade {cascade}");
+                _context.BeginDebugLabel(cmd, FoliageCascadeDebugLabels[cascade]);
                 try
                 {
                     RenderFoliageCascade(
@@ -183,6 +187,15 @@ namespace Njulf.Rendering.Pipeline
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
         {
             yield break;
+        }
+
+        private static string[] CreateCascadeDebugLabels(string passKind)
+        {
+            var labels = new string[ShadowSettings.MaxDirectionalCascades];
+            for (int cascade = 0; cascade < labels.Length; cascade++)
+                labels[cascade] = $"DirectionalShadowPass {passKind} Cascade {cascade}";
+
+            return labels;
         }
 
         private void RenderCascade(
@@ -651,6 +664,12 @@ namespace Njulf.Rendering.Pipeline
             hash = HashAdd(hash, sceneData.DirectionalStaticShadowMeshletDrawSignature);
             hash = HashAdd(hash, sceneData.DirectionalShadowMapSize);
             hash = HashAdd(hash, sceneData.DirectionalShadowCascadeCount);
+            hash = HashAdd(hash, sceneData.SceneSubmissionGpuCompactionEnabled ? 1u : 0u);
+            hash = HashAdd(hash, sceneData.SceneSubmissionGpuLodSelectionEnabled ? 1u : 0u);
+            hash = HashAdd(hash, BitConverter.SingleToUInt32Bits(sceneData.SceneSubmissionGpuLod1DistanceRatio));
+            hash = HashAdd(hash, BitConverter.SingleToUInt32Bits(sceneData.SceneSubmissionGpuLod2DistanceRatio));
+            hash = HashAdd(hash, sceneData.SceneSubmissionGpuShadowCompactionEnabled ? 1u : 0u);
+            hash = HashAdd(hash, sceneData.SceneSubmissionGpuShadowLodBias);
             GPUShadowData shadowData = sceneData.ShadowData;
             GPUShadowData* shadowDataPtr = &shadowData;
             byte* bytes = (byte*)shadowDataPtr;

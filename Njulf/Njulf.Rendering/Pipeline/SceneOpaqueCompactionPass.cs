@@ -238,6 +238,11 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 null);
 
+            float gpuLod1DistanceRatio = SceneSubmissionSettings.ClampGpuLod1DistanceRatio(
+                sceneData.SceneSubmissionGpuLod1DistanceRatio);
+            float gpuLod2DistanceRatio = SceneSubmissionSettings.ClampGpuLod2DistanceRatio(
+                sceneData.SceneSubmissionGpuLod2DistanceRatio,
+                gpuLod1DistanceRatio);
             var pushConstants = new GPUSceneOpaqueCompactionPushConstants
             {
                 CameraPosition = new Njulf.Core.Math.Vector4(
@@ -281,7 +286,11 @@ namespace Njulf.Rendering.Pipeline
                 OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? (uint)sceneData.HiZTestMode : (uint)HiZTestMode.Off,
                 OcclusionBias = sceneData.OcclusionBias,
                 PreviousFrameUvPaddingPixels = checked((uint)Math.Max(0, sceneData.PreviousHiZUvPaddingPixels)),
-                PreviousHiZFrameValid = sceneData.PreviousHiZFrameValid ? 1u : 0u
+                PreviousHiZFrameValid = sceneData.PreviousHiZFrameValid ? 1u : 0u,
+                GpuLod1DistanceRatio = gpuLod1DistanceRatio,
+                GpuLod2DistanceRatio = gpuLod2DistanceRatio,
+                GpuShadowLodBias = checked((uint)Math.Clamp(sceneData.SceneSubmissionGpuShadowLodBias, 0, 2)),
+                Padding0 = 0u
             };
             _context.Api.CmdPushConstants(
                 cmd,

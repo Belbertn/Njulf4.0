@@ -3,6 +3,8 @@ using NUnit.Framework;
 using System;
 using System.IO;
 using System.Linq;
+using Njulf.Core.Math;
+using Njulf.Rendering.Data;
 
 namespace Njulf.Tests;
 
@@ -48,9 +50,9 @@ public sealed class SimpleDdgiVolumeManagerTests
     public void UpdateQuotas_ConsumeConfiguredBudgetBeyondPreferredRingMaximums()
     {
         int[] quotas = new int[3];
-        int[] minimums = [384, 144, 48];
-        int[] preferredMaximums = [672, 288, 120];
-        int[] capacities = [6_912, 6_912, 6_912];
+        int[] minimums = [512, 96, 24];
+        int[] preferredMaximums = [1_024, 324, 128];
+        int[] capacities = [10_976, 3_240, 1_152];
         int[] weights = [6, 3, 1];
 
         SimpleDdgiVolumeManager.AllocateUpdateQuotas(
@@ -69,6 +71,93 @@ public sealed class SimpleDdgiVolumeManagerTests
             Assert.That(quotas[1], Is.GreaterThan(preferredMaximums[1]));
             Assert.That(quotas[2], Is.GreaterThan(preferredMaximums[2]));
         });
+    }
+
+    [Test]
+    public void PerRingGridSelection_UsesExplicitNearMidAndFarSettings()
+    {
+        var settings = new GlobalIlluminationSettings
+        {
+            SimpleDdgiNearRingGridSizeX = 28,
+            SimpleDdgiNearRingGridSizeY = 14,
+            SimpleDdgiNearRingGridSizeZ = 28,
+            SimpleDdgiMidRingGridSizeX = 18,
+            SimpleDdgiMidRingGridSizeY = 10,
+            SimpleDdgiMidRingGridSizeZ = 18,
+            SimpleDdgiFarRingGridSizeX = 12,
+            SimpleDdgiFarRingGridSizeY = 8,
+            SimpleDdgiFarRingGridSizeZ = 12
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SimpleDdgiVolumeManager.ResolveRingGrid(settings, 0), Is.EqualTo((28, 14, 28)));
+            Assert.That(SimpleDdgiVolumeManager.ResolveRingGrid(settings, 1), Is.EqualTo((18, 10, 18)));
+            Assert.That(SimpleDdgiVolumeManager.ResolveRingGrid(settings, 2), Is.EqualTo((12, 8, 12)));
+
+            settings.SimpleDdgiRingGridSizeX = 9;
+            settings.SimpleDdgiRingGridSizeY = 7;
+            settings.SimpleDdgiRingGridSizeZ = 5;
+            Assert.That(SimpleDdgiVolumeManager.ResolveRingGrid(settings, 0), Is.EqualTo((9, 7, 5)));
+            Assert.That(SimpleDdgiVolumeManager.ResolveRingGrid(settings, 1), Is.EqualTo((9, 7, 5)));
+            Assert.That(SimpleDdgiVolumeManager.ResolveRingGrid(settings, 2), Is.EqualTo((9, 7, 5)));
+        });
+    }
+
+    [Test]
+    public void ProbeAgePercentile_UsesExactNearestRankWithinTheRequestedVolume()
+    {
+        uint[] ages = Enumerable.Range(0, 20).Select(static value => (uint)value).ToArray();
+        uint[] scratch = new uint[ages.Length];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SimpleDdgiVolumeManager.CalculateProbeAgePercentile(ages, scratch, 0.50f), Is.EqualTo(9u));
+            Assert.That(SimpleDdgiVolumeManager.CalculateProbeAgePercentile(ages, scratch, 0.95f), Is.EqualTo(18u));
+            Assert.That(SimpleDdgiVolumeManager.CalculateProbeAgePercentile(ages, scratch, 1.0f), Is.EqualTo(19u));
+            Assert.That(SimpleDdgiVolumeManager.CalculateProbeAgePercentile(ages, scratch[..5], 0.95f), Is.Zero);
+        });
+    }
+
+    [Test]
+    public void AuthoredLatticePhase_OffsetsAndWrapsProbePlanesWithoutMovingBounds()
+    {
+        Vector3 min = new(-2.1f, 0.1f, 4.2f);
+        Vector3 origin = SimpleDdgiVolumeManager.ResolveAuthoredLatticeOrigin(
+            min,
+            spacing: 1.0f,
+            latticePhase: new Vector3(0.5f, 0.25f, 0.75f));
+        Vector3 wrappedOrigin = SimpleDdgiVolumeManager.ResolveAuthoredLatticeOrigin(
+            new Vector3(0.1f, 0.1f, 0.1f),
+            spacing: 1.0f,
+            latticePhase: new Vector3(-0.25f, 1.25f, float.NaN));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(origin, Is.EqualTo(new Vector3(-2.5f, -0.75f, 3.75f)));
+            Assert.That(origin.X, Is.LessThanOrEqualTo(min.X));
+            Assert.That(origin.Y, Is.LessThanOrEqualTo(min.Y));
+            Assert.That(origin.Z, Is.LessThanOrEqualTo(min.Z));
+            Assert.That(wrappedOrigin, Is.EqualTo(new Vector3(-0.25f, -0.75f, 0.0f)));
+        });
+    }
+
+    [Test]
+    public void SecondVolumeOwnershipEarlyOutThreshold_ClampsFiniteValuesAndFallsBackForNonFiniteValues()
+    {
+        var settings = new GlobalIlluminationSettings();
+
+        settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = -1.0f;
+        Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.Zero);
+
+        settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = 2.0f;
+        Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.EqualTo(1.0f));
+
+        settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = float.NaN;
+        Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.EqualTo(0.95f));
+
+        settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = float.PositiveInfinity;
+        Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.EqualTo(0.95f));
     }
 
     [Test]

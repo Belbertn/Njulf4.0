@@ -687,6 +687,10 @@ namespace Njulf.Rendering.Data
         public float OcclusionBias;
         public uint PreviousFrameUvPaddingPixels;
         public uint PreviousHiZFrameValid;
+        public float GpuLod1DistanceRatio;
+        public float GpuLod2DistanceRatio;
+        public uint GpuShadowLodBias;
+        public uint Padding0;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

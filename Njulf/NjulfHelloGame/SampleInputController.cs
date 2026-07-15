@@ -1426,8 +1426,10 @@ internal sealed class SampleInputController
         Console.WriteLine(
             $"{prefix}: compaction={(submission.GpuCompactionEnabled ? "on" : "off")}, " +
             $"indirect={(submission.IndirectMeshletDispatchEnabled ? "on" : "off")}, " +
-            $"gpuLod={(submission.GpuLodSelectionEnabled ? "on" : "off")}, " +
+            $"gpuLod={(submission.GpuLodSelectionEnabled ? "on" : "off")} " +
+            $"ratios={submission.GpuLod1DistanceRatio:F1}/{submission.GpuLod2DistanceRatio:F1}, " +
             $"shadowCompaction={(submission.GpuShadowCompactionEnabled ? "on" : "off")}, " +
+            $"shadowLodBias={submission.GpuShadowLodBias}, " +
             $"validation={(submission.ValidationCompareCpuGpuLists ? "on" : "off")}, " +
             $"mode={diagnostics.SceneSubmissionActiveMode}, forwardPath={diagnostics.SceneSubmissionForwardPath}, taskShader={diagnostics.SceneSubmissionForwardTaskShader}, " +
             $"cpuCandidates={diagnostics.SceneSubmissionCpuCandidateCount}, " +

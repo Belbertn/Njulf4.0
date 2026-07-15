@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using Njulf.Core.Camera;
 using Njulf.Assets;
 using Njulf.Core.Interfaces;
@@ -147,6 +148,8 @@ internal sealed class SampleDiagnosticsReporter
 
             PrintDdgiTriageDiagnostics(diagnostics);
             PrintGiDiagnostics(diagnostics);
+            PrintDdgiRingDiagnostics(diagnostics);
+            PrintDdgiVolumeActivityDiagnostics(diagnostics);
             PrintDdgiSchedulerDiagnostics(diagnostics);
             PrintDdgiUpdateDiagnostics(diagnostics);
             return;
@@ -316,6 +319,8 @@ internal sealed class SampleDiagnosticsReporter
             $"debug={diagnostics.AmbientOcclusionDebugView}, aoRecordUs={diagnostics.CpuAmbientOcclusionRecordMicroseconds}, " +
             $"blurRecordUs={diagnostics.CpuAmbientOcclusionBlurRecordMicroseconds}.");
         PrintGiDiagnostics(diagnostics);
+        PrintDdgiRingDiagnostics(diagnostics);
+        PrintDdgiVolumeActivityDiagnostics(diagnostics);
         PrintDdgiInvestigationDiagnostics(diagnostics);
         PrintDdgiSchedulerDiagnostics(diagnostics);
         PrintDdgiUpdateDiagnostics(diagnostics);
@@ -456,6 +461,7 @@ internal sealed class SampleDiagnosticsReporter
             $"Frame diagnostics DDGI investigation: " +
             $"simpleEvents recenter/clear/preserve/framesSinceClear/framesSinceRecenter={diagnostics.SimpleDdgiRecenterCount}/{diagnostics.SimpleDdgiAtlasClearCount}/{diagnostics.SimpleDdgiAtlasPreserveOnRecenterCount}/{diagnostics.SimpleDdgiFramesSinceLastClear}/{diagnostics.SimpleDdgiFramesSinceLastRecenter}, " +
             $"simpleForward fresh/zero/nonzero/avgIrrLum/avgVisibility/lowVisibility={diagnostics.SimpleDdgiFreshAtlasForwardSampleCount}/{diagnostics.SimpleDdgiZeroIrradianceSampleCount}/{diagnostics.SimpleDdgiNonzeroIrradianceSampleCount}/{diagnostics.SimpleDdgiAverageSampledIrradianceLuminance:F5}/{diagnostics.SimpleDdgiAverageVisibility:F3}/{diagnostics.SimpleDdgiLowVisibilitySampleCount}, " +
+            $"simpleGather primary/second/rate={diagnostics.SimpleDdgiGatherSampleCount}/{diagnostics.SimpleDdgiSecondVolumeGatherCount}/{FormatSimpleDdgiSecondVolumeGatherRate(diagnostics)}, " +
             $"updateFrames full/partial/updatedFraction/start/end/skipped={diagnostics.DdgiFullRefreshFrameCount}/{diagnostics.DdgiPartialRefreshFrameCount}/{diagnostics.DdgiUpdatedProbeFraction:F3}/{diagnostics.DdgiProbeUpdateStartIndex}/{diagnostics.DdgiProbeUpdateEndIndex}/{diagnostics.DdgiSkippedProbeCount}, " +
             $"probeAge p50/p95/max={diagnostics.DdgiFramesSinceProbeUpdatedP50:F1}/{diagnostics.DdgiFramesSinceProbeUpdatedP95:F1}/{diagnostics.DdgiFramesSinceProbeUpdatedMax:F1}, " +
             $"invalidated={diagnostics.DdgiNewlyInvalidatedProbeCount}, reasons recenter/dirty/age/visibility/full={diagnostics.DdgiRefreshReasonRecenterProbeCount}/{diagnostics.DdgiRefreshReasonDirtyProbeCount}/{diagnostics.DdgiRefreshReasonAgeProbeCount}/{diagnostics.DdgiRefreshReasonVisibilityProbeCount}/{diagnostics.DdgiRefreshReasonFullRefreshProbeCount}, " +
@@ -628,6 +634,115 @@ internal sealed class SampleDiagnosticsReporter
         return $"locals={localCount},minSpacing={minSpacing:F2},maxBudget={maxBudgetFraction:P0}:{dominantPreset},warnings={warningCount}";
     }
 
+    private static void PrintDdgiRingDiagnostics(RendererDiagnostics diagnostics)
+    {
+        Console.WriteLine($"Frame diagnostics DDGI rings: {FormatDdgiRingDiagnostics(diagnostics)}.");
+    }
+
+    private static string FormatDdgiRingDiagnostics(RendererDiagnostics diagnostics)
+    {
+        var result = new StringBuilder();
+        for (int ringIndex = 0; ringIndex < 3; ringIndex++)
+        {
+            DdgiVolumeDiagnosticsEntry? ring = null;
+            for (int i = 0; i < diagnostics.DdgiVolumes.Count; i++)
+            {
+                DdgiVolumeDiagnosticsEntry candidate = diagnostics.DdgiVolumes[i];
+                if (candidate.CascadeIndex == ringIndex &&
+                    string.Equals(candidate.DesignPreset, "simple-ring", StringComparison.Ordinal))
+                {
+                    ring = candidate;
+                    break;
+                }
+            }
+
+            if (ring == null)
+                continue;
+
+            if (result.Length > 0)
+                result.Append("; ");
+
+            int gridX = GridCountFromSize(ring.SizeX, ring.ProbeSpacingX);
+            int gridY = GridCountFromSize(ring.SizeY, ring.ProbeSpacingY);
+            int gridZ = GridCountFromSize(ring.SizeZ, ring.ProbeSpacingZ);
+            float horizontalReach = Math.Max(ring.SizeX, ring.SizeZ) * 0.5f;
+            float verticalReach = ring.SizeY * 0.5f;
+            result.Append("ring")
+                .Append(ringIndex)
+                .Append(" grid=")
+                .Append(gridX)
+                .Append('x')
+                .Append(gridY)
+                .Append('x')
+                .Append(gridZ)
+                .Append(" spacing=")
+                .Append(ring.ProbeSpacingX.ToString("F2", CultureInfo.InvariantCulture))
+                .Append(" reach=±")
+                .Append(horizontalReach.ToString("F1", CultureInfo.InvariantCulture))
+                .Append("/±")
+                .Append(verticalReach.ToString("F1", CultureInfo.InvariantCulture))
+                .Append("m ageP95=")
+                .Append(ring.EstimatedAgeP95Frames.ToString("F0", CultureInfo.InvariantCulture));
+        }
+
+        return result.Length == 0 ? "none" : result.ToString();
+    }
+
+    private static int GridCountFromSize(float size, float spacing)
+    {
+        if (spacing <= 0.0f || !float.IsFinite(spacing))
+            return 0;
+        return Math.Max(2, (int)MathF.Round(size / spacing) + 1);
+    }
+
+    private static void PrintDdgiVolumeActivityDiagnostics(RendererDiagnostics diagnostics)
+    {
+        Console.WriteLine($"Frame diagnostics DDGI volumes: {FormatDdgiVolumeActivityDiagnostics(diagnostics)}.");
+    }
+
+    private static string FormatDdgiVolumeActivityDiagnostics(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.DdgiVolumes.Count == 0)
+            return "none";
+
+        var result = new StringBuilder();
+        for (int i = 0; i < diagnostics.DdgiVolumes.Count; i++)
+        {
+            DdgiVolumeDiagnosticsEntry volume = diagnostics.DdgiVolumes[i];
+            if (result.Length > 0)
+                result.Append("; ");
+
+            string label = string.Equals(volume.DesignPreset, "simple-ring", StringComparison.Ordinal)
+                ? $"ring{volume.CascadeIndex}"
+                : volume.Kind == DdgiProbeVolumeKind.Authored
+                    ? "authored"
+                    : volume.Kind.ToString();
+            result.Append('v')
+                .Append(volume.VolumeIndex)
+                .Append(' ')
+                .Append(label)
+                .Append(" active/inactive=")
+                .Append(volume.ActiveProbeCount)
+                .Append('/')
+                .Append(volume.InactiveProbeCount)
+                .Append(" state=")
+                .Append(volume.ProbeStateCountsValid != 0 ? "measured" : "pending")
+                .Append(" gather primary/sampled=");
+            if (volume.GatherCountersReadbackValid != 0)
+            {
+                result.Append(volume.PrimaryGatherCount)
+                    .Append('/')
+                    .Append(volume.SampledGatherCount);
+            }
+            else
+            {
+                result.Append("pending");
+            }
+        }
+
+        return result.ToString();
+    }
+
     public void PrintMovementFrameDiagnostics(IRenderer renderer, FirstPersonCamera camera)
     {
         if (renderer is not VulkanRenderer vulkanRenderer)
@@ -687,7 +802,8 @@ internal sealed class SampleDiagnosticsReporter
             $"cpuDrawMs avg/p95/max={stillCpu.Average:F2}/{stillCpu.P95:F2}/{stillCpu.Max:F2}, " +
             $"rebuilds={_stillPayloadRebuilds}, avgUploadMiB={stillUploadMiB:F2}; " +
             $"last sceneBuildUs={diagnostics.CpuSceneBuildMicroseconds}, meshCullUs={diagnostics.CpuMeshletCullMicroseconds}, " +
-            $"uploadUs={diagnostics.CpuUploadMicroseconds}, stall={diagnostics.RuntimeWorstStallReason}:{diagnostics.RuntimeWorstStallMicroseconds}us.");
+            $"uploadUs={diagnostics.CpuUploadMicroseconds}, primaryRecordUs={diagnostics.CpuPrimaryCommandRecordMicroseconds}, " +
+            $"validation={diagnostics.ValidationMode}, stall={diagnostics.RuntimeWorstStallReason}:{diagnostics.RuntimeWorstStallMicroseconds}us.");
 
         _movingFrames = 0;
         _stillFrames = 0;
@@ -756,6 +872,16 @@ internal sealed class SampleDiagnosticsReporter
     private static string FormatDdgiCounterReadback(RendererDiagnostics diagnostics, uint value)
     {
         return FormatPendingUInt(diagnostics.DdgiForwardEstimateCountersReadbackValid, value);
+    }
+
+    private static string FormatSimpleDdgiSecondVolumeGatherRate(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.DdgiInvestigationCountersReadbackValid == 0)
+            return "pending";
+        if (diagnostics.SimpleDdgiGatherSampleCount == 0)
+            return "n/a";
+        return (diagnostics.SimpleDdgiSecondVolumeGatherCount /
+            (double)diagnostics.SimpleDdgiGatherSampleCount).ToString("P1", CultureInfo.InvariantCulture);
     }
 
     private static string FormatDdgiRingMismatchSample(RendererDiagnostics diagnostics)

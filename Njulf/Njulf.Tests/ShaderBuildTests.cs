@@ -593,6 +593,8 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("DDGI_TRACE_RING_MISMATCH_SAMPLE_VALID_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 0u"));
             Assert.That(shader, Does.Contain("DDGI_TRACE_RING_MISMATCH_SAMPLE_REQUEST_AGE_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 18u"));
             Assert.That(shader, Does.Contain("DDGI_TRACE_RING_MISMATCH_CORRECTED_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 19u"));
+            Assert.That(common, Does.Contain("DDGI_INVESTIGATION_SIMPLE_VOLUME_PRIMARY_GATHER_COUNTER_BASE = DDGI_INVESTIGATION_COUNTER_BASE + 38u"));
+            Assert.That(common, Does.Contain("DDGI_INVESTIGATION_SIMPLE_VOLUME_SAMPLED_GATHER_COUNTER_BASE = DDGI_INVESTIGATION_SIMPLE_VOLUME_PRIMARY_GATHER_COUNTER_BASE + 16u"));
             Assert.That(shader, Does.Contain("bool DdgiTraceEnergyDiagnosticRay(uint probeIndex, uint rayIndex)"));
             Assert.That(shader, Does.Contain("return DdgiTraceEnergyDiagnosticsEnabled() && ((probeIndex + rayIndex + pc.FrameIndex) & 3u) == 0u;"));
             Assert.That(shader, Does.Contain("RecordDdgiTraceEnergyDiagnostics("));
@@ -1251,7 +1253,9 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATED_POSITION, fract(abs(ddgiSample.relocatedProbePosition) * 0.05));"));
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION_DIRECTION)"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CLASSIFICATION_INVALID_SCORE, vec3(clamp(ddgiSample.classificationInvalidScore, 0.0, 1.0)));"));
-            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_SELECTION, MeshletDebugColor(uint(max(ddgiSample.cascadeIndex, 0.0)) + 1u));"));
+            Assert.That(shader, Does.Contain("vec3 cascadeContributorColor = simpleDdgiActive && globalIlluminationEnabled"));
+            Assert.That(shader, Does.Contain("? simpleDdgiContributingVolumeColor"));
+            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_SELECTION, cascadeContributorColor);"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_BLEND_WEIGHT, vec3(clamp(ddgiSample.cascadeBlendWeight, 0.0, 1.0)));"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_UPDATE_REASONS, MeshletDebugColor(uint(clamp(ddgiSample.updateReason * 255.0, 0.0, 255.0))));"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BUDGET, vec3(ddgiSample.rayBudget, ddgiSample.supportCoverage, ddgiSample.weight));"));
@@ -1858,7 +1862,9 @@ public sealed class ShaderBuildTests
         int baseOnlyLodGuard = sceneCompaction.IndexOf(
             "if (meshInfo.MeshletLod1Count == 0u && meshInfo.MeshletLod2Count == 0u)",
             StringComparison.Ordinal);
-        int lodSelection = sceneCompaction.IndexOf("uint requestedLod = SelectLodLevel", StringComparison.Ordinal);
+        int lodSelection = sceneCompaction.IndexOf(
+            "SelectLodLevel(pc.Push.CameraPosition.xyz",
+            StringComparison.Ordinal);
 
         Assert.Multiple(() =>
         {
@@ -1872,6 +1878,37 @@ public sealed class ShaderBuildTests
             Assert.That(skinning, Does.Contain("GPUVertex source = ReadSplitVertex(dispatch.SourceVertexOffset + localVertexIndex);"));
             Assert.That(baseOnlyLodGuard, Is.GreaterThanOrEqualTo(0));
             Assert.That(lodSelection, Is.GreaterThan(baseOnlyLodGuard));
+        });
+    }
+
+    [Test]
+    public void SceneCompaction_UsesRuntimeLodThresholdsAndShadowLodBias()
+    {
+        string common = ReadRepoText("Njulf.Shaders", "common.glsl");
+        string sceneCompaction = ReadRepoText("Njulf.Shaders", "scene_opaque_compact.comp");
+        string compactionPass = ReadRepoText("Njulf.Rendering", "Pipeline", "SceneOpaqueCompactionPass.cs");
+        string sceneDataBuilder = ReadRepoText("Njulf.Rendering", "Data", "SceneDataBuilder.cs");
+        string directionalShadowPass = ReadRepoText("Njulf.Rendering", "Pipeline", "DirectionalShadowPass.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(common, Does.Contain("float GpuLod1DistanceRatio;"));
+            Assert.That(common, Does.Contain("float GpuLod2DistanceRatio;"));
+            Assert.That(common, Does.Contain("uint GpuShadowLodBias;"));
+            Assert.That(sceneCompaction, Does.Not.Contain("SCENE_MESHLET_LOD1_DISTANCE_RATIO"));
+            Assert.That(sceneCompaction, Does.Not.Contain("SCENE_MESHLET_LOD2_DISTANCE_RATIO"));
+            Assert.That(sceneCompaction, Does.Contain("pc.Push.GpuLod1DistanceRatio"));
+            Assert.That(sceneCompaction, Does.Contain("pc.Push.GpuLod2DistanceRatio"));
+            Assert.That(sceneCompaction, Does.Contain(
+                "bool ApplyGpuLodSelection(inout GPUMeshletDrawCommand command, out uint effectiveLod, uint lodBias)"));
+            Assert.That(sceneCompaction, Does.Contain("ApplyGpuLodSelection(command, effectiveLod, 0u)"));
+            Assert.That(sceneCompaction, Does.Contain("ApplyGpuLodSelection(command, effectiveLod, pc.Push.GpuShadowLodBias)"));
+            Assert.That(compactionPass, Does.Contain("GpuLod1DistanceRatio = gpuLod1DistanceRatio"));
+            Assert.That(compactionPass, Does.Contain("GpuLod2DistanceRatio = gpuLod2DistanceRatio"));
+            Assert.That(compactionPass, Does.Contain("GpuShadowLodBias = checked((uint)Math.Clamp"));
+            Assert.That(sceneDataBuilder, Does.Contain("SelectMeshletLodLevelNormalized"));
+            Assert.That(directionalShadowPass, Does.Contain("BitConverter.SingleToUInt32Bits(sceneData.SceneSubmissionGpuLod1DistanceRatio)"));
+            Assert.That(directionalShadowPass, Does.Contain("sceneData.SceneSubmissionGpuShadowLodBias"));
         });
     }
 
@@ -1994,9 +2031,13 @@ public sealed class ShaderBuildTests
             Assert.That(source, Does.Contain("private static readonly uint PushConstantSize"));
             Assert.That(source, Does.Contain("uint DispatchGroupCountX"));
             Assert.That(source, Does.Contain("uint DispatchGroupCountY"));
+            Assert.That(source, Does.Contain("ImageMemoryBarrier2 MipWriteToNextReadBarrier"));
             Assert.That(source, Does.Contain("ImageLayout sourceLayout = mip == 0"));
             Assert.That(source, Does.Contain(": ImageLayout.General;"));
             Assert.That(source, Does.Contain("AddMipWriteToNextReadDependency"));
+            Assert.That(source, Does.Contain("TransitionDepthAndPyramidToGeneral(cmd);"));
+            Assert.That(source, Does.Contain("ImageMemoryBarrierCount = barrierCount"));
+            Assert.That(source, Does.Contain("SetTrackedLayout(ImageLayout.DepthStencilReadOnlyOptimal)"));
             Assert.That(source, Does.Contain("ImageLayout.General,"));
             Assert.That(source, Does.Contain("TransitionPyramidToShaderRead(cmd);"));
             Assert.That(source, Does.Contain("LevelCount = _pyramid.MipLevels"));
@@ -2010,6 +2051,26 @@ public sealed class ShaderBuildTests
             Assert.That(sceneData, Does.Contain("CpuHiZDepthTransitionMicroseconds"));
             Assert.That(diagnostics, Does.Contain("CpuHiZDescriptorBindMicroseconds"));
             Assert.That(renderer, Does.Contain("CpuHiZFinalBarrierMicroseconds = sceneData.CpuHiZFinalBarrierMicroseconds"));
+        });
+    }
+
+    [Test]
+    public void ShadowPasses_CacheBoundedLoopDebugLabels()
+    {
+        string directional = ReadRepoText("Njulf.Rendering", "Pipeline", "DirectionalShadowPass.cs");
+        string spot = ReadRepoText("Njulf.Rendering", "Pipeline", "SpotShadowPass.cs");
+        string point = ReadRepoText("Njulf.Rendering", "Pipeline", "PointShadowPass.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(directional, Does.Contain("StaticCascadeDebugLabels"));
+            Assert.That(directional, Does.Contain("ShadowSettings.MaxDirectionalCascades"));
+            Assert.That(spot, Does.Contain("CachedLightLabelCapacity = 32"));
+            Assert.That(point, Does.Contain("CachedPointLightLabelCapacity = 4"));
+            Assert.That(point, Does.Contain("PointLightFaceCount = 6"));
+            Assert.That(directional, Does.Not.Contain("BeginDebugLabel(cmd, $\""));
+            Assert.That(spot, Does.Not.Contain("BeginDebugLabel(cmd, $\""));
+            Assert.That(point, Does.Not.Contain("BeginDebugLabel(cmd, $\""));
         });
     }
 

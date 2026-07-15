@@ -357,7 +357,10 @@ namespace Njulf.Rendering.Data
         public bool SceneSubmissionGpuCompactionEnabled { get; set; }
         public bool SceneSubmissionIndirectMeshletDispatchEnabled { get; set; }
         public bool SceneSubmissionGpuLodSelectionEnabled { get; set; }
+        public float SceneSubmissionGpuLod1DistanceRatio { get; set; } = SceneSubmissionSettings.DefaultGpuLod1DistanceRatio;
+        public float SceneSubmissionGpuLod2DistanceRatio { get; set; } = SceneSubmissionSettings.DefaultGpuLod2DistanceRatio;
         public bool SceneSubmissionGpuShadowCompactionEnabled { get; set; }
+        public int SceneSubmissionGpuShadowLodBias { get; set; } = SceneSubmissionSettings.DefaultGpuShadowLodBias;
         public bool SceneSubmissionValidationCompareCpuGpuLists { get; set; }
         public bool SceneSubmissionGpuCompactionActive { get; set; }
         public string SceneSubmissionForwardPath { get; set; } = SceneSubmissionDiagnosticsPolicy.ForwardPathCpu;
@@ -747,6 +750,8 @@ namespace Njulf.Rendering.Data
         public float SimpleDdgiAverageSampledIrradianceLuminance { get; set; }
         public float SimpleDdgiAverageVisibility { get; set; }
         public uint SimpleDdgiLowVisibilitySampleCount { get; set; }
+        public uint SimpleDdgiGatherSampleCount { get; set; }
+        public uint SimpleDdgiSecondVolumeGatherCount { get; set; }
         public int DdgiFullRefreshFrameCount { get; set; }
         public int DdgiPartialRefreshFrameCount { get; set; }
         public float DdgiUpdatedProbeFraction { get; set; }
@@ -1400,7 +1405,10 @@ namespace Njulf.Rendering.Data
             SceneSubmissionGpuCompactionEnabled = false;
             SceneSubmissionIndirectMeshletDispatchEnabled = false;
             SceneSubmissionGpuLodSelectionEnabled = false;
+            SceneSubmissionGpuLod1DistanceRatio = SceneSubmissionSettings.DefaultGpuLod1DistanceRatio;
+            SceneSubmissionGpuLod2DistanceRatio = SceneSubmissionSettings.DefaultGpuLod2DistanceRatio;
             SceneSubmissionGpuShadowCompactionEnabled = false;
+            SceneSubmissionGpuShadowLodBias = SceneSubmissionSettings.DefaultGpuShadowLodBias;
             SceneSubmissionValidationCompareCpuGpuLists = false;
             SceneSubmissionGpuCompactionActive = false;
             SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ForwardPathCpu;
@@ -1810,6 +1818,8 @@ namespace Njulf.Rendering.Data
             SimpleDdgiAverageSampledIrradianceLuminance = 0;
             SimpleDdgiAverageVisibility = 0;
             SimpleDdgiLowVisibilitySampleCount = 0;
+            SimpleDdgiGatherSampleCount = 0;
+            SimpleDdgiSecondVolumeGatherCount = 0;
             DdgiFullRefreshFrameCount = 0;
             DdgiPartialRefreshFrameCount = 0;
             DdgiUpdatedProbeFraction = 0;

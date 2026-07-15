@@ -543,6 +543,7 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("float validSupport;"));
                 Assert.That(shared, Does.Contain("float spatialCoverage;"));
                 Assert.That(shared, Does.Contain("float transportVisibility;"));
+                Assert.That(shared, Does.Contain("vec3 contributingVolumeColor;"));
                 Assert.That(shared, Does.Contain("uint selectedVolume;"));
                 Assert.That(shared, Does.Contain("uint validProbeCount;"));
                 Assert.That(shared, Does.Contain("SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 viewDir)"));
@@ -583,6 +584,12 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("SimpleDdgiParams p, float volumeSpacing)"));
                 Assert.That(shared, Does.Contain("selectedVolume.spacing"));
                 Assert.That(shared, Does.Contain("float outerWeight = 1.0 - innerValidMass;"));
+                Assert.That(shared, Does.Contain("outer.contributingVolumeColor * outerDirectionalMass"));
+                Assert.That(shared, Does.Contain("inner.contributingVolumeColor * innerDirectionalMass"));
+                Assert.That(shared, Does.Contain("contributorColorAccumulated / directionalMass"));
+                Assert.That(shared, Does.Contain("DDGI_INVESTIGATION_SIMPLE_VOLUME_PRIMARY_GATHER_COUNTER_BASE + selectedVolumeIndex"));
+                Assert.That(shared, Does.Contain("DDGI_INVESTIGATION_SIMPLE_VOLUME_SAMPLED_GATHER_COUNTER_BASE + selectedVolumeIndex"));
+                Assert.That(shared, Does.Contain("DDGI_INVESTIGATION_SIMPLE_VOLUME_SAMPLED_GATHER_COUNTER_BASE + nextVolumeIndex"));
                 Assert.That(shared, Does.Contain("SimpleDdgiProbeState ReadSimpleDdgiProbeState(uint bufferIndex, uint probeIndex)"));
                 Assert.That(shared, Does.Contain("SimpleDdgiProbeUpdate ReadSimpleDdgiProbeUpdate(uint bufferIndex, uint queueOffset)"));
                 Assert.That(shared, Does.Contain("vec3 SimpleDdgiProbeRelocatedPosition(uint probeIndex, SimpleDdgiVolume volume, uint localProbeIndex)"));
@@ -646,6 +653,8 @@ namespace Njulf.Tests
                 Assert.That(forward, Does.Contain("ddgiSample.visibilityMomentMean = simpleDebug.visibilityMomentMean;"));
                 Assert.That(forward, Does.Contain("ddgiSample.visibilityConfidence = simpleGather.transportVisibility;"));
                 Assert.That(forward, Does.Contain("ddgiSample.cascadeIndex = float(simpleGather.selectedVolume);"));
+                Assert.That(forward, Does.Contain("simpleDdgiContributingVolumeColor = simpleGather.contributingVolumeColor;"));
+                Assert.That(forward, Does.Contain("? simpleDdgiContributingVolumeColor"));
                 Assert.That(forward, Does.Contain("ddgiSample.minProbeSpacing = simpleGather.selectedSpacing;"));
                 Assert.That(forward, Does.Contain("ddgiDiffuse = simpleIrradiance * simpleDdgiParams.indirectIntensity * albedo * max(1.0 - metallic, 0.0) / PI;"));
                 Assert.That(forward, Does.Contain("finalDiffuseIndirect = finalDdgiDiffuse + diffuseIbl * simpleFallback * indirectAo;"));

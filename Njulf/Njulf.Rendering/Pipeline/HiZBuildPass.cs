@@ -19,6 +19,10 @@ namespace Njulf.Rendering.Pipeline
     {
         private const string EntryPoint = "main";
         private static readonly uint PushConstantSize = checked((uint)Marshal.SizeOf<GPUHiZBuildPushConstants>());
+        private static readonly PipelineStageFlags2 PyramidSampledReadStages =
+            PipelineStageFlags2.TaskShaderBitExt |
+            PipelineStageFlags2.ComputeShaderBit |
+            PipelineStageFlags2.FragmentShaderBit;
 
         private readonly HiZDepthPyramid _pyramid;
         private readonly RenderTargetManager _renderTargets;
@@ -27,6 +31,9 @@ namespace Njulf.Rendering.Pipeline
         private DescriptorPool _descriptorPool;
         private DescriptorSet[] _descriptorSets = Array.Empty<DescriptorSet>();
         private MipRecordMetadata[] _mipMetadata = Array.Empty<MipRecordMetadata>();
+        private ImageMemoryBarrier2 _sceneDepthReadBarrierTemplate;
+        private ImageMemoryBarrier2 _pyramidToGeneralBarrierTemplate;
+        private ImageMemoryBarrier2 _pyramidToShaderReadBarrierTemplate;
         private PipelineLayout _pipelineLayout;
         private VkPipeline _pipeline;
         private PipelineCache _pipelineCache;
@@ -64,11 +71,11 @@ namespace Njulf.Rendering.Pipeline
                 return;
 
             long stageStart = Stopwatch.GetTimestamp();
-            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
-            sceneData.CpuHiZDepthTransitionMicroseconds = ElapsedMicroseconds(stageStart);
-
-            stageStart = Stopwatch.GetTimestamp();
-            TransitionPyramidToGeneral(cmd);
+            TransitionDepthAndPyramidToGeneral(cmd);
+            // The depth and pyramid transitions now share one synchronization2 call. Attribute
+            // its issuance cost to the pyramid bucket so the compact breakdown does not count
+            // the same command twice.
+            sceneData.CpuHiZDepthTransitionMicroseconds = 0;
             sceneData.CpuHiZPyramidTransitionMicroseconds = ElapsedMicroseconds(stageStart);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
@@ -79,7 +86,7 @@ namespace Njulf.Rendering.Pipeline
 
             for (int mip = 0; mip < _mipMetadata.Length; mip++)
             {
-                MipRecordMetadata metadata = _mipMetadata[mip];
+                ref readonly MipRecordMetadata metadata = ref _mipMetadata[mip];
                 DescriptorSet set = metadata.DescriptorSet;
                 stageStart = Stopwatch.GetTimestamp();
                 _context.Api.CmdBindDescriptorSets(
@@ -113,7 +120,7 @@ namespace Njulf.Rendering.Pipeline
                 if (mip + 1 < _mipMetadata.Length)
                 {
                     stageStart = Stopwatch.GetTimestamp();
-                    AddMipWriteToNextReadDependency(cmd, (uint)mip);
+                    AddMipWriteToNextReadDependency(cmd, metadata.MipWriteToNextReadBarrier);
                     dependencyBarrierTicks += Stopwatch.GetTimestamp() - stageStart;
                 }
             }
@@ -403,12 +410,85 @@ namespace Njulf.Rendering.Pipeline
         {
             _mipMetadata = new MipRecordMetadata[_pyramid.MipLevels];
 
+            var depthRange = new ImageSubresourceRange
+            {
+                AspectMask = ImageAspectFlags.DepthBit,
+                BaseMipLevel = 0,
+                LevelCount = 1,
+                BaseArrayLayer = 0,
+                LayerCount = 1
+            };
+            var fullPyramidRange = new ImageSubresourceRange
+            {
+                AspectMask = ImageAspectFlags.ColorBit,
+                BaseMipLevel = 0,
+                LevelCount = _pyramid.MipLevels,
+                BaseArrayLayer = 0,
+                LayerCount = 1
+            };
+
+            // Image handles and subresource ranges change only when the descriptor sets are
+            // recreated. Per frame, the opening barriers patch only their dynamic layout and
+            // source-stage/access fields before recording.
+            _sceneDepthReadBarrierTemplate = BarrierBuilder.CreateImageBarrier(
+                _renderTargets.SceneDepth.Image,
+                PipelineStageFlags2.None,
+                AccessFlags2.None,
+                PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.EarlyFragmentTestsBit,
+                AccessFlags2.ShaderSampledReadBit | AccessFlags2.DepthStencilAttachmentReadBit,
+                ImageLayout.Undefined,
+                ImageLayout.DepthStencilReadOnlyOptimal,
+                Vk.QueueFamilyIgnored,
+                Vk.QueueFamilyIgnored,
+                depthRange);
+            _pyramidToGeneralBarrierTemplate = BarrierBuilder.CreateImageBarrier(
+                _pyramid.Image,
+                PipelineStageFlags2.None,
+                AccessFlags2.None,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                ImageLayout.Undefined,
+                ImageLayout.General,
+                Vk.QueueFamilyIgnored,
+                Vk.QueueFamilyIgnored,
+                fullPyramidRange);
+            _pyramidToShaderReadBarrierTemplate = BarrierBuilder.CreateImageBarrier(
+                _pyramid.Image,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PyramidSampledReadStages,
+                AccessFlags2.ShaderSampledReadBit,
+                ImageLayout.General,
+                ImageLayout.ShaderReadOnlyOptimal,
+                Vk.QueueFamilyIgnored,
+                Vk.QueueFamilyIgnored,
+                fullPyramidRange);
+
             for (uint mip = 0; mip < _pyramid.MipLevels; mip++)
             {
                 Extent2D sourceExtent = mip == 0
                     ? _renderTargets.SceneDepth.Extent
                     : _pyramid.GetMipExtent(mip - 1);
                 Extent2D destinationExtent = _pyramid.GetMipExtent(mip);
+                var mipRange = new ImageSubresourceRange
+                {
+                    AspectMask = ImageAspectFlags.ColorBit,
+                    BaseMipLevel = mip,
+                    LevelCount = 1,
+                    BaseArrayLayer = 0,
+                    LayerCount = 1
+                };
+                ImageMemoryBarrier2 mipWriteToNextReadBarrier = BarrierBuilder.CreateImageBarrier(
+                    _pyramid.Image,
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderStorageWriteBit,
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderSampledReadBit,
+                    ImageLayout.General,
+                    ImageLayout.General,
+                    Vk.QueueFamilyIgnored,
+                    Vk.QueueFamilyIgnored,
+                    mipRange);
 
                 _mipMetadata[(int)mip] = new MipRecordMetadata(
                     _descriptorSets[(int)mip],
@@ -418,123 +498,64 @@ namespace Njulf.Rendering.Pipeline
                         DestinationDimensions = new Vector2(destinationExtent.Width, destinationExtent.Height)
                     },
                     (destinationExtent.Width + 7u) / 8u,
-                    (destinationExtent.Height + 7u) / 8u);
+                    (destinationExtent.Height + 7u) / 8u,
+                    mipWriteToNextReadBarrier);
             }
         }
 
-        private void TransitionDepthForRead(CommandBuffer cmd)
+        private void TransitionDepthAndPyramidToGeneral(CommandBuffer cmd)
         {
-            if (_swapchain.DepthImageLayout == ImageLayout.DepthStencilReadOnlyOptimal)
-                return;
-
-            var range = new ImageSubresourceRange
+            ImageMemoryBarrier2* barriers = stackalloc ImageMemoryBarrier2[2];
+            uint barrierCount = 0;
+            ImageLayout depthLayout = _renderTargets.SceneDepth.Layout;
+            bool transitionSceneDepth = depthLayout != ImageLayout.DepthStencilReadOnlyOptimal;
+            if (transitionSceneDepth)
             {
-                AspectMask = ImageAspectFlags.DepthBit,
-                BaseMipLevel = 0,
-                LevelCount = 1,
-                BaseArrayLayer = 0,
-                LayerCount = 1
-            };
+                ImageMemoryBarrier2 depthBarrier = _sceneDepthReadBarrierTemplate;
+                PatchSceneDepthReadBarrier(ref depthBarrier, depthLayout);
+                barriers[barrierCount++] = depthBarrier;
+            }
 
-            ImageLayout oldLayout = _swapchain.DepthImageLayout;
-            _swapchain.SetDepthImageLayout(ImageLayout.DepthStencilReadOnlyOptimal);
+            ImageMemoryBarrier2 pyramidBarrier = _pyramidToGeneralBarrierTemplate;
+            PatchPyramidToGeneralBarrier(ref pyramidBarrier, _pyramid.Layout);
+            barriers[barrierCount++] = pyramidBarrier;
 
-            var barrier = BarrierBuilder.CreateImageBarrier(
-                _swapchain.DepthImage,
-                PipelineStageFlags2.LateFragmentTestsBit,
-                AccessFlags2.DepthStencilAttachmentWriteBit,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderSampledReadBit,
-                oldLayout,
-                ImageLayout.DepthStencilReadOnlyOptimal,
-                Vk.QueueFamilyIgnored,
-                Vk.QueueFamilyIgnored,
-                range);
-
-            BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
-        }
-
-        private void TransitionPyramidToGeneral(CommandBuffer cmd)
-        {
-            var range = new ImageSubresourceRange
+            var dependencyInfo = new DependencyInfo
             {
-                AspectMask = ImageAspectFlags.ColorBit,
-                BaseMipLevel = 0,
-                LevelCount = _pyramid.MipLevels,
-                BaseArrayLayer = 0,
-                LayerCount = 1
+                SType = StructureType.DependencyInfo,
+                ImageMemoryBarrierCount = barrierCount,
+                PImageMemoryBarriers = barriers
             };
+            _context.Api.CmdPipelineBarrier2(cmd, &dependencyInfo);
 
-            var barrier = BarrierBuilder.CreateImageBarrier(
-                _pyramid.Image,
-                _pyramid.Layout == ImageLayout.Undefined
-                    ? PipelineStageFlags2.None
-                    : PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
-                _pyramid.Layout == ImageLayout.Undefined
-                    ? AccessFlags2.None
-                    : AccessFlags2.ShaderSampledReadBit,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit,
-                _pyramid.Layout,
-                ImageLayout.General,
-                Vk.QueueFamilyIgnored,
-                Vk.QueueFamilyIgnored,
-                range);
-
-            BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
+            if (transitionSceneDepth)
+                _renderTargets.SceneDepth.SetTrackedLayout(ImageLayout.DepthStencilReadOnlyOptimal);
             _pyramid.Layout = ImageLayout.General;
         }
 
-        private void AddMipWriteToNextReadDependency(CommandBuffer cmd, uint mip)
+        private static void PatchSceneDepthReadBarrier(ref ImageMemoryBarrier2 barrier, ImageLayout oldLayout)
         {
-            var range = new ImageSubresourceRange
-            {
-                AspectMask = ImageAspectFlags.ColorBit,
-                BaseMipLevel = mip,
-                LevelCount = 1,
-                BaseArrayLayer = 0,
-                LayerCount = 1
-            };
+            barrier.OldLayout = oldLayout;
+            barrier.SrcStageMask = RenderTarget.GetSourceStageForLayout(oldLayout);
+            barrier.SrcAccessMask = RenderTarget.GetSourceAccessForLayout(oldLayout);
+        }
 
-            var barrier = BarrierBuilder.CreateImageBarrier(
-                _pyramid.Image,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderSampledReadBit,
-                ImageLayout.General,
-                ImageLayout.General,
-                Vk.QueueFamilyIgnored,
-                Vk.QueueFamilyIgnored,
-                range);
+        private static void PatchPyramidToGeneralBarrier(ref ImageMemoryBarrier2 barrier, ImageLayout oldLayout)
+        {
+            bool isUndefined = oldLayout == ImageLayout.Undefined;
+            barrier.OldLayout = oldLayout;
+            barrier.SrcStageMask = isUndefined ? PipelineStageFlags2.None : PyramidSampledReadStages;
+            barrier.SrcAccessMask = isUndefined ? AccessFlags2.None : AccessFlags2.ShaderSampledReadBit;
+        }
 
+        private static void AddMipWriteToNextReadDependency(CommandBuffer cmd, ImageMemoryBarrier2 barrier)
+        {
             BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
         }
 
         private void TransitionPyramidToShaderRead(CommandBuffer cmd)
         {
-            var range = new ImageSubresourceRange
-            {
-                AspectMask = ImageAspectFlags.ColorBit,
-                BaseMipLevel = 0,
-                LevelCount = _pyramid.MipLevels,
-                BaseArrayLayer = 0,
-                LayerCount = 1
-            };
-
-            var barrier = BarrierBuilder.CreateImageBarrier(
-                _pyramid.Image,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
-                AccessFlags2.ShaderSampledReadBit,
-                ImageLayout.General,
-                ImageLayout.ShaderReadOnlyOptimal,
-                Vk.QueueFamilyIgnored,
-                Vk.QueueFamilyIgnored,
-                range);
-
-            BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
+            BarrierBuilder.ExecuteImageBarrier(cmd, _pyramidToShaderReadBarrierTemplate);
             _pyramid.Layout = ImageLayout.ShaderReadOnlyOptimal;
         }
 
@@ -557,6 +578,9 @@ namespace Njulf.Rendering.Pipeline
 
             _descriptorSets = Array.Empty<DescriptorSet>();
             _mipMetadata = Array.Empty<MipRecordMetadata>();
+            _sceneDepthReadBarrierTemplate = default;
+            _pyramidToGeneralBarrierTemplate = default;
+            _pyramidToShaderReadBarrierTemplate = default;
         }
 
         private static long ElapsedMicroseconds(long startTimestamp)
@@ -573,6 +597,7 @@ namespace Njulf.Rendering.Pipeline
             DescriptorSet DescriptorSet,
             GPUHiZBuildPushConstants PushConstants,
             uint DispatchGroupCountX,
-            uint DispatchGroupCountY);
+            uint DispatchGroupCountY,
+            ImageMemoryBarrier2 MipWriteToNextReadBarrier);
     }
 }

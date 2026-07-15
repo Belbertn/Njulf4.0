@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Text;
 using Silk.NET.Vulkan;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Utilities;
@@ -20,6 +21,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly RenderGraphResourceBindings _concreteResourceBindings = new();
         private readonly Dictionary<RenderGraphResourceId, RenderGraphResourceUsage> _lastResourceUsages = new();
         private readonly List<RenderGraphPlannedBarrier> _framePlannedBarriers = new();
+        private readonly StringBuilder _barrierSummaryBuilder = new();
         private bool _disposed;
 
         public IReadOnlyList<string> PassNames => _passes.ConvertAll(pass => pass.Name);
@@ -363,6 +365,7 @@ namespace Njulf.Rendering.Pipeline
                 timestamps,
                 commandBuffers,
                 useSecondaryCommandBuffers);
+            CompleteBarrierSummary(sceneData);
         }
 
         /// <summary>
@@ -460,6 +463,16 @@ namespace Njulf.Rendering.Pipeline
         public void BeginSplitExecution(SceneRenderingData sceneData)
         {
             ResetBarrierPlanning(sceneData);
+        }
+
+        /// <summary>
+        /// Publishes the summary accumulated across all command-buffer segments of a split
+        /// execution. The async scheduler owns its own plan summary, so an existing diagnostic
+        /// value intentionally takes precedence.
+        /// </summary>
+        internal void CompleteSplitExecution(SceneRenderingData sceneData)
+        {
+            CompleteBarrierSummary(sceneData);
         }
 
         public void ExecuteSelected(
@@ -669,29 +682,41 @@ namespace Njulf.Rendering.Pipeline
             sceneData.GraphExecutedBarrierCount++;
             if (queueOwnershipTransition)
                 sceneData.GraphQueueOwnershipTransitionCount++;
-            sceneData.GraphBarrierSummary = BuildBarrierSummary();
+            AppendBarrierSummary(barrier);
         }
 
         private void ResetBarrierPlanning(SceneRenderingData sceneData)
         {
             _framePlannedBarriers.Clear();
             _lastResourceUsages.Clear();
+            _barrierSummaryBuilder.Clear();
             sceneData.GraphPlannedBarrierCount = 0;
             sceneData.GraphExecutedBarrierCount = 0;
             sceneData.GraphQueueOwnershipTransitionCount = 0;
             sceneData.GraphBarrierSummary = string.Empty;
         }
 
-        private string BuildBarrierSummary()
+        private void AppendBarrierSummary(RenderGraphPlannedBarrier barrier)
         {
-            var parts = new List<string>(_framePlannedBarriers.Count);
-            for (int i = 0; i < _framePlannedBarriers.Count; i++)
-            {
-                RenderGraphPlannedBarrier barrier = _framePlannedBarriers[i];
-                parts.Add($"{barrier.PassName}:{barrier.Resource} {barrier.OldLayout}->{barrier.NewLayout}");
-            }
+            if (_barrierSummaryBuilder.Length > 0)
+                _barrierSummaryBuilder.Append("; ");
 
-            return string.Join("; ", parts);
+            _barrierSummaryBuilder
+                .Append(barrier.PassName)
+                .Append(':')
+                .Append(barrier.Resource)
+                .Append(' ')
+                .Append(barrier.OldLayout)
+                .Append("->")
+                .Append(barrier.NewLayout);
+        }
+
+        private void CompleteBarrierSummary(SceneRenderingData sceneData)
+        {
+            if (!string.IsNullOrEmpty(sceneData.GraphBarrierSummary) || _barrierSummaryBuilder.Length == 0)
+                return;
+
+            sceneData.GraphBarrierSummary = _barrierSummaryBuilder.ToString();
         }
 
         private int CountPotentialQueueOwnershipTransitions(RenderFeatureIsolationMode featureIsolation)

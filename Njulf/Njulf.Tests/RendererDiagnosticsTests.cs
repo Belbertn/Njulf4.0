@@ -893,9 +893,9 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(new Vector3(5f, 0f, 0f), center, 1f), Is.EqualTo(0));
-                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(new Vector3(20f, 0f, 0f), center, 1f), Is.EqualTo(1));
-                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(new Vector3(40f, 0f, 0f), center, 1f), Is.EqualTo(2));
+                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(new Vector3(4f, 0f, 0f), center, 1f), Is.EqualTo(0));
+                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(new Vector3(6f, 0f, 0f), center, 1f), Is.EqualTo(1));
+                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(new Vector3(12f, 0f, 0f), center, 1f), Is.EqualTo(2));
             });
         }
 
@@ -904,10 +904,10 @@ namespace Njulf.Tests
         {
             Assert.Multiple(() =>
             {
-                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(12.5f, previousLodLevel: 0, hysteresisFraction: 0.15f), Is.EqualTo(0));
-                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(14.0f, previousLodLevel: 0, hysteresisFraction: 0.15f), Is.EqualTo(1));
-                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(29.0f, previousLodLevel: 2, hysteresisFraction: 0.15f), Is.EqualTo(2));
-                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(26.0f, previousLodLevel: 2, hysteresisFraction: 0.15f), Is.EqualTo(1));
+                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(4.5f, previousLodLevel: 0, hysteresisFraction: 0.15f), Is.EqualTo(0));
+                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(4.7f, previousLodLevel: 0, hysteresisFraction: 0.15f), Is.EqualTo(1));
+                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(9.0f, previousLodLevel: 2, hysteresisFraction: 0.15f), Is.EqualTo(2));
+                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(8.0f, previousLodLevel: 2, hysteresisFraction: 0.15f), Is.EqualTo(1));
             });
         }
 
@@ -1217,9 +1217,100 @@ namespace Njulf.Tests
                 Assert.That(settings.SceneSubmission.GpuCompactionEnabled, Is.True);
                 Assert.That(settings.SceneSubmission.IndirectMeshletDispatchEnabled, Is.True);
                 Assert.That(settings.SceneSubmission.GpuLodSelectionEnabled, Is.True);
+                Assert.That(settings.SceneSubmission.GpuLod1DistanceRatio, Is.EqualTo(4.0f));
+                Assert.That(settings.SceneSubmission.GpuLod2DistanceRatio, Is.EqualTo(10.0f));
                 Assert.That(settings.SceneSubmission.GpuShadowCompactionEnabled, Is.True);
+                Assert.That(settings.SceneSubmission.GpuShadowLodBias, Is.EqualTo(1));
                 Assert.That(settings.SceneSubmission.ValidationCompareCpuGpuLists, Is.False);
             });
+        }
+
+        [Test]
+        public void SceneSubmissionSettings_LodControlsHaveSafeDefaultsAndClamps()
+        {
+            var settings = new SceneSubmissionSettings();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.GpuLod1DistanceRatio, Is.EqualTo(4.0f));
+                Assert.That(settings.GpuLod2DistanceRatio, Is.EqualTo(10.0f));
+                Assert.That(settings.GpuShadowLodBias, Is.EqualTo(1));
+            });
+
+            settings.GpuLod1DistanceRatio = 80.0f;
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.GpuLod1DistanceRatio, Is.EqualTo(64.0f));
+                Assert.That(settings.GpuLod2DistanceRatio, Is.EqualTo(64.0f));
+            });
+
+            settings.GpuLod2DistanceRatio = 200.0f;
+            settings.GpuLod1DistanceRatio = float.NaN;
+            settings.GpuLod2DistanceRatio = float.NaN;
+            settings.GpuShadowLodBias = -1;
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.GpuLod1DistanceRatio, Is.EqualTo(4.0f));
+                Assert.That(settings.GpuLod2DistanceRatio, Is.EqualTo(10.0f));
+                Assert.That(settings.GpuShadowLodBias, Is.Zero);
+            });
+
+            settings.GpuLod1DistanceRatio = 12.0f;
+            settings.GpuLod2DistanceRatio = 4.0f;
+            settings.GpuShadowLodBias = 99;
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.GpuLod1DistanceRatio, Is.EqualTo(12.0f));
+                Assert.That(settings.GpuLod2DistanceRatio, Is.EqualTo(12.0f));
+                Assert.That(settings.GpuShadowLodBias, Is.EqualTo(2));
+            });
+        }
+
+        [Test]
+        public void SceneRenderingData_ClearRestoresSceneSubmissionLodDefaults()
+        {
+            var sceneData = new SceneRenderingData
+            {
+                SceneSubmissionGpuLod1DistanceRatio = 64.0f,
+                SceneSubmissionGpuLod2DistanceRatio = 128.0f,
+                SceneSubmissionGpuShadowLodBias = 2
+            };
+
+            sceneData.Clear();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(sceneData.SceneSubmissionGpuLod1DistanceRatio, Is.EqualTo(4.0f));
+                Assert.That(sceneData.SceneSubmissionGpuLod2DistanceRatio, Is.EqualTo(10.0f));
+                Assert.That(sceneData.SceneSubmissionGpuShadowLodBias, Is.EqualTo(1));
+            });
+        }
+
+        [Test]
+        public void RenderSettings_SaveLoadRoundTripsSceneSubmissionLodControls()
+        {
+            string path = Path.Combine(TestContext.CurrentContext.WorkDirectory, $"scene-submission-{Guid.NewGuid():N}.json");
+            try
+            {
+                var settings = new RenderSettings();
+                settings.SceneSubmission.GpuLod1DistanceRatio = 6.5f;
+                settings.SceneSubmission.GpuLod2DistanceRatio = 15.25f;
+                settings.SceneSubmission.GpuShadowLodBias = 2;
+                settings.Save(path);
+
+                RenderSettings loaded = RenderSettings.Load(path);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(loaded.SceneSubmission.GpuLod1DistanceRatio, Is.EqualTo(6.5f));
+                    Assert.That(loaded.SceneSubmission.GpuLod2DistanceRatio, Is.EqualTo(15.25f));
+                    Assert.That(loaded.SceneSubmission.GpuShadowLodBias, Is.EqualTo(2));
+                });
+            }
+            finally
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
         }
 
         [Test]
@@ -1615,6 +1706,7 @@ namespace Njulf.Tests
                 settings.GlobalIllumination.SimpleDdgiStructuredGatherEnabled = false;
                 settings.GlobalIllumination.SimpleDdgiReducedBlendEnabled = false;
                 settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled = true;
+                settings.GlobalIllumination.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = 0.93f;
                 settings.GlobalIllumination.SimpleDdgiToroidalScrollingEnabled = false;
                 settings.GlobalIllumination.SimpleDdgiRegionalInvalidationEnabled = false;
                 settings.GlobalIllumination.SimpleDdgiRoughSpecularEnabled = true;
@@ -1776,6 +1868,7 @@ namespace Njulf.Tests
                     Assert.That(loaded.GlobalIllumination.SimpleDdgiStructuredGatherEnabled, Is.False);
                     Assert.That(loaded.GlobalIllumination.SimpleDdgiReducedBlendEnabled, Is.False);
                     Assert.That(loaded.GlobalIllumination.SimpleDdgiSampledAtlasEnabled, Is.True);
+                    Assert.That(loaded.GlobalIllumination.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.EqualTo(0.93f));
                     Assert.That(loaded.GlobalIllumination.SimpleDdgiToroidalScrollingEnabled, Is.False);
                     Assert.That(loaded.GlobalIllumination.SimpleDdgiRegionalInvalidationEnabled, Is.False);
                     Assert.That(loaded.GlobalIllumination.SimpleDdgiRoughSpecularEnabled, Is.True);

@@ -14,6 +14,12 @@ namespace Njulf.Rendering.Pipeline
 {
     public sealed unsafe class SpotShadowPass : RenderPassBase
     {
+        // ShadowSettings clamps this to 32 and SpotShadowAtlas has the same record capacity.
+        private const int CachedLightLabelCapacity = 32;
+        private static readonly string[] StaticLightDebugLabels = CreateLightDebugLabels("Static");
+        private static readonly string[] DynamicLightDebugLabels = CreateLightDebugLabels("Dynamic");
+        private static readonly string[] FoliageLightDebugLabels = CreateLightDebugLabels("Foliage");
+
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly FoliagePipeline? _foliagePipeline;
         private readonly FoliageManager? _foliageManager;
@@ -100,7 +106,7 @@ namespace Njulf.Rendering.Pipeline
             BindShadowPipeline(cmd);
             for (int i = 0; i < sceneData.SpotShadowSelectedCount; i++)
             {
-                _context.BeginDebugLabel(cmd, $"SpotShadowPass Static Light {i}");
+                _context.BeginDebugLabel(cmd, GetLightDebugLabel(StaticLightDebugLabels, "Static", i));
                 try
                 {
                     RenderSpot(
@@ -124,7 +130,7 @@ namespace Njulf.Rendering.Pipeline
             BindShadowPipeline(cmd);
             for (int i = 0; i < sceneData.SpotShadowSelectedCount; i++)
             {
-                _context.BeginDebugLabel(cmd, $"SpotShadowPass Dynamic Light {i}");
+                _context.BeginDebugLabel(cmd, GetLightDebugLabel(DynamicLightDebugLabels, "Dynamic", i));
                 try
                 {
                     RenderSpot(
@@ -151,7 +157,7 @@ namespace Njulf.Rendering.Pipeline
             int shadowCount = Math.Min(sceneData.SpotShadowSelectedCount, sceneData.FoliageMaxLocalShadowedSpotLights);
             for (int i = 0; i < shadowCount; i++)
             {
-                _context.BeginDebugLabel(cmd, $"SpotShadowPass Foliage Light {i}");
+                _context.BeginDebugLabel(cmd, GetLightDebugLabel(FoliageLightDebugLabels, "Foliage", i));
                 try
                 {
                     RenderFoliageSpot(cmd, sceneData, i);
@@ -161,6 +167,22 @@ namespace Njulf.Rendering.Pipeline
                     _context.EndDebugLabel(cmd);
                 }
             }
+        }
+
+        private static string[] CreateLightDebugLabels(string passKind)
+        {
+            var labels = new string[CachedLightLabelCapacity];
+            for (int lightIndex = 0; lightIndex < labels.Length; lightIndex++)
+                labels[lightIndex] = $"SpotShadowPass {passKind} Light {lightIndex}";
+
+            return labels;
+        }
+
+        private static string GetLightDebugLabel(string[] labels, string passKind, int lightIndex)
+        {
+            return (uint)lightIndex < (uint)labels.Length
+                ? labels[lightIndex]
+                : $"SpotShadowPass {passKind} Light {lightIndex}";
         }
 
         private void RenderSpot(

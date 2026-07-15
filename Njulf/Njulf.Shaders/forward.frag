@@ -3511,6 +3511,7 @@ void main()
     bool simpleDdgiActive = simpleDdgiConfigured &&
         (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) != 0u;
     DdgiSampleResult ddgiSample = EmptyDdgiSampleResult();
+    vec3 simpleDdgiContributingVolumeColor = vec3(0.0);
     vec3 ddgiDiffuse = vec3(0.0);
     vec3 finalDdgiDiffuse = vec3(0.0);
     float ddgiCoverage = 0.0;
@@ -3542,6 +3543,7 @@ void main()
         float simpleOwnership = SimpleDdgiRadiometricOwnership(simpleGather);
         float simpleFallback = (1.0 - simpleOwnership) * simpleDdgiParams.environmentFallbackIntensity;
         vec3 simpleIrradiance = simpleGather.irradiance;
+        simpleDdgiContributingVolumeColor = simpleGather.contributingVolumeColor;
         ddgiSample.irradiance = simpleIrradiance;
         ddgiSample.coverage = simpleGather.spatialCoverage;
         ddgiSample.spatialCoverage = simpleGather.spatialCoverage;
@@ -3929,7 +3931,10 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_SELECTION)
     {
-        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_SELECTION, MeshletDebugColor(uint(max(ddgiSample.cascadeIndex, 0.0)) + 1u));
+        vec3 cascadeContributorColor = simpleDdgiActive && globalIlluminationEnabled
+            ? simpleDdgiContributingVolumeColor
+            : MeshletDebugColor(uint(max(ddgiSample.cascadeIndex, 0.0)) + 1u);
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_SELECTION, cascadeContributorColor);
         return;
     }
 

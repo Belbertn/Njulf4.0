@@ -78,6 +78,82 @@ namespace Njulf.Tests
             Assert.That(transformed.Max, Is.EqualTo(new Vector3(11f, 22f, -2f)));
         }
 
+        [TestCase(3.99f, 4.0f, 10.0f, 0)]
+        [TestCase(4.0f, 4.0f, 10.0f, 1)]
+        [TestCase(9.99f, 4.0f, 10.0f, 1)]
+        [TestCase(10.0f, 4.0f, 10.0f, 2)]
+        [TestCase(11.99f, 12.0f, 32.0f, 0)]
+        [TestCase(12.0f, 12.0f, 32.0f, 1)]
+        [TestCase(32.0f, 12.0f, 32.0f, 2)]
+        public void SelectMeshletLodLevel_UsesConfiguredDistanceRatios(
+            float distanceRatio,
+            float lod1DistanceRatio,
+            float lod2DistanceRatio,
+            int expectedLod)
+        {
+            int lod = SceneDataBuilder.SelectMeshletLodLevel(
+                distanceRatio,
+                previousLodLevel: -1,
+                hysteresisFraction: 0.0f,
+                lod1DistanceRatio: lod1DistanceRatio,
+                lod2DistanceRatio: lod2DistanceRatio);
+
+            Assert.That(lod, Is.EqualTo(expectedLod));
+        }
+
+        [Test]
+        public void SelectMeshletLodLevel_UsesConfiguredRatiosForHysteresis()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    SceneDataBuilder.SelectMeshletLodLevel(
+                        4.5f,
+                        previousLodLevel: 0,
+                        hysteresisFraction: 0.15f,
+                        lod1DistanceRatio: 4.0f,
+                        lod2DistanceRatio: 10.0f),
+                    Is.EqualTo(0));
+                Assert.That(
+                    SceneDataBuilder.SelectMeshletLodLevel(
+                        4.7f,
+                        previousLodLevel: 0,
+                        hysteresisFraction: 0.15f,
+                        lod1DistanceRatio: 4.0f,
+                        lod2DistanceRatio: 10.0f),
+                    Is.EqualTo(1));
+                Assert.That(
+                    SceneDataBuilder.SelectMeshletLodLevel(
+                        29.0f,
+                        previousLodLevel: 2,
+                        hysteresisFraction: 0.15f,
+                        lod1DistanceRatio: 12.0f,
+                        lod2DistanceRatio: 32.0f),
+                    Is.EqualTo(2));
+                Assert.That(
+                    SceneDataBuilder.SelectMeshletLodLevel(
+                        26.0f,
+                        previousLodLevel: 2,
+                        hysteresisFraction: 0.15f,
+                        lod1DistanceRatio: 12.0f,
+                        lod2DistanceRatio: 32.0f),
+                    Is.EqualTo(1));
+            });
+        }
+
+        [Test]
+        public void SelectMeshletLodLevel_NormalizesDirectThresholdInputs()
+        {
+            int lod = SceneDataBuilder.SelectMeshletLodLevel(
+                10.0f,
+                previousLodLevel: -1,
+                hysteresisFraction: 0.0f,
+                lod1DistanceRatio: float.NaN,
+                lod2DistanceRatio: float.PositiveInfinity);
+
+            Assert.That(lod, Is.EqualTo(2));
+        }
+
         [Test]
         public void ResolveRenderObjectMaterialHandle_NullAndZeroUseDefaultHandle()
         {

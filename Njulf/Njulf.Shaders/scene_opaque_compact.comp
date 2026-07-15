@@ -14,8 +14,6 @@ layout(push_constant) uniform SceneOpaqueCompactionPushConstantBlock
 const uint SCENE_OPAQUE_COMPACTION_FLAG_FRUSTUM_TEST = 1u << 0u;
 const uint SCENE_OPAQUE_COMPACTION_FLAG_GPU_LOD_SELECTION = 1u << 1u;
 const uint SCENE_OPAQUE_COMPACTION_FLAG_DIRECTIONAL_SHADOW_COMPACTION = 1u << 2u;
-const float SCENE_MESHLET_LOD1_DISTANCE_RATIO = 12.0;
-const float SCENE_MESHLET_LOD2_DISTANCE_RATIO = 32.0;
 const uint SCENE_DIRECTIONAL_SHADOW_CASCADE_COUNT = 4u;
 const uint SCENE_SUBMISSION_COUNTER_OPAQUE_CANDIDATE = 0u;
 const uint SCENE_SUBMISSION_COUNTER_OPAQUE_EMITTED = 1u;
@@ -429,9 +427,11 @@ uint SelectLodLevel(vec3 cameraPosition, vec3 worldCenter, float worldRadius)
     float effectiveRadius = max(worldRadius, 1.0);
     float distanceFromSurface = max(0.0, length(cameraPosition - worldCenter) - effectiveRadius);
     float distanceRatio = distanceFromSurface / effectiveRadius;
-    if (distanceRatio >= SCENE_MESHLET_LOD2_DISTANCE_RATIO)
+    float lod1DistanceRatio = max(pc.Push.GpuLod1DistanceRatio, 1.0);
+    float lod2DistanceRatio = max(pc.Push.GpuLod2DistanceRatio, lod1DistanceRatio);
+    if (distanceRatio >= lod2DistanceRatio)
         return 2u;
-    if (distanceRatio >= SCENE_MESHLET_LOD1_DISTANCE_RATIO)
+    if (distanceRatio >= lod1DistanceRatio)
         return 1u;
     return 0u;
 }
@@ -483,7 +483,7 @@ void SelectMeshletRange(GPUMeshInfo meshInfo, uint requestedLod, out uint firstM
     effectiveLod = 2u;
 }
 
-bool ApplyGpuLodSelection(inout GPUMeshletDrawCommand command, out uint effectiveLod)
+bool ApplyGpuLodSelection(inout GPUMeshletDrawCommand command, out uint effectiveLod, uint lodBias)
 {
     effectiveLod = 0u;
     if ((pc.Push.Flags & SCENE_OPAQUE_COMPACTION_FLAG_GPU_LOD_SELECTION) == 0u)
@@ -511,7 +511,9 @@ bool ApplyGpuLodSelection(inout GPUMeshletDrawCommand command, out uint effectiv
 
     vec4 worldCenter = TransformRowMajorPoint(meshInfo.BoundingSphere.xyz, instanceBufferIndex, objectWordOffset);
     float worldRadius = meshInfo.BoundingSphere.w * ReadInstanceMaxScale(instanceBufferIndex, objectWordOffset);
-    uint requestedLod = SelectLodLevel(pc.Push.CameraPosition.xyz, worldCenter.xyz, worldRadius);
+    uint requestedLod = min(
+        SelectLodLevel(pc.Push.CameraPosition.xyz, worldCenter.xyz, worldRadius) + lodBias,
+        2u);
 
     uint firstMeshlet = 0u;
     uint meshletCount = 0u;
@@ -551,7 +553,7 @@ void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
         localDrawIndex);
 
     uint effectiveLod = 0u;
-    if (!ApplyGpuLodSelection(command, effectiveLod))
+    if (!ApplyGpuLodSelection(command, effectiveLod, 0u))
         return;
 
     if (!IsMeshletVisible(command, frustumPlanes))
@@ -626,7 +628,7 @@ void ProcessDepthCandidate(
         candidateIndex);
 
     uint effectiveLod = 0u;
-    if (!ApplyGpuLodSelection(command, effectiveLod))
+    if (!ApplyGpuLodSelection(command, effectiveLod, 0u))
         return;
 
     if (!IsMeshletVisible(command, frustumPlanes))
@@ -663,7 +665,7 @@ void ProcessDirectionalShadowCandidate(
         candidateIndex);
 
     uint effectiveLod = 0u;
-    if (!ApplyGpuLodSelection(command, effectiveLod))
+    if (!ApplyGpuLodSelection(command, effectiveLod, pc.Push.GpuShadowLodBias))
         return;
 
     uint cascadeCount = min(pc.Push.DirectionalShadowCascadeCount, SCENE_DIRECTIONAL_SHADOW_CASCADE_COUNT);

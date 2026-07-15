@@ -36,6 +36,10 @@ namespace Njulf.Rendering.Resources
         private const uint ProbeStateScrollExposedFlag = 1u << 1;
         private const uint ProbeStateInactiveFlag = 1u << 2;
         private const uint ProbeUpdateMaintenanceFlag = 1u << 12;
+        // Packed into the simple-DDGI flag word so this artist-facing gather
+        // quality control does not grow the hot params header or shift volumes.
+        private const int SecondVolumeOwnershipEarlyOutThresholdShift = 12;
+        private const uint SecondVolumeOwnershipEarlyOutThresholdMask = 0xffu << SecondVolumeOwnershipEarlyOutThresholdShift;
         // Queue-local quality profile.  Probe-state generation uses a different
         // buffer, so bits 3..15 are available to make the trace shader consume
         // actual ring/cascade work limits instead of one global quality value.
@@ -66,6 +70,9 @@ namespace Njulf.Rendering.Resources
         private readonly GPUSimpleDdgiVolume[] _previousVolumeScratch = new GPUSimpleDdgiVolume[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
         private readonly GPUSimpleDdgiProbeUpdate[] _updateQueueScratch = new GPUSimpleDdgiProbeUpdate[GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount];
         private readonly GPUSimpleDdgiProbeState[] _probeStateScratch = new GPUSimpleDdgiProbeState[GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount];
+        // Diagnostics need an exact per-volume age percentile. Reusing one bounded
+        // selection buffer avoids allocations and avoids sorting the whole probe pool.
+        private readonly uint[] _probeAgePercentileScratch = new uint[GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount];
         // Scheduler scratch is retained for the renderer lifetime. Allocating five
         // small arrays every frame showed up as avoidable managed churn in long
         // travel/soak runs, particularly while authored-volume layouts change.
@@ -393,8 +400,24 @@ namespace Njulf.Rendering.Resources
                 DdgiProbeVolumeKind kind = Kind(volume) == VolumeKindAuthored
                     ? DdgiProbeVolumeKind.Authored
                     : DdgiProbeVolumeKind.CameraClipmap;
-                int cascadeIndex = Kind(volume) == VolumeKindRing ? Math.Max(0, i) : 0;
+                int cascadeIndex = Kind(volume) == VolumeKindRing
+                    ? Math.Clamp(SourceOrdinal(volume) - 10_000, 0, 2)
+                    : 0;
                 float volumeCubicMeters = Math.Max(size.X * size.Y * size.Z, 0.0001f);
+                int firstProbe = FirstProbe(volume);
+                int ageCount = firstProbe >= 0 && firstProbe < _probeAges.Length
+                    ? Math.Min(probeCount, _probeAges.Length - firstProbe)
+                    : 0;
+                uint estimatedAgeP95 = ageCount > 0
+                    ? CalculateProbeAgePercentile(
+                        _probeAges.AsSpan(firstProbe, ageCount),
+                        _probeAgePercentileScratch.AsSpan(0, ageCount),
+                        0.95f)
+                    : 0u;
+                int inactiveProbeCount = _probeStateReadbackValid != 0
+                    ? CountInactiveProbes(_probeInactive, firstProbe, probeCount)
+                    : 0;
+                int activeProbeCount = Math.Max(0, probeCount - inactiveProbeCount);
 
                 entries[i] = new DdgiVolumeDiagnosticsEntry(
                     VolumeIndex: i,
@@ -424,7 +447,16 @@ namespace Njulf.Rendering.Resources
                     MaxProbeSpacing = spacing,
                     ProbeDensityPerCubicMeter = probeCount / volumeCubicMeters,
                     ActiveProbeBudgetFraction = Math.Clamp(probeCount / (float)activeProbeBudget, 0.0f, 1.0f),
-                    DesignPreset = kind == DdgiProbeVolumeKind.Authored ? "simple-authored" : "simple-ring",
+                    ProbeStateCountsValid = _probeStateReadbackValid,
+                    ActiveProbeCount = activeProbeCount,
+                    InactiveProbeCount = inactiveProbeCount,
+                    EstimatedAgeP95Frames = estimatedAgeP95,
+                    DesignPreset = Kind(volume) switch
+                    {
+                        VolumeKindAuthored => "simple-authored",
+                        VolumeKindRing => "simple-ring",
+                        _ => "simple-legacy"
+                    },
                     BudgetWarning = !string.IsNullOrEmpty(_lastBudgetWarning)
                         ? _lastBudgetWarning
                         : probeCount > activeProbeBudget / 4 ? "simple-volume-uses-large-fraction-of-probe-budget" : string.Empty
@@ -432,6 +464,53 @@ namespace Njulf.Rendering.Resources
             }
 
             return entries;
+        }
+
+        internal static uint CalculateProbeAgePercentile(
+            ReadOnlySpan<uint> ages,
+            Span<uint> scratch,
+            float percentile)
+        {
+            if (ages.IsEmpty || scratch.Length < ages.Length)
+                return 0u;
+
+            ages.CopyTo(scratch);
+            int rank = Math.Clamp((int)Math.Ceiling(Math.Clamp(percentile, 0.0f, 1.0f) * ages.Length) - 1, 0, ages.Length - 1);
+            return SelectKthProbeAge(scratch.Slice(0, ages.Length), rank);
+        }
+
+        private static uint SelectKthProbeAge(Span<uint> values, int rank)
+        {
+            int left = 0;
+            int right = values.Length - 1;
+            while (left < right)
+            {
+                uint pivot = values[left + ((right - left) >> 1)];
+                int lower = left;
+                int upper = right;
+                while (lower <= upper)
+                {
+                    while (values[lower] < pivot)
+                        lower++;
+                    while (values[upper] > pivot)
+                        upper--;
+                    if (lower > upper)
+                        break;
+
+                    (values[lower], values[upper]) = (values[upper], values[lower]);
+                    lower++;
+                    upper--;
+                }
+
+                if (rank <= upper)
+                    right = upper;
+                else if (rank >= lower)
+                    left = lower;
+                else
+                    return values[rank];
+            }
+
+            return values[left];
         }
 
         public void GetEstimatedProbeAgeFrames(out float p50, out float p95, out float maximum)
@@ -1853,11 +1932,10 @@ namespace Njulf.Rendering.Resources
                 return false;
             }
 
-            int countX = Math.Clamp((int)MathF.Ceiling(size.X / spacing) + 1, 2, GlobalIlluminationSettings.MaxSimpleDdgiProbeCountX);
-            int countY = Math.Clamp((int)MathF.Ceiling(size.Y / spacing) + 1, 2, GlobalIlluminationSettings.MaxSimpleDdgiProbeCountY);
-            int countZ = Math.Clamp((int)MathF.Ceiling(size.Z / spacing) + 1, 2, GlobalIlluminationSettings.MaxSimpleDdgiProbeCountZ);
-            Vector3 origin = SnapVector(min, spacing);
-            Vector3 latticeSize = LatticeSize(countX, countY, countZ, spacing);
+            Vector3 origin = ResolveAuthoredLatticeOrigin(min, spacing, authored.LatticePhase);
+            int countX = ResolveAuthoredLatticeAxisCount(max.X, origin.X, spacing, GlobalIlluminationSettings.MaxSimpleDdgiProbeCountX);
+            int countY = ResolveAuthoredLatticeAxisCount(max.Y, origin.Y, spacing, GlobalIlluminationSettings.MaxSimpleDdgiProbeCountY);
+            int countZ = ResolveAuthoredLatticeAxisCount(max.Z, origin.Z, spacing, GlobalIlluminationSettings.MaxSimpleDdgiProbeCountZ);
             candidate = new VolumeCandidate(
                 VolumeKindAuthored,
                 ordinal,
@@ -1866,8 +1944,8 @@ namespace Njulf.Rendering.Resources
                 countX,
                 countY,
                 countZ,
-                origin,
-                origin + latticeSize,
+                min,
+                max,
                 Math.Max(spacing * 1.5f, 0.001f));
             return true;
         }
@@ -1875,9 +1953,7 @@ namespace Njulf.Rendering.Resources
         private VolumeCandidate CreateRingVolume(GlobalIlluminationSettings gi, BoundingBox sceneBounds, Vector3 cameraPosition, int ringIndex)
         {
             float spacing = gi.SimpleDdgiRingBaseSpacing * MathF.Pow(gi.SimpleDdgiRingSpacingMultiplier, ringIndex);
-            int countX = gi.SimpleDdgiRingGridSizeX;
-            int countY = gi.SimpleDdgiRingGridSizeY;
-            int countZ = gi.SimpleDdgiRingGridSizeZ;
+            (int countX, int countY, int countZ) = ResolveRingGrid(gi, ringIndex);
             Vector3 latticeSize = LatticeSize(countX, countY, countZ, spacing);
             bool hadRingOrigin = _ringHasOrigins[ringIndex];
             Vector3 origin = ResolveSceneClampedOrigin(
@@ -1912,6 +1988,28 @@ namespace Njulf.Rendering.Resources
                 origin,
                 origin + latticeSize,
                 Math.Max(spacing * 1.5f, 0.001f));
+        }
+
+        internal static (int X, int Y, int Z) ResolveRingGrid(GlobalIlluminationSettings settings, int ringIndex)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+
+            return ringIndex switch
+            {
+                1 => (
+                    settings.SimpleDdgiMidRingGridSizeX,
+                    settings.SimpleDdgiMidRingGridSizeY,
+                    settings.SimpleDdgiMidRingGridSizeZ),
+                2 => (
+                    settings.SimpleDdgiFarRingGridSizeX,
+                    settings.SimpleDdgiFarRingGridSizeY,
+                    settings.SimpleDdgiFarRingGridSizeZ),
+                _ => (
+                    settings.SimpleDdgiNearRingGridSizeX,
+                    settings.SimpleDdgiNearRingGridSizeY,
+                    settings.SimpleDdgiNearRingGridSizeZ)
+            };
         }
 
         private VolumeCandidate CreateLegacyVolume(GlobalIlluminationSettings gi, BoundingBox sceneBounds, Vector3 cameraPosition)
@@ -2628,6 +2726,32 @@ namespace Njulf.Rendering.Resources
             return MathF.Floor(value / s) * s;
         }
 
+        internal static Vector3 ResolveAuthoredLatticeOrigin(Vector3 minimum, float spacing, Vector3 latticePhase)
+        {
+            float safeSpacing = Math.Max(spacing, 0.001f);
+            Vector3 phase = new(
+                NormalizeLatticePhase(latticePhase.X),
+                NormalizeLatticePhase(latticePhase.Y),
+                NormalizeLatticePhase(latticePhase.Z));
+            Vector3 phaseOffset = phase * safeSpacing;
+            return SnapVector(minimum - phaseOffset, safeSpacing) + phaseOffset;
+        }
+
+        private static int ResolveAuthoredLatticeAxisCount(float maximum, float origin, float spacing, int maximumCount)
+        {
+            float safeSpacing = Math.Max(spacing, 0.001f);
+            float extent = Math.Max(maximum - origin, 0.0f);
+            return Math.Clamp((int)MathF.Ceiling(extent / safeSpacing) + 1, 2, maximumCount);
+        }
+
+        private static float NormalizeLatticePhase(float value)
+        {
+            if (!float.IsFinite(value))
+                return 0.0f;
+
+            return value - MathF.Floor(value);
+        }
+
         private static Vector3 SnapVector(Vector3 value, float spacing) =>
             new(SnapScalar(value.X, spacing), SnapScalar(value.Y, spacing), SnapScalar(value.Z, spacing));
 
@@ -2729,9 +2853,18 @@ namespace Njulf.Rendering.Resources
 
         private static int CountInactiveProbes(byte[] inactive, int probeCount)
         {
+            return CountInactiveProbes(inactive, 0, probeCount);
+        }
+
+        private static int CountInactiveProbes(byte[] inactive, int firstProbe, int probeCount)
+        {
+            if (firstProbe < 0 || probeCount <= 0)
+                return 0;
+
             int count = 0;
-            int length = Math.Min(Math.Max(probeCount, 0), inactive.Length);
-            for (int i = 0; i < length; i++)
+            int start = Math.Clamp(firstProbe, 0, inactive.Length);
+            int end = Math.Min(inactive.Length, start + Math.Max(probeCount, 0));
+            for (int i = start; i < end; i++)
             {
                 if (inactive[i] != 0)
                     count++;
@@ -2809,6 +2942,12 @@ namespace Njulf.Rendering.Resources
             {
                 flags |= 1u << 9;
             }
+            uint earlyOutThreshold = checked((uint)Math.Clamp(
+                (int)MathF.Round(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold * 255.0f),
+                0,
+                255));
+            flags = (flags & ~SecondVolumeOwnershipEarlyOutThresholdMask) |
+                (earlyOutThreshold << SecondVolumeOwnershipEarlyOutThresholdShift);
             return flags;
         }
 

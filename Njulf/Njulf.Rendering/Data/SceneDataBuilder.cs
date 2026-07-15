@@ -39,8 +39,6 @@ namespace Njulf.Rendering.Data
         private const uint InitialDirectionalShadowMeshletDrawCapacity = 32768;
         private const uint InitialLocalShadowMeshletDrawCapacity = 8192;
         private const uint CpuMeshletCullingThreshold = 128;
-        private const float MeshletLod1DistanceRatio = 12f;
-        private const float MeshletLod2DistanceRatio = 32f;
         private const float MeshletLodHysteresisFraction = 0.15f;
 
         private static readonly ulong ObjectStride = (ulong)Marshal.SizeOf<GPUObjectData>();
@@ -417,9 +415,12 @@ namespace Njulf.Rendering.Data
             Vector2 projectionJitter = default,
             TransparencySettings? transparencySettings = null,
             DecalSettings? decalSettings = null,
+            bool geometryDecalsEnabled = true,
             bool useCameraDependentCpuPayload = false,
             bool useCpuMeshletFrustumCulling = false,
-            bool captureSceneSubmissionValidationLists = false)
+            bool captureSceneSubmissionValidationLists = false,
+            float gpuLod1DistanceRatio = SceneSubmissionSettings.DefaultGpuLod1DistanceRatio,
+            float gpuLod2DistanceRatio = SceneSubmissionSettings.DefaultGpuLod2DistanceRatio)
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
@@ -427,6 +428,12 @@ namespace Njulf.Rendering.Data
                 throw new ArgumentNullException(nameof(camera));
             if (uploadCommandBuffer.Handle == 0)
                 throw new ArgumentException("A valid command buffer is required for scene data upload.", nameof(uploadCommandBuffer));
+
+            gpuLod1DistanceRatio = SceneSubmissionSettings.ClampGpuLod1DistanceRatio(gpuLod1DistanceRatio);
+            gpuLod2DistanceRatio = SceneSubmissionSettings.ClampGpuLod2DistanceRatio(
+                gpuLod2DistanceRatio,
+                gpuLod1DistanceRatio);
+            geometryDecalsEnabled &= decalSettings?.GeometryDecalsEnabled ?? true;
 
             lock (_lock)
             {
@@ -485,9 +492,12 @@ namespace Njulf.Rendering.Data
                     selectedPointShadows,
                     transparencySettings,
                     decalSettings,
+                    geometryDecalsEnabled,
                     CaptureCpuSnapshots,
                     cameraDependentCpuPayload,
-                    useCpuMeshletFrustumCulling);
+                    useCpuMeshletFrustumCulling,
+                    gpuLod1DistanceRatio,
+                    gpuLod2DistanceRatio);
                 _lastPayloadSignatureMicroseconds = ElapsedMicroseconds(signatureStart);
                 bool staticPayloadChanged = !_hasCachedPayload || !_lastStaticPayloadSignature.Equals(staticPayloadSignature);
                 if (staticPayloadChanged)
@@ -565,10 +575,12 @@ namespace Njulf.Rendering.Data
                         buildLocalShadowMeshlets,
                         selectedPointShadows,
                         rebuildObjectData: staticPayloadChanged,
-                        geometryDecalsEnabled: decalSettings?.GeometryDecalsEnabled ?? true,
+                        geometryDecalsEnabled: geometryDecalsEnabled,
                         maxTransparentMeshlets: transparencySettings?.MaxTransparentMeshlets ?? int.MaxValue,
                         useCameraDependentCpuPayload: cameraDependentCpuPayload,
-                        useCpuMeshletFrustumCulling: useCpuMeshletFrustumCulling);
+                        useCpuMeshletFrustumCulling: useCpuMeshletFrustumCulling,
+                        gpuLod1DistanceRatio: gpuLod1DistanceRatio,
+                        gpuLod2DistanceRatio: gpuLod2DistanceRatio);
                     _lastStaticPayloadSignature = staticPayloadSignature;
                     _lastCullingSignature = cullingSignature;
                     _hasCachedPayload = true;
@@ -918,7 +930,9 @@ namespace Njulf.Rendering.Data
             bool geometryDecalsEnabled,
             int maxTransparentMeshlets,
             bool useCameraDependentCpuPayload,
-            bool useCpuMeshletFrustumCulling)
+            bool useCpuMeshletFrustumCulling,
+            float gpuLod1DistanceRatio,
+            float gpuLod2DistanceRatio)
         {
             var shadowFrusta = new Frustum[ShadowSettings.MaxDirectionalCascades];
             if (useCameraDependentCpuPayload && directionalShadowData.HasValue && directionalShadowCascadeCount > 0)
@@ -1060,7 +1074,13 @@ namespace Njulf.Rendering.Data
                     ? storedLodLevel
                     : -1;
                 int lodLevel = useCameraDependentCpuPayload
-                    ? SelectMeshletLodLevel(cameraPosition, worldCenter, worldRadius, previousLodLevel)
+                    ? SelectMeshletLodLevelNormalized(
+                        cameraPosition,
+                        worldCenter,
+                        worldRadius,
+                        previousLodLevel,
+                        gpuLod1DistanceRatio,
+                        gpuLod2DistanceRatio)
                     : 0;
                 _previousRenderObjectLods[renderObject] = lodLevel;
                 MeshletLodRange meshletRange = GetMeshletLodRange(meshInfo, lodLevel, out int effectiveLodLevel);
@@ -1298,7 +1318,13 @@ namespace Njulf.Rendering.Data
                         ? storedLodLevel
                         : -1;
                     int lodLevel = useCameraDependentCpuPayload
-                        ? SelectMeshletLodLevel(cameraPosition, worldCenter, worldRadius, previousLodLevel)
+                        ? SelectMeshletLodLevelNormalized(
+                            cameraPosition,
+                            worldCenter,
+                            worldRadius,
+                            previousLodLevel,
+                            gpuLod1DistanceRatio,
+                            gpuLod2DistanceRatio)
                         : 0;
                     _previousStaticInstanceLods[staticInstanceKey] = lodLevel;
                     MeshletLodRange meshletRange = GetMeshletLodRange(meshInfo, lodLevel, out int effectiveLodLevel);
@@ -1632,39 +1658,92 @@ namespace Njulf.Rendering.Data
             Vector3 cameraPosition,
             Vector3 worldCenter,
             float worldRadius,
-            int previousLodLevel = -1)
+            int previousLodLevel = -1,
+            float lod1DistanceRatio = SceneSubmissionSettings.DefaultGpuLod1DistanceRatio,
+            float lod2DistanceRatio = SceneSubmissionSettings.DefaultGpuLod2DistanceRatio)
+        {
+            lod1DistanceRatio = SceneSubmissionSettings.ClampGpuLod1DistanceRatio(lod1DistanceRatio);
+            lod2DistanceRatio = SceneSubmissionSettings.ClampGpuLod2DistanceRatio(lod2DistanceRatio, lod1DistanceRatio);
+            return SelectMeshletLodLevelNormalized(
+                cameraPosition,
+                worldCenter,
+                worldRadius,
+                previousLodLevel,
+                lod1DistanceRatio,
+                lod2DistanceRatio);
+        }
+
+        private static int SelectMeshletLodLevelNormalized(
+            Vector3 cameraPosition,
+            Vector3 worldCenter,
+            float worldRadius,
+            int previousLodLevel,
+            float lod1DistanceRatio,
+            float lod2DistanceRatio)
         {
             float effectiveRadius = Math.Max(worldRadius, 1f);
             float distanceFromSurface = Math.Max(0f, Distance(cameraPosition, worldCenter) - effectiveRadius);
             float distanceRatio = distanceFromSurface / effectiveRadius;
 
             if (previousLodLevel >= 0)
-                return SelectMeshletLodLevel(distanceRatio, previousLodLevel, MeshletLodHysteresisFraction);
+            {
+                return SelectMeshletLodLevelNormalized(
+                    distanceRatio,
+                    previousLodLevel,
+                    MeshletLodHysteresisFraction,
+                    lod1DistanceRatio,
+                    lod2DistanceRatio);
+            }
 
-            return SelectMeshletLodLevel(distanceRatio);
+            return SelectMeshletLodLevelNormalized(distanceRatio, lod1DistanceRatio, lod2DistanceRatio);
         }
 
-        internal static int SelectMeshletLodLevel(float distanceRatio, int previousLodLevel, float hysteresisFraction)
+        internal static int SelectMeshletLodLevel(
+            float distanceRatio,
+            int previousLodLevel,
+            float hysteresisFraction,
+            float lod1DistanceRatio = SceneSubmissionSettings.DefaultGpuLod1DistanceRatio,
+            float lod2DistanceRatio = SceneSubmissionSettings.DefaultGpuLod2DistanceRatio)
+        {
+            lod1DistanceRatio = SceneSubmissionSettings.ClampGpuLod1DistanceRatio(lod1DistanceRatio);
+            lod2DistanceRatio = SceneSubmissionSettings.ClampGpuLod2DistanceRatio(lod2DistanceRatio, lod1DistanceRatio);
+            return SelectMeshletLodLevelNormalized(
+                distanceRatio,
+                previousLodLevel,
+                hysteresisFraction,
+                lod1DistanceRatio,
+                lod2DistanceRatio);
+        }
+
+        private static int SelectMeshletLodLevelNormalized(
+            float distanceRatio,
+            int previousLodLevel,
+            float hysteresisFraction,
+            float lod1DistanceRatio,
+            float lod2DistanceRatio)
         {
             if (previousLodLevel < 0)
-                return SelectMeshletLodLevel(distanceRatio);
+                return SelectMeshletLodLevelNormalized(distanceRatio, lod1DistanceRatio, lod2DistanceRatio);
 
             float hysteresis = Math.Clamp(hysteresisFraction, 0f, 0.5f);
             return previousLodLevel switch
             {
-                0 when distanceRatio < MeshletLod1DistanceRatio * (1f + hysteresis) => 0,
-                1 when distanceRatio >= MeshletLod1DistanceRatio * (1f - hysteresis) &&
-                       distanceRatio < MeshletLod2DistanceRatio * (1f + hysteresis) => 1,
-                2 when distanceRatio >= MeshletLod2DistanceRatio * (1f - hysteresis) => 2,
-                _ => SelectMeshletLodLevel(distanceRatio)
+                0 when distanceRatio < lod1DistanceRatio * (1f + hysteresis) => 0,
+                1 when distanceRatio >= lod1DistanceRatio * (1f - hysteresis) &&
+                       distanceRatio < lod2DistanceRatio * (1f + hysteresis) => 1,
+                2 when distanceRatio >= lod2DistanceRatio * (1f - hysteresis) => 2,
+                _ => SelectMeshletLodLevelNormalized(distanceRatio, lod1DistanceRatio, lod2DistanceRatio)
             };
         }
 
-        private static int SelectMeshletLodLevel(float distanceRatio)
+        private static int SelectMeshletLodLevelNormalized(
+            float distanceRatio,
+            float lod1DistanceRatio,
+            float lod2DistanceRatio)
         {
-            if (distanceRatio >= MeshletLod2DistanceRatio)
+            if (distanceRatio >= lod2DistanceRatio)
                 return 2;
-            if (distanceRatio >= MeshletLod1DistanceRatio)
+            if (distanceRatio >= lod1DistanceRatio)
                 return 1;
             return 0;
         }
@@ -2935,9 +3014,12 @@ namespace Njulf.Rendering.Data
                 ReadOnlySpan<SelectedLocalShadow> selectedPointShadows,
                 TransparencySettings? transparencySettings,
                 DecalSettings? decalSettings,
+                bool geometryDecalsEnabled,
                 bool captureCpuSnapshots,
                 bool cameraDependentCpuPayload,
-                bool useCpuMeshletFrustumCulling)
+                bool useCpuMeshletFrustumCulling,
+                float gpuLod1DistanceRatio,
+                float gpuLod2DistanceRatio)
             {
                 var hash = new HashCode();
                 if (cameraDependentCpuPayload)
@@ -2958,9 +3040,14 @@ namespace Njulf.Rendering.Data
                 hash.Add(captureCpuSnapshots);
                 hash.Add(cameraDependentCpuPayload);
                 hash.Add(useCpuMeshletFrustumCulling);
+                if (cameraDependentCpuPayload)
+                {
+                    hash.Add(gpuLod1DistanceRatio);
+                    hash.Add(gpuLod2DistanceRatio);
+                }
                 hash.Add(transparencySettings?.MaxTransparentMeshlets ?? int.MaxValue);
                 hash.Add(transparencySettings?.SortPerMeshlet ?? true);
-                hash.Add(decalSettings?.GeometryDecalsEnabled ?? true);
+                hash.Add(geometryDecalsEnabled);
                 if (cameraDependentCpuPayload && directionalShadowData.HasValue)
                 {
                     GPUShadowData shadowData = directionalShadowData.Value;

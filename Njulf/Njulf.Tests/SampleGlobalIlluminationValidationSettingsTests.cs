@@ -1,4 +1,6 @@
+using Njulf.Core.Math;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
 using NjulfHelloGame;
 using NUnit.Framework;
 
@@ -11,7 +13,7 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
     private const ulong SponzaAccelerationStructureBudgetBytes = 512UL * 1024UL * 1024UL;
 
     [Test]
-    public void ConfigureRenderSettings_SponzaAddsUpperDenseCoverageWithinProbeBudget()
+    public void ConfigureRenderSettings_SponzaReallocatesProbeBudgetToNavigableCoverage()
     {
         var settings = new RenderSettings();
 
@@ -24,38 +26,54 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             SamplePerformanceScenario.GiSponzaRightWallStationary);
 
         GlobalIlluminationSettings gi = settings.GlobalIllumination;
-        SimpleDdgiAuthoredVolume volume = gi.SimpleDdgiAuthoredVolumes.Single();
         int ringProbeCount =
-            gi.SimpleDdgiRingCount *
-            gi.SimpleDdgiRingGridSizeX *
-            gi.SimpleDdgiRingGridSizeY *
-            gi.SimpleDdgiRingGridSizeZ;
-        int authoredProbeCount =
-            ((int)MathF.Ceiling((volume.Max.X - volume.Min.X) / volume.Spacing) + 1) *
-            ((int)MathF.Ceiling((volume.Max.Y - volume.Min.Y) / volume.Spacing) + 1) *
-            ((int)MathF.Ceiling((volume.Max.Z - volume.Min.Z) / volume.Spacing) + 1);
+            gi.SimpleDdgiNearRingGridSizeX * gi.SimpleDdgiNearRingGridSizeY * gi.SimpleDdgiNearRingGridSizeZ +
+            gi.SimpleDdgiMidRingGridSizeX * gi.SimpleDdgiMidRingGridSizeY * gi.SimpleDdgiMidRingGridSizeZ +
+            gi.SimpleDdgiFarRingGridSizeX * gi.SimpleDdgiFarRingGridSizeY * gi.SimpleDdgiFarRingGridSizeZ;
+        int authoredProbeCount = gi.SimpleDdgiAuthoredVolumes.Sum(AuthoredProbeCount);
 
         Assert.Multiple(() =>
         {
             Assert.That(gi.GiAccelerationStructureMemoryBudgetBytes, Is.EqualTo(SponzaAccelerationStructureBudgetBytes));
             Assert.That(gi.EnvironmentFallbackIntensity, Is.EqualTo(1.0f));
-            Assert.That(gi.SimpleDdgiAuthoredVolumes, Has.Count.EqualTo(1));
-            Assert.That(volume.Spacing, Is.EqualTo(1.0f));
+            Assert.That(gi.SimpleDdgiAuthoredVolumes, Has.Count.EqualTo(6));
+            Assert.That(gi.SimpleDdgiAuthoredVolumes, Is.All.Matches<SimpleDdgiAuthoredVolume>(volume => volume.Spacing == 1.0f));
+            Assert.That(gi.SimpleDdgiAuthoredVolumes, Has.Some.Matches<SimpleDdgiAuthoredVolume>(volume => volume.Min.Y < 0.0f));
+            Assert.That(gi.SimpleDdgiAuthoredVolumes, Is.All.Matches<SimpleDdgiAuthoredVolume>(volume => volume.Max.Y <= 8.5f));
+            Assert.That(gi.SimpleDdgiAuthoredVolumes, Has.Some.Matches<SimpleDdgiAuthoredVolume>(volume => volume.LatticePhase != default));
 
-            // Measured main-mesh bounds are
-            // (-16.245575, -1.131135, -9.402087)..(20.001305, 18.757229, 14.363933).
-            Assert.That(volume.Min.X, Is.LessThanOrEqualTo(-16.245575f));
-            Assert.That(volume.Max.X, Is.GreaterThanOrEqualTo(20.001305f));
-            Assert.That(volume.Min.Z, Is.LessThanOrEqualTo(-9.402087f));
-            Assert.That(volume.Max.Z, Is.GreaterThanOrEqualTo(14.363933f));
-            Assert.That(volume.Min.Y, Is.LessThanOrEqualTo(10.5f), "Upper coverage must overlap the dense near ring.");
-            Assert.That(volume.Max.Y, Is.GreaterThanOrEqualTo(18.757229f));
-
-            Assert.That(ringProbeCount, Is.EqualTo(20_736));
-            Assert.That(authoredProbeCount, Is.EqualTo(11_154));
-            Assert.That(ringProbeCount + authoredProbeCount, Is.EqualTo(31_890));
+            Assert.That(gi.SimpleDdgiRingBaseSpacing, Is.EqualTo(1.0f));
+            Assert.That(gi.SimpleDdgiRingSpacingMultiplier, Is.EqualTo(3.0f));
+            Assert.That(gi.SimpleDdgiNearRingGridSizeX, Is.EqualTo(32));
+            Assert.That(gi.SimpleDdgiNearRingGridSizeY, Is.EqualTo(12));
+            Assert.That(gi.SimpleDdgiNearRingGridSizeZ, Is.EqualTo(32));
+            Assert.That(gi.SimpleDdgiMidRingGridSizeX, Is.EqualTo(18));
+            Assert.That(gi.SimpleDdgiMidRingGridSizeY, Is.EqualTo(10));
+            Assert.That(gi.SimpleDdgiMidRingGridSizeZ, Is.EqualTo(18));
+            Assert.That(gi.SimpleDdgiFarRingGridSizeX, Is.EqualTo(12));
+            Assert.That(gi.SimpleDdgiFarRingGridSizeY, Is.EqualTo(8));
+            Assert.That(gi.SimpleDdgiFarRingGridSizeZ, Is.EqualTo(12));
+            Assert.That(gi.SimpleDdgiNearFullRaysPerProbe, Is.EqualTo(64));
+            Assert.That(gi.SimpleDdgiSampledAtlasEnabled, Is.True);
+            Assert.That(ringProbeCount, Is.EqualTo(16_680));
+            Assert.That(authoredProbeCount, Is.EqualTo(8_569));
+            Assert.That(ringProbeCount + authoredProbeCount, Is.EqualTo(25_249));
             Assert.That(ringProbeCount + authoredProbeCount, Is.LessThanOrEqualTo(GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount));
         });
+    }
+
+    private static int AuthoredProbeCount(SimpleDdgiAuthoredVolume volume)
+    {
+        Vector3 min = Vector3.Min(volume.Min, volume.Max);
+        Vector3 max = Vector3.Max(volume.Min, volume.Max);
+        Vector3 origin = SimpleDdgiVolumeManager.ResolveAuthoredLatticeOrigin(
+            min,
+            volume.Spacing,
+            volume.LatticePhase);
+        int countX = (int)MathF.Ceiling((max.X - origin.X) / volume.Spacing) + 1;
+        int countY = (int)MathF.Ceiling((max.Y - origin.Y) / volume.Spacing) + 1;
+        int countZ = (int)MathF.Ceiling((max.Z - origin.Z) / volume.Spacing) + 1;
+        return countX * countY * countZ;
     }
 
     [TestCase(SamplePerformanceScenario.GiCornellRoom)]

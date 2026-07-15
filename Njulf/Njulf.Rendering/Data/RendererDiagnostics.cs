@@ -51,6 +51,18 @@ namespace Njulf.Rendering.Data
         public float MaxProbeSpacing { get; init; }
         public float ProbeDensityPerCubicMeter { get; init; }
         public float ActiveProbeBudgetFraction { get; init; }
+        /// <summary>1 when ActiveProbeCount and InactiveProbeCount are measured or authoritative.</summary>
+        public int ProbeStateCountsValid { get; init; }
+        public int ActiveProbeCount { get; init; }
+        public int InactiveProbeCount { get; init; }
+        /// <summary>1 when the per-volume gather counters were read from a completed GPU frame.</summary>
+        public int GatherCountersReadbackValid { get; init; }
+        /// <summary>Fragments for which this was the finest containing Simple-DDGI volume.</summary>
+        public uint PrimaryGatherCount { get; init; }
+        /// <summary>Simple-DDGI volume gathers performed, including primary and coarser fallback gathers.</summary>
+        public uint SampledGatherCount { get; init; }
+        /// <summary>Exact nearest-rank P95 of the CPU-resident ages for this volume.</summary>
+        public float EstimatedAgeP95Frames { get; init; }
         public string DesignPreset { get; init; } = string.Empty;
         public string BudgetWarning { get; init; } = string.Empty;
     }
@@ -808,6 +820,8 @@ namespace Njulf.Rendering.Data
         public float SimpleDdgiAverageSampledIrradianceLuminance { get; init; }
         public float SimpleDdgiAverageVisibility { get; init; }
         public uint SimpleDdgiLowVisibilitySampleCount { get; init; }
+        public uint SimpleDdgiGatherSampleCount { get; init; }
+        public uint SimpleDdgiSecondVolumeGatherCount { get; init; }
         public int DdgiFullRefreshFrameCount { get; init; }
         public int DdgiPartialRefreshFrameCount { get; init; }
         public float DdgiUpdatedProbeFraction { get; init; }

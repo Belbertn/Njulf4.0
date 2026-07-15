@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -314,6 +315,57 @@ public sealed class RenderGraphResourceDeclarationTests
             Throws.InvalidOperationException.With.Message.Contains("imported"));
     }
 
+    [Test]
+    public void CompleteSplitExecution_PublishesOneBarrierSummaryEntryPerBarrierAndPreservesAsyncPlanSummary()
+    {
+        var graph = new RenderGraph();
+        List<RenderGraphPlannedBarrier> plannedBarriers = GetPlannedBarrierList(graph);
+        var barriers = new[]
+        {
+            CreatePlannedBarrier("DepthPrePass", RenderGraphResourceId.SceneDepth),
+            CreatePlannedBarrier("HiZBuildPass", RenderGraphResourceId.HiZPyramid),
+            CreatePlannedBarrier("ForwardPlusPass", RenderGraphResourceId.SceneColor)
+        };
+
+        foreach (RenderGraphPlannedBarrier barrier in barriers)
+        {
+            plannedBarriers.Add(barrier);
+            AppendBarrierSummary(graph, barrier);
+        }
+
+        var sceneData = new SceneRenderingData();
+        graph.CompleteSplitExecution(sceneData);
+
+        string[] summaryEntries = sceneData.GraphBarrierSummary.Split(new[] { "; " }, StringSplitOptions.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(summaryEntries, Has.Length.EqualTo(graph.LastPlannedBarriers.Count));
+            Assert.That(summaryEntries, Is.EqualTo(new[]
+            {
+                "DepthPrePass:SceneDepth General->ShaderReadOnlyOptimal",
+                "HiZBuildPass:HiZPyramid General->ShaderReadOnlyOptimal",
+                "ForwardPlusPass:SceneColor General->ShaderReadOnlyOptimal"
+            }));
+        });
+
+        sceneData.GraphBarrierSummary = "async plan: 2 graphics segments, 1 compute segments, 3 queue-family handoffs";
+        graph.CompleteSplitExecution(sceneData);
+
+        Assert.That(
+            sceneData.GraphBarrierSummary,
+            Is.EqualTo("async plan: 2 graphics segments, 1 compute segments, 3 queue-family handoffs"));
+
+        var nextFrameSceneData = new SceneRenderingData { GraphBarrierSummary = "stale summary" };
+        graph.BeginSplitExecution(nextFrameSceneData);
+        graph.CompleteSplitExecution(nextFrameSceneData);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(graph.LastPlannedBarriers, Is.Empty);
+            Assert.That(nextFrameSceneData.GraphBarrierSummary, Is.Empty);
+        });
+    }
+
     private static RenderGraphResourceDescriptor CreateSceneColorDescriptor()
     {
         return new RenderGraphResourceDescriptor(
@@ -345,6 +397,39 @@ public sealed class RenderGraphResourceDeclarationTests
             ?? throw new InvalidOperationException("RenderPassBase.Name backing field was not found.");
         field.SetValue(pass, name);
         return pass;
+    }
+
+    private static List<RenderGraphPlannedBarrier> GetPlannedBarrierList(RenderGraph graph)
+    {
+        FieldInfo field = typeof(RenderGraph).GetField("_framePlannedBarriers", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("RenderGraph planned-barrier field was not found.");
+        return (List<RenderGraphPlannedBarrier>)field.GetValue(graph)!;
+    }
+
+    private static void AppendBarrierSummary(RenderGraph graph, RenderGraphPlannedBarrier barrier)
+    {
+        MethodInfo method = typeof(RenderGraph).GetMethod("AppendBarrierSummary", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingMethodException(typeof(RenderGraph).FullName, "AppendBarrierSummary");
+        method.Invoke(graph, new object[] { barrier });
+    }
+
+    private static RenderGraphPlannedBarrier CreatePlannedBarrier(string passName, RenderGraphResourceId resource)
+    {
+        return new RenderGraphPlannedBarrier(
+            passName,
+            resource,
+            RenderGraphResourceAccess.Write,
+            RenderGraphResourceAccess.Read,
+            ImageLayout.General,
+            ImageLayout.ShaderReadOnlyOptimal,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.FragmentShaderBit,
+            AccessFlags2.ShaderSampledReadBit,
+            RenderGraphQueueIntent.Graphics,
+            RenderGraphQueueIntent.Graphics,
+            QueueOwnershipTransition: false,
+            Executed: true);
     }
 
     private sealed class NamedTestPass : RenderPassBase

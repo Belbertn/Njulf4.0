@@ -264,8 +264,18 @@ AO debug views:
 | `DdgiMaterialTextureMaxCascade` | Highest camera-relative cascade that samples material textures in DDGI hit shading; `-1` disables cascade texture sampling while authored volumes still sample textures. |
 | `DdgiSelfShadowBiasScale` | Artist-facing multiplier for authored DDGI normal/view self-shadow bias. Default `1.0`; higher values reduce acne/leaks at the cost of contact accuracy. |
 | `DdgiHysteresisResponse` | Artist-facing response scale for DDGI probe lighting history. Default `1.0`; higher values converge lighting changes faster, lower values favor stability. |
+| `SimpleDdgiSampledAtlasEnabled` | Enables the optional filtered image mirror of the canonical Simple-DDGI SSBO atlases. High and Ultra request it; the runtime disables it safely if the DDGI memory budget cannot admit the extra image allocation. |
+| `SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold` | Ownership threshold for skipping a containing coarser-ring gather. Default `0.95`; lower values reduce gather work while increasing transition risk, and `1.0` keeps the conservative behavior. |
+| `SimpleDdgiRingBaseSpacing`, `SimpleDdgiRingSpacingMultiplier` | Base near-ring spacing and per-ring spacing multiplier for camera-relative Simple-DDGI rings. |
+| `SimpleDdgiNearRingGridSizeX/Y/Z`, `SimpleDdgiMidRingGridSizeX/Y/Z`, `SimpleDdgiFarRingGridSizeX/Y/Z` | Independent lattice dimensions for the near, mid, and far Simple-DDGI rings. The legacy `SimpleDdgiRingGridSizeX/Y/Z` setters broadcast a dimension to all three rings. |
+| `SimpleDdgiAuthoredVolume.LatticePhase` | Spacing-relative XYZ phase for an authored lattice. It is wrapped to `[0, 1)` and shifts probe planes within unchanged volume bounds, helping avoid repeated wall/column alignments. |
+| `SimpleDdgiNear/Mid/FarFullRaysPerProbe` | Full-refresh ray count for each Simple-DDGI ring; authored volumes use the near profile. |
+| `SimpleDdgiNear/Mid/FarMaintenanceRaysPerProbe` | Stable maintenance ray count for each Simple-DDGI ring. |
+| `SimpleDdgiNear/Mid/FarMinimumUpdateQuota`, `SimpleDdgiNear/Mid/FarMaximumUpdateQuota` | Per-ring update floors and preferred maxima applied before the weighted remainder allocator consumes the global Simple-DDGI update budget. |
 
 `DdgiHigh` is the default DDGI-only production profile: DDGI mode, SSGI disabled, ray-query backend requested, probe classification/relocation enabled, camera-relative clipmaps enabled, AO/reflections enabled, and DDGI async compute enabled. The production DDGI tier budgets are explicit: `DdgiLow` uses 2 cascades at 16x6x16 with a 64 MB DDGI memory target, `DdgiMedium` uses 3 cascades at 20x8x20 with 128 MB, `DdgiHigh` uses 3 cascades at 24x14x24 with 192 MB, and `DdgiUltra` uses 4 cascades at 32x12x32 with 384 MB. Dense probe density is reserved for admitted authored local volumes such as interiors and alleys; the camera-relative clipmap remains tier-bounded instead of allocating a dense all-world volume. Milestone 9 validation reports include a DDGI production gate for required benchmark scenes and fail if SSGI resources/passes remain active in `DdgiHigh`.
+
+The `DdgiHigh` Simple-DDGI profile uses three asymmetric camera-relative rings: near `28x14x28` at `1.25 m`, mid `18x10x18` at `3.75 m`, and far `12x8x12` at `11.25 m`. This is 15,368 probes total, reaching approximately `±16.9 m / ±8.1 m`, `±31.9 m / ±16.9 m`, and `±61.9 m / ±39.4 m` horizontally/vertically before authored volumes. Its global update budget is 2,048 probes per frame, with near/mid/far preferred quotas of 1,024/324/128 and 64/48/24 full-refresh rays per probe. DDGI diagnostics report each active Simple-DDGI ring's grid, spacing, reach, and exact CPU age P95.
 
 DDGI debug views include `DdgiCoverage`, `DdgiCascadeSelection`, `DdgiCascadeBlendWeight`, `DdgiUpdateReasons`, `DdgiRayBudget`, and gather-tile views such as `DdgiGatherBlendWeight` for validating volume selection, probe validity, update reasons, ray-budget behavior, and shader-read tile state.
 
@@ -555,8 +565,13 @@ Foliage debug views:
 | `GpuCompactionEnabled` | Enables GPU compaction of scene draw lists. |
 | `IndirectMeshletDispatchEnabled` | Enables indirect meshlet dispatch. |
 | `GpuLodSelectionEnabled` | Enables GPU LOD selection. |
+| `GpuLod1DistanceRatio` | Distance-to-bounding-radius threshold for LOD0 → LOD1. Defaults to `4.0`; clamped to `[1, 64]`. |
+| `GpuLod2DistanceRatio` | Distance-to-bounding-radius threshold for LOD1 → LOD2. Defaults to `10.0`; clamped to `[GpuLod1DistanceRatio, 128]`. |
 | `GpuShadowCompactionEnabled` | Enables GPU shadow compaction. |
+| `GpuShadowLodBias` | Additional LOD levels selected for GPU-compacted directional-shadow draws. Defaults to `1`; clamped to `[0, 2]`. |
 | `ValidationCompareCpuGpuLists` | Compares CPU/GPU lists for validation. |
+
+Meshes without authored LOD1/LOD2 meshlet ranges safely remain on their available base range; changing these thresholds never fabricates simplified geometry. Set the ratios to `12.0` and `32.0` to reproduce the prior threshold behavior.
 
 ## Hi-Z Visibility Policy
 

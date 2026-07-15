@@ -36,7 +36,11 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.FarFieldCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleBase + RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleCount));
                 Assert.That(RendererDiagnosticsBuffer.FarFieldCounterCount, Is.EqualTo(10));
                 Assert.That(RendererDiagnosticsBuffer.DdgiInvestigationCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.FarFieldCounterBase + RendererDiagnosticsBuffer.FarFieldCounterCount));
-                Assert.That(RendererDiagnosticsBuffer.DdgiInvestigationCounterCount, Is.EqualTo(36));
+                Assert.That(RendererDiagnosticsBuffer.DdgiInvestigationFixedCounterCount, Is.EqualTo(38));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeGatherCounterCount, Is.EqualTo(GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumePrimaryGatherCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiInvestigationCounterBase + RendererDiagnosticsBuffer.DdgiInvestigationFixedCounterCount));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeSampledGatherCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.SimpleDdgiVolumePrimaryGatherCounterBase + RendererDiagnosticsBuffer.SimpleDdgiVolumeGatherCounterCount));
+                Assert.That(RendererDiagnosticsBuffer.DdgiInvestigationCounterCount, Is.EqualTo(70));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(RendererDiagnosticsBuffer.MeshletCounterCount + RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount + RendererDiagnosticsBuffer.DdgiTraceEnergyCounterCount + RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterCount + RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount + RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleCount + RendererDiagnosticsBuffer.FarFieldCounterCount + RendererDiagnosticsBuffer.DdgiInvestigationCounterCount));
                 Assert.That(settings.Debug.SelectedObjectIndex, Is.EqualTo(-1));
                 Assert.That(settings.Debug.MaxDebugLineSegments, Is.EqualTo(DebugDrawList.DefaultMaxLineSegments));
@@ -220,6 +224,7 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.SimpleDdgiStructuredGatherEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiReducedBlendEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.EqualTo(0.95f));
                 Assert.That(settings.GlobalIllumination.SimpleDdgiToroidalScrollingEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiRegionalInvalidationEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.FarFieldSkyVisibilityEnabled, Is.True);
@@ -348,6 +353,32 @@ namespace Njulf.Tests
                 Assert.That(negativeXPositiveZ, Is.GreaterThan(0));
                 Assert.That(positiveXNegativeZ, Is.GreaterThan(0));
                 Assert.That(positiveXPositiveZ, Is.GreaterThan(0));
+            });
+        }
+
+        [Test]
+        public void DdgiProbeDebugMarkerBudget_IsSharedAcrossRemainingVolumes()
+        {
+            int remainingMarkers = 768;
+            int remainingVolumes = 4;
+            var allocations = new int[remainingVolumes];
+
+            for (int i = 0; i < allocations.Length; i++)
+            {
+                int allocation = VulkanRenderer.CalculateDdgiProbeMarkerBudget(
+                    remainingMarkers,
+                    remainingVolumes);
+                allocations[i] = allocation;
+                remainingMarkers -= allocation;
+                remainingVolumes--;
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(allocations, Is.EqualTo(new[] { 192, 192, 192, 192 }));
+                Assert.That(remainingMarkers, Is.Zero);
+                Assert.That(VulkanRenderer.CalculateDdgiProbeMarkerBudget(0, 4), Is.Zero);
+                Assert.That(VulkanRenderer.CalculateDdgiProbeMarkerBudget(64, 0), Is.Zero);
             });
         }
 

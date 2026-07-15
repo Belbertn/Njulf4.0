@@ -28,7 +28,11 @@ namespace Njulf.Rendering.Resources
         public const int FarFieldCounterBase = DdgiTraceRingMismatchSampleBase + DdgiTraceRingMismatchSampleCount;
         public const int FarFieldCounterCount = 10;
         public const int DdgiInvestigationCounterBase = FarFieldCounterBase + FarFieldCounterCount;
-        public const int DdgiInvestigationCounterCount = 36;
+        public const int DdgiInvestigationFixedCounterCount = 38;
+        public const int SimpleDdgiVolumeGatherCounterCount = GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount;
+        public const int SimpleDdgiVolumePrimaryGatherCounterBase = DdgiInvestigationCounterBase + DdgiInvestigationFixedCounterCount;
+        public const int SimpleDdgiVolumeSampledGatherCounterBase = SimpleDdgiVolumePrimaryGatherCounterBase + SimpleDdgiVolumeGatherCounterCount;
+        public const int DdgiInvestigationCounterCount = DdgiInvestigationFixedCounterCount + SimpleDdgiVolumeGatherCounterCount * 2;
         public const int CounterCount = MeshletCounterCount + DdgiForwardEstimateCounterCount + DdgiTraceEnergyCounterCount + DdgiTraceEarlyOutCounterCount + DdgiBlendEnergyCounterCount + DdgiTraceRingMismatchSampleCount + FarFieldCounterCount + DdgiInvestigationCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
@@ -124,6 +128,18 @@ namespace Njulf.Rendering.Resources
             float invInvestigationSampleCount = ddgiInvestigationSampleCount > 0 ? 1.0f / ddgiInvestigationSampleCount : 0.0f;
             float invSimpleVisibilitySampleCount = simpleVisibilitySampleCount > 0 ? 1.0f / simpleVisibilitySampleCount : 0.0f;
             float invSkyVisibilitySampleCount = skyVisibilitySampleCount > 0 ? 1.0f / skyVisibilitySampleCount : 0.0f;
+            uint[] simpleVolumePrimaryGatherCounts = investigationValid
+                ? new uint[SimpleDdgiVolumeGatherCounterCount]
+                : Array.Empty<uint>();
+            uint[] simpleVolumeSampledGatherCounts = investigationValid
+                ? new uint[SimpleDdgiVolumeGatherCounterCount]
+                : Array.Empty<uint>();
+            for (int i = 0; i < simpleVolumePrimaryGatherCounts.Length; i++)
+            {
+                simpleVolumePrimaryGatherCounts[i] = counters[SimpleDdgiVolumePrimaryGatherCounterBase + i];
+                simpleVolumeSampledGatherCounts[i] = counters[SimpleDdgiVolumeSampledGatherCounterBase + i];
+            }
+
             _lastCompletedDdgiInvestigationCounters[frameIndex] = investigationValid
                 ? new DdgiInvestigationCounters(
                     ReadbackValid: 1,
@@ -163,6 +179,10 @@ namespace Njulf.Rendering.Resources
                     FarSunShadowOccludedCount: counters[DdgiInvestigationCounterBase + 33],
                     RoughSpecularSampleCount: counters[DdgiInvestigationCounterBase + 34],
                     RoughSpecularNonzeroCount: counters[DdgiInvestigationCounterBase + 35],
+                    SimpleGatherCount: counters[DdgiInvestigationCounterBase + 36],
+                    SimpleSecondVolumeGatherCount: counters[DdgiInvestigationCounterBase + 37],
+                    SimpleVolumePrimaryGatherCounts: simpleVolumePrimaryGatherCounts,
+                    SimpleVolumeSampledGatherCounts: simpleVolumeSampledGatherCounts,
                     FarFieldStepBucket0Count: counters[FarFieldCounterBase + 5],
                     FarFieldStepBucket1Count: counters[FarFieldCounterBase + 6],
                     FarFieldStepBucket2Count: counters[FarFieldCounterBase + 7],

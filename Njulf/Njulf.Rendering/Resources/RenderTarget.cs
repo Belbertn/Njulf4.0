@@ -129,8 +129,8 @@ namespace Njulf.Rendering.Resources
             Transition(
                 cmd,
                 ImageLayout.ColorAttachmentOptimal,
-                GetSourceStage(Layout),
-                GetSourceAccess(Layout),
+                GetSourceStageForLayout(Layout),
+                GetSourceAccessForLayout(Layout),
                 PipelineStageFlags2.ColorAttachmentOutputBit,
                 AccessFlags2.ColorAttachmentWriteBit | AccessFlags2.ColorAttachmentReadBit);
         }
@@ -141,8 +141,8 @@ namespace Njulf.Rendering.Resources
             Transition(
                 cmd,
                 ImageLayout.DepthStencilAttachmentOptimal,
-                GetSourceStage(Layout),
-                GetSourceAccess(Layout),
+                GetSourceStageForLayout(Layout),
+                GetSourceAccessForLayout(Layout),
                 PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit,
                 AccessFlags2.DepthStencilAttachmentWriteBit | AccessFlags2.DepthStencilAttachmentReadBit);
         }
@@ -153,8 +153,8 @@ namespace Njulf.Rendering.Resources
             Transition(
                 cmd,
                 ImageLayout.DepthStencilReadOnlyOptimal,
-                GetSourceStage(Layout),
-                GetSourceAccess(Layout),
+                GetSourceStageForLayout(Layout),
+                GetSourceAccessForLayout(Layout),
                 PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.EarlyFragmentTestsBit,
                 AccessFlags2.ShaderSampledReadBit | AccessFlags2.DepthStencilAttachmentReadBit);
         }
@@ -165,8 +165,8 @@ namespace Njulf.Rendering.Resources
             Transition(
                 cmd,
                 ImageLayout.ShaderReadOnlyOptimal,
-                GetSourceStage(Layout),
-                GetSourceAccess(Layout),
+                GetSourceStageForLayout(Layout),
+                GetSourceAccessForLayout(Layout),
                 PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderSampledReadBit);
         }
@@ -177,8 +177,8 @@ namespace Njulf.Rendering.Resources
             Transition(
                 cmd,
                 ImageLayout.General,
-                GetSourceStage(Layout),
-                GetSourceAccess(Layout),
+                GetSourceStageForLayout(Layout),
+                GetSourceAccessForLayout(Layout),
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit);
         }
@@ -189,8 +189,8 @@ namespace Njulf.Rendering.Resources
             Transition(
                 cmd,
                 ImageLayout.General,
-                GetSourceStage(Layout),
-                GetSourceAccess(Layout),
+                GetSourceStageForLayout(Layout),
+                GetSourceAccessForLayout(Layout),
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
         }
@@ -201,8 +201,8 @@ namespace Njulf.Rendering.Resources
             Transition(
                 cmd,
                 ImageLayout.TransferSrcOptimal,
-                GetSourceStage(Layout),
-                GetSourceAccess(Layout),
+                GetSourceStageForLayout(Layout),
+                GetSourceAccessForLayout(Layout),
                 PipelineStageFlags2.TransferBit,
                 AccessFlags2.TransferReadBit);
         }
@@ -213,8 +213,8 @@ namespace Njulf.Rendering.Resources
             Transition(
                 cmd,
                 ImageLayout.TransferDstOptimal,
-                GetSourceStage(Layout),
-                GetSourceAccess(Layout),
+                GetSourceStageForLayout(Layout),
+                GetSourceAccessForLayout(Layout),
                 PipelineStageFlags2.TransferBit,
                 AccessFlags2.TransferWriteBit);
         }
@@ -232,8 +232,8 @@ namespace Njulf.Rendering.Resources
             Transition(
                 cmd,
                 newLayout,
-                srcStage ?? GetSourceStage(Layout),
-                srcAccess ?? GetSourceAccess(Layout),
+                srcStage ?? GetSourceStageForLayout(Layout),
+                srcAccess ?? GetSourceAccessForLayout(Layout),
                 dstStage,
                 dstAccess,
                 force);
@@ -284,7 +284,7 @@ namespace Njulf.Rendering.Resources
             Layout = newLayout;
         }
 
-        private static PipelineStageFlags2 GetSourceStage(ImageLayout layout)
+        internal static PipelineStageFlags2 GetSourceStageForLayout(ImageLayout layout)
         {
             return layout switch
             {
@@ -299,7 +299,7 @@ namespace Njulf.Rendering.Resources
             };
         }
 
-        private static AccessFlags2 GetSourceAccess(ImageLayout layout)
+        internal static AccessFlags2 GetSourceAccessForLayout(ImageLayout layout)
         {
             return layout switch
             {

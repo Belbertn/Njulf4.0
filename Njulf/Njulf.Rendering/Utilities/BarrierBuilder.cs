@@ -11,6 +11,8 @@ namespace Njulf.Rendering.Utilities
     /// </summary>
     public static class BarrierBuilder
     {
+        private static readonly Vk Api = Vk.GetApi();
+
         private static readonly ImageSubresourceRange FullSubresourceRange = new ImageSubresourceRange
         {
             AspectMask = ImageAspectFlags.ColorBit | ImageAspectFlags.DepthBit | ImageAspectFlags.StencilBit,
@@ -80,7 +82,7 @@ namespace Njulf.Rendering.Utilities
         public static unsafe void ExecuteBarrier(CommandBuffer cmd, DependencyInfo depInfo)
         {
             ValidateDependencyInfo(depInfo);
-            Vk.GetApi().CmdPipelineBarrier2(cmd, &depInfo);
+            Api.CmdPipelineBarrier2(cmd, &depInfo);
         }
 
         public static unsafe void ExecuteImageBarrier(CommandBuffer cmd, ImageMemoryBarrier2 imageBarrier)
@@ -93,7 +95,7 @@ namespace Njulf.Rendering.Utilities
             };
 
             ValidateDependencyInfo(depInfo);
-            Vk.GetApi().CmdPipelineBarrier2(cmd, &depInfo);
+            Api.CmdPipelineBarrier2(cmd, &depInfo);
         }
 
         public static unsafe void ExecuteBarrier(
@@ -101,7 +103,6 @@ namespace Njulf.Rendering.Utilities
             ImageMemoryBarrier2[]? imageBarriers = null,
             BufferMemoryBarrier2[]? bufferBarriers = null)
         {
-            Vk vk = Vk.GetApi();
             var depInfo = new DependencyInfo
             {
                 SType = StructureType.DependencyInfo,
@@ -114,17 +115,16 @@ namespace Njulf.Rendering.Utilities
                 fixed (ImageMemoryBarrier2* pImageBarriers = imageBarriers)
                 {
                     depInfo.PImageMemoryBarriers = pImageBarriers;
-                    ExecuteWithOptionalBufferBarriers(vk, cmd, &depInfo, bufferBarriers);
+                    ExecuteWithOptionalBufferBarriers(cmd, &depInfo, bufferBarriers);
                 }
             }
             else
             {
-                ExecuteWithOptionalBufferBarriers(vk, cmd, &depInfo, bufferBarriers);
+                ExecuteWithOptionalBufferBarriers(cmd, &depInfo, bufferBarriers);
             }
         }
 
         private static unsafe void ExecuteWithOptionalBufferBarriers(
-            Vk vk,
             CommandBuffer cmd,
             DependencyInfo* depInfo,
             BufferMemoryBarrier2[]? bufferBarriers)
@@ -135,13 +135,13 @@ namespace Njulf.Rendering.Utilities
                 {
                     depInfo->PBufferMemoryBarriers = pBufferBarriers;
                     ValidateDependencyInfo(*depInfo);
-                    vk.CmdPipelineBarrier2(cmd, depInfo);
+                    Api.CmdPipelineBarrier2(cmd, depInfo);
                 }
             }
             else
             {
                 ValidateDependencyInfo(*depInfo);
-                vk.CmdPipelineBarrier2(cmd, depInfo);
+                Api.CmdPipelineBarrier2(cmd, depInfo);
             }
         }
 

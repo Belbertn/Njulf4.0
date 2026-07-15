@@ -1362,6 +1362,10 @@ namespace Njulf.Rendering
             bool sceneGpuShadowCompactionActive =
                 Settings.SceneSubmission.GpuCompactionEnabled &&
                 Settings.SceneSubmission.GpuShadowCompactionEnabled;
+            uint forwardDebugViewMode = ResolveForwardDebugViewMode();
+            bool geometryDecalsEnabled =
+                Settings.Decals.GeometryDecalsEnabled &&
+                ShouldRenderGeometryDecals(forwardDebugViewMode);
 
             // Build and upload scene data using SceneDataBuilder
             var sceneData = _sceneDataBuilder.Build(
@@ -1378,11 +1382,14 @@ namespace Njulf.Rendering
                 projectionJitter: jitter,
                 transparencySettings: Settings.Transparency,
                 decalSettings: Settings.Decals,
+                geometryDecalsEnabled: geometryDecalsEnabled,
                 useCameraDependentCpuPayload: Settings.UseCameraDependentCpuScenePayload &&
                     !sceneGpuLodSelectionActive &&
                     !sceneGpuShadowCompactionActive,
                 useCpuMeshletFrustumCulling: Settings.UseCpuMeshletFrustumCulling && !sceneGpuLodSelectionActive,
-                captureSceneSubmissionValidationLists: Settings.SceneSubmission.ValidationCompareCpuGpuLists);
+                captureSceneSubmissionValidationLists: Settings.SceneSubmission.ValidationCompareCpuGpuLists,
+                gpuLod1DistanceRatio: Settings.SceneSubmission.GpuLod1DistanceRatio,
+                gpuLod2DistanceRatio: Settings.SceneSubmission.GpuLod2DistanceRatio);
             int frameRingIndex = _currentFrame;
             ulong frameSerial = _ddgiFrameSerial;
             sceneData.FrameIndex = frameRingIndex;
@@ -1408,7 +1415,10 @@ namespace Njulf.Rendering
             sceneData.SceneSubmissionGpuCompactionEnabled = Settings.SceneSubmission.GpuCompactionEnabled;
             sceneData.SceneSubmissionIndirectMeshletDispatchEnabled = Settings.SceneSubmission.IndirectMeshletDispatchEnabled;
             sceneData.SceneSubmissionGpuLodSelectionEnabled = Settings.SceneSubmission.GpuLodSelectionEnabled;
+            sceneData.SceneSubmissionGpuLod1DistanceRatio = Settings.SceneSubmission.GpuLod1DistanceRatio;
+            sceneData.SceneSubmissionGpuLod2DistanceRatio = Settings.SceneSubmission.GpuLod2DistanceRatio;
             sceneData.SceneSubmissionGpuShadowCompactionEnabled = Settings.SceneSubmission.GpuShadowCompactionEnabled;
+            sceneData.SceneSubmissionGpuShadowLodBias = Settings.SceneSubmission.GpuShadowLodBias;
             sceneData.HiZValidateAgainstLegacyPath = Settings.HiZOcclusion.ValidateAgainstLegacyPath;
             sceneData.SceneSubmissionValidationCompareCpuGpuLists =
                 Settings.SceneSubmission.ValidationCompareCpuGpuLists ||
@@ -1600,7 +1610,7 @@ namespace Njulf.Rendering
             sceneData.TransparencyDebugView = Settings.Transparency.DebugView;
             sceneData.TransparentReceiveShadows = Settings.Transparency.ReceiveShadows;
             sceneData.DecalDebugView = Settings.Decals.DebugView;
-            sceneData.GeometryDecalsEnabled = Settings.Decals.GeometryDecalsEnabled;
+            sceneData.GeometryDecalsEnabled = geometryDecalsEnabled;
             sceneData.GeometryDecalDepthBias = Settings.Decals.GeometryDepthBias;
             sceneData.GeometryDecalSlopeScaledDepthBias = Settings.Decals.GeometrySlopeScaledDepthBias;
             sceneData.HiZMipCount = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.MipLevels ?? 0u : 0u;
@@ -1609,7 +1619,7 @@ namespace Njulf.Rendering
             sceneData.ActiveSceneColorTextureIndex = BindlessIndex.HdrSceneColorTexture;
             sceneData.EffectiveExposure = Settings.Exposure;
             sceneData.FogDirectionalInscatteringDirection = ResolveFogDirectionalInscatteringDirection(lightSnapshot);
-            sceneData.DebugViewMode = ResolveForwardDebugViewMode();
+            sceneData.DebugViewMode = forwardDebugViewMode;
             sceneData.JitterEnabled = jitter.X != 0.0f || jitter.Y != 0.0f ? 1 : 0;
             sceneData.JitterX = jitter.X;
             sceneData.JitterY = jitter.Y;
@@ -1740,6 +1750,8 @@ namespace Njulf.Rendering
             _lastDiagnostics = BuildDiagnostics(sceneData);
             _debugDraw.ClearFrame();
         }
+
+        internal static bool ShouldRenderGeometryDecals(uint forwardDebugViewMode) => forwardDebugViewMode == 0;
 
         private uint ResolveForwardDebugViewMode()
         {
@@ -1937,6 +1949,12 @@ namespace Njulf.Rendering
             int remainingDetailedProbeMarkers = sceneData.DebugOverlayMode == DebugOverlayMode.DdgiProbeVolumes
                 ? 0
                 : MaxDetailedProbeMarkersPerFrame;
+            int simpleVolumeCount = Settings.GlobalIllumination.EffectiveUseSimpleDdgi &&
+                _simpleDdgiVolumeManager != null &&
+                _simpleDdgiVolumeManager.ProbeCount > 0
+                    ? _simpleDdgiVolumeManager.LastVolumes.Length
+                    : 0;
+            int remainingMarkerVolumes = volumes.Count + simpleVolumeCount;
             for (int i = 0; i < volumes.Count; i++)
             {
                 GlobalIlluminationProbeVolume volume = volumes[i];
@@ -1951,18 +1969,22 @@ namespace Njulf.Rendering
                     : DdgiProbeVolumeRuntimeMetadata.Authored;
                 if (remainingDetailedProbeMarkers > 0)
                 {
+                    int volumeMarkerBudget = CalculateDdgiProbeMarkerBudget(
+                        remainingDetailedProbeMarkers,
+                        remainingMarkerVolumes);
                     remainingDetailedProbeMarkers -= DrawDdgiProbeSamples(
                         volume,
                         metadata,
                         firstProbeIndex,
                         sceneData.DebugOverlayMode,
                         depthMode,
-                        remainingDetailedProbeMarkers);
+                        volumeMarkerBudget);
                 }
 
                 sceneData.DebugDdgiProbeVolumesDrawn++;
                 if (active)
                     activeProbeStart += volume.ProbeCount;
+                remainingMarkerVolumes = Math.Max(0, remainingMarkerVolumes - 1);
             }
 
             DrawSimpleDdgiProbeVolumeOverlay(sceneData, depthMode, remainingDetailedProbeMarkers);
@@ -1982,6 +2004,7 @@ namespace Njulf.Rendering
 
             ReadOnlySpan<GPUSimpleDdgiVolume> volumes = _simpleDdgiVolumeManager.LastVolumes;
             int remainingProbeMarkers = maxProbeMarkers;
+            int remainingMarkerVolumes = volumes.Length;
             for (int volumeIndex = 0; volumeIndex < volumes.Length; volumeIndex++)
             {
                 GPUSimpleDdgiVolume volume = volumes[volumeIndex];
@@ -1994,20 +2017,30 @@ namespace Njulf.Rendering
                 int probeCountY = Math.Max(1, (int)MathF.Round(volume.GridCountsAndFirstProbe.Y));
                 int probeCountZ = Math.Max(1, (int)MathF.Round(volume.GridCountsAndFirstProbe.Z));
                 int firstProbeIndex = Math.Max(0, (int)MathF.Round(volume.GridCountsAndFirstProbe.W));
-                Vector3 latticeExtent = new(
-                    Math.Max(probeCountX - 1, 1) * spacing,
-                    Math.Max(probeCountY - 1, 1) * spacing,
-                    Math.Max(probeCountZ - 1, 1) * spacing);
+                Vector3 worldMin = new(
+                    volume.WorldMinAndEdgeFade.X,
+                    volume.WorldMinAndEdgeFade.Y,
+                    volume.WorldMinAndEdgeFade.Z);
+                Vector3 worldMax = new(
+                    volume.WorldMaxAndKind.X,
+                    volume.WorldMaxAndKind.Y,
+                    volume.WorldMaxAndKind.Z);
 
                 _debugDraw.Box(
-                    new BoundingBox(origin, origin + latticeExtent),
+                    new BoundingBox(worldMin, worldMax),
                     ResolveSimpleDdgiVolumeDebugColor(volumeIndex, volume),
                     depthMode);
                 sceneData.DebugDdgiProbeVolumesDrawn++;
 
                 if (remainingProbeMarkers <= 0)
+                {
+                    remainingMarkerVolumes = Math.Max(0, remainingMarkerVolumes - 1);
                     continue;
+                }
 
+                int volumeMarkerBudget = CalculateDdgiProbeMarkerBudget(
+                    remainingProbeMarkers,
+                    remainingMarkerVolumes);
                 remainingProbeMarkers -= DrawSimpleDdgiProbeSamples(
                     origin,
                     spacing,
@@ -2017,7 +2050,8 @@ namespace Njulf.Rendering
                     firstProbeIndex,
                     sceneData.DebugOverlayMode,
                     depthMode,
-                    remainingProbeMarkers);
+                    volumeMarkerBudget);
+                remainingMarkerVolumes = Math.Max(0, remainingMarkerVolumes - 1);
             }
         }
 
@@ -2201,6 +2235,17 @@ namespace Njulf.Rendering
         }
 
         internal readonly record struct DdgiProbeMarkerSampling(int StepX, int StepY, int StepZ);
+
+        internal static int CalculateDdgiProbeMarkerBudget(int remainingMarkers, int remainingVolumes)
+        {
+            if (remainingMarkers <= 0 || remainingVolumes <= 0)
+                return 0;
+
+            // Divide the still-available budget among every volume that has not
+            // been visited yet. Any markers a sparse/filtering volume does not use
+            // remain available and are redistributed by the next iteration.
+            return Math.Max(1, (remainingMarkers + remainingVolumes - 1) / remainingVolumes);
+        }
 
         internal static DdgiProbeMarkerSampling CalculateDdgiProbeMarkerSampling(
             int probeCountX,
@@ -3944,6 +3989,8 @@ namespace Njulf.Rendering
                 SimpleDdgiAverageSampledIrradianceLuminance = giUsesSimpleDdgi ? sceneData.SimpleDdgiAverageSampledIrradianceLuminance : 0.0f,
                 SimpleDdgiAverageVisibility = giUsesSimpleDdgi ? sceneData.SimpleDdgiAverageVisibility : 0.0f,
                 SimpleDdgiLowVisibilitySampleCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiLowVisibilitySampleCount : 0,
+                SimpleDdgiGatherSampleCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiGatherSampleCount : 0,
+                SimpleDdgiSecondVolumeGatherCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiSecondVolumeGatherCount : 0,
                 DdgiFullRefreshFrameCount = giUsesDdgi ? sceneData.DdgiFullRefreshFrameCount : 0,
                 DdgiPartialRefreshFrameCount = giUsesDdgi ? sceneData.DdgiPartialRefreshFrameCount : 0,
                 DdgiUpdatedProbeFraction = giUsesDdgi ? sceneData.DdgiUpdatedProbeFraction : 0.0f,
@@ -5029,6 +5076,7 @@ namespace Njulf.Rendering
             sceneData.GraphQueueOwnershipTransitionCount = plan.QueueFamilyOwnershipTransferCount;
             sceneData.AsyncComputeOwnershipTransferCount = _asyncComputeOwnershipTransferCountThisFrame;
             sceneData.GraphBarrierSummary = $"async plan: {plan.GraphicsSegmentCount} graphics segments, {plan.ComputeSegmentCount} compute segments, {plan.QueueFamilyOwnershipTransferCount} queue-family handoffs";
+            _renderGraph.CompleteSplitExecution(sceneData);
             return true;
             }
             catch (Exception exception)
@@ -8974,6 +9022,8 @@ namespace Njulf.Rendering
                 sceneData.SimpleDdgiAverageSampledIrradianceLuminance = 0.0f;
                 sceneData.SimpleDdgiAverageVisibility = 0.0f;
                 sceneData.SimpleDdgiLowVisibilitySampleCount = 0;
+                sceneData.SimpleDdgiGatherSampleCount = 0;
+                sceneData.SimpleDdgiSecondVolumeGatherCount = 0;
                 sceneData.DdgiForwardSimplePathSampleCount = 0;
                 sceneData.DdgiForwardLegacyPathSampleCount = 0;
                 sceneData.DdgiForwardZeroFinalIndirectCount = 0;
@@ -9014,6 +9064,7 @@ namespace Njulf.Rendering
                 sceneData.DdgiBlackFrameAfterAtlasClear = 0;
                 sceneData.DdgiBlackFrameDuringFreshAtlas = 0;
                 sceneData.DdgiBlackFrameMovementClass = DdgiCameraMovementClass.None;
+                ApplySimpleDdgiVolumeGatherCounters(sceneData, counters);
                 return;
             }
 
@@ -9024,6 +9075,8 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiAverageSampledIrradianceLuminance = Math.Max(counters.SimpleSampledIrradianceLuminanceAverage, 0.0f);
             sceneData.SimpleDdgiAverageVisibility = Math.Clamp(counters.SimpleVisibilityAverage, 0.0f, 1.0f);
             sceneData.SimpleDdgiLowVisibilitySampleCount = counters.SimpleLowVisibilitySampleCount;
+            sceneData.SimpleDdgiGatherSampleCount = counters.SimpleGatherCount;
+            sceneData.SimpleDdgiSecondVolumeGatherCount = counters.SimpleSecondVolumeGatherCount;
             sceneData.DdgiForwardSimplePathSampleCount = counters.SimpleForwardSampleCount;
             sceneData.DdgiForwardLegacyPathSampleCount = counters.LegacyForwardSampleCount;
             sceneData.DdgiForwardZeroFinalIndirectCount = counters.ForwardZeroFinalIndirectCount;
@@ -9059,6 +9112,7 @@ namespace Njulf.Rendering
             sceneData.DdgiSimpleTraceFarFieldStepBucket2Count = counters.FarFieldStepBucket2Count;
             sceneData.DdgiSimpleTraceFarFieldStepBucket3Count = counters.FarFieldStepBucket3Count;
             sceneData.DdgiSimpleTraceFarFieldStepBucket4Count = counters.FarFieldStepBucket4Count;
+            ApplySimpleDdgiVolumeGatherCounters(sceneData, counters);
 
             bool blackSuspect =
                 counters.ForwardZeroFinalIndirectCount > 0 &&
@@ -9068,6 +9122,30 @@ namespace Njulf.Rendering
             sceneData.DdgiBlackFrameAfterAtlasClear = blackSuspect && sceneData.SimpleDdgiAtlasCleared != 0 ? 1 : 0;
             sceneData.DdgiBlackFrameDuringFreshAtlas = blackSuspect && counters.FreshAtlasForwardSampleCount > 0 ? 1 : 0;
             sceneData.DdgiBlackFrameMovementClass = blackSuspect ? sceneData.DdgiCameraMovementClass : DdgiCameraMovementClass.None;
+        }
+
+        private static void ApplySimpleDdgiVolumeGatherCounters(
+            SceneRenderingData sceneData,
+            DdgiInvestigationCounters counters)
+        {
+            IReadOnlyList<uint>? primaryCounts = counters.SimpleVolumePrimaryGatherCounts;
+            IReadOnlyList<uint>? sampledCounts = counters.SimpleVolumeSampledGatherCounts;
+            for (int i = 0; i < sceneData.DdgiVolumeDiagnostics.Count; i++)
+            {
+                DdgiVolumeDiagnosticsEntry entry = sceneData.DdgiVolumeDiagnostics[i];
+                int volumeIndex = entry.VolumeIndex;
+                bool countersValid = counters.ReadbackValid != 0 &&
+                    primaryCounts != null &&
+                    sampledCounts != null &&
+                    (uint)volumeIndex < (uint)primaryCounts.Count &&
+                    (uint)volumeIndex < (uint)sampledCounts.Count;
+                sceneData.DdgiVolumeDiagnostics[i] = entry with
+                {
+                    GatherCountersReadbackValid = countersValid ? 1 : 0,
+                    PrimaryGatherCount = countersValid ? primaryCounts![volumeIndex] : 0u,
+                    SampledGatherCount = countersValid ? sampledCounts![volumeIndex] : 0u
+                };
+            }
         }
 
         private static string FormatDdgiTraceRingMismatchSample(DdgiForwardEstimateCounters counters)

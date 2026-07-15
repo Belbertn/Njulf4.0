@@ -736,11 +736,65 @@ namespace Njulf.Rendering.Data
 
     public sealed class SceneSubmissionSettings
     {
+        public const float DefaultGpuLod1DistanceRatio = 4.0f;
+        public const float DefaultGpuLod2DistanceRatio = 10.0f;
+        public const int DefaultGpuShadowLodBias = 1;
+
+        private float _gpuLod1DistanceRatio = DefaultGpuLod1DistanceRatio;
+        private float _gpuLod2DistanceRatio = DefaultGpuLod2DistanceRatio;
+        private int _gpuShadowLodBias = DefaultGpuShadowLodBias;
+
         public bool GpuCompactionEnabled { get; set; } = true;
         public bool IndirectMeshletDispatchEnabled { get; set; } = true;
         public bool GpuLodSelectionEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Distance-to-bounding-radius ratio at which GPU scene submission switches from LOD0 to LOD1.
+        /// </summary>
+        public float GpuLod1DistanceRatio
+        {
+            get => _gpuLod1DistanceRatio;
+            set
+            {
+                _gpuLod1DistanceRatio = ClampGpuLod1DistanceRatio(value);
+                if (_gpuLod2DistanceRatio < _gpuLod1DistanceRatio)
+                    _gpuLod2DistanceRatio = _gpuLod1DistanceRatio;
+            }
+        }
+
+        /// <summary>
+        /// Distance-to-bounding-radius ratio at which GPU scene submission switches from LOD1 to LOD2.
+        /// This is always at least <see cref="GpuLod1DistanceRatio"/>.
+        /// </summary>
+        public float GpuLod2DistanceRatio
+        {
+            get => _gpuLod2DistanceRatio;
+            set => _gpuLod2DistanceRatio = ClampGpuLod2DistanceRatio(value, _gpuLod1DistanceRatio);
+        }
+
         public bool GpuShadowCompactionEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Additional LOD levels selected for GPU-compacted directional-shadow draws.
+        /// </summary>
+        public int GpuShadowLodBias
+        {
+            get => _gpuShadowLodBias;
+            set => _gpuShadowLodBias = Math.Clamp(value, 0, 2);
+        }
+
         public bool ValidationCompareCpuGpuLists { get; set; }
+
+        internal static float ClampGpuLod1DistanceRatio(float value) =>
+            ClampFinite(value, minimum: 1.0f, maximum: 64.0f, fallback: DefaultGpuLod1DistanceRatio);
+
+        internal static float ClampGpuLod2DistanceRatio(float value, float gpuLod1DistanceRatio) =>
+            Math.Max(
+                ClampGpuLod1DistanceRatio(gpuLod1DistanceRatio),
+                ClampFinite(value, minimum: 1.0f, maximum: 128.0f, fallback: DefaultGpuLod2DistanceRatio));
+
+        private static float ClampFinite(float value, float minimum, float maximum, float fallback) =>
+            float.IsFinite(value) ? Math.Clamp(value, minimum, maximum) : fallback;
     }
 
     public sealed class DynamicResolutionSettings
@@ -1372,16 +1426,23 @@ namespace Njulf.Rendering.Data
 
     public readonly struct SimpleDdgiAuthoredVolume
     {
-        public SimpleDdgiAuthoredVolume(Vector3 min, Vector3 max, float spacing)
+        /// <param name="latticePhase">
+        /// Spacing-relative lattice phase. Each component is wrapped to [0, 1)
+        /// when the authored grid is built, allowing an artist to move probes off
+        /// a repeated wall/column alignment without moving the volume bounds.
+        /// </param>
+        public SimpleDdgiAuthoredVolume(Vector3 min, Vector3 max, float spacing, Vector3 latticePhase = default)
         {
             Min = min;
             Max = max;
             Spacing = spacing;
+            LatticePhase = latticePhase;
         }
 
         public Vector3 Min { get; init; }
         public Vector3 Max { get; init; }
         public float Spacing { get; init; }
+        public Vector3 LatticePhase { get; init; }
     }
 
     public sealed class GlobalIlluminationSettings
@@ -1472,13 +1533,19 @@ namespace Njulf.Rendering.Data
         private float _ddgiRelocationBlendAlpha = 0.20f;
         private float _simpleDdgiProbeSpacing = 1.25f;
         private int _simpleDdgiRingCount = 3;
-        private float _simpleDdgiRingBaseSpacing = 1.0f;
-        private float _simpleDdgiRingSpacingMultiplier = 4.0f;
-        private int _simpleDdgiRingGridSizeX = 24;
-        private int _simpleDdgiRingGridSizeY = 12;
-        private int _simpleDdgiRingGridSizeZ = 24;
-        private int _simpleDdgiRaysPerProbe = 128;
-        private int _simpleDdgiMaintenanceRaysPerProbe = 32;
+        private float _simpleDdgiRingBaseSpacing = 1.25f;
+        private float _simpleDdgiRingSpacingMultiplier = 3.0f;
+        private int _simpleDdgiNearRingGridSizeX = 28;
+        private int _simpleDdgiNearRingGridSizeY = 14;
+        private int _simpleDdgiNearRingGridSizeZ = 28;
+        private int _simpleDdgiMidRingGridSizeX = 18;
+        private int _simpleDdgiMidRingGridSizeY = 10;
+        private int _simpleDdgiMidRingGridSizeZ = 18;
+        private int _simpleDdgiFarRingGridSizeX = 12;
+        private int _simpleDdgiFarRingGridSizeY = 8;
+        private int _simpleDdgiFarRingGridSizeZ = 12;
+        private int _simpleDdgiRaysPerProbe = 96;
+        private int _simpleDdgiMaintenanceRaysPerProbe = 24;
         private float _simpleDdgiHysteresis = 0.97f;
         private float _simpleDdgiHysteresisChangeThreshold = 0.50f;
         private float _simpleDdgiHysteresisStepThreshold = 0.80f;
@@ -1487,22 +1554,22 @@ namespace Njulf.Rendering.Data
         private float _simpleDdgiStableMaintenanceEmaThreshold = 0.03f;
         private float _simpleDdgiNormalBias = 0.1f;
         private float _simpleDdgiViewBias = 0.3f;
+        private float _simpleDdgiSecondVolumeOwnershipEarlyOutThreshold = 0.95f;
         private int _simpleDdgiProbeUpdatesPerFrame = 2_048;
-        // Independent per-ring controls.  The legacy scalar controls remain as
-        // compatibility defaults, while the scheduler consumes these explicit
+        // Independent per-ring controls. The scheduler consumes these explicit
         // values for near/authored, mid, and far camera-relative volumes.
-        private int _simpleDdgiNearFullRaysPerProbe = 128;
-        private int _simpleDdgiMidFullRaysPerProbe = 64;
-        private int _simpleDdgiFarFullRaysPerProbe = 32;
+        private int _simpleDdgiNearFullRaysPerProbe = 64;
+        private int _simpleDdgiMidFullRaysPerProbe = 48;
+        private int _simpleDdgiFarFullRaysPerProbe = 24;
         private int _simpleDdgiNearMaintenanceRaysPerProbe = 32;
         private int _simpleDdgiMidMaintenanceRaysPerProbe = 16;
         private int _simpleDdgiFarMaintenanceRaysPerProbe = 8;
-        private int _simpleDdgiNearMinimumUpdateQuota = 128;
-        private int _simpleDdgiMidMinimumUpdateQuota = 48;
-        private int _simpleDdgiFarMinimumUpdateQuota = 16;
+        private int _simpleDdgiNearMinimumUpdateQuota = 512;
+        private int _simpleDdgiMidMinimumUpdateQuota = 96;
+        private int _simpleDdgiFarMinimumUpdateQuota = 24;
         private int _simpleDdgiNearMaximumUpdateQuota = 1_024;
-        private int _simpleDdgiMidMaximumUpdateQuota = 512;
-        private int _simpleDdgiFarMaximumUpdateQuota = 256;
+        private int _simpleDdgiMidMaximumUpdateQuota = 324;
+        private int _simpleDdgiFarMaximumUpdateQuota = 128;
         private int _simpleDdgiNearMaterialTextureMaxCascade = 1;
         private int _simpleDdgiMidMaterialTextureMaxCascade = 0;
         private int _simpleDdgiFarMaterialTextureMaxCascade = -1;
@@ -1590,6 +1657,18 @@ namespace Njulf.Rendering.Data
         /// </summary>
         public bool SimpleDdgiSampledAtlasEnabled { get; set; }
         /// <summary>
+        /// Ownership at which an interior camera-relative ring can skip sampling a
+        /// containing coarser ring. Lower values trade a small transition error for
+        /// fewer eight-corner gathers; 1.0 preserves the fully conservative path.
+        /// </summary>
+        public float SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold
+        {
+            get => _simpleDdgiSecondVolumeOwnershipEarlyOutThreshold;
+            set => _simpleDdgiSecondVolumeOwnershipEarlyOutThreshold = float.IsFinite(value)
+                ? Clamp(value, 0.0f, 1.0f)
+                : 0.95f;
+        }
+        /// <summary>
         /// Keeps camera-relative rings in a shared toroidal physical layout so normal
         /// scrolling invalidates only exposed cells and never copies atlas data.
         /// </summary>
@@ -1647,22 +1726,101 @@ namespace Njulf.Rendering.Data
             set => _simpleDdgiRingSpacingMultiplier = Clamp(value, 1.25f, 8.0f);
         }
 
+        /// <summary>
+        /// Compatibility broadcast for callers that intentionally want one grid for every
+        /// camera-relative ring. New production configurations use the explicit near/mid/far
+        /// grid settings below.
+        /// </summary>
         public int SimpleDdgiRingGridSizeX
         {
-            get => _simpleDdgiRingGridSizeX;
-            set => _simpleDdgiRingGridSizeX = Clamp(value, 2, MaxSimpleDdgiProbeCountX);
+            get => _simpleDdgiNearRingGridSizeX;
+            set
+            {
+                int clamped = Clamp(value, 2, MaxSimpleDdgiProbeCountX);
+                _simpleDdgiNearRingGridSizeX = clamped;
+                _simpleDdgiMidRingGridSizeX = clamped;
+                _simpleDdgiFarRingGridSizeX = clamped;
+            }
         }
 
+        /// <summary>Compatibility broadcast; see <see cref="SimpleDdgiRingGridSizeX"/>.</summary>
         public int SimpleDdgiRingGridSizeY
         {
-            get => _simpleDdgiRingGridSizeY;
-            set => _simpleDdgiRingGridSizeY = Clamp(value, 2, MaxSimpleDdgiProbeCountY);
+            get => _simpleDdgiNearRingGridSizeY;
+            set
+            {
+                int clamped = Clamp(value, 2, MaxSimpleDdgiProbeCountY);
+                _simpleDdgiNearRingGridSizeY = clamped;
+                _simpleDdgiMidRingGridSizeY = clamped;
+                _simpleDdgiFarRingGridSizeY = clamped;
+            }
         }
 
+        /// <summary>Compatibility broadcast; see <see cref="SimpleDdgiRingGridSizeX"/>.</summary>
         public int SimpleDdgiRingGridSizeZ
         {
-            get => _simpleDdgiRingGridSizeZ;
-            set => _simpleDdgiRingGridSizeZ = Clamp(value, 2, MaxSimpleDdgiProbeCountZ);
+            get => _simpleDdgiNearRingGridSizeZ;
+            set
+            {
+                int clamped = Clamp(value, 2, MaxSimpleDdgiProbeCountZ);
+                _simpleDdgiNearRingGridSizeZ = clamped;
+                _simpleDdgiMidRingGridSizeZ = clamped;
+                _simpleDdgiFarRingGridSizeZ = clamped;
+            }
+        }
+
+        public int SimpleDdgiNearRingGridSizeX
+        {
+            get => _simpleDdgiNearRingGridSizeX;
+            set => _simpleDdgiNearRingGridSizeX = Clamp(value, 2, MaxSimpleDdgiProbeCountX);
+        }
+
+        public int SimpleDdgiNearRingGridSizeY
+        {
+            get => _simpleDdgiNearRingGridSizeY;
+            set => _simpleDdgiNearRingGridSizeY = Clamp(value, 2, MaxSimpleDdgiProbeCountY);
+        }
+
+        public int SimpleDdgiNearRingGridSizeZ
+        {
+            get => _simpleDdgiNearRingGridSizeZ;
+            set => _simpleDdgiNearRingGridSizeZ = Clamp(value, 2, MaxSimpleDdgiProbeCountZ);
+        }
+
+        public int SimpleDdgiMidRingGridSizeX
+        {
+            get => _simpleDdgiMidRingGridSizeX;
+            set => _simpleDdgiMidRingGridSizeX = Clamp(value, 2, MaxSimpleDdgiProbeCountX);
+        }
+
+        public int SimpleDdgiMidRingGridSizeY
+        {
+            get => _simpleDdgiMidRingGridSizeY;
+            set => _simpleDdgiMidRingGridSizeY = Clamp(value, 2, MaxSimpleDdgiProbeCountY);
+        }
+
+        public int SimpleDdgiMidRingGridSizeZ
+        {
+            get => _simpleDdgiMidRingGridSizeZ;
+            set => _simpleDdgiMidRingGridSizeZ = Clamp(value, 2, MaxSimpleDdgiProbeCountZ);
+        }
+
+        public int SimpleDdgiFarRingGridSizeX
+        {
+            get => _simpleDdgiFarRingGridSizeX;
+            set => _simpleDdgiFarRingGridSizeX = Clamp(value, 2, MaxSimpleDdgiProbeCountX);
+        }
+
+        public int SimpleDdgiFarRingGridSizeY
+        {
+            get => _simpleDdgiFarRingGridSizeY;
+            set => _simpleDdgiFarRingGridSizeY = Clamp(value, 2, MaxSimpleDdgiProbeCountY);
+        }
+
+        public int SimpleDdgiFarRingGridSizeZ
+        {
+            get => _simpleDdgiFarRingGridSizeZ;
+            set => _simpleDdgiFarRingGridSizeZ = Clamp(value, 2, MaxSimpleDdgiProbeCountZ);
         }
 
         public int SimpleDdgiRaysPerProbe
@@ -2620,9 +2778,15 @@ namespace Njulf.Rendering.Data
                     SimpleDdgiRingCount = 2;
                     SimpleDdgiRingBaseSpacing = 1.75f;
                     SimpleDdgiRingSpacingMultiplier = 2.5f;
-                    SimpleDdgiRingGridSizeX = 12;
-                    SimpleDdgiRingGridSizeY = 6;
-                    SimpleDdgiRingGridSizeZ = 12;
+                    SimpleDdgiNearRingGridSizeX = 16;
+                    SimpleDdgiNearRingGridSizeY = 8;
+                    SimpleDdgiNearRingGridSizeZ = 16;
+                    SimpleDdgiMidRingGridSizeX = 10;
+                    SimpleDdgiMidRingGridSizeY = 6;
+                    SimpleDdgiMidRingGridSizeZ = 10;
+                    SimpleDdgiFarRingGridSizeX = 6;
+                    SimpleDdgiFarRingGridSizeY = 4;
+                    SimpleDdgiFarRingGridSizeZ = 6;
                     SimpleDdgiRaysPerProbe = 32;
                     SimpleDdgiMaintenanceRaysPerProbe = 8;
                     SimpleDdgiProbeUpdatesPerFrame = 128;
@@ -2634,9 +2798,15 @@ namespace Njulf.Rendering.Data
                     SimpleDdgiRingCount = 2;
                     SimpleDdgiRingBaseSpacing = 1.40f;
                     SimpleDdgiRingSpacingMultiplier = 2.75f;
-                    SimpleDdgiRingGridSizeX = 16;
-                    SimpleDdgiRingGridSizeY = 8;
-                    SimpleDdgiRingGridSizeZ = 16;
+                    SimpleDdgiNearRingGridSizeX = 22;
+                    SimpleDdgiNearRingGridSizeY = 11;
+                    SimpleDdgiNearRingGridSizeZ = 22;
+                    SimpleDdgiMidRingGridSizeX = 14;
+                    SimpleDdgiMidRingGridSizeY = 8;
+                    SimpleDdgiMidRingGridSizeZ = 14;
+                    SimpleDdgiFarRingGridSizeX = 10;
+                    SimpleDdgiFarRingGridSizeY = 6;
+                    SimpleDdgiFarRingGridSizeZ = 10;
                     SimpleDdgiRaysPerProbe = 64;
                     SimpleDdgiMaintenanceRaysPerProbe = 16;
                     SimpleDdgiProbeUpdatesPerFrame = 384;
@@ -2646,28 +2816,40 @@ namespace Njulf.Rendering.Data
 
                 case DdgiQualityTier.DdgiUltra:
                     SimpleDdgiRingCount = 3;
-                    SimpleDdgiRingBaseSpacing = 0.85f;
-                    SimpleDdgiRingSpacingMultiplier = 3.5f;
-                    SimpleDdgiRingGridSizeX = 24;
-                    SimpleDdgiRingGridSizeY = 12;
-                    SimpleDdgiRingGridSizeZ = 24;
+                    SimpleDdgiRingBaseSpacing = 1.0f;
+                    SimpleDdgiRingSpacingMultiplier = 3.25f;
+                    SimpleDdgiNearRingGridSizeX = 32;
+                    SimpleDdgiNearRingGridSizeY = 16;
+                    SimpleDdgiNearRingGridSizeZ = 32;
+                    SimpleDdgiMidRingGridSizeX = 21;
+                    SimpleDdgiMidRingGridSizeY = 12;
+                    SimpleDdgiMidRingGridSizeZ = 21;
+                    SimpleDdgiFarRingGridSizeX = 14;
+                    SimpleDdgiFarRingGridSizeY = 10;
+                    SimpleDdgiFarRingGridSizeZ = 14;
                     SimpleDdgiRaysPerProbe = 128;
                     SimpleDdgiMaintenanceRaysPerProbe = 32;
-                    SimpleDdgiProbeUpdatesPerFrame = 1_024;
+                    SimpleDdgiProbeUpdatesPerFrame = 3_072;
                     FarFieldClipmapResolution = 192;
                     FarFieldMaxTraceSteps = 256;
                     break;
 
                 default:
                     SimpleDdgiRingCount = 3;
-                    SimpleDdgiRingBaseSpacing = 1.0f;
-                    SimpleDdgiRingSpacingMultiplier = 3.25f;
-                    SimpleDdgiRingGridSizeX = 20;
-                    SimpleDdgiRingGridSizeY = 10;
-                    SimpleDdgiRingGridSizeZ = 20;
+                    SimpleDdgiRingBaseSpacing = 1.25f;
+                    SimpleDdgiRingSpacingMultiplier = 3.0f;
+                    SimpleDdgiNearRingGridSizeX = 28;
+                    SimpleDdgiNearRingGridSizeY = 14;
+                    SimpleDdgiNearRingGridSizeZ = 28;
+                    SimpleDdgiMidRingGridSizeX = 18;
+                    SimpleDdgiMidRingGridSizeY = 10;
+                    SimpleDdgiMidRingGridSizeZ = 18;
+                    SimpleDdgiFarRingGridSizeX = 12;
+                    SimpleDdgiFarRingGridSizeY = 8;
+                    SimpleDdgiFarRingGridSizeZ = 12;
                     SimpleDdgiRaysPerProbe = 96;
                     SimpleDdgiMaintenanceRaysPerProbe = 24;
-                    SimpleDdgiProbeUpdatesPerFrame = 768;
+                    SimpleDdgiProbeUpdatesPerFrame = 2_048;
                     FarFieldClipmapResolution = 128;
                     FarFieldMaxTraceSteps = 192;
                     break;
@@ -2746,18 +2928,18 @@ namespace Njulf.Rendering.Data
                     break;
 
                 default:
-                    SimpleDdgiNearFullRaysPerProbe = 96;
+                    SimpleDdgiNearFullRaysPerProbe = 64;
                     SimpleDdgiMidFullRaysPerProbe = 48;
                     SimpleDdgiFarFullRaysPerProbe = 24;
                     SimpleDdgiNearMaintenanceRaysPerProbe = 24;
                     SimpleDdgiMidMaintenanceRaysPerProbe = 12;
                     SimpleDdgiFarMaintenanceRaysPerProbe = 6;
-                    SimpleDdgiNearMinimumUpdateQuota = 384;
-                    SimpleDdgiMidMinimumUpdateQuota = 144;
-                    SimpleDdgiFarMinimumUpdateQuota = 48;
-                    SimpleDdgiNearMaximumUpdateQuota = 672;
-                    SimpleDdgiMidMaximumUpdateQuota = 288;
-                    SimpleDdgiFarMaximumUpdateQuota = 120;
+                    SimpleDdgiNearMinimumUpdateQuota = 512;
+                    SimpleDdgiMidMinimumUpdateQuota = 96;
+                    SimpleDdgiFarMinimumUpdateQuota = 24;
+                    SimpleDdgiNearMaximumUpdateQuota = 1_024;
+                    SimpleDdgiMidMaximumUpdateQuota = 324;
+                    SimpleDdgiFarMaximumUpdateQuota = 128;
                     SimpleDdgiNearMaterialTextureMaxCascade = 1;
                     SimpleDdgiMidMaterialTextureMaxCascade = 0;
                     SimpleDdgiFarMaterialTextureMaxCascade = -1;
@@ -3761,6 +3943,7 @@ namespace Njulf.Rendering.Data
             public bool SimpleDdgiStructuredGatherEnabled { get; init; } = true;
             public bool SimpleDdgiReducedBlendEnabled { get; init; } = true;
             public bool SimpleDdgiSampledAtlasEnabled { get; init; }
+            public float SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold { get; init; } = 0.95f;
             public bool SimpleDdgiToroidalScrollingEnabled { get; init; } = true;
             public bool SimpleDdgiRegionalInvalidationEnabled { get; init; } = true;
             public bool SimpleDdgiFogEnabled { get; init; } = true;
@@ -3768,25 +3951,31 @@ namespace Njulf.Rendering.Data
             public bool SimpleDdgiRoughSpecularEnabled { get; init; }
             public float SimpleDdgiProbeSpacing { get; init; } = 1.25f;
             public int SimpleDdgiRingCount { get; init; } = 3;
-            public float SimpleDdgiRingBaseSpacing { get; init; } = 1.0f;
-            public float SimpleDdgiRingSpacingMultiplier { get; init; } = 4.0f;
-            public int SimpleDdgiRingGridSizeX { get; init; } = 24;
-            public int SimpleDdgiRingGridSizeY { get; init; } = 12;
-            public int SimpleDdgiRingGridSizeZ { get; init; } = 24;
-            public int SimpleDdgiRaysPerProbe { get; init; } = 128;
-            public int SimpleDdgiMaintenanceRaysPerProbe { get; init; } = 32;
-            public int SimpleDdgiNearFullRaysPerProbe { get; init; } = 128;
-            public int SimpleDdgiMidFullRaysPerProbe { get; init; } = 64;
-            public int SimpleDdgiFarFullRaysPerProbe { get; init; } = 32;
-            public int SimpleDdgiNearMaintenanceRaysPerProbe { get; init; } = 32;
-            public int SimpleDdgiMidMaintenanceRaysPerProbe { get; init; } = 16;
-            public int SimpleDdgiFarMaintenanceRaysPerProbe { get; init; } = 8;
-            public int SimpleDdgiNearMinimumUpdateQuota { get; init; } = 128;
-            public int SimpleDdgiMidMinimumUpdateQuota { get; init; } = 48;
-            public int SimpleDdgiFarMinimumUpdateQuota { get; init; } = 16;
+            public float SimpleDdgiRingBaseSpacing { get; init; } = 1.25f;
+            public float SimpleDdgiRingSpacingMultiplier { get; init; } = 3.0f;
+            public int SimpleDdgiNearRingGridSizeX { get; init; } = 28;
+            public int SimpleDdgiNearRingGridSizeY { get; init; } = 14;
+            public int SimpleDdgiNearRingGridSizeZ { get; init; } = 28;
+            public int SimpleDdgiMidRingGridSizeX { get; init; } = 18;
+            public int SimpleDdgiMidRingGridSizeY { get; init; } = 10;
+            public int SimpleDdgiMidRingGridSizeZ { get; init; } = 18;
+            public int SimpleDdgiFarRingGridSizeX { get; init; } = 12;
+            public int SimpleDdgiFarRingGridSizeY { get; init; } = 8;
+            public int SimpleDdgiFarRingGridSizeZ { get; init; } = 12;
+            public int SimpleDdgiRaysPerProbe { get; init; } = 96;
+            public int SimpleDdgiMaintenanceRaysPerProbe { get; init; } = 24;
+            public int SimpleDdgiNearFullRaysPerProbe { get; init; } = 64;
+            public int SimpleDdgiMidFullRaysPerProbe { get; init; } = 48;
+            public int SimpleDdgiFarFullRaysPerProbe { get; init; } = 24;
+            public int SimpleDdgiNearMaintenanceRaysPerProbe { get; init; } = 24;
+            public int SimpleDdgiMidMaintenanceRaysPerProbe { get; init; } = 12;
+            public int SimpleDdgiFarMaintenanceRaysPerProbe { get; init; } = 6;
+            public int SimpleDdgiNearMinimumUpdateQuota { get; init; } = 512;
+            public int SimpleDdgiMidMinimumUpdateQuota { get; init; } = 96;
+            public int SimpleDdgiFarMinimumUpdateQuota { get; init; } = 24;
             public int SimpleDdgiNearMaximumUpdateQuota { get; init; } = 1_024;
-            public int SimpleDdgiMidMaximumUpdateQuota { get; init; } = 512;
-            public int SimpleDdgiFarMaximumUpdateQuota { get; init; } = 256;
+            public int SimpleDdgiMidMaximumUpdateQuota { get; init; } = 324;
+            public int SimpleDdgiFarMaximumUpdateQuota { get; init; } = 128;
             public int SimpleDdgiNearMaterialTextureMaxCascade { get; init; } = 1;
             public int SimpleDdgiMidMaterialTextureMaxCascade { get; init; } = 0;
             public int SimpleDdgiFarMaterialTextureMaxCascade { get; init; } = -1;
@@ -3934,6 +4123,7 @@ namespace Njulf.Rendering.Data
                     SimpleDdgiStructuredGatherEnabled = settings.SimpleDdgiStructuredGatherEnabled,
                     SimpleDdgiReducedBlendEnabled = settings.SimpleDdgiReducedBlendEnabled,
                     SimpleDdgiSampledAtlasEnabled = settings.SimpleDdgiSampledAtlasEnabled,
+                    SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold,
                     SimpleDdgiToroidalScrollingEnabled = settings.SimpleDdgiToroidalScrollingEnabled,
                     SimpleDdgiRegionalInvalidationEnabled = settings.SimpleDdgiRegionalInvalidationEnabled,
                     SimpleDdgiFogEnabled = settings.SimpleDdgiFogEnabled,
@@ -3943,9 +4133,15 @@ namespace Njulf.Rendering.Data
                     SimpleDdgiRingCount = settings.SimpleDdgiRingCount,
                     SimpleDdgiRingBaseSpacing = settings.SimpleDdgiRingBaseSpacing,
                     SimpleDdgiRingSpacingMultiplier = settings.SimpleDdgiRingSpacingMultiplier,
-                    SimpleDdgiRingGridSizeX = settings.SimpleDdgiRingGridSizeX,
-                    SimpleDdgiRingGridSizeY = settings.SimpleDdgiRingGridSizeY,
-                    SimpleDdgiRingGridSizeZ = settings.SimpleDdgiRingGridSizeZ,
+                    SimpleDdgiNearRingGridSizeX = settings.SimpleDdgiNearRingGridSizeX,
+                    SimpleDdgiNearRingGridSizeY = settings.SimpleDdgiNearRingGridSizeY,
+                    SimpleDdgiNearRingGridSizeZ = settings.SimpleDdgiNearRingGridSizeZ,
+                    SimpleDdgiMidRingGridSizeX = settings.SimpleDdgiMidRingGridSizeX,
+                    SimpleDdgiMidRingGridSizeY = settings.SimpleDdgiMidRingGridSizeY,
+                    SimpleDdgiMidRingGridSizeZ = settings.SimpleDdgiMidRingGridSizeZ,
+                    SimpleDdgiFarRingGridSizeX = settings.SimpleDdgiFarRingGridSizeX,
+                    SimpleDdgiFarRingGridSizeY = settings.SimpleDdgiFarRingGridSizeY,
+                    SimpleDdgiFarRingGridSizeZ = settings.SimpleDdgiFarRingGridSizeZ,
                     SimpleDdgiRaysPerProbe = settings.SimpleDdgiRaysPerProbe,
                     SimpleDdgiMaintenanceRaysPerProbe = settings.SimpleDdgiMaintenanceRaysPerProbe,
                     SimpleDdgiNearFullRaysPerProbe = settings.SimpleDdgiNearFullRaysPerProbe,
@@ -4109,6 +4305,7 @@ namespace Njulf.Rendering.Data
                 settings.SimpleDdgiStructuredGatherEnabled = SimpleDdgiStructuredGatherEnabled;
                 settings.SimpleDdgiReducedBlendEnabled = SimpleDdgiReducedBlendEnabled;
                 settings.SimpleDdgiSampledAtlasEnabled = SimpleDdgiSampledAtlasEnabled;
+                settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold;
                 settings.SimpleDdgiToroidalScrollingEnabled = SimpleDdgiToroidalScrollingEnabled;
                 settings.SimpleDdgiRegionalInvalidationEnabled = SimpleDdgiRegionalInvalidationEnabled;
                 settings.SimpleDdgiFogEnabled = SimpleDdgiFogEnabled;
@@ -4118,9 +4315,15 @@ namespace Njulf.Rendering.Data
                 settings.SimpleDdgiRingCount = SimpleDdgiRingCount;
                 settings.SimpleDdgiRingBaseSpacing = SimpleDdgiRingBaseSpacing;
                 settings.SimpleDdgiRingSpacingMultiplier = SimpleDdgiRingSpacingMultiplier;
-                settings.SimpleDdgiRingGridSizeX = SimpleDdgiRingGridSizeX;
-                settings.SimpleDdgiRingGridSizeY = SimpleDdgiRingGridSizeY;
-                settings.SimpleDdgiRingGridSizeZ = SimpleDdgiRingGridSizeZ;
+                settings.SimpleDdgiNearRingGridSizeX = SimpleDdgiNearRingGridSizeX;
+                settings.SimpleDdgiNearRingGridSizeY = SimpleDdgiNearRingGridSizeY;
+                settings.SimpleDdgiNearRingGridSizeZ = SimpleDdgiNearRingGridSizeZ;
+                settings.SimpleDdgiMidRingGridSizeX = SimpleDdgiMidRingGridSizeX;
+                settings.SimpleDdgiMidRingGridSizeY = SimpleDdgiMidRingGridSizeY;
+                settings.SimpleDdgiMidRingGridSizeZ = SimpleDdgiMidRingGridSizeZ;
+                settings.SimpleDdgiFarRingGridSizeX = SimpleDdgiFarRingGridSizeX;
+                settings.SimpleDdgiFarRingGridSizeY = SimpleDdgiFarRingGridSizeY;
+                settings.SimpleDdgiFarRingGridSizeZ = SimpleDdgiFarRingGridSizeZ;
                 settings.SimpleDdgiRaysPerProbe = SimpleDdgiRaysPerProbe;
                 settings.SimpleDdgiMaintenanceRaysPerProbe = SimpleDdgiMaintenanceRaysPerProbe;
                 settings.SimpleDdgiNearFullRaysPerProbe = SimpleDdgiNearFullRaysPerProbe;
@@ -4334,7 +4537,10 @@ namespace Njulf.Rendering.Data
             public bool GpuCompactionEnabled { get; init; } = true;
             public bool IndirectMeshletDispatchEnabled { get; init; } = true;
             public bool GpuLodSelectionEnabled { get; init; } = true;
+            public float GpuLod1DistanceRatio { get; init; } = SceneSubmissionSettings.DefaultGpuLod1DistanceRatio;
+            public float GpuLod2DistanceRatio { get; init; } = SceneSubmissionSettings.DefaultGpuLod2DistanceRatio;
             public bool GpuShadowCompactionEnabled { get; init; } = true;
+            public int GpuShadowLodBias { get; init; } = SceneSubmissionSettings.DefaultGpuShadowLodBias;
             public bool ValidationCompareCpuGpuLists { get; init; }
 
             public static SceneSubmissionFile FromSettings(SceneSubmissionSettings settings)
@@ -4344,7 +4550,10 @@ namespace Njulf.Rendering.Data
                     GpuCompactionEnabled = settings.GpuCompactionEnabled,
                     IndirectMeshletDispatchEnabled = settings.IndirectMeshletDispatchEnabled,
                     GpuLodSelectionEnabled = settings.GpuLodSelectionEnabled,
+                    GpuLod1DistanceRatio = settings.GpuLod1DistanceRatio,
+                    GpuLod2DistanceRatio = settings.GpuLod2DistanceRatio,
                     GpuShadowCompactionEnabled = settings.GpuShadowCompactionEnabled,
+                    GpuShadowLodBias = settings.GpuShadowLodBias,
                     ValidationCompareCpuGpuLists = settings.ValidationCompareCpuGpuLists
                 };
             }
@@ -4354,7 +4563,10 @@ namespace Njulf.Rendering.Data
                 settings.GpuCompactionEnabled = GpuCompactionEnabled;
                 settings.IndirectMeshletDispatchEnabled = IndirectMeshletDispatchEnabled;
                 settings.GpuLodSelectionEnabled = GpuLodSelectionEnabled;
+                settings.GpuLod1DistanceRatio = GpuLod1DistanceRatio;
+                settings.GpuLod2DistanceRatio = GpuLod2DistanceRatio;
                 settings.GpuShadowCompactionEnabled = GpuShadowCompactionEnabled;
+                settings.GpuShadowLodBias = GpuShadowLodBias;
                 settings.ValidationCompareCpuGpuLists = ValidationCompareCpuGpuLists;
             }
         }

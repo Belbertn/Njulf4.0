@@ -14,6 +14,13 @@ namespace Njulf.Rendering.Pipeline
 {
     public sealed unsafe class PointShadowPass : RenderPassBase
     {
+        // ShadowSettings and PointShadowCubemapArray both cap selected point lights at four.
+        private const int CachedPointLightLabelCapacity = 4;
+        private const int PointLightFaceCount = 6;
+        private static readonly string[] StaticFaceDebugLabels = CreateFaceDebugLabels("Static");
+        private static readonly string[] DynamicFaceDebugLabels = CreateFaceDebugLabels("Dynamic");
+        private static readonly string[] FoliageFaceDebugLabels = CreateFaceDebugLabels("Foliage");
+
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly FoliagePipeline? _foliagePipeline;
         private readonly FoliageManager? _foliageManager;
@@ -104,6 +111,7 @@ namespace Njulf.Rendering.Pipeline
                 staticViews: true,
                 sceneData.LocalStaticShadowMeshletCount,
                 BindlessIndex.LocalStaticShadowMeshletDrawBufferBase,
+                StaticFaceDebugLabels,
                 "Static");
         }
 
@@ -117,6 +125,7 @@ namespace Njulf.Rendering.Pipeline
                 staticViews: false,
                 sceneData.LocalDynamicShadowMeshletCount,
                 BindlessIndex.LocalDynamicShadowMeshletDrawBufferBase,
+                DynamicFaceDebugLabels,
                 "Dynamic");
         }
 
@@ -126,6 +135,7 @@ namespace Njulf.Rendering.Pipeline
             bool staticViews,
             int meshletCount,
             int meshletDrawBufferBaseIndex,
+            string[] debugLabels,
             string label)
         {
             if (meshletCount <= 0)
@@ -138,7 +148,7 @@ namespace Njulf.Rendering.Pipeline
                     if (!IsFaceEnabled(sceneData, pointIndex, faceIndex))
                         continue;
 
-                    _context.BeginDebugLabel(cmd, $"PointShadowPass {label} Light {pointIndex} Face {FaceName(faceIndex)}");
+                    _context.BeginDebugLabel(cmd, GetFaceDebugLabel(debugLabels, label, pointIndex, faceIndex));
                     try
                     {
                         ImageView view = staticViews
@@ -223,7 +233,7 @@ namespace Njulf.Rendering.Pipeline
                     if (!IsFaceEnabled(sceneData, pointIndex, faceIndex))
                         continue;
 
-                    _context.BeginDebugLabel(cmd, $"PointShadowPass Foliage Light {pointIndex} Face {FaceName(faceIndex)}");
+                    _context.BeginDebugLabel(cmd, GetFaceDebugLabel(FoliageFaceDebugLabels, "Foliage", pointIndex, faceIndex));
                     try
                     {
                         RenderFoliageFace(
@@ -643,6 +653,34 @@ namespace Njulf.Rendering.Pipeline
                 4 => shadow.FaceViewProjection4,
                 _ => shadow.FaceViewProjection5
             };
+        }
+
+        private static string[] CreateFaceDebugLabels(string passKind)
+        {
+            var labels = new string[CachedPointLightLabelCapacity * PointLightFaceCount];
+            for (int pointIndex = 0; pointIndex < CachedPointLightLabelCapacity; pointIndex++)
+            {
+                for (int faceIndex = 0; faceIndex < PointLightFaceCount; faceIndex++)
+                {
+                    labels[GetFaceLabelIndex(pointIndex, faceIndex)] =
+                        $"PointShadowPass {passKind} Light {pointIndex} Face {FaceName(faceIndex)}";
+                }
+            }
+
+            return labels;
+        }
+
+        private static string GetFaceDebugLabel(string[] labels, string passKind, int pointIndex, int faceIndex)
+        {
+            if ((uint)pointIndex < CachedPointLightLabelCapacity && (uint)faceIndex < PointLightFaceCount)
+                return labels[GetFaceLabelIndex(pointIndex, faceIndex)];
+
+            return $"PointShadowPass {passKind} Light {pointIndex} Face {FaceName(faceIndex)}";
+        }
+
+        private static int GetFaceLabelIndex(int pointIndex, int faceIndex)
+        {
+            return pointIndex * PointLightFaceCount + faceIndex;
         }
 
         private static string FaceName(int faceIndex)

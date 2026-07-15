@@ -22,6 +22,10 @@ const uint SIMPLE_DDGI_FLAG_DETAILED_DIAGNOSTICS_ENABLED = 1u << 9;
 // The CPU knows when a real lighting edit is propagating.  Adaptive history must
 // not mistake ordinary low-sample Monte-Carlo variation for that edit.
 const uint SIMPLE_DDGI_FLAG_LIGHTING_CHANGE_ACTIVE = 1u << 10;
+// A normalized [0, 1] second-volume early-out threshold is packed into the
+// otherwise-unused high flag bits. This preserves the fixed params header ABI.
+const uint SIMPLE_DDGI_SECOND_VOLUME_OWNERSHIP_THRESHOLD_SHIFT = 12u;
+const uint SIMPLE_DDGI_SECOND_VOLUME_OWNERSHIP_THRESHOLD_MASK = 0xffu << SIMPLE_DDGI_SECOND_VOLUME_OWNERSHIP_THRESHOLD_SHIFT;
 const uint SIMPLE_DDGI_IRRADIANCE_TEXELS = 8u;
 const uint SIMPLE_DDGI_VISIBILITY_TEXELS = 16u;
 const uint SIMPLE_DDGI_MAX_RAYS_PER_PROBE = 256u;
@@ -91,6 +95,7 @@ struct SimpleDdgiParams
     uint sampledAtlasLayersPerTexture;
     uint sampledAtlasTextureGroupCount;
     uint sampledAtlasEnabled;
+    float secondVolumeOwnershipEarlyOutThreshold;
 };
 
 bool SimpleDdgiDetailedDiagnosticsEnabled(SimpleDdgiParams params)
@@ -274,6 +279,9 @@ SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
     p.sampledAtlasLayersPerTexture = uint(max(reserved.y, 0.0));
     p.sampledAtlasTextureGroupCount = uint(max(reserved.z, 0.0));
     p.sampledAtlasEnabled = uint(max(reserved.w, 0.0));
+    p.secondVolumeOwnershipEarlyOutThreshold = float(
+        (p.flags & SIMPLE_DDGI_SECOND_VOLUME_OWNERSHIP_THRESHOLD_MASK) >>
+        SIMPLE_DDGI_SECOND_VOLUME_OWNERSHIP_THRESHOLD_SHIFT) / 255.0;
     return p;
 }
 
@@ -663,6 +671,10 @@ bool SelectSimpleDdgiVolume(SimpleDdgiParams p, vec3 worldPosition, out uint sel
 struct SimpleDdgiGatherResult
 {
     vec3 irradiance;
+    // Weighted with the same directional masses that compose irradiance. This
+    // lets the cascade-selection debug view show every volume that contributed,
+    // rather than only the finest volume selected before fallback blending.
+    vec3 contributingVolumeColor;
     float validSupport;
     float directionalSupport;
     float spatialCoverage;
@@ -677,6 +689,7 @@ SimpleDdgiGatherResult EmptySimpleDdgiGatherResult()
 {
     SimpleDdgiGatherResult result;
     result.irradiance = vec3(0.0);
+    result.contributingVolumeColor = vec3(0.0);
     result.validSupport = 0.0;
     result.directionalSupport = 0.0;
     result.spatialCoverage = 0.0;
@@ -686,6 +699,21 @@ SimpleDdgiGatherResult EmptySimpleDdgiGatherResult()
     result.selectedSpacing = 0.0;
     result.validProbeCount = 0u;
     return result;
+}
+
+vec3 SimpleDdgiVolumeContributorDebugColor(uint volumeIndex, uint volumeKind)
+{
+    // Keep this palette synchronized with the CPU probe-volume overlay so the
+    // shaded contributor view and probe markers identify the same volumes.
+    if (volumeKind == SIMPLE_DDGI_VOLUME_KIND_AUTHORED)
+        return vec3(0.95, 0.90, 0.25);
+
+    uint paletteIndex = volumeIndex % 3u;
+    if (paletteIndex == 0u)
+        return vec3(0.20, 0.75, 1.00);
+    if (paletteIndex == 1u)
+        return vec3(0.30, 0.95, 0.55);
+    return vec3(0.95, 0.30, 0.85);
 }
 
 float SimpleDdgiRadiometricOwnership(SimpleDdgiGatherResult gather)
@@ -799,6 +827,9 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     result.irradiance = directionalMass > 0.000001
         ? clamp(accumulated / directionalMass, vec3(0.0), vec3(64.0))
         : vec3(0.0);
+    result.contributingVolumeColor = directionalMass > 0.000001
+        ? SimpleDdgiVolumeContributorDebugColor(volumeIndex, volume.kind)
+        : vec3(0.0);
     return result;
 }
 
@@ -893,6 +924,8 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
         innerDirectionalMass * inner.transportVisibility;
     vec3 accumulated = outer.irradiance * outerDirectionalMass +
         inner.irradiance * innerDirectionalMass;
+    vec3 contributorColorAccumulated = outer.contributingVolumeColor * outerDirectionalMass +
+        inner.contributingVolumeColor * innerDirectionalMass;
     SimpleDdgiGatherResult result;
     float innerSpatialMass = inner.spatialCoverage * w;
     result.spatialCoverage = clamp(
@@ -911,6 +944,9 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
     result.ownership = clamp(validMass, 0.0, 1.0);
     result.irradiance = directionalMass > 0.000001
         ? clamp(accumulated / directionalMass, vec3(0.0), vec3(64.0))
+        : vec3(0.0);
+    result.contributingVolumeColor = directionalMass > 0.000001
+        ? clamp(contributorColorAccumulated / directionalMass, vec3(0.0), vec3(1.0))
         : vec3(0.0);
     result.selectedVolume = inner.selectedVolume;
     result.selectedSpacing = mix(outer.selectedSpacing, inner.selectedSpacing, w);
@@ -947,7 +983,23 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 v
         selectedVolumeIndex,
         biasedWorldPos,
         safeNormal);
-    if (edgeWeight >= 0.999 && selected.ownership >= 0.999)
+    uint diagnosticFrame = p.frameIndex % uint(FRAMES_IN_FLIGHT);
+    AddSimpleDdgiDiagnostic(
+        p,
+        diagnosticFrame,
+        DDGI_INVESTIGATION_SIMPLE_GATHER_COUNTER,
+        1u);
+    AddSimpleDdgiDiagnostic(
+        p,
+        diagnosticFrame,
+        DDGI_INVESTIGATION_SIMPLE_VOLUME_PRIMARY_GATHER_COUNTER_BASE + selectedVolumeIndex,
+        1u);
+    AddSimpleDdgiDiagnostic(
+        p,
+        diagnosticFrame,
+        DDGI_INVESTIGATION_SIMPLE_VOLUME_SAMPLED_GATHER_COUNTER_BASE + selectedVolumeIndex,
+        1u);
+    if (edgeWeight >= 0.999 && selected.ownership >= p.secondVolumeOwnershipEarlyOutThreshold)
         return selected;
 
     bool foundOuterVolume = false;
@@ -963,12 +1015,22 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 v
             nextVolumeIndex,
             biasedWorldPos,
             safeNormal);
+        AddSimpleDdgiDiagnostic(
+            p,
+            diagnosticFrame,
+            DDGI_INVESTIGATION_SIMPLE_SECOND_VOLUME_GATHER_COUNTER,
+            1u);
+        AddSimpleDdgiDiagnostic(
+            p,
+            diagnosticFrame,
+            DDGI_INVESTIGATION_SIMPLE_VOLUME_SAMPLED_GATHER_COUNTER_BASE + nextVolumeIndex,
+            1u);
         selected = BlendSimpleDdgiGatherResults(
             outer,
             selected,
             foundOuterVolume ? 1.0 : edgeWeight);
         foundOuterVolume = true;
-        if (selected.ownership >= 0.999)
+        if (selected.ownership >= p.secondVolumeOwnershipEarlyOutThreshold)
             break;
     }
 

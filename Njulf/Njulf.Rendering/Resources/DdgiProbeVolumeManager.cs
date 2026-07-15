@@ -1405,6 +1405,9 @@ namespace Njulf.Rendering.Resources
                     MaxProbeSpacing = maxSpacing,
                     ProbeDensityPerCubicMeter = probeCount / volumeCubicMeters,
                     ActiveProbeBudgetFraction = Math.Clamp(probeCount / (float)activeProbeBudget, 0.0f, 1.0f),
+                    ProbeStateCountsValid = 1,
+                    ActiveProbeCount = probeCount,
+                    InactiveProbeCount = 0,
                     DesignPreset = designPreset,
                     BudgetWarning = ResolveDdgiVolumeBudgetWarning(kind, probeCount, activeProbeBudget, designPreset)
                 };
