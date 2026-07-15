@@ -1,29 +1,3 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-
-    <PropertyGroup>
-        <OutputType>Exe</OutputType>
-        <TargetFramework>net10.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
-    </PropertyGroup>
-
-    <ItemGroup>
-      <ProjectReference Include="..\Njulf.Core\Njulf.Core.csproj" />
-      <ProjectReference Include="..\Njulf.Rendering\Njulf.Rendering.csproj" />
-      <ProjectReference Include="..\Njulf.Assets\Njulf.Assets.csproj" />
-      <ProjectReference Include="..\Njulf.Input\Njulf.Input.csproj" />
-    </ItemGroup>
-
-    <ItemGroup>
-      <None Update="NewSponza_Main_glTF_003.gltf" CopyToOutputDirectory="IfDifferent" />
-      <None Update="NewSponza_Main_glTF_003.bin" CopyToOutputDirectory="IfDifferent" />
-      <None Update="NewSponza_Curtains_glTF.gltf" CopyToOutputDirectory="IfDifferent" />
-      <None Update="NewSponza_Curtains_glTF.bin" CopyToOutputDirectory="IfDifferent" />
-      <None Update="Strut.glb" CopyToOutputDirectory="IfDifferent" />
-      <None Update="sample-asset-validation-report.json" CopyToOutputDirectory="IfDifferent" />
-      <None Update="Assets\**\*.*" CopyToOutputDirectory="IfDifferent" />
-      <None Update="textures\**\*.*" CopyToOutputDirectory="IfDifferent" />
-      <None Update="textures\IvyLeaf_*.png" CopyToOutputDirectory="Never" />
-    </ItemGroup>
-
-</Project>
+version https://git-lfs.github.com/spec/v1
+oid sha256:9033cad6f446dbbc2d5036e0b5c11950f08b24926348425069d0ab421f291915
+size 3666

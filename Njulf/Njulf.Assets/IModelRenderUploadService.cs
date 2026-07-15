@@ -1,26 +1,3 @@
-using Njulf.Core.Scene;
-
-namespace Njulf.Assets
-{
-    /// <summary>
-    /// Bridges imported asset data to renderer-owned GPU resources without making
-    /// Njulf.Assets reference a concrete rendering backend.
-    /// </summary>
-    public interface IModelRenderUploadService
-    {
-        ModelRenderUploadDiagnostics LastUploadDiagnostics { get; }
-
-        Model UploadModel(ModelMesh modelMesh);
-    }
-
-    public sealed record ModelRenderUploadDiagnostics(
-        string ModelName,
-        int RenderObjectCount,
-        int RegisteredMeshCount,
-        int LoadedMaterialCount,
-        int LoadedTextureCount,
-        int DefaultWhiteSubstitutions,
-        int DefaultNormalSubstitutions,
-        int DefaultBlackSubstitutions,
-        int BlendMaterialCount);
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:f4f27a4c3e5b778c46c2219085819b74a1a675946ea438d0aae4e5012c790160
+size 962

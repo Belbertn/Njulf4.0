@@ -1,9 +1,3 @@
-namespace Njulf.Core.Interfaces
-{
-    public interface IContentManager
-    {
-        T Load<T>(string path);
-        void Unload<T>(T asset);
-        void Clear();
-    }
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:5823cfeff9ce44e9351cc0a382f08ab67404ddb808573b7bc4f9ed58f119e82d
+size 172

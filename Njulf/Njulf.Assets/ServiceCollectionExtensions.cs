@@ -1,31 +1,3 @@
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
-using Njulf.Core.Interfaces;
-
-namespace Njulf.Assets
-{
-    public static class ServiceCollectionExtensions
-    {
-        public static IServiceCollection AddAssets(this IServiceCollection services, string? contentRoot = null)
-        {
-            return services.AddAssetsInternal(contentRoot);
-        }
-
-        public static IServiceCollection AddAssetsWithContentRoot(this IServiceCollection services, string contentRoot)
-        {
-            return services.AddAssetsInternal(contentRoot);
-        }
-
-        private static IServiceCollection AddAssetsInternal(this IServiceCollection services, string? contentRoot)
-        {
-            services.TryAddSingleton(provider => new ContentManager(
-                contentRoot,
-                provider.GetService<IModelRenderUploadService>()));
-            services.TryAddSingleton<IContentManager>(provider => provider.GetRequiredService<ContentManager>());
-            services.TryAddSingleton<ModelImporter>();
-            services.TryAddSingleton<MeshletBuilder>();
-            services.TryAddSingleton<ProcessedMeshAssetBuilder>();
-            return services;
-        }
-    }
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:1ce84b3b028dd1844e961147a068b4f55b6b9ac2c5a17944fb4b869f1d4d6857
+size 1245

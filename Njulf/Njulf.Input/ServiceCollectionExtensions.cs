@@ -1,30 +1,3 @@
-using Microsoft.Extensions.DependencyInjection;
-using Njulf.Core.Interfaces;
-using Njulf.Input;
-using Silk.NET.Input;
-
-namespace Microsoft.Extensions.DependencyInjection
-{
-    public static class InputServiceCollectionExtensions
-    {
-        public static IServiceCollection AddInput(this IServiceCollection services)
-        {
-            services.AddSingleton<IInputManager, InputManager>(provider =>
-            {
-                var inputContext = provider.GetRequiredService<IInputContext>();
-                var inputManager = new InputManager(inputContext);
-                inputManager.Initialize();
-                return inputManager;
-            });
-            
-            return services;
-        }
-        
-        public static IServiceCollection AddInputContext(this IServiceCollection services)
-        {
-            services.AddSingleton<IInputContext>(_ =>
-                throw new InvalidOperationException("Register a Silk.NET IInputContext created from the application window before adding input services."));
-            return services;
-        }
-    }
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:230e2dfd14f879e42f384808f1447e69f55aaa1a1d733d04005eca94f6e961f5
+size 1082

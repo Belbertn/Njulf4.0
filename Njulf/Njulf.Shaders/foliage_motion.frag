@@ -1,23 +1,3 @@
-#version 460
-#extension GL_GOOGLE_include_directive : require
-
-#include "common.glsl"
-
-layout(location = 0) noperspective in vec2 inCurrentUv;
-layout(location = 1) noperspective in vec2 inPreviousUv;
-layout(location = 2) in vec2 inTexCoord;
-layout(location = 3) flat in uint inMaterialIndex;
-layout(location = 0) out vec2 outVelocity;
-
-void main()
-{
-    GPUMaterialData material = ReadMaterial(inMaterialIndex);
-    if (material.AlbedoTextureIndex >= FIRST_TEXTURE_INDEX)
-    {
-        float alpha = texture(BindlessTextures[nonuniformEXT(material.AlbedoTextureIndex)], inTexCoord).a;
-        if (material.NormalScaleBias.y >= 0.5 && alpha < material.NormalScaleBias.z)
-            discard;
-    }
-
-    outVelocity = clamp(inCurrentUv - inPreviousUv, vec2(-1.0), vec2(1.0));
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:bee7ce285b87ed1da44bd4bc0976aa0b121584056c8c89ce5dbc61aad5868036
+size 776

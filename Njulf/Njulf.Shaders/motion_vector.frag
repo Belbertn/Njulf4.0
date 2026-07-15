@@ -1,10 +1,3 @@
-#version 460
-
-layout(location = 0) noperspective in vec2 inCurrentUv;
-layout(location = 1) noperspective in vec2 inPreviousUv;
-layout(location = 0) out vec2 outVelocity;
-
-void main()
-{
-    outVelocity = clamp(inCurrentUv - inPreviousUv, vec2(-1.0), vec2(1.0));
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:452874dff94207698f3897f9efc740b6094f2acd24a4fa1d63921742c0dd106e
+size 263

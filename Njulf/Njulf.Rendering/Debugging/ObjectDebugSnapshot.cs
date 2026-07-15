@@ -1,15 +1,3 @@
-using Njulf.Core.Math;
-using Njulf.Rendering.Resources;
-
-namespace Njulf.Rendering.Debug
-{
-    public sealed record ObjectDebugSnapshot(
-        int ObjectIndex,
-        string Name,
-        MeshHandle Mesh,
-        MaterialHandle Material,
-        Matrix4x4 WorldMatrix,
-        BoundingBox WorldBounds,
-        bool Visible,
-        bool CpuCulled);
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:df589dbf6612ecce26149e11937868fef51185d9451815c2a3dc993ce919c27c
+size 354

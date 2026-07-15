@@ -1,19 +1,3 @@
-namespace Njulf.Rendering.Diagnostics;
-
-public sealed record SceneReloadDiagnostics(
-    int ReloadIndex,
-    int RenderObjectCountBefore,
-    int RenderObjectCountAfter,
-    int MeshCountBefore,
-    int MeshCountAfter,
-    int MaterialCountBefore,
-    int MaterialCountAfter,
-    int TextureCountBefore,
-    int TextureCountAfter,
-    int DescriptorWritesBefore,
-    int DescriptorWritesAfter,
-    ulong GpuBytesBefore,
-    ulong GpuBytesAfter,
-    long ManagedBytesBefore,
-    long ManagedBytesAfter,
-    int PendingDeletionCountAfter);
+version https://git-lfs.github.com/spec/v1
+oid sha256:40b97482a9155cd5c78f81e4cb48462aee9f90ad9f6dcff75fbc97b84b814e27
+size 539

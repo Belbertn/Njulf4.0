@@ -1,17 +1,3 @@
-using Njulf.Core.Math;
-
-namespace Njulf.Core.Vfx
-{
-    public sealed class BeamDefinition
-    {
-        public string Name { get; init; } = string.Empty;
-        public ParticleMaterialDefinition Material { get; init; } = new();
-        public Vector3 LocalStart { get; init; }
-        public Vector3 LocalEnd { get; init; } = Vector3.UnitZ;
-        public ParticleCurve Width { get; init; } = ParticleCurve.Constant(0.05f);
-        public ParticleGradient Color { get; init; } = ParticleGradient.White;
-        public int SegmentCount { get; init; } = 8;
-        public float NoiseAmplitude { get; init; }
-        public float UvScrollSpeed { get; init; }
-    }
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:6b827958c1f16072347758b4c8a6d9626ea3d6ca0e1639739897c788812e49b4
+size 665

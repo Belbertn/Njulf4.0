@@ -1,25 +1,3 @@
-using System;
-
-namespace Njulf.Rendering.Diagnostics;
-
-public sealed record RendererFailureReport(
-    string OperationName,
-    string? LastSuccessfulStep,
-    string ExceptionType,
-    string ExceptionMessage,
-    string? StartupLogPath)
-{
-    public static RendererFailureReport FromException(
-        string operationName,
-        string? lastSuccessfulStep,
-        Exception exception,
-        string? startupLogPath)
-    {
-        return new RendererFailureReport(
-            operationName,
-            lastSuccessfulStep,
-            exception.GetType().FullName ?? exception.GetType().Name,
-            exception.Message,
-            startupLogPath);
-    }
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:3fc47d43f705cd950ef3456ba03ae4107d58e396b309f2cd0f9bd0eab1f82e0b
+size 669

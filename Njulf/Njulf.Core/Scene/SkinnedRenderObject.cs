@@ -1,30 +1,3 @@
-using Njulf.Core.Animation;
-using Njulf.Core.Math;
-
-namespace Njulf.Core.Scene
-{
-    public sealed class SkinnedRenderObject : RenderObject
-    {
-        public SkinnedRenderObject()
-        {
-        }
-
-        public SkinnedRenderObject(object mesh, object material)
-            : base(mesh, material)
-        {
-        }
-
-        public int SkinIndex { get; set; } = -1;
-        public Animator? Animator { get; set; }
-        public Matrix4x4 SkinningBindTransform { get; set; } = Matrix4x4.Identity;
-        public BoundingBox? AnimatedBoundingBox { get; set; }
-        public uint SkinnedVertexOffset { get; set; }
-        public bool SkinningEnabled { get; set; }
-
-        public override void Update(float deltaTime)
-        {
-            base.Update(deltaTime);
-            Animator?.Update(deltaTime);
-        }
-    }
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:7cc377bb49d0c39bedc4428532a73cf96e20f7fd3162a56fc57e39836af5f364
+size 830

@@ -1,22 +1,3 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-
-    <PropertyGroup>
-        <TargetFramework>net10.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
-    </PropertyGroup>
-
-    <ItemGroup>
-      <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
-      <PackageReference Include="Silk.NET" Version="2.23.0" />
-      <PackageReference Include="Silk.NET.Core" Version="2.23.0" />
-      <PackageReference Include="Silk.NET.Input" Version="2.23.0" />
-      <PackageReference Include="Silk.NET.Input.Common" Version="2.23.0" />
-      <PackageReference Include="Silk.NET.Input.Extensions" Version="2.23.0" />
-    </ItemGroup>
-
-    <ItemGroup>
-      <ProjectReference Include="..\Njulf.Core\Njulf.Core.csproj" />
-    </ItemGroup>
-
-</Project>
+version https://git-lfs.github.com/spec/v1
+oid sha256:dd7f315c3fbc06ea83c52e26ac3f63abbd506aee5e458a8a38c6cc415e4194cf
+size 814

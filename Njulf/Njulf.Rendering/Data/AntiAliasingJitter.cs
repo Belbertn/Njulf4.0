@@ -1,35 +1,3 @@
-using System;
-using Njulf.Core.Math;
-
-namespace Njulf.Rendering.Data
-{
-    public static class AntiAliasingJitter
-    {
-        public static Vector2 GetHaltonJitter(int sampleIndex, int sampleCount, uint width, uint height, bool enabled)
-        {
-            if (!enabled || width == 0 || height == 0)
-                return Vector2.Zero;
-
-            int count = sampleCount <= 3 ? 2 : sampleCount <= 6 ? 4 : sampleCount <= 12 ? 8 : 16;
-            int index = Math.Abs(sampleIndex) % count + 1;
-            float x = Halton(index, 2) - 0.5f;
-            float y = Halton(index, 3) - 0.5f;
-            return new Vector2((x * 2.0f) / width, (y * 2.0f) / height);
-        }
-
-        private static float Halton(int index, int radix)
-        {
-            float result = 0.0f;
-            float fraction = 1.0f / radix;
-
-            while (index > 0)
-            {
-                result += fraction * (index % radix);
-                index /= radix;
-                fraction /= radix;
-            }
-
-            return result;
-        }
-    }
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:ddd01c990cd52ab1dfc899ab0cc64f9e232a9d1acbc5e0fa8a56db4431a77466
+size 1047

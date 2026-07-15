@@ -1,25 +1,3 @@
-using System;
-
-namespace Njulf.Rendering.Resources
-{
-    public struct TextureHandle : IEquatable<TextureHandle>
-    {
-        public int Index { get; }
-        public uint Generation { get; }
-        
-        public TextureHandle(int index, uint generation)
-        {
-            Index = index;
-            Generation = generation;
-        }
-        
-        public bool IsValid => Index >= 0 && Generation > 0;
-        public static readonly TextureHandle Invalid = new TextureHandle(-1, 0);
-        
-        public bool Equals(TextureHandle other) => Index == other.Index && Generation == other.Generation;
-        public override bool Equals(object? obj) => obj is TextureHandle other && Equals(other);
-        public override int GetHashCode() => unchecked((Index * 397) ^ (int)Generation);
-        public static bool operator ==(TextureHandle left, TextureHandle right) => left.Equals(right);
-        public static bool operator !=(TextureHandle left, TextureHandle right) => !left.Equals(right);
-    }
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:c19fcc9cb69b9d936855a8d7c52ea275c231b69865f13f1d2e95ca292a835a06
+size 1011

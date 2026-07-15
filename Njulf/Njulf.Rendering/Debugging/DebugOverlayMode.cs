@@ -1,29 +1,3 @@
-namespace Njulf.Rendering.Debug
-{
-    public enum DebugOverlayMode : uint
-    {
-        None = 0,
-        LightTiles = 1,
-        DirectionalShadowCascades = 2,
-        ReflectionProbeVolumes = 3,
-        DdgiProbeVolumes = 4,
-        DecalVolumes = 5,
-        ObjectBounds = 6,
-        MeshletBounds = 7,
-        SelectedObject = 8,
-        MaterialInspection = 9,
-        PassTimings = 10,
-        GpuMemory = 11,
-        DdgiProbeActivity = 12,
-        DdgiUpdatedProbes = 13,
-        DdgiProbeRelocation = 14,
-        DdgiProbeAge = 15,
-        DdgiPhysicalSlots = 16,
-        DdgiCascadeBounds = 17,
-        DdgiNewlyExposedCells = 18,
-        DdgiFrustumPriority = 19,
-        DdgiSafetyRefresh = 20,
-        DdgiCascadeBlend = 21,
-        DdgiUpdateReasons = 22
-    }
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:074c675191101cfb8d50c9e059c0dd8e59f97fc20e983cf4781981a18239fd71
+size 777

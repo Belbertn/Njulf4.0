@@ -1,20 +1,3 @@
-using System;
-using System.Collections.Generic;
-using Njulf.Core.Math;
-
-namespace Njulf.Core.Animation
-{
-    public enum AnimationInterpolation
-    {
-        Step,
-        Linear,
-        CubicSpline
-    }
-
-    public sealed class AnimationSampler
-    {
-        public IReadOnlyList<float> InputTimes { get; init; } = Array.Empty<float>();
-        public IReadOnlyList<Vector4> OutputValues { get; init; } = Array.Empty<Vector4>();
-        public AnimationInterpolation Interpolation { get; init; } = AnimationInterpolation.Linear;
-    }
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:8828c3e5a39a5534b7d1fff9f6dfe704d6cb8f28ab45114b5535eb9f8063dace
+size 540
