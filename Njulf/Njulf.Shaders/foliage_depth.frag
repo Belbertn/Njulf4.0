@@ -1,3 +1,26 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:590737174845bc348c067dbffcc42e69bcc548259dc68e03e455cb75d378fd25
-size 713
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+#include "foliage_coverage.glsl"
+
+layout(location = 0) in vec2 fragTexCoord;
+layout(location = 1) flat in uint fragMaterialIndex;
+layout(location = 4) flat in uint fragClusterIndex;
+layout(location = 5) flat in uint fragLodBand;
+layout(location = 6) flat in uint fragGeometryMode;
+
+void main()
+{
+    GPUMaterialData material = ReadMaterial(fragMaterialIndex);
+    vec4 sampledAlbedo;
+    if (!FoliageCoverageSurvives(
+            material,
+            fragTexCoord,
+            fragGeometryMode,
+            fragClusterIndex,
+            fragLodBand,
+            gl_FragCoord.xy,
+            sampledAlbedo))
+        discard;
+}

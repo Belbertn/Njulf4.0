@@ -1,3 +1,62 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:775fa37603b5d826088488d29c27c600931aea043c8542d34403ae1fcfb62b85
-size 3987
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <CookedAssetsOnly Condition="'$(Configuration)' == 'Release'">true</CookedAssetsOnly>
+        <DefineConstants Condition="'$(Configuration)' != 'Release'">$(DefineConstants);NJULF_EDITOR</DefineConstants>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\Njulf.Core\Njulf.Core.csproj" />
+      <ProjectReference Include="..\Njulf.Rendering\Njulf.Rendering.csproj" />
+      <ProjectReference Include="..\Njulf.Assets\Njulf.Assets.csproj" />
+      <ProjectReference Include="..\Njulf.Input\Njulf.Input.csproj" />
+      <ProjectReference Include="..\Njulf.Editor\Njulf.Editor.csproj" Condition="'$(Configuration)' != 'Release'" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <None Update="NewSponza_Main_glTF_003.gltf" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
+      <None Update="NewSponza_Main_glTF_003.bin" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
+      <None Update="NewSponza_Curtains_glTF.gltf" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
+      <None Update="NewSponza_Curtains_glTF.bin" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
+      <None Update="Strut.glb" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
+      <None Update="sample-asset-validation-report.json" CopyToOutputDirectory="IfDifferent" />
+      <None Update="Assets\**\*.*" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
+      <None Update="textures\**\*.*" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
+      <None Update="textures\IvyLeaf_*.png" CopyToOutputDirectory="Never" />
+      <None Update="Cooked\**\*.*" CopyToOutputDirectory="IfDifferent" />
+      <None Update="Scenes\**\*.njscene.json" CopyToOutputDirectory="IfDifferent" />
+    </ItemGroup>
+
+    <Target Name="ExcludeSourceImporterRuntimeFiles"
+            AfterTargets="ResolveReferences"
+            Condition="'$(CookedAssetsOnly)' == 'true'">
+      <ItemGroup>
+        <_SourceImporterRuntimeFile Include="@(ReferenceCopyLocalPaths)"
+          Condition="$([System.String]::Copy('%(ReferenceCopyLocalPaths.Filename)').StartsWith('SharpGLTF'))
+                  Or $([System.String]::Copy('%(ReferenceCopyLocalPaths.Filename)').StartsWith('Silk.NET.Assimp'))
+                  Or $([System.String]::Copy('%(ReferenceCopyLocalPaths.Filename)').StartsWith('Assimp'))
+                  Or $([System.String]::Copy('%(ReferenceCopyLocalPaths.Filename)').StartsWith('BCnEncoder'))
+                  Or $([System.String]::Copy('%(ReferenceCopyLocalPaths.Filename)').StartsWith('StbImageSharp'))" />
+        <ReferenceCopyLocalPaths Remove="@(_SourceImporterRuntimeFile)" />
+      </ItemGroup>
+    </Target>
+
+    <Target Name="ExcludeSourceImporterPublishedFiles"
+            AfterTargets="ComputeFilesToPublish"
+            Condition="'$(CookedAssetsOnly)' == 'true'">
+      <ItemGroup>
+        <_SourceImporterPublishedFile Include="@(ResolvedFileToPublish)"
+          Condition="$([System.String]::Copy('%(ResolvedFileToPublish.Filename)').StartsWith('SharpGLTF'))
+                  Or $([System.String]::Copy('%(ResolvedFileToPublish.Filename)').StartsWith('Silk.NET.Assimp'))
+                  Or $([System.String]::Copy('%(ResolvedFileToPublish.Filename)').StartsWith('Assimp'))
+                  Or $([System.String]::Copy('%(ResolvedFileToPublish.Filename)').StartsWith('BCnEncoder'))
+                  Or $([System.String]::Copy('%(ResolvedFileToPublish.Filename)').StartsWith('StbImageSharp'))" />
+        <ResolvedFileToPublish Remove="@(_SourceImporterPublishedFile)" />
+      </ItemGroup>
+    </Target>
+
+</Project>

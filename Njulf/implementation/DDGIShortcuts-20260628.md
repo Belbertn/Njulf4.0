@@ -1,3 +1,50 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:802cc2718240816cf549ff0f6faf23a5fe49380b046e10bfc5607a01991de762
-size 3361
+# DDGI Shortcuts
+
+Source: `NjulfHelloGame/SampleInputController.cs`
+
+All shortcuts below are physical key chords: hold either `Left Ctrl` or `Right Ctrl`, then press the listed key.
+
+## DDGI Controls
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+D` | Cycle DDGI-only debug view. Forces DDGI mode on, disables SSGI, enables ray-query DDGI, camera-relative DDGI, probe classification, and probe relocation. |
+| `Ctrl+V` | Cycle DDGI investigation views: gather path, support/data/confidence, irradiance, raw diffuse, confidence bypass, and update reasons. |
+| `Ctrl+P` | Restore the current scene/scenario's normal render profile and clear visualization overrides. |
+| `Ctrl+T` | Cycle `DdgiQualityTier`, then force DDGI-only mode. |
+| `Ctrl+L` | Toggle DDGI compact L1 probe metadata (`DdgiProbeL1MetadataEnabled`) and print the resulting GI settings. |
+| `Ctrl+R` | Print detailed DDGI diagnostics to the console. |
+
+## GI Controls That Affect DDGI
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+5` | Toggle global illumination. Disabling GI also clears the GI debug view. |
+| `Ctrl+Y` | Cycle GI mode: `Disabled -> Ssgi -> Ddgi -> Hybrid -> RayQueryHybrid -> Disabled`. DDGI is active in `Ddgi`, `Hybrid`, and `RayQueryHybrid`. |
+| `Ctrl+6` | Cycle the full GI debug view list, including SSGI, DDGI, and ray-query views. |
+| `Ctrl+G` | Cycle focused DDGI GI debug views: `FinalIndirect -> DdgiIrradiance -> DdgiCoverage -> DdgiUpdateReasons -> FinalIndirect`. Also forces DDGI-only mode. |
+| `Ctrl+Backspace` | Clear the GI debug view (`GlobalIlluminationDebugView.None`). |
+| `Ctrl+J` | Decrease GI max bounce distance by `0.5`. |
+| `Ctrl+U` | Increase GI max bounce distance by `0.5`. |
+| `Ctrl+M` | Decrease GI indirect intensity by `0.05`. |
+| `Ctrl+I` | Increase GI indirect intensity by `0.05`. |
+
+## DDGI Debug View Cycles
+
+### `Ctrl+D` DDGI-Only Cycle
+
+`FinalIndirect -> DdgiIrradiance -> DdgiSampledIrradiance -> DdgiFinalDiffuse -> DdgiRawDiffuse -> DdgiConfidenceBypass -> DdgiVisibility -> DdgiVisibilityMoments -> DdgiProbeIndex -> DdgiProbeState -> DdgiProbeRelocation -> DdgiLeakClamp -> DdgiCoverage -> DdgiCascadeSelection -> DdgiCascadeBlendWeight -> DdgiUpdateReasons -> DdgiRayBudget -> DdgiGatherLocalVolume -> DdgiGatherClipmap -> DdgiGatherClipmapBlendWeight -> DdgiGatherFallback -> FinalIndirect`
+
+### `Ctrl+6` Full GI Debug Cycle
+
+`FinalIndirect -> SsgiRaw -> SsgiFiltered -> SsgiHistory -> SsgiRayHitMask -> SsgiHistoryRejection -> DdgiIrradiance -> DdgiSampledIrradiance -> DdgiFinalDiffuse -> DdgiRawDiffuse -> DdgiConfidenceBypass -> DdgiVisibility -> DdgiVisibilityMoments -> DdgiProbeIndex -> DdgiProbeState -> DdgiProbeRelocation -> DdgiLeakClamp -> DdgiCoverage -> DdgiCascadeSelection -> DdgiCascadeBlendWeight -> DdgiUpdateReasons -> DdgiRayBudget -> DdgiGatherLocalVolume -> DdgiGatherClipmap -> DdgiGatherClipmapBlendWeight -> DdgiGatherFallback -> RayQueryCost -> None`
+
+## DDGI Debug Overlays
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+Keypad9` | Cycle renderer debug overlays. The cycle includes DDGI overlays after reflection probe volumes. |
+
+DDGI overlay segment:
+
+`DdgiProbeVolumes -> DdgiProbeActivity -> DdgiUpdatedProbes -> DdgiProbeRelocation -> DdgiProbeAge -> DdgiPhysicalSlots -> DdgiCascadeBounds -> DdgiNewlyExposedCells -> DdgiFrustumPriority -> DdgiSafetyRefresh -> DdgiCascadeBlend -> DdgiUpdateReasons`

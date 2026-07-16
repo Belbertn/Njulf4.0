@@ -1,3 +1,14 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:616bf6026106d2151373e71cd7582ebc6115ebc9ac76dd3e99b40933ac9e8d9d
-size 337
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+
+layout(location = 0) flat in uint fragMaterialIndex;
+
+void main()
+{
+    GPUMaterialData material = ReadMaterial(fragMaterialIndex);
+    bool doubleSided = material.NormalScaleBias.w >= 0.5;
+    if (!doubleSided && !gl_FrontFacing)
+        discard;
+}

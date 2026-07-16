@@ -1,3 +1,212 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:fb94a575fde92a80a5e712477173a179377d87737e81128667c94cbb77cd6149
-size 9176
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 2, binding = 0, rgba16f) uniform writeonly image2D GiFinalDiffuseOutput;
+
+layout(push_constant) uniform SsgiDenoisePushBlock
+{
+    vec4 SourceDimensions;
+    vec4 DestinationDimensions;
+    vec4 FilterParams;
+    mat4 InverseProjectionMatrix;
+    uint Radius;
+    uint DenoiserEnabled;
+    uint DebugView;
+    uint TemporalEnabled;
+} pc;
+
+ivec2 PixelAtUv(uint textureIndex, vec2 uv)
+{
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(textureIndex)], 0);
+    return ivec2(clamp(uv * vec2(size), vec2(0.0), vec2(size - ivec2(1))));
+}
+
+float FetchDepthPixel(ivec2 pixel)
+{
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], 0);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return texelFetch(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], clampedPixel, 0).r;
+}
+
+float FetchDepthAtUv(vec2 uv)
+{
+    return FetchDepthPixel(PixelAtUv(uint(DEPTH_TEXTURE_INDEX), uv));
+}
+
+vec4 FetchNormalPixel(ivec2 pixel)
+{
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(SCENE_NORMAL_TEXTURE_INDEX)], 0);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return texelFetch(BindlessTextures[nonuniformEXT(SCENE_NORMAL_TEXTURE_INDEX)], clampedPixel, 0);
+}
+
+vec4 FetchNormalAtUv(vec2 uv)
+{
+    return FetchNormalPixel(PixelAtUv(uint(SCENE_NORMAL_TEXTURE_INDEX), uv));
+}
+
+vec4 FetchSsgiPixel(ivec2 pixel)
+{
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(SSGI_FILTERED_TEXTURE_INDEX)], 0);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return texelFetch(BindlessTextures[nonuniformEXT(SSGI_FILTERED_TEXTURE_INDEX)], clampedPixel, 0);
+}
+
+float FetchHitDistancePixel(ivec2 pixel)
+{
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(SSGI_HIT_DISTANCE_TEXTURE_INDEX)], 0);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return texelFetch(BindlessTextures[nonuniformEXT(SSGI_HIT_DISTANCE_TEXTURE_INDEX)], clampedPixel, 0).r;
+}
+
+vec2 FetchMomentsPixel(ivec2 pixel)
+{
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(SSGI_MOMENTS_TEXTURE_INDEX)], 0);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return texelFetch(BindlessTextures[nonuniformEXT(SSGI_MOMENTS_TEXTURE_INDEX)], clampedPixel, 0).rg;
+}
+
+float FetchHistoryLengthPixel(ivec2 pixel)
+{
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(SSGI_HISTORY_LENGTH_TEXTURE_INDEX)], 0);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return texelFetch(BindlessTextures[nonuniformEXT(SSGI_HISTORY_LENGTH_TEXTURE_INDEX)], clampedPixel, 0).r;
+}
+
+vec2 SourceTexelUv(ivec2 pixel)
+{
+    return (vec2(pixel) + vec2(0.5)) / max(pc.SourceDimensions.xy, vec2(1.0));
+}
+
+float ReconstructViewDepth(vec2 uv, float depth)
+{
+    vec4 clip = vec4(uv * 2.0 - vec2(1.0), depth, 1.0);
+    vec4 view = MulRowMajor(clip, pc.InverseProjectionMatrix);
+    return abs(view.z / max(abs(view.w), 0.00001));
+}
+
+float Gaussian(float x, float sigma)
+{
+    return exp(-(x * x) / max(2.0 * sigma * sigma, 0.00001));
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = imageSize(GiFinalDiffuseOutput);
+    if (pixel.x >= extent.x || pixel.y >= extent.y)
+        return;
+
+    vec2 destinationSize = max(pc.DestinationDimensions.xy, vec2(1.0));
+    vec2 uv = (vec2(pixel) + vec2(0.5)) / destinationSize;
+
+    float centerDepth = FetchDepthPixel(pixel);
+    vec4 centerNormalSample = FetchNormalPixel(pixel);
+    if (centerDepth <= 0.000001 || centerNormalSample.a <= 0.001)
+    {
+        imageStore(GiFinalDiffuseOutput, pixel, vec4(0.0));
+        return;
+    }
+
+    float centerViewDepth = ReconstructViewDepth(uv, centerDepth);
+    vec3 centerNormal = normalize(centerNormalSample.xyz);
+
+    float depthSigma = max(max(pc.FilterParams.x, 0.00001), centerViewDepth * 0.02);
+    float normalPower = max(pc.FilterParams.y, 1.0);
+    vec2 sourceSize = max(pc.SourceDimensions.xy, vec2(1.0));
+    vec2 sourceTexelPosition = uv * sourceSize - vec2(0.5);
+    ivec2 baseSourcePixel = ivec2(floor(sourceTexelPosition));
+    vec2 sourceFraction = fract(sourceTexelPosition);
+
+    uint radius = pc.DenoiserEnabled == 0u ? 0u : clamp(pc.Radius, 1u, 4u);
+    ivec2 nearestSourcePixel = baseSourcePixel + ivec2(greaterThanEqual(sourceFraction, vec2(0.5)));
+    vec4 centerSsgi = FetchSsgiPixel(nearestSourcePixel);
+    float centerHitDistance = FetchHitDistancePixel(nearestSourcePixel);
+    float centerLuma = dot(max(centerSsgi.rgb, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+    vec2 centerMoments = pc.TemporalEnabled != 0u
+        ? FetchMomentsPixel(nearestSourcePixel)
+        : vec2(centerLuma, centerLuma * centerLuma);
+    float centerVariance = max(centerMoments.y - centerMoments.x * centerMoments.x, 0.0);
+    float centerHistoryLength = pc.TemporalEnabled != 0u ? FetchHistoryLengthPixel(nearestSourcePixel) : 1.0;
+    float historyConvergence = clamp(centerHistoryLength / 16.0, 0.0, 1.0);
+    float varianceSigma = sqrt(max(centerVariance, 0.0));
+    uint iterations = pc.DenoiserEnabled == 0u
+        ? 0u
+        : clamp(radius + uint(centerVariance > 0.02 ? 1u : 0u), 1u, 4u);
+
+    vec3 accumulated = vec3(0.0);
+    float energyWeightSum = 0.0;
+    float supportSum = 0.0;
+    float supportWeightSum = 0.0;
+    const float atrousWeights[5] = float[5](0.0625, 0.25, 0.375, 0.25, 0.0625);
+    for (uint iteration = 0u; iteration < 4u; iteration++)
+    {
+        if (iteration >= iterations)
+            continue;
+
+        int stepWidth = 1 << int(iteration);
+        for (int y = -2; y <= 2; y++)
+        {
+            for (int x = -2; x <= 2; x++)
+            {
+                ivec2 kernelOffset = ivec2(x, y) * stepWidth;
+                ivec2 sourcePixel = nearestSourcePixel + kernelOffset;
+                vec4 ssgi = FetchSsgiPixel(sourcePixel);
+                float sampleHitDistance = FetchHitDistancePixel(sourcePixel);
+                vec2 sampleUv = SourceTexelUv(sourcePixel);
+                float sampleDepth = FetchDepthAtUv(sampleUv);
+                vec4 sampleNormal = FetchNormalAtUv(sampleUv);
+                if (sampleDepth <= 0.000001 || sampleNormal.a <= 0.001)
+                    continue;
+
+                float sampleViewDepth = ReconstructViewDepth(sampleUv, sampleDepth);
+                float depthDifference = abs(sampleViewDepth - centerViewDepth);
+                if (depthDifference > depthSigma * 4.0)
+                    continue;
+
+                float depthWeight = Gaussian(depthDifference, depthSigma);
+                float hitDistanceSigma = max(0.08, max(centerHitDistance, sampleHitDistance) * 0.18);
+                float hitDistanceWeight = centerHitDistance > 0.0001 && sampleHitDistance > 0.0001
+                    ? Gaussian(abs(sampleHitDistance - centerHitDistance), hitDistanceSigma)
+                    : 1.0;
+                float normalWeight = pow(clamp(dot(centerNormal, normalize(sampleNormal.xyz)), 0.0, 1.0), normalPower);
+                float sampleSupport = clamp(ssgi.a, 0.0, 1.0);
+                float sampleLuma = dot(max(ssgi.rgb, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+                vec2 sampleMoments = pc.TemporalEnabled != 0u
+                    ? FetchMomentsPixel(sourcePixel)
+                    : vec2(sampleLuma, sampleLuma * sampleLuma);
+                float sampleVariance = max(sampleMoments.y - sampleMoments.x * sampleMoments.x, 0.0);
+                float sampleHistoryLength = pc.TemporalEnabled != 0u ? FetchHistoryLengthPixel(sourcePixel) : 1.0;
+                float historyWeight = clamp(min(centerHistoryLength, sampleHistoryLength) / 8.0, 0.1, 1.0);
+                float adaptiveLumaSigma = max(0.04, max(max(centerLuma, sampleLuma) * 0.25, max(varianceSigma, sqrt(sampleVariance)) * 2.0));
+                adaptiveLumaSigma = mix(adaptiveLumaSigma * 1.75, adaptiveLumaSigma, historyConvergence);
+                float lumaWeight = Gaussian(abs(sampleLuma - centerLuma), adaptiveLumaSigma);
+                float waveletWeight = atrousWeights[x + 2] * atrousWeights[y + 2];
+                float bilateralWeight = waveletWeight * depthWeight * normalWeight * hitDistanceWeight * lumaWeight * historyWeight;
+                float supportWeight = mix(0.25, 1.0, sampleSupport);
+
+                accumulated += max(ssgi.rgb, vec3(0.0)) * bilateralWeight * supportWeight;
+                energyWeightSum += bilateralWeight * supportWeight;
+                supportSum += sampleSupport * bilateralWeight;
+                supportWeightSum += bilateralWeight;
+            }
+        }
+    }
+
+    vec3 result = energyWeightSum > 0.00001
+        ? accumulated / energyWeightSum
+        : max(centerSsgi.rgb, vec3(0.0));
+    float confidence = supportWeightSum > 0.00001
+        ? supportSum / supportWeightSum
+        : centerSsgi.a;
+
+    if (pc.DebugView == 5u)
+        result = vec3(clamp(confidence, 0.0, 1.0));
+
+    imageStore(GiFinalDiffuseOutput, pixel, vec4(result, clamp(confidence, 0.0, 1.0)));
+}

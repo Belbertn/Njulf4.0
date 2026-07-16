@@ -1,3 +1,140 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:12b96874f9c0d1d41921538da9aa4cb2be2c0eb8f7c051dc7a6b575de4767b26
-size 7925
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "ddgi_schedule_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    if (gl_GlobalInvocationID.x != 0u)
+        return;
+
+    DdgiScheduleConstants constants = ReadDdgiScheduleConstants();
+    uint requestBudget = min(constants.RequestBudget, constants.ActiveProbeCount);
+    uint primaryRayBudget = constants.PrimaryRayBudget;
+    uint requestCount = 0u;
+    uint primaryRayCount = 0u;
+    uint budgetRejectedCount = 0u;
+    uint priority0RequestCount = 0u;
+    uint priority1RequestCount = 0u;
+    uint priority2RequestCount = 0u;
+    uint priority3RequestCount = 0u;
+    uint requestBudgetRejectedCount = 0u;
+    uint primaryRayBudgetRejectedCount = 0u;
+    uint priorityBucketMismatchSkipCount = 0u;
+    uint activePriorityBucketCount = min(constants.PriorityBucketCount, 4u);
+    uint compactedCandidateCount = ReadStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_COUNT) / 4u);
+    bool warmupActive = constants.WarmupState == DDGI_WARMUP_STATE_COLD_START ||
+        constants.WarmupState == DDGI_WARMUP_STATE_LOCAL_VOLUME ||
+        constants.WarmupState == DDGI_WARMUP_STATE_NEAR_CASCADE ||
+        constants.WarmupState == DDGI_WARMUP_STATE_RECOVERY;
+    uint unusedQuotaCarry = 0u;
+
+    for (uint bucket = 0u; bucket < activePriorityBucketCount; bucket++)
+    {
+        uint bucketQuota = requestBudget;
+        if (warmupActive)
+        {
+            if (bucket == 0u)
+                bucketQuota = min(constants.WarmupLocalBudget, requestBudget);
+            else if (bucket == 1u)
+                bucketQuota = min(constants.WarmupCascade0Budget, requestBudget);
+            else if (bucket == 2u)
+                bucketQuota = min(constants.WarmupNewCellBudget, requestBudget);
+            else
+                bucketQuota = min(constants.WarmupSafetyBudget, requestBudget);
+        }
+        else
+        {
+            if (bucket == 0u)
+                bucketQuota = min((requestBudget * 40u + 99u) / 100u, requestBudget);
+            else if (bucket == 1u)
+                bucketQuota = min((requestBudget * 30u + 99u) / 100u, requestBudget);
+            else if (bucket == 2u)
+                bucketQuota = min((requestBudget * 20u + 99u) / 100u, requestBudget);
+            else
+                bucketQuota = requestBudget;
+        }
+        uint remainingRequestBudget = requestBudget - min(requestCount, requestBudget);
+        uint bucketRequestBudget = min(bucketQuota + unusedQuotaCarry, remainingRequestBudget);
+        uint bucketRequestCount = 0u;
+        uint bucketStart = ReadStorageWord(uint(DDGI_SCHEDULER_PREFIX_BUFFER_INDEX), bucket);
+        uint bucketEnd = bucket + 1u < constants.PriorityBucketCount
+            ? ReadStorageWord(uint(DDGI_SCHEDULER_PREFIX_BUFFER_INDEX), bucket + 1u)
+            : compactedCandidateCount;
+        bucketEnd = min(bucketEnd, compactedCandidateCount);
+        if (bucketEnd <= bucketStart)
+            continue;
+
+        uint bucketCount = bucketEnd - bucketStart;
+        uint rotatedStart = constants.FrameSerial % bucketCount;
+        for (uint offset = 0u; offset < bucketCount; offset++)
+        {
+            uint candidateIndex = constants.CandidateOutputOffset + bucketStart + ((rotatedStart + offset) % bucketCount);
+            uint probeIndex = ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PROBE_INDEX);
+            if (probeIndex == DDGI_SCHEDULE_INVALID_PROBE)
+                continue;
+
+            uint priority = ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PRIORITY);
+            if (priority != bucket)
+            {
+                priorityBucketMismatchSkipCount++;
+                continue;
+            }
+
+            uint primaryRayCost = max(ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PRIMARY_RAY_COST), 1u);
+            if (requestCount >= requestBudget || bucketRequestCount >= bucketRequestBudget)
+            {
+                requestBudgetRejectedCount++;
+                continue;
+            }
+
+            if (primaryRayCount + primaryRayCost > primaryRayBudget)
+            {
+                primaryRayBudgetRejectedCount++;
+                continue;
+            }
+
+            WriteDdgiProbeUpdateRequestFromCandidate(requestCount, candidateIndex);
+            requestCount++;
+            bucketRequestCount++;
+            primaryRayCount += primaryRayCost;
+            if (priority == 0u)
+                priority0RequestCount++;
+            else if (priority == 1u)
+                priority1RequestCount++;
+            else if (priority == 2u)
+                priority2RequestCount++;
+            else
+                priority3RequestCount++;
+        }
+
+        if (bucketRequestCount < bucketRequestBudget)
+            unusedQuotaCarry = bucketRequestBudget - bucketRequestCount;
+        else
+            unusedQuotaCarry = 0u;
+    }
+
+    uint candidateCount = min(compactedCandidateCount, constants.CandidateOutputCapacity);
+    budgetRejectedCount = requestBudgetRejectedCount + primaryRayBudgetRejectedCount;
+    uint candidateBufferOverflowCount = ReadStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_BUFFER_OVERFLOW_COUNT) / 4u);
+    uint perBucketOverflowCount = ReadStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PER_BUCKET_OVERFLOW_COUNT) / 4u);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_COUNT) / 4u, candidateCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_REQUEST_COUNT) / 4u, requestCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIMARY_RAY_COUNT) / 4u, primaryRayCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_OVERFLOW_COUNT) / 4u, candidateBufferOverflowCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_BUDGET_REJECTED_COUNT) / 4u, budgetRejectedCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_REQUEST_BUDGET_REJECTED_COUNT) / 4u, requestBudgetRejectedCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIMARY_RAY_BUDGET_REJECTED_COUNT) / 4u, primaryRayBudgetRejectedCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY0_REQUEST_COUNT) / 4u, priority0RequestCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY1_REQUEST_COUNT) / 4u, priority1RequestCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY2_REQUEST_COUNT) / 4u, priority2RequestCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY3_REQUEST_COUNT) / 4u, priority3RequestCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY_BUCKET_MISMATCH_SKIP_COUNT) / 4u, priorityBucketMismatchSkipCount);
+    WriteStorageWord(uint(DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_TRACE_INDIRECT_DISPATCH_GROUP_COUNT_X) / 4u, requestCount);
+    WriteStorageWord(uint(DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_TRACE_INDIRECT_DISPATCH_GROUP_COUNT_Y) / 4u, 1u);
+    WriteStorageWord(uint(DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_TRACE_INDIRECT_DISPATCH_GROUP_COUNT_Z) / 4u, 1u);
+}

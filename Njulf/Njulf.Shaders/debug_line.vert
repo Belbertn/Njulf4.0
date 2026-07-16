@@ -1,3 +1,17 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:663af5effcae5414169950d014238a3e996f68d62ed2386c28c070f5fda71f92
-size 331
+#version 460
+
+layout(location = 0) in vec3 inPosition;
+layout(location = 1) in vec4 inColor;
+
+layout(location = 0) out vec4 outColor;
+
+layout(push_constant) uniform DebugLinePushBlock
+{
+    mat4 ViewProjectionMatrix;
+} pc;
+
+void main()
+{
+    gl_Position = pc.ViewProjectionMatrix * vec4(inPosition, 1.0);
+    outColor = inColor;
+}

@@ -1,3 +1,27 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:6b6a48ca269f91bcbbf1f960260becc73cd1821bb9a013eeaa69e59b15a9ff9a
-size 781
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "material_coverage.glsl"
+
+layout(location = 0) in vec2 fragTexCoord;
+layout(location = 1) flat in uint fragMaterialIndex;
+layout(location = 2) in vec2 fragTexCoord2;
+layout(location = 3) in vec4 fragVertexColor;
+
+void main()
+{
+    GPUMaterialData material = ReadMaterial(fragMaterialIndex);
+    bool doubleSided = material.NormalScaleBias.w >= 0.5;
+    if (!doubleSided && !gl_FrontFacing)
+        discard;
+
+    MaterialAlphaCoverage coverage = EvaluateMaterialAlphaCoverage(
+        material,
+        fragTexCoord,
+        fragTexCoord2,
+        fragVertexColor.a);
+    if (!MaterialCoverageSurvivesForward(coverage))
+        discard;
+}

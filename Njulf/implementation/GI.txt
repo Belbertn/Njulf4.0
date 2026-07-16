@@ -1,3 +1,10 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:31645ee962734921996ed5686b680a7246162e7c4363d0a6325f0e508ae51095
-size 336
+- Surfels as a near-field dynamic cache.
+- Ray traced transparency.
+- Ray traced caustics.
+- Multi-bounce DDGI beyond temporal accumulation.
+- Emissive mesh importance sampling.
+- Hardware ray traced reflections replacement.
+- Neural denoising or vendor-specific upscalers
+- Emissive mesh
+- RT VFX
+- Maybe reintroduce SSGI at some point

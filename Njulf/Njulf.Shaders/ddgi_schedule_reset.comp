@@ -1,3 +1,18 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:7028809d7969cb79070fe8af592952ebaff9b6f42ee9129032b44627694654b0
-size 717
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "ddgi_schedule_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    if (gl_GlobalInvocationID.x != 0u)
+        return;
+
+    DdgiScheduleConstants constants = ReadDdgiScheduleConstants();
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_SCAN_PROBE_COUNT) / 4u, DdgiScheduleScanProbeCount(constants));
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_OUTPUT_CAPACITY) / 4u, constants.CandidateOutputCapacity);
+}

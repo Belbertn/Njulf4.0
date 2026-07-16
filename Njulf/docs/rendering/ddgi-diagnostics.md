@@ -1,3 +1,74 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:0609802eaf03aefef357017ab1d4fb5d1d6e043d4fc520460aeff16776b56a50
-size 3836
+# DDGI Diagnostics
+
+DDGI diagnostics distinguish geometric coverage from usable lighting support.
+
+## Forward Estimate Metrics
+
+`spatial` is geometric volume and lattice coverage. A high value means DDGI volumes cover the shaded pixel.
+
+`support` is usable probe support. It only rises when sampled probes are active and have irradiance alpha, quality confidence, and contribution weight.
+
+`data` is the data confidence used for final ownership and composition.
+
+`visibility` is the sampled visibility confidence for the strongest supported probe chain.
+
+`leak` is final leak attenuation after visibility transport.
+
+`effective` is the final DDGI trust after support, data confidence, and leak attenuation.
+
+`rawLum` is raw DDGI diffuse luminance before final fallback composition.
+
+`finalLum` is final composed indirect diffuse luminance.
+
+`fallbackWeight` is the average environment fallback weight used by final DDGI composition. It should rise where DDGI support is low, but it must not hide a weak raw DDGI signal in production validation.
+
+`ownership` is support-based DDGI ownership consumed for the pixel. Unsupported spatial coverage must not consume ownership.
+
+## Scheduler Metrics
+
+`requestBudget` is the intended probe request budget for the frame.
+
+`primaryRayBudget` is the intended DDGI primary ray budget for the frame.
+
+`ddgiDispatchCapacity` is the predicted GPU scheduler dispatch/request upper bound.
+
+`ddgiActualRequests` and `ddgiActualPrimaryRays` come from GPU scheduler readback. They are reported as `pending` until a valid readback exists.
+
+`candidates` is compacted scheduler candidate count. `stableSkipped` is the count of stable probes intentionally not emitted as candidates.
+
+`candidateBufferOverflow` means the bounded scan generated more compacted candidates than the candidate output region can hold.
+
+`bucketCapDrop` / `perBucketOverflow` means a priority bucket hit its local top-k capacity before global compaction. It is an admission-quality signal, not a hard buffer overflow.
+
+`requestBudgetRejected` means finalize found more valid candidates than the request budget could accept.
+
+`primaryRayBudgetRejected` means finalize stopped accepting candidates because the primary ray budget would be exceeded.
+
+`traceDispatchGroups`, `traceProbeCount`, `traceRayCount`, `blendProbeCount`, `relocateClassifyProbeCount`, and `publishProbeCount` report the actual DDGI update workload. In GPU scheduler mode these values come from completed scheduler readback and are reported as pending until readback is valid. For the trace shader, one dispatch group maps to one updated probe.
+
+## Troubleshooting
+
+| Symptom | Likely area |
+| --- | --- |
+| `spatial` high, `support` low | Probe data, irradiance confidence, quality confidence, or warmup scheduling |
+| `support` high, `effective` low | Final composition, leak attenuation, visibility, or AO interaction |
+| `gatherFallback` high | Gather tile assignment or volume coverage |
+| `candidateBufferOverflow` high | Scan-list quota or candidate output capacity |
+| `bucketCapDrop` high | Priority bucket top-k cap or source quota distribution |
+| `requestBudgetRejected` high | Request budget too small for current warmup/dirty workload |
+| `primaryRayBudgetRejected` high | Primary ray budget too small for selected probes |
+| `rawLum` high, `finalLum` low | Final composition or suppression mask |
+| `finalLum` visible, `rawLum` weak, `fallbackWeight` high | Environment fallback is masking weak DDGI bounce |
+| `ddgiActualRequests=pending` | First readback frames have not completed yet |
+
+## Required Ownership Invariant
+
+Spatial coverage alone must not suppress environment fallback. If a frame reports:
+
+```text
+spatial=1.000
+support=0.000
+effective=0.000
+```
+
+then `ownership` must also be `0.000`, and environment fallback must remain available.

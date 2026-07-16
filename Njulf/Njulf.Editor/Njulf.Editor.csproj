@@ -1,3 +1,17 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:5cedad63539f8cae9ec79731a2f0d1485978678bac83590febe5fa444395f829
-size 661
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Hexa.NET.ImGui" Version="2.2.9" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Njulf.Core\Njulf.Core.csproj" />
+    <ProjectReference Include="..\Njulf.Assets\Njulf.Assets.csproj" />
+    <ProjectReference Include="..\Njulf.Rendering\Njulf.Rendering.csproj" />
+    <ProjectReference Include="..\Njulf.Input\Njulf.Input.csproj" />
+  </ItemGroup>
+</Project>
