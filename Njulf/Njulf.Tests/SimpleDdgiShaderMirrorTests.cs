@@ -667,23 +667,64 @@ namespace Njulf.Tests
                 fresh: false,
                 previousActive: 0.6f,
                 maintenance: true);
+            CpuSimpleRelocationResult deeplyEmbedded = RelocateAndClassify(
+                [
+                    new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.30f),
+                    new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.32f),
+                    new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.34f),
+                    new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.36f)
+                ],
+                spacing: 1.0f,
+                previousRelocation: Vector3.Zero,
+                fresh: true);
+            CpuSimpleRelocationResult conflictingDirections = RelocateAndClassify(
+                [
+                    new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.05f),
+                    new(-Vector3.UnitX, HitKind: 2.0f, Distance: 0.20f),
+                    new(-Vector3.UnitX, HitKind: 2.0f, Distance: 0.22f),
+                    new(-Vector3.UnitX, HitKind: 2.0f, Distance: 0.24f)
+                ],
+                spacing: 1.0f,
+                previousRelocation: Vector3.Zero,
+                fresh: true);
+            CpuSimpleRelocationResult additiveRetry = RelocateAndClassify(
+                stronglyInvalid,
+                spacing: 1.0f,
+                previousRelocation: new Vector3(0.10f, 0.0f, 0.0f),
+                fresh: false);
+            CpuSimpleRelocationResult distantBackfaces = RelocateAndClassify(
+                [
+                    new(Vector3.UnitX, HitKind: 2.0f, Distance: 2.0f),
+                    new(Vector3.UnitY, HitKind: 2.0f, Distance: 2.2f),
+                    new(-Vector3.UnitX, HitKind: 2.0f, Distance: 2.4f),
+                    new(-Vector3.UnitY, HitKind: 2.0f, Distance: 2.6f)
+                ],
+                spacing: 1.0f,
+                previousRelocation: Vector3.Zero,
+                fresh: true);
 
             Assert.Multiple(() =>
             {
                 Assert.That(normalUpdate.Active, Is.True);
                 Assert.That(normalUpdate.Classification, Is.Zero);
-                Assert.That(normalUpdate.Relocation.X, Is.EqualTo(0.00675f).Within(1.0e-5f));
-                Assert.That(freshUpdate.Relocation.X, Is.EqualTo(0.045f).Within(1.0e-5f));
+                Assert.That(normalUpdate.Relocation.X, Is.EqualTo(0.03f).Within(1.0e-5f));
+                Assert.That(freshUpdate.Relocation.X, Is.EqualTo(0.20f).Within(1.0e-5f));
                 Assert.That(decayed.Relocation.X, Is.EqualTo(0.19f).Within(1.0e-5f));
                 Assert.That(allMiss.Active, Is.True);
                 Assert.That(allMiss.Classification, Is.EqualTo(0));
                 Assert.That(allMiss.MissRatio, Is.EqualTo(1.0f));
                 Assert.That(invalidAuthored.Active, Is.False);
                 Assert.That(invalidAuthored.Classification, Is.EqualTo(1));
-                Assert.That(invalidRing.Active, Is.True);
-                Assert.That(invalidRing.ActiveWeight, Is.EqualTo(0.35f).Within(1.0e-5f));
+                Assert.That(invalidAuthored.Relocation.X, Is.EqualTo(0.12f).Within(1.0e-5f));
+                Assert.That(invalidRing.Active, Is.False);
+                Assert.That(invalidRing.Classification, Is.EqualTo(1));
                 Assert.That(maintenance.ActiveWeight, Is.EqualTo(0.6f).Within(1.0e-5f));
                 Assert.That(maintenance.Relocation.X, Is.EqualTo(0.2f).Within(1.0e-5f));
+                Assert.That(deeplyEmbedded.Relocation.X, Is.EqualTo(0.40f).Within(1.0e-5f));
+                Assert.That(conflictingDirections.Relocation.X, Is.EqualTo(0.15f).Within(1.0e-5f));
+                Assert.That(additiveRetry.Relocation.X, Is.EqualTo(0.118f).Within(1.0e-5f));
+                Assert.That(distantBackfaces.Active, Is.True);
+                Assert.That(distantBackfaces.Relocation, Is.EqualTo(Vector3.Zero));
             });
         }
 
@@ -854,7 +895,7 @@ namespace Njulf.Tests
                 Assert.That(hitShading, Does.Contain("max(environment.SkyIntensity, 0.0)"));
                 Assert.That(hitShading, Does.Not.Contain("max(environment.DiffuseIntensity, 0.0)"));
                 Assert.That(shared, Does.Contain("max(environment.SkyIntensity, 0.0)"));
-                Assert.That(forward, Does.Contain("diffuseIbl = diffuseWeight * albedo * irradiance * environment.DiffuseIntensity;"));
+                Assert.That(forward, Does.Contain("diffuseIbl = diffuseWeight * (albedo / PI) * irradiance * environment.DiffuseIntensity;"));
                 Assert.That(simpleManager, Does.Contain("_settings.Environment.Enabled ? _settings.Environment.SkyIntensity : 0.0f"));
                 Assert.That(trace, Does.Contain("float nearTlasMaxDistance = farFieldEnabled"));
                 Assert.That(trace, Does.Contain("SIMPLE_DDGI_TRACE_FLAG_COMPLETE_RAY_SCENE"));
@@ -862,6 +903,15 @@ namespace Njulf.Tests
                 Assert.That(trace, Does.Contain("TraceFarFieldClipmapDetailed(probePosition, direction, nearTlasMaxDistance, maxDistance"));
                 Assert.That(trace, Does.Contain("bool frontFace = rayQueryGetIntersectionFrontFaceEXT(query, true);"));
                 Assert.That(trace, Does.Contain("hitKind = frontFace ? 1.0 : 2.0;"));
+                Assert.That(shared, Does.Contain($"SIMPLE_DDGI_TRACE_ENERGY_COUNTER_BASE = {RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase}u"));
+                Assert.That(shared, Does.Contain($"SIMPLE_DDGI_BLEND_ENERGY_COUNTER_BASE = {RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase}u"));
+                Assert.That(shared, Does.Contain("void RecordSimpleDdgiTraceEnergyDiagnostics("));
+                Assert.That(shared, Does.Contain("void RecordSimpleDdgiBlendEnergyDiagnostics("));
+                Assert.That(trace, Does.Contain("RecordSimpleDdgiTraceEnergyDiagnostics("));
+                Assert.That(trace, Does.Contain("traceDirectNoShadowDiffuse"));
+                Assert.That(trace, Does.Contain("traceBounceDiffuse"));
+                Assert.That(trace, Does.Contain("traceSkyDiffuse"));
+                Assert.That(blend, Does.Contain("RecordSimpleDdgiBlendEnergyDiagnostics("));
                 Assert.That(blend, Does.Contain("SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, localProbeOffset);"));
                 Assert.That(blend, Does.Contain("SimpleDdgiAdaptiveIrradianceHysteresis"));
                 Assert.That(blend, Does.Contain("SimpleDdgiAdaptiveVisibilityHysteresis"));
@@ -891,7 +941,11 @@ namespace Njulf.Tests
                 Assert.That(relocate, Does.Contain("float softInvalidProbeScore = max("));
                 Assert.That(relocate, Does.Contain("float activeFloor = (volume.kind == SIMPLE_DDGI_VOLUME_KIND_AUTHORED || hardInvalidProbeScore >= 0.95) ? 0.0 : 0.35;"));
                 Assert.That(relocate, Does.Contain("state.classification = inactiveProbe ? SIMPLE_DDGI_CLASSIFICATION_INACTIVE : SIMPLE_DDGI_CLASSIFICATION_ACTIVE;"));
-                Assert.That(relocate, Does.Contain("targetRelocation = previous.relocation + direction * targetDistance;"));
+                Assert.That(relocate, Does.Contain("nearestBackfaceDistance + targetSurfaceDistance"));
+                Assert.That(relocate, Does.Contain("float localBackfaceRatio = backfaceRatio * backfaceProximity;"));
+                Assert.That(relocate, Does.Contain("nearestBackfaceDistance <= maximumActionableBackfaceDistance"));
+                Assert.That(relocate, Does.Contain("targetRelocation = previous.relocation + nearestBackfaceDirection * targetDistance;"));
+                Assert.That(relocate, Does.Not.Contain("targetSurfaceDistance - nearestDistance"));
                 Assert.That(relocate, Does.Contain("WriteRelocationClassification(probeIndex, blendedRelocation"));
                 Assert.That(shared, Does.Not.Contain("confidence chain").IgnoreCase);
                 Assert.That(shared, Does.Not.Contain("max(visibility, 0.03)"));
@@ -919,6 +973,7 @@ namespace Njulf.Tests
                 Assert.That(forward, Does.Contain("SimpleDdgiResolveInterpolationPosition("));
                 Assert.That(forward, Does.Contain("ddgiSample.visibilityMomentMean = simpleDebug.visibilityMomentMean;"));
                 Assert.That(forward, Does.Contain("ddgiSample.visibilityConfidence = simpleGather.transportVisibility;"));
+                Assert.That(forward, Does.Contain("AccumulateDdgiVisibilityMomentDiagnostics("));
                 Assert.That(forward, Does.Contain("ddgiSample.cascadeIndex = float(simpleGather.selectedVolume);"));
                 Assert.That(forward, Does.Contain("simpleDdgiContributingVolumeColor = simpleGather.contributingVolumeColor;"));
                 Assert.That(forward, Does.Contain("? simpleDdgiContributingVolumeColor"));
@@ -1262,7 +1317,6 @@ namespace Njulf.Tests
             int missCount = 0;
             int hitCount = 0;
             int backfaceCount = 0;
-            Vector3 backfaceDirectionSum = Vector3.Zero;
             float nearestBackfaceDistance = float.MaxValue;
             Vector3 nearestBackfaceDirection = Vector3.Zero;
             float nearestHitDistance = float.MaxValue;
@@ -1284,7 +1338,6 @@ namespace Njulf.Tests
                 {
                     backfaceCount++;
                     Vector3 direction = Vector3.Normalize(ray.Direction);
-                    backfaceDirectionSum += direction;
                     if (ray.Distance < nearestBackfaceDistance)
                     {
                         nearestBackfaceDistance = ray.Distance;
@@ -1299,11 +1352,16 @@ namespace Njulf.Tests
             float hitRatio = hitCount / (float)rayCount;
             float backfaceRatio = backfaceCount / (float)rayCount;
             float closeRatio = closeCount / (float)rayCount;
+            float backfaceProximity = nearestBackfaceDistance < float.MaxValue
+                ? 1.0f - SmoothStep(spacing * 0.25f, spacing * 0.45f, nearestBackfaceDistance)
+                : 0.0f;
+            float localBackfaceRatio = backfaceRatio * backfaceProximity;
             float hardInvalidScore = Math.Max(
                 SmoothStep(0.70f, 0.90f, closeRatio),
-                SmoothStep(0.55f, 0.75f, backfaceRatio));
+                SmoothStep(0.55f, 0.75f, localBackfaceRatio));
             float hardInvalid = SmoothStep(0.75f, 0.95f, hardInvalidScore);
-            float targetActive = Math.Max(1.0f - hardInvalid, authored ? 0.0f : 0.35f);
+            float activeFloor = authored || hardInvalidScore >= 0.95f ? 0.0f : 0.35f;
+            float targetActive = Math.Max(1.0f - hardInvalid, activeFloor);
             float stateAlpha = fresh ? 1.0f : 0.12f;
             if (targetActive > previousActive)
                 stateAlpha = Math.Max(stateAlpha, 0.35f);
@@ -1311,18 +1369,17 @@ namespace Njulf.Tests
                 ? previousActive
                 : Lerp(previousActive, targetActive, stateAlpha);
 
-            if (!maintenance && backfaceCount > 0)
+            float maximumActionableBackfaceDistance = spacing * (0.45f - 0.10f);
+            if (!maintenance &&
+                backfaceRatio >= 0.10f &&
+                nearestBackfaceDistance <= maximumActionableBackfaceDistance)
             {
-                Vector3 direction = backfaceDirectionSum.Length() > 0.00001f
-                    ? Vector3.Normalize(backfaceDirectionSum)
-                    : nearestBackfaceDirection;
                 float targetSurfaceDistance = spacing * 0.10f;
-                float nearestDistance = nearestBackfaceDistance < float.MaxValue ? nearestBackfaceDistance : targetSurfaceDistance;
-                float relocationEvidence = SmoothStep(0.10f, 0.35f, closeRatio) * (1.0f - missRatio);
-                float neededPush = Math.Max(targetSurfaceDistance - nearestDistance, 0.0f);
-                float closePush = closeRatio * spacing * 0.12f;
-                float targetDistance = Math.Clamp(Math.Max(neededPush, closePush) * relocationEvidence, 0.0f, spacing * 0.45f);
-                targetRelocation = direction * targetDistance;
+                float targetDistance = Math.Clamp(
+                    nearestBackfaceDistance + targetSurfaceDistance,
+                    0.0f,
+                    spacing * 0.45f);
+                targetRelocation = previousRelocation + nearestBackfaceDirection * targetDistance;
             }
 
             float alpha = fresh

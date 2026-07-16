@@ -78,6 +78,8 @@ public sealed class ShaderBuildTests
         "foliage_motion.task",
         "foliage_motion.mesh",
         "foliage_motion.frag",
+        "imgui.vert",
+        "imgui.frag",
         "taa_resolve.frag"
     ];
 
@@ -100,6 +102,18 @@ public sealed class ShaderBuildTests
             uint magic = BinaryPrimitives.ReadUInt32LittleEndian(magicBytes);
             Assert.That(magic, Is.EqualTo(0x07230203), $"Shader resource '{resourceName}' is not SPIR-V bytecode.");
         }
+    }
+
+    [Test]
+    public void ImGuiVertexShader_PreservesTopLeftFramebufferCoordinates()
+    {
+        string shader = ReadRepoText("Njulf.Shaders", "imgui.vert");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shader, Does.Contain("gl_Position = vec4(position, 0.0, 1.0);"));
+            Assert.That(shader, Does.Not.Contain("-position.y"));
+        });
     }
 
     [Test]
@@ -953,7 +967,7 @@ public sealed class ShaderBuildTests
             Assert.That(pass, Does.Not.Contain("float environmentIntensity = _settings.Environment.Enabled ? _settings.Environment.DiffuseIntensity : 0.0f;"));
             Assert.That(simpleManager, Does.Contain("float environmentIntensity = _settings.Environment.Enabled ? _settings.Environment.SkyIntensity : 0.0f;"));
             Assert.That(simpleManager, Does.Not.Contain("float environmentIntensity = _settings.Environment.Enabled ? _settings.Environment.DiffuseIntensity : 0.0f;"));
-            Assert.That(forward, Does.Contain("diffuseIbl = diffuseWeight * albedo * irradiance * environment.DiffuseIntensity;"));
+            Assert.That(forward, Does.Contain("diffuseIbl = diffuseWeight * (albedo / PI) * irradiance * environment.DiffuseIntensity;"));
             Assert.That(shader, Does.Contain("float variance = max(mean2 - mean * mean, 0.005);"));
         });
     }

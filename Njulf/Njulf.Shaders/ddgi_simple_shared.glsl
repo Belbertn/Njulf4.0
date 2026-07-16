@@ -162,6 +162,119 @@ void AddSimpleDdgiDiagnostic(SimpleDdgiParams params, uint frameIndex, uint coun
         AddRendererDiagnostic(frameIndex, counterIndex, value);
 }
 
+// These renderer-owned slots describe the active DDGI transport path. Full and
+// simple DDGI are mutually exclusive, so the simple implementation can publish
+// the same capture contract without allocating a second diagnostics ABI.
+const uint SIMPLE_DDGI_TRACE_ENERGY_COUNTER_BASE = 55u;
+const uint SIMPLE_DDGI_TRACE_ENERGY_SAMPLE_COUNT_COUNTER = SIMPLE_DDGI_TRACE_ENERGY_COUNTER_BASE + 0u;
+const uint SIMPLE_DDGI_TRACE_ENERGY_HIT_COUNT_COUNTER = SIMPLE_DDGI_TRACE_ENERGY_COUNTER_BASE + 1u;
+const uint SIMPLE_DDGI_TRACE_ENERGY_MISS_COUNT_COUNTER = SIMPLE_DDGI_TRACE_ENERGY_COUNTER_BASE + 2u;
+const uint SIMPLE_DDGI_TRACE_ENERGY_RAY_LUMINANCE_COUNTER = SIMPLE_DDGI_TRACE_ENERGY_COUNTER_BASE + 3u;
+const uint SIMPLE_DDGI_TRACE_ENERGY_DIRECT_LUMINANCE_COUNTER = SIMPLE_DDGI_TRACE_ENERGY_COUNTER_BASE + 4u;
+const uint SIMPLE_DDGI_TRACE_ENERGY_EMISSIVE_LUMINANCE_COUNTER = SIMPLE_DDGI_TRACE_ENERGY_COUNTER_BASE + 5u;
+const uint SIMPLE_DDGI_TRACE_ENERGY_BOUNCE_LUMINANCE_COUNTER = SIMPLE_DDGI_TRACE_ENERGY_COUNTER_BASE + 6u;
+const uint SIMPLE_DDGI_TRACE_ENERGY_SKY_LUMINANCE_COUNTER = SIMPLE_DDGI_TRACE_ENERGY_COUNTER_BASE + 7u;
+const uint SIMPLE_DDGI_TRACE_ENERGY_HIT_ZERO_DIRECT_COUNTER = SIMPLE_DDGI_TRACE_ENERGY_COUNTER_BASE + 8u;
+const uint SIMPLE_DDGI_TRACE_ENERGY_HIT_WITH_DIRECT_COUNTER = SIMPLE_DDGI_TRACE_ENERGY_COUNTER_BASE + 9u;
+const uint SIMPLE_DDGI_TRACE_ENERGY_DIRECT_NO_SHADOW_LUMINANCE_COUNTER = SIMPLE_DDGI_TRACE_ENERGY_COUNTER_BASE + 10u;
+const uint SIMPLE_DDGI_BLEND_ENERGY_COUNTER_BASE = 72u;
+const uint SIMPLE_DDGI_BLEND_ENERGY_SAMPLE_COUNT_COUNTER = SIMPLE_DDGI_BLEND_ENERGY_COUNTER_BASE + 0u;
+const uint SIMPLE_DDGI_BLEND_ENERGY_IRRADIANCE_LUMINANCE_COUNTER = SIMPLE_DDGI_BLEND_ENERGY_COUNTER_BASE + 1u;
+const uint SIMPLE_DDGI_BLEND_ENERGY_CONFIDENCE_COUNTER = SIMPLE_DDGI_BLEND_ENERGY_COUNTER_BASE + 2u;
+const uint SIMPLE_DDGI_BLEND_ENERGY_LOW_CONFIDENCE_COUNTER = SIMPLE_DDGI_BLEND_ENERGY_COUNTER_BASE + 3u;
+const uint SIMPLE_DDGI_BLEND_ENERGY_NONZERO_IRRADIANCE_COUNTER = SIMPLE_DDGI_BLEND_ENERGY_COUNTER_BASE + 4u;
+const float SIMPLE_DDGI_ENERGY_LUMINANCE_SCALE = 4096.0;
+const float SIMPLE_DDGI_ENERGY_WEIGHT_SCALE = 1024.0;
+
+float SimpleDdgiEnergyLuminance(vec3 value)
+{
+    return dot(max(value, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+}
+
+uint PackSimpleDdgiEnergyLuminance(float value)
+{
+    return uint(round(clamp(value, 0.0, 16.0) * SIMPLE_DDGI_ENERGY_LUMINANCE_SCALE));
+}
+
+uint PackSimpleDdgiEnergyWeight(float value)
+{
+    return uint(round(clamp(value, 0.0, 1.0) * SIMPLE_DDGI_ENERGY_WEIGHT_SCALE));
+}
+
+bool SimpleDdgiTraceEnergyDiagnosticRay(SimpleDdgiParams params, uint probeIndex, uint rayIndex)
+{
+    return SimpleDdgiDetailedDiagnosticsEnabled(params) &&
+        ((probeIndex + rayIndex + params.frameIndex) & 3u) == 0u;
+}
+
+bool SimpleDdgiBlendEnergyDiagnosticTexel(SimpleDdgiParams params, uint probeIndex, uint texel)
+{
+    return SimpleDdgiDetailedDiagnosticsEnabled(params) &&
+        ((probeIndex + texel + params.frameIndex) & 7u) == 0u;
+}
+
+void RecordSimpleDdgiTraceEnergyDiagnostics(
+    SimpleDdgiParams params,
+    uint diagnosticFrame,
+    uint probeIndex,
+    uint rayIndex,
+    vec3 rayRadiance,
+    vec3 directDiffuse,
+    vec3 directNoShadowDiffuse,
+    vec3 emissiveDiffuse,
+    vec3 bounceDiffuse,
+    vec3 skyDiffuse,
+    bool hit)
+{
+    if (!SimpleDdgiTraceEnergyDiagnosticRay(params, probeIndex, rayIndex))
+        return;
+
+    AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_TRACE_ENERGY_SAMPLE_COUNT_COUNTER, 1u);
+    AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_TRACE_ENERGY_RAY_LUMINANCE_COUNTER, PackSimpleDdgiEnergyLuminance(SimpleDdgiEnergyLuminance(rayRadiance)));
+    AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_TRACE_ENERGY_DIRECT_LUMINANCE_COUNTER, PackSimpleDdgiEnergyLuminance(SimpleDdgiEnergyLuminance(directDiffuse)));
+    AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_TRACE_ENERGY_DIRECT_NO_SHADOW_LUMINANCE_COUNTER, PackSimpleDdgiEnergyLuminance(SimpleDdgiEnergyLuminance(directNoShadowDiffuse)));
+    AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_TRACE_ENERGY_EMISSIVE_LUMINANCE_COUNTER, PackSimpleDdgiEnergyLuminance(SimpleDdgiEnergyLuminance(emissiveDiffuse)));
+    AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_TRACE_ENERGY_BOUNCE_LUMINANCE_COUNTER, PackSimpleDdgiEnergyLuminance(SimpleDdgiEnergyLuminance(bounceDiffuse)));
+    AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_TRACE_ENERGY_SKY_LUMINANCE_COUNTER, PackSimpleDdgiEnergyLuminance(SimpleDdgiEnergyLuminance(skyDiffuse)));
+
+    if (hit)
+    {
+        AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_TRACE_ENERGY_HIT_COUNT_COUNTER, 1u);
+        AddRendererDiagnostic(
+            diagnosticFrame,
+            SimpleDdgiEnergyLuminance(directDiffuse) <= 0.00001
+                ? SIMPLE_DDGI_TRACE_ENERGY_HIT_ZERO_DIRECT_COUNTER
+                : SIMPLE_DDGI_TRACE_ENERGY_HIT_WITH_DIRECT_COUNTER,
+            1u);
+    }
+    else
+    {
+        AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_TRACE_ENERGY_MISS_COUNT_COUNTER, 1u);
+    }
+}
+
+void RecordSimpleDdgiBlendEnergyDiagnostics(
+    SimpleDdgiParams params,
+    uint diagnosticFrame,
+    uint probeIndex,
+    uint texel,
+    vec3 irradiance,
+    float confidence)
+{
+    if (!SimpleDdgiBlendEnergyDiagnosticTexel(params, probeIndex, texel))
+        return;
+
+    float luminance = SimpleDdgiEnergyLuminance(irradiance);
+    float safeConfidence = clamp(confidence, 0.0, 1.0);
+    AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_BLEND_ENERGY_SAMPLE_COUNT_COUNTER, 1u);
+    AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_BLEND_ENERGY_IRRADIANCE_LUMINANCE_COUNTER, PackSimpleDdgiEnergyLuminance(luminance));
+    AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_BLEND_ENERGY_CONFIDENCE_COUNTER, PackSimpleDdgiEnergyWeight(safeConfidence));
+    if (safeConfidence <= 0.0001)
+        AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_BLEND_ENERGY_LOW_CONFIDENCE_COUNTER, 1u);
+    if (luminance > 0.00001)
+        AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_BLEND_ENERGY_NONZERO_IRRADIANCE_COUNTER, 1u);
+}
+
 #ifndef SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT
 #define SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT 1u
 #endif

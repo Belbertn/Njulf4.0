@@ -17,7 +17,10 @@ layout(push_constant) uniform ImGuiPushConstants
 void main()
 {
     vec2 position = (inPosition - pc.displayPosition) / pc.displaySize * 2.0 - 1.0;
-    gl_Position = vec4(position.x, -position.y, 0.0, 1.0);
+    // ImGui and this pass both use a top-left framebuffer origin. With the
+    // pass's positive-height Vulkan viewport, NDC -1 maps to the framebuffer
+    // top, so flipping Y here would vertically mirror the complete overlay.
+    gl_Position = vec4(position, 0.0, 1.0);
     outUv = inUv;
     outColor = inColor;
 }

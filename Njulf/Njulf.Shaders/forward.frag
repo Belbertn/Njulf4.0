@@ -2706,7 +2706,10 @@ void EvaluateIbl(
     // Diffuse IBL is an irradiance-derived radiance field.  AO is applied once by
     // indirect composition to the environment-owned share; DDGI retains its own
     // probe visibility instead of receiving a second screen-space occlusion term.
-    diffuseIbl = diffuseWeight * albedo * irradiance * environment.DiffuseIntensity;
+    // Irradiance cubemaps store E = integral(L cos(theta) dw), for both HDR
+    // sources and the procedural sky. Convert that incident irradiance to
+    // outgoing Lambertian radiance exactly once, matching DDGI receivers.
+    diffuseIbl = diffuseWeight * (albedo / PI) * irradiance * environment.DiffuseIntensity;
 
     vec3 reflectionDirection = reflect(-viewDirection, normal);
     float maxLod = max(float(environment.PrefilteredMipCount) - 1.0, 0.0);
@@ -3613,6 +3616,13 @@ void main()
             simpleDiagnosticVisibility = simpleDebug.visibility;
             simpleDiagnosticVisibilityMean = simpleDebug.visibilityMomentMean;
         }
+        AccumulateDdgiVisibilityMomentDiagnostics(
+            ddgiSample.visibilityMomentMean,
+            ddgiSample.visibilityMomentVariance,
+            ddgiSample.visibilityProbeDistance,
+            ddgiSample.visibilityMaxRayDistance,
+            simpleDiagnosticVisibility,
+            ddgiSample.irradianceAtlasConfidence);
 
         // Once valid probe data produces a normalized estimate, DDGI owns the
         // spatially covered share. Probe-validity mass selects that estimate but
@@ -3682,6 +3692,13 @@ void main()
     else
     {
         ddgiSample = SampleDdgiIrradiance(fragWorldPosition, ddgiNormal, ddgiIndirectAo);
+        AccumulateDdgiVisibilityMomentDiagnostics(
+            ddgiSample.visibilityMomentMean,
+            ddgiSample.visibilityMomentVariance,
+            ddgiSample.visibilityProbeDistance,
+            ddgiSample.visibilityMaxRayDistance,
+            ddgiSample.visibility,
+            ddgiSample.irradianceAtlasConfidence);
         ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic);
         float ddgiEnvironmentFallbackIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 13u), 0.0, 4.0);
         HybridDiffuseGiResult hybridDiffuse = ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo, ddgiEnvironmentFallbackIntensity, debugViewMode);

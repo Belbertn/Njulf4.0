@@ -69,6 +69,25 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void GenerateProceduralSkyIrradianceCubemap_StoresIntegratedIrradianceRatherThanBlurredRadiance()
+        {
+            float[] irradiance = BytesToFloats(
+                EnvironmentMapProcessor.GenerateProceduralSkyIrradianceCubemap(2, sampleCount: 128));
+            float[] oldBlurredRadianceApproximation = BytesToFloats(
+                EnvironmentMapProcessor.GenerateProceduralSkyCubemap(2, 1, blur: 0.85f));
+
+            float irradianceLuminance = AverageLuminance(irradiance);
+            float blurredRadianceLuminance = AverageLuminance(oldBlurredRadianceApproximation);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(irradianceLuminance, Is.GreaterThan(0.0f));
+                Assert.That(irradianceLuminance, Is.GreaterThan(blurredRadianceLuminance * 2.0f));
+                Assert.That(Array.Exists(irradiance, float.IsNaN), Is.False);
+            });
+        }
+
+        [Test]
         public void GeneratePrefilteredEnvironmentCubemap_PreservesConstantRadianceAcrossMips()
         {
             var image = CreateConstantImage(4, 2, 3.0f, 2.0f, 1.0f);
@@ -124,6 +143,15 @@ namespace Njulf.Tests
             float[] values = new float[bytes.Length / sizeof(float)];
             MemoryMarshal.Cast<byte, float>(bytes).CopyTo(values);
             return values;
+        }
+
+        private static float AverageLuminance(float[] rgba)
+        {
+            float sum = 0.0f;
+            int count = rgba.Length / 4;
+            for (int offset = 0; offset < rgba.Length; offset += 4)
+                sum += rgba[offset] * 0.2126f + rgba[offset + 1] * 0.7152f + rgba[offset + 2] * 0.0722f;
+            return sum / Math.Max(count, 1);
         }
 
         private static byte[] Combine(byte[] first, byte[] second)

@@ -32,6 +32,7 @@ layout(push_constant) uniform SimpleDdgiPushBlock
 
 const float SIMPLE_DDGI_RELOCATION_TARGET_DISTANCE = 0.10;
 const float SIMPLE_DDGI_RELOCATION_MAX_DISTANCE = 0.45;
+const float SIMPLE_DDGI_RELOCATION_MIN_BACKFACE_RATIO = 0.10;
 
 vec4 ReadSimpleRayRadianceDistance(uint rayResultIndex)
 {
@@ -77,7 +78,6 @@ void main()
     uint backfaceCount = 0u;
     uint closeCount = 0u;
     uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
-    vec3 backfaceDirectionSum = vec3(0.0);
     float nearestHitDistance = 3.402823466e+38;
     float nearestBackfaceDistance = 3.402823466e+38;
     vec3 nearestBackfaceDirection = vec3(0.0);
@@ -106,7 +106,6 @@ void main()
         if (hitKind > 1.5)
         {
             backfaceCount++;
-            backfaceDirectionSum += direction;
             if (distance < nearestBackfaceDistance)
             {
                 nearestBackfaceDistance = distance;
@@ -120,12 +119,20 @@ void main()
     float hitRatio = float(hitCount) / rayCount;
     float backfaceRatio = float(backfaceCount) / rayCount;
     float closeRatio = float(closeCount) / rayCount;
+    // Backface orientation is only reliable evidence that a probe is embedded
+    // when the surface is locally reachable. Architectural assets commonly use
+    // one-sided shells, so distant backfaces must not accumulate a max-distance
+    // relocation or classify an otherwise open probe as inactive.
+    float backfaceProximity = nearestBackfaceDistance < 3.0e+38
+        ? 1.0 - smoothstep(volume.spacing * 0.25, volume.spacing * SIMPLE_DDGI_RELOCATION_MAX_DISTANCE, nearestBackfaceDistance)
+        : 0.0;
+    float localBackfaceRatio = backfaceRatio * backfaceProximity;
     float softInvalidProbeScore = max(
         smoothstep(0.25, 0.45, closeRatio),
-        smoothstep(0.40, 0.60, backfaceRatio));
+        smoothstep(0.40, 0.60, localBackfaceRatio));
     float hardInvalidProbeScore = max(
         smoothstep(0.70, 0.90, closeRatio),
-        smoothstep(0.55, 0.75, backfaceRatio));
+        smoothstep(0.55, 0.75, localBackfaceRatio));
     bool maintenanceUpdate = SimpleDdgiUpdateIsMaintenance(update);
 
     float previousActive = clamp(previous.activeWeight, 0.0, 1.0);
@@ -140,19 +147,21 @@ void main()
         : mix(previousActive, targetActive, stateBlendAlpha);
 
     vec3 targetRelocation = vec3(0.0);
-    if (!maintenanceUpdate && backfaceCount > 0u)
+    float maximumActionableBackfaceDistance = volume.spacing *
+        (SIMPLE_DDGI_RELOCATION_MAX_DISTANCE - SIMPLE_DDGI_RELOCATION_TARGET_DISTANCE);
+    if (!maintenanceUpdate &&
+        backfaceRatio >= SIMPLE_DDGI_RELOCATION_MIN_BACKFACE_RATIO &&
+        nearestBackfaceDistance <= maximumActionableBackfaceDistance)
     {
-        vec3 direction = length(backfaceDirectionSum) > 0.00001 ? normalize(backfaceDirectionSum) : nearestBackfaceDirection;
         float targetSurfaceDistance = volume.spacing * SIMPLE_DDGI_RELOCATION_TARGET_DISTANCE;
-        float nearestDistance = nearestBackfaceDistance < 3.0e+38 ? nearestBackfaceDistance : targetSurfaceDistance;
-        float relocationEvidence = smoothstep(0.10, 0.35, closeRatio) * (1.0 - missRatio);
-        float neededPush = max(targetSurfaceDistance - nearestDistance, 0.0);
-        float closePush = closeRatio * volume.spacing * 0.12;
+        // The hit distance reaches the exit surface from the already-relocated
+        // trace origin. Move past that surface by a spacing-relative margin;
+        // subtracting the hit distance can never escape embedded geometry.
         float targetDistance = clamp(
-            max(neededPush, closePush) * relocationEvidence,
+            nearestBackfaceDistance + targetSurfaceDistance,
             0.0,
             volume.spacing * SIMPLE_DDGI_RELOCATION_MAX_DISTANCE);
-        targetRelocation = previous.relocation + direction * targetDistance;
+        targetRelocation = previous.relocation + nearestBackfaceDirection * targetDistance;
     }
 
     float targetRelocationLength = length(targetRelocation);

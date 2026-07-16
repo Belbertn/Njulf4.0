@@ -7694,26 +7694,44 @@ namespace Njulf.Rendering
                 return;
             }
 
-            DdgiFrameLayout layout = BuildDdgiFrameLayout(scene, camera, lightSnapshot, sceneData, cameraCut);
-            _lastDdgiFrameLayout = layout;
-            _ddgiProbeVolumeManager.Upload(layout, _stagingRing, _currentCommandBuffer);
-            _ddgiGatherTileManager?.Upload(
-                layout,
-                sceneData.ViewProjectionMatrix,
-                sceneData.ScreenWidth,
-                sceneData.ScreenHeight,
-                _stagingRing,
-                _currentCommandBuffer,
-                ResolveDdgiGatherSupportReadiness());
-
             bool ddgiActive = Settings.GlobalIllumination.EffectiveUseDdgi;
             bool simpleDdgiActive = Settings.GlobalIllumination.EffectiveUseSimpleDdgi &&
                                     _simpleDdgiVolumeManager != null &&
                                     _farFieldClipmapManager != null;
             bool simpleDdgiStructuredGatherAvailable = simpleDdgiActive &&
-                                                        Settings.GlobalIllumination.EffectiveUseRayQueryBackend &&
-                                                        _context.RayQuerySupported &&
-                                                        _accelerationStructureManager?.Active == true;
+                                                         Settings.GlobalIllumination.EffectiveUseRayQueryBackend &&
+                                                         _context.RayQuerySupported &&
+                                                         _accelerationStructureManager?.Active == true;
+            bool ddgiRayUpdateActive = ddgiActive &&
+                                       Settings.GlobalIllumination.EffectiveUseRayQueryBackend &&
+                                       _accelerationStructureManager?.Active == true;
+            bool simpleDdgiRayUpdateActive = simpleDdgiActive &&
+                                             Settings.GlobalIllumination.EffectiveUseRayQueryBackend &&
+                                             _accelerationStructureManager?.Active == true;
+
+            DdgiFrameLayout layout = BuildDdgiFrameLayout(scene, camera, lightSnapshot, sceneData, cameraCut);
+            _lastDdgiFrameLayout = layout;
+            // Full and simple DDGI have separate state/atlas owners. Do not run
+            // the inactive owner's upload path and then overwrite a shared
+            // gather table later in the frame; only the selected backend may
+            // mutate its resources.
+            if (ddgiActive)
+            {
+                _ddgiProbeVolumeManager.Upload(layout, _stagingRing, _currentCommandBuffer);
+                _ddgiGatherTileManager?.Upload(
+                    layout,
+                    sceneData.ViewProjectionMatrix,
+                    sceneData.ScreenWidth,
+                    sceneData.ScreenHeight,
+                    _stagingRing,
+                    _currentCommandBuffer,
+                    ResolveDdgiGatherSupportReadiness());
+            }
+
+            // Build and upload the current emissive payload before calculating
+            // the simple-DDGI dirty signature. This makes the revision consumed
+            // by scheduling describe the data traced in this same frame.
+            UploadDdgiEmissiveSources(scene, sceneData, ddgiRayUpdateActive || simpleDdgiRayUpdateActive);
             if (simpleDdgiActive)
             {
                 _farFieldClipmapManager!.Upload(
@@ -7738,24 +7756,27 @@ namespace Njulf.Rendering
             }
             bool farFieldCoverageAvailable = simpleDdgiActive &&
                                              _farFieldClipmapManager!.CoverageReady;
-            SimpleDdgiDirtySignature simpleDdgiDirtySignature = CreateSimpleDdgiDirtySignature(scene, lightSnapshot, _ddgiEmissiveSourceRevision);
-            _simpleDdgiVolumeManager?.Upload(
-                scene,
-                camera.Position,
-                _stagingRing,
-                _currentCommandBuffer,
-                _currentFrame,
-                simpleDdgiDirtySignature.Signature,
-                simpleDdgiDirtySignature.ReasonFlags,
-                simpleDdgiStructuredGatherAvailable,
-                farFieldCoverageAvailable,
-                layout.DirtyRegions);
-            // Simple DDGI reuses the bounded two-candidate gather-tile hot path
-            // after its volume table is uploaded. A rare third recovery candidate
-            // is found from the volume table in the shader. The mutually exclusive
-            // legacy DDGI upload above is intentionally overwritten for this mode.
             if (simpleDdgiActive)
             {
+                SimpleDdgiDirtySignature simpleDdgiDirtySignature = CreateSimpleDdgiDirtySignature(
+                    scene,
+                    lightSnapshot,
+                    _ddgiEmissiveSourceRevision,
+                    farFieldCoverageAvailable);
+                _simpleDdgiVolumeManager!.Upload(
+                    scene,
+                    camera.Position,
+                    _stagingRing,
+                    _currentCommandBuffer,
+                    _currentFrame,
+                    simpleDdgiDirtySignature.Signature,
+                    simpleDdgiDirtySignature.ReasonFlags,
+                    simpleDdgiStructuredGatherAvailable,
+                    farFieldCoverageAvailable,
+                    layout.DirtyRegions);
+                // The gather table has one active producer. In simple mode it is
+                // populated directly from the simple volume table; no legacy
+                // payload is uploaded first.
                 _ddgiGatherTileManager?.UploadSimple(
                     _simpleDdgiVolumeManager!.LastVolumes,
                     sceneData.ViewProjectionMatrix,
@@ -7764,28 +7785,29 @@ namespace Njulf.Rendering
                     _stagingRing,
                     _currentCommandBuffer);
             }
-            bool ddgiRayUpdateActive = ddgiActive &&
-                                       Settings.GlobalIllumination.EffectiveUseRayQueryBackend &&
-                                       _accelerationStructureManager?.Active == true;
-            bool simpleDdgiRayUpdateActive = simpleDdgiActive &&
-                                             Settings.GlobalIllumination.EffectiveUseRayQueryBackend &&
-                                             _accelerationStructureManager?.Active == true;
             bool ddgiCompareMode = Settings.GlobalIllumination.DdgiSchedulerMode == DdgiSchedulerMode.CpuGpuCompare;
             bool gpuSchedulerRequested = Settings.GlobalIllumination.DdgiSchedulerMode != DdgiSchedulerMode.CpuReference;
             bool gpuSchedulerQueueRequested = Settings.GlobalIllumination.DdgiSchedulerMode == DdgiSchedulerMode.Gpu ||
                                               (ddgiCompareMode && Settings.GlobalIllumination.DdgiCompareModeUseGpuQueueForRendering);
             int frameRingIndex = _currentFrame;
             ulong frameSerial = sceneData.DdgiFrameSerial;
-            AdvanceDdgiGpuSchedulerFallbackRetry(ddgiRayUpdateActive);
-            string gpuSchedulerFallbackReason = ResolveDdgiGpuSchedulerFallbackReason(
-                ddgiRayUpdateActive,
-                ddgiCompareMode,
-                Settings.GlobalIllumination.DdgiCompareModeUseGpuQueueForRendering);
+            if (ddgiActive)
+                AdvanceDdgiGpuSchedulerFallbackRetry(ddgiRayUpdateActive);
+            string gpuSchedulerFallbackReason = ddgiActive
+                ? ResolveDdgiGpuSchedulerFallbackReason(
+                    ddgiRayUpdateActive,
+                    ddgiCompareMode,
+                    Settings.GlobalIllumination.DdgiCompareModeUseGpuQueueForRendering)
+                : string.Empty;
             bool gpuSchedulerActive = ddgiRayUpdateActive &&
-                                      gpuSchedulerQueueRequested &&
-                                      string.IsNullOrEmpty(gpuSchedulerFallbackReason);
-            int scheduledProbeUpdates;
-            if (ddgiCompareMode && ddgiRayUpdateActive)
+                                       gpuSchedulerQueueRequested &&
+                                       string.IsNullOrEmpty(gpuSchedulerFallbackReason);
+            int scheduledProbeUpdates = 0;
+            if (!ddgiActive)
+            {
+                _ddgiProbeVolumeManager.ClearGpuSchedulerValidationExpectedFrame(frameRingIndex);
+            }
+            else if (ddgiCompareMode && ddgiRayUpdateActive)
             {
                 int cpuReferenceScheduledProbeUpdates = _ddgiProbeVolumeManager.ScheduleProbeUpdates(
                     enabled: true,
@@ -7879,8 +7901,10 @@ namespace Njulf.Rendering
             sceneData.DdgiAtlasMemoryBudgetBytes = ddgiActive ? Settings.GlobalIllumination.DdgiAtlasMemoryBudgetBytes : 0UL;
             sceneData.DdgiProbeRelocationCount = ddgiRayUpdateActive && Settings.GlobalIllumination.DdgiProbeRelocationEnabled ? scheduledProbeUpdates : 0;
             sceneData.DdgiProbeClassificationCount = ddgiRayUpdateActive && Settings.GlobalIllumination.DdgiProbeClassificationEnabled ? scheduledProbeUpdates : 0;
-            PopulateDdgiLightSelectionMetadata(sceneData, lightSnapshot, ddgiRayUpdateActive);
-            UploadDdgiEmissiveSources(scene, sceneData, ddgiRayUpdateActive || simpleDdgiRayUpdateActive);
+            PopulateDdgiLightSelectionMetadata(
+                sceneData,
+                lightSnapshot,
+                ddgiRayUpdateActive || simpleDdgiRayUpdateActive);
             PopulateDdgiDiagnostics(sceneData, layout, ddgiActive);
             PopulateDdgiCoverageDiagnostics(sceneData);
             sceneData.DdgiTextureBytes = ddgiActive ? _ddgiProbeVolumeManager.TextureBytes : 0;
@@ -7969,12 +7993,16 @@ namespace Njulf.Rendering
             sceneData.DdgiGpuSchedulerValidationMismatchCount = gpuSchedulerActive ? schedulerValidation.MismatchCount : 0;
             sceneData.DdgiGpuSchedulerValidationSampleLimit = gpuSchedulerActive ? schedulerValidation.SampleLimit : 0;
             sceneData.DdgiGpuSchedulerValidationFirstMismatch = gpuSchedulerActive ? schedulerValidation.FirstMismatch : string.Empty;
-            uint knownUpdateProbeCount = gpuSchedulerActive
-                ? sceneData.DdgiGpuSchedulerActualRequestCount
-                : (uint)Math.Max(0, sceneData.DdgiProbesUpdated);
-            uint knownUpdateRayCount = gpuSchedulerActive
-                ? sceneData.DdgiGpuSchedulerActualPrimaryRayCount
-                : (uint)Math.Min((ulong)uint.MaxValue, _ddgiProbeVolumeManager.LastScheduledPrimaryRayCount);
+            uint knownUpdateProbeCount = ddgiActive
+                ? gpuSchedulerActive
+                    ? sceneData.DdgiGpuSchedulerActualRequestCount
+                    : (uint)Math.Max(0, sceneData.DdgiProbesUpdated)
+                : 0u;
+            uint knownUpdateRayCount = ddgiActive
+                ? gpuSchedulerActive
+                    ? sceneData.DdgiGpuSchedulerActualPrimaryRayCount
+                    : (uint)Math.Min((ulong)uint.MaxValue, _ddgiProbeVolumeManager.LastScheduledPrimaryRayCount)
+                : 0u;
             sceneData.DdgiTraceDispatchGroupCount = knownUpdateProbeCount;
             sceneData.DdgiTraceProbeCount = knownUpdateProbeCount;
             sceneData.DdgiTraceRayCount = knownUpdateRayCount;
@@ -8190,18 +8218,18 @@ namespace Njulf.Rendering
             sceneData.DdgiVolumeDiagnostics.Clear();
             sceneData.DdgiVolumeDiagnostics.AddRange(_simpleDdgiVolumeManager.GetVolumeDiagnostics());
             sceneData.DdgiScheduledPrimaryRayCount = primaryRayCount;
-            sceneData.DdgiEstimatedShadowRayUpperBound = EstimateDdgiShadowRayUpperBound(
+            sceneData.DdgiEffectiveMaxShadedLights = _simpleDdgiVolumeManager.EffectiveMaxShadedLights;
+            sceneData.DdgiEstimatedShadowRayUpperBound = EstimateSimpleDdgiShadowRayUpperBound(
                 primaryRayCount,
                 sceneData.DirectionalLightCount,
                 sceneData.LocalLightCount,
-                Settings.GlobalIllumination.DdgiMaxShadedLights);
-            PopulateDdgiLightSelectionDiagnostics(
+                sceneData.DdgiEffectiveMaxShadedLights);
+            PopulateSimpleDdgiLightSelectionDiagnostics(
                 sceneData,
                 primaryRayCount,
-                sceneData.DdgiPrimaryDirectionalLightIndex,
-                sceneData.DdgiSelectedLocalLightIndex,
+                sceneData.DirectionalLightCount,
                 sceneData.LocalLightCount,
-                Settings.GlobalIllumination.DdgiMaxShadedLights);
+                sceneData.DdgiEffectiveMaxShadedLights);
             sceneData.DdgiQualityTier = Settings.GlobalIllumination.DdgiQualityTier;
             // See the full-DDGI setup above: this is a runtime execution result, not the
             // user's request. It is set immediately before a validated split graph executes.
@@ -8708,6 +8736,44 @@ namespace Njulf.Rendering
                 return 0;
 
             return primaryRayCount * (ulong)CountSelectedDdgiHitLights(directionalLightCount, localLightCount, maxShadedLights);
+        }
+
+        internal static ulong EstimateSimpleDdgiShadowRayUpperBound(
+            ulong primaryRayCount,
+            int directionalLightCount,
+            int localLightCount,
+            int maxShadedLights)
+        {
+            int capacity = Math.Min(Math.Max(maxShadedLights, 0), 8);
+            int lightCount = Math.Min(
+                capacity,
+                Math.Max(directionalLightCount, 0) + Math.Max(localLightCount, 0));
+            return primaryRayCount * (ulong)lightCount;
+        }
+
+        private static void PopulateSimpleDdgiLightSelectionDiagnostics(
+            SceneRenderingData sceneData,
+            ulong primaryRayCount,
+            int directionalLightCount,
+            int localLightCount,
+            int maxShadedLights)
+        {
+            int capacity = Math.Min(Math.Max(maxShadedLights, 0), 8);
+            int selectedDirectionalLights = Math.Min(Math.Max(directionalLightCount, 0), capacity);
+            int selectedLocalLights = Math.Min(
+                Math.Max(localLightCount, 0),
+                capacity - selectedDirectionalLights);
+            ulong selectedDirectionalHits = primaryRayCount * (ulong)selectedDirectionalLights;
+            ulong selectedLocalHits = primaryRayCount * (ulong)selectedLocalLights;
+
+            sceneData.DdgiSelectedDirectionalHitCount = selectedDirectionalHits;
+            sceneData.DdgiSelectedLocalHitCount = selectedLocalHits;
+            sceneData.DdgiVisibilityRayCount = selectedDirectionalHits + selectedLocalHits;
+            sceneData.DdgiSkippedLocalLightCount = primaryRayCount *
+                (ulong)Math.Max(0, localLightCount - selectedLocalLights);
+            sceneData.DdgiLightSelectionMode = primaryRayCount > 0 && capacity > 0
+                ? "simple-per-hit-top-n"
+                : "disabled";
         }
 
         private static void PopulateDdgiLightSelectionDiagnostics(
@@ -9470,12 +9536,50 @@ namespace Njulf.Rendering
             return HashAdd(hash, emissiveSourceRevision);
         }
 
+        internal static ulong CreateSimpleDdgiEnvironmentSignature(EnvironmentSettings environment)
+        {
+            if (environment == null)
+                throw new ArgumentNullException(nameof(environment));
+
+            ulong hash = HashStart;
+            hash = HashAdd(hash, environment.Enabled);
+            hash = HashAdd(hash, (uint)environment.SourceKind);
+            hash = HashAdd(hash, environment.SkyIntensity);
+            hash = HashAdd(hash, environment.RotationRadians);
+            hash = HashAdd(hash, environment.EnvironmentSize);
+            hash = HashAdd(hash, environment.IrradianceSize);
+            hash = HashAdd(hash, (uint)environment.TexturePrecision);
+            string sourcePath = environment.SourcePath ?? string.Empty;
+            hash = HashAdd(hash, sourcePath.Length);
+            for (int i = 0; i < sourcePath.Length; i++)
+                hash = HashAdd(hash, sourcePath[i]);
+            return hash;
+        }
+
         private SimpleDdgiDirtySignature CreateSimpleDdgiDirtySignature(
             Scene scene,
             LightFrameSnapshot lightSnapshot,
-            uint emissiveSourceRevision)
+            uint emissiveSourceRevision,
+            bool farFieldCoverageAvailable)
         {
             ulong lightSignature = CreateDdgiLightSignature(lightSnapshot);
+            lightSignature = HashAdd(
+                lightSignature,
+                CreateSimpleDdgiEnvironmentSignature(Settings.Environment));
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            lightSignature = HashAdd(lightSignature, gi.EnvironmentFallbackIntensity);
+            lightSignature = HashAdd(lightSignature, gi.DdgiSelfShadowBiasScale);
+            lightSignature = HashAdd(lightSignature, gi.SimpleDdgiNormalBias);
+            lightSignature = HashAdd(lightSignature, gi.SimpleDdgiViewBias);
+            lightSignature = HashAdd(lightSignature, gi.SimpleDdgiMaximumWorldBiasMeters);
+            lightSignature = HashAdd(lightSignature, gi.SimpleDdgiArchitecturalThicknessMeters);
+            lightSignature = HashAdd(lightSignature, gi.FarFieldClipmapEnabled);
+            lightSignature = HashAdd(lightSignature, gi.FarFieldPagedEnabled);
+            lightSignature = HashAdd(lightSignature, gi.FarFieldForceAll);
+            lightSignature = HashAdd(lightSignature, gi.FarFieldSkyVisibilityEnabled);
+            lightSignature = HashAdd(lightSignature, gi.FarFieldStartDistance);
+            lightSignature = HashAdd(lightSignature, gi.FarFieldMaxTraceSteps);
+            lightSignature = HashAdd(lightSignature, farFieldCoverageAvailable);
             ulong emissiveSignature = HashAdd(HashStart, emissiveSourceRevision);
             // Region events are the normal Simple DDGI dynamic path.  Retain the
             // whole-scene signature only as the explicit legacy/validation mode;

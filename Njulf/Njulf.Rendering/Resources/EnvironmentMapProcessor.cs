@@ -168,6 +168,33 @@ namespace Njulf.Rendering.Resources
             });
         }
 
+        internal static byte[] GenerateProceduralSkyIrradianceCubemap(
+            uint cubeSize,
+            int sampleCount = DiffuseIrradianceSampleCount)
+        {
+            if (sampleCount <= 0)
+                throw new ArgumentOutOfRangeException(nameof(sampleCount));
+
+            // Keep the same representation as GenerateIrradianceCubemap: each
+            // texel stores hemispherical irradiance E = integral(L cos(theta) dw).
+            // A blurred radiance lookup is not equivalent and is short by roughly
+            // PI for a constant sky when the diffuse BRDF is applied by the caller.
+            return GenerateCubemap(null, cubeSize, mipLevels: 1, (_, normal, _, _) =>
+            {
+                BuildTangentBasis(normal, out Vec3 tangent, out Vec3 bitangent);
+                Vec3 sum = default;
+                for (int i = 0; i < sampleCount; i++)
+                {
+                    (float u, float v) = Hammersley(i, sampleCount);
+                    Vec3 local = CosineSampleHemisphere(u, v);
+                    Vec3 direction = (tangent * local.X + bitangent * local.Y + normal * local.Z).Normalized();
+                    sum += ProceduralSky(direction, blur: 0.0f);
+                }
+
+                return sum * (Pi / sampleCount);
+            });
+        }
+
         private static byte[] GenerateCubemap(
             HdrEquirectangularImage? source,
             uint baseSize,

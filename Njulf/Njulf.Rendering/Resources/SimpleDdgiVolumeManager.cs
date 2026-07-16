@@ -222,7 +222,10 @@ namespace Njulf.Rendering.Resources
         private uint _dirtyFirstScheduledLatencyMaxFrames;
         private uint _dirtyFirstUpdateLatencyMaxFrames;
         private uint _dirtyConvergenceLatencyMaxFrames;
-        private readonly Dictionary<int, int> _volumeRoundRobinCursors = new();
+        private readonly Dictionary<
+            (int VolumeKind, int SourceOrdinal, SimpleDdgiSchedulerWorkClass WorkClass),
+            int> _volumeWorkClassRoundRobinCursors = new(
+                GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount * SchedulerWorkClassCount);
         private int _previousVolumeCount;
         private readonly Vector3[] _ringOrigins = new Vector3[3];
         private readonly bool[] _ringHasOrigins = new bool[3];
@@ -311,6 +314,7 @@ namespace Njulf.Rendering.Resources
         private uint _activeDirtyReasonFlags;
         private uint _regionalDirtyReasonFlags;
         private ulong _scheduledPrimaryRayCount;
+        private int _effectiveMaxShadedLights;
         private ulong _adaptiveRaySavedPrimaryRayCount;
         private int _rayBudgetRejectedProbeCount;
         private ulong _rayBudgetRejectedPrimaryRayCount;
@@ -445,6 +449,7 @@ namespace Njulf.Rendering.Resources
         public int LightingDirtyBoostedCapacity => _lightingDirtyBoostedCapacity;
         public uint DirtyReasonFlags => (_lightingDirtyFrames > 0 ? _activeDirtyReasonFlags : 0u) | _regionalDirtyReasonFlags;
         public ulong ScheduledPrimaryRayCount => _scheduledPrimaryRayCount;
+        public int EffectiveMaxShadedLights => _effectiveMaxShadedLights;
         public ulong AdaptiveRaySavedPrimaryRayCount => _adaptiveRaySavedPrimaryRayCount;
         public int RayBudgetRejectedProbeCount => _rayBudgetRejectedProbeCount;
         public ulong RayBudgetRejectedPrimaryRayCount => _rayBudgetRejectedPrimaryRayCount;
@@ -1243,6 +1248,7 @@ namespace Njulf.Rendering.Resources
             _lightingDirtyBoostedCapacity = 0;
             _regionalDirtyReasonFlags = 0u;
             _scheduledPrimaryRayCount = 0;
+            _effectiveMaxShadedLights = 0;
             _adaptiveRaySavedPrimaryRayCount = 0;
             _rayBudgetRejectedProbeCount = 0;
             _rayBudgetRejectedPrimaryRayCount = 0;
@@ -1385,6 +1391,7 @@ namespace Njulf.Rendering.Resources
             Array.Clear(_probeSchedulingFlags);
             Array.Clear(_probeDirtyReasons);
             Array.Clear(_probeVisibilityImportance);
+            _volumeWorkClassRoundRobinCursors.Clear();
             _dirtyLatencyOutstandingEventCount = 0;
             _probeStateReadbackValid = 0;
         }
@@ -1987,23 +1994,15 @@ namespace Njulf.Rendering.Resources
             GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
             int firstProbe = FirstProbe(volume);
             int probeCount = VolumeProbeCount(volume);
-            bool maintenance = IsMaintenanceWorkClass(workClass);
-            int cursor = 0;
-            int stride = 1;
-            if (maintenance)
-            {
-                int cursorKey = VolumeCursorKey(volume);
-                _volumeRoundRobinCursors.TryGetValue(cursorKey, out int storedCursor);
-                cursor = Math.Clamp(storedCursor, 0, Math.Max(probeCount - 1, 0));
-                stride = ResolveProbeUpdateStride(probeCount);
-            }
+            var cursorKey = VolumeWorkClassCursorKey(volume, workClass);
+            _volumeWorkClassRoundRobinCursors.TryGetValue(cursorKey, out int storedCursor);
+            int cursor = Math.Clamp(storedCursor, 0, Math.Max(probeCount - 1, 0));
+            int stride = ResolveProbeUpdateStride(probeCount);
 
             int visited = 0;
             while (visited < probeCount && volumeUsed < volumeQuota && classUsed < classLimit && count < capacity)
             {
-                int local = maintenance
-                    ? (int)((cursor + (long)visited * stride) % probeCount)
-                    : visited;
+                int local = (int)((cursor + (long)visited * stride) % probeCount);
                 int probeIndex = firstProbe + local;
                 visited++;
                 if ((uint)probeIndex >= (uint)_probeCount || _probeQueued[probeIndex] != 0)
@@ -2029,13 +2028,12 @@ namespace Njulf.Rendering.Resources
                 classUsed++;
             }
 
-            if (maintenance)
-            {
-                int cursorKey = VolumeCursorKey(volume);
-                _volumeRoundRobinCursors[cursorKey] = probeCount > 0
-                    ? (int)((cursor + (long)visited * stride) % probeCount)
-                    : 0;
-            }
+            // Every saturated priority class must advance independently. Starting
+            // visible retry/dirty scans at local probe zero each frame repeatedly
+            // admitted the same prefix and left the tail stale indefinitely.
+            _volumeWorkClassRoundRobinCursors[cursorKey] = probeCount > 0
+                ? (int)((cursor + (long)visited * stride) % probeCount)
+                : 0;
         }
 
         private bool TryResolveProbeWorkClass(
@@ -2097,11 +2095,6 @@ namespace Njulf.Rendering.Resources
                 (uint)probeIndex < (uint)_probeStableUpdateCounts.Length &&
                 _probeStableUpdateCounts[probeIndex] < _settings.GlobalIllumination.SimpleDdgiStableMaintenanceUpdateCount;
         }
-
-        private static bool IsMaintenanceWorkClass(SimpleDdgiSchedulerWorkClass workClass) =>
-            workClass is SimpleDdgiSchedulerWorkClass.NearMaintenance or
-                SimpleDdgiSchedulerWorkClass.MidMaintenance or
-                SimpleDdgiSchedulerWorkClass.FarMaintenance;
 
         private static int WorkClassOffset(int volumeIndex) =>
             Math.Max(0, volumeIndex) * SchedulerWorkClassCount;
@@ -2512,6 +2505,9 @@ namespace Njulf.Rendering.Resources
             uint packedMaxLights = checked((uint)Math.Clamp(quality.MaxShadedLights, 0, 62) + 1);
             flags |= packedMaterialCascade << ProbeUpdateMaterialTextureCascadeShift;
             flags |= packedMaxLights << ProbeUpdateMaxShadedLightsShift;
+            _effectiveMaxShadedLights = Math.Max(
+                _effectiveMaxShadedLights,
+                Math.Clamp(quality.MaxShadedLights, 0, 62));
             _scheduledPrimaryRayCount += (ulong)rayCount;
             _ringScheduledPrimaryRayCounts[quality.RingIndex] += (ulong)rayCount;
             if (rayCount >= quality.FullRays)
@@ -3901,8 +3897,10 @@ namespace Njulf.Rendering.Resources
         private static int SourceOrdinal(GPUSimpleDdgiVolume volume) =>
             Math.Max(0, (int)MathF.Round(volume.RaysAndReserved.X));
 
-        private static int VolumeCursorKey(GPUSimpleDdgiVolume volume) =>
-            HashCode.Combine((int)Kind(volume), SourceOrdinal(volume));
+        private static (int VolumeKind, int SourceOrdinal, SimpleDdgiSchedulerWorkClass WorkClass) VolumeWorkClassCursorKey(
+            GPUSimpleDdgiVolume volume,
+            SimpleDdgiSchedulerWorkClass workClass) =>
+            ((int)Kind(volume), SourceOrdinal(volume), workClass);
 
         private static int CountInactiveProbes(byte[] inactive, int probeCount)
         {

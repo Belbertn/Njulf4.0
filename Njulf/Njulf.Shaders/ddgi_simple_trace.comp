@@ -113,6 +113,11 @@ void main()
     // misses.  Forward composition evaluates diffuse IBL only for probe ownership
     // gaps, so sky energy is represented exactly once.
     vec3 radiance = SampleDdgiEnvironmentMissRadianceWithFallback(direction, params.environmentRadiance);
+    vec3 traceDirectDiffuse = vec3(0.0);
+    vec3 traceDirectNoShadowDiffuse = vec3(0.0);
+    vec3 traceEmissiveDiffuse = vec3(0.0);
+    vec3 traceBounceDiffuse = vec3(0.0);
+    vec3 traceSkyDiffuse = radiance;
     float hitDistance = maxDistance;
     float hitKind = 0.0;
     bool farFieldOnlyRing = volume.spacing >= 15.999;
@@ -166,7 +171,13 @@ void main()
                 vec3 directNoShadowDiffuse;
                 vec3 directDiffuse = EvaluateDirectDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo, directNoShadowDiffuse);
                 vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
-                radiance = surfaceEmissive + emissiveProxyDiffuse * (1.0 - bounceOwnership) + directDiffuse + bounce;
+                vec3 emissiveDiffuse = surfaceEmissive + emissiveProxyDiffuse * (1.0 - bounceOwnership);
+                radiance = emissiveDiffuse + directDiffuse + bounce;
+                traceDirectDiffuse = directDiffuse;
+                traceDirectNoShadowDiffuse = directNoShadowDiffuse;
+                traceEmissiveDiffuse = emissiveDiffuse;
+                traceBounceDiffuse = bounce;
+                traceSkyDiffuse = vec3(0.0);
                 if (dot(max(directDiffuse, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) > 0.0001)
                     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_DIRECT_LIGHT_HIT_COUNTER, 1u);
                 if (dot(max(surfaceEmissive + emissiveProxyDiffuse, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) > 0.0001)
@@ -191,7 +202,28 @@ void main()
             vec3 hitPosition = probePosition + direction * hitDistance;
             vec3 directNoShadowDiffuse;
             vec3 safeFarNormal = normalize(farNormal);
-            radiance = EvaluateDirectDiffuseRadianceAtHit(hitPosition, safeFarNormal, farAlbedo, directNoShadowDiffuse);
+            float bounceOwnership;
+            vec3 bounce = SampleSimpleDdgiUnifiedIrradiance(
+                hitPosition + safeFarNormal * max(0.03, volume.spacing * 0.02),
+                safeFarNormal,
+                -direction,
+                true,
+                bounceOwnership) * farAlbedo / SIMPLE_DDGI_PI;
+            vec3 directDiffuse = EvaluateDirectDiffuseRadianceAtHit(
+                hitPosition,
+                safeFarNormal,
+                farAlbedo,
+                directNoShadowDiffuse);
+            vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
+                hitPosition,
+                safeFarNormal,
+                farAlbedo) * (1.0 - bounceOwnership);
+            radiance = directDiffuse + emissiveProxyDiffuse + bounce;
+            traceDirectDiffuse = directDiffuse;
+            traceDirectNoShadowDiffuse = directNoShadowDiffuse;
+            traceEmissiveDiffuse = emissiveProxyDiffuse;
+            traceBounceDiffuse = bounce;
+            traceSkyDiffuse = vec3(0.0);
             hitKind = dot(direction, safeFarNormal) > 0.0 ? 2.0 : 1.0;
         }
         else if (farStepExhausted)
@@ -224,6 +256,19 @@ void main()
     {
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_MISS_COUNTER, 1u);
     }
+
+    RecordSimpleDdgiTraceEnergyDiagnostics(
+        params,
+        pc.CurrentFrameIndex,
+        probeIndex,
+        rayIndex,
+        radiance,
+        traceDirectDiffuse,
+        traceDirectNoShadowDiffuse,
+        traceEmissiveDiffuse,
+        traceBounceDiffuse,
+        traceSkyDiffuse,
+        hitKind >= 0.5);
 
     WriteSimpleRayResult(globalRay, radiance, hitDistance, direction, hitKind);
 }

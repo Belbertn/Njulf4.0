@@ -223,6 +223,142 @@ public sealed class SimpleDdgiVolumeManagerTests
     }
 
     [Test]
+    public void SchedulerPriorityClasses_AdvanceIndependentRoundRobinCursors()
+    {
+        string source = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiVolumeManager.cs"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Contain("VolumeWorkClassCursorKey(volume, workClass)"));
+            Assert.That(source, Does.Contain("_volumeWorkClassRoundRobinCursors.TryGetValue(cursorKey"));
+            Assert.That(source, Does.Contain("int local = (int)((cursor + (long)visited * stride) % probeCount);"));
+            Assert.That(source, Does.Contain("_volumeWorkClassRoundRobinCursors[cursorKey] = probeCount > 0"));
+            Assert.That(source, Does.Not.Contain("int local = maintenance"));
+        });
+    }
+
+    [Test]
+    public void SimpleDdgiDiagnostics_ReportTheScheduledPerHitLightLimit()
+    {
+        string manager = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiVolumeManager.cs"));
+        string renderer = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "VulkanRenderer.cs"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(manager, Does.Contain("public int EffectiveMaxShadedLights => _effectiveMaxShadedLights;"));
+            Assert.That(manager, Does.Contain("_effectiveMaxShadedLights = Math.Max("));
+            Assert.That(renderer, Does.Contain("sceneData.DdgiEffectiveMaxShadedLights = _simpleDdgiVolumeManager.EffectiveMaxShadedLights;"));
+            Assert.That(renderer, Does.Contain("PopulateSimpleDdgiLightSelectionDiagnostics("));
+            Assert.That(renderer, Does.Contain("? \"simple-per-hit-top-n\""));
+        });
+    }
+
+    [TestCase(100UL, 1, 0, 8, 100UL)]
+    [TestCase(100UL, 2, 10, 8, 800UL)]
+    [TestCase(100UL, 2, 10, 3, 300UL)]
+    [TestCase(100UL, 2, 10, 0, 0UL)]
+    public void SimpleDdgiShadowRayUpperBound_UsesTheActualTopNLightCapacity(
+        ulong primaryRays,
+        int directionalLights,
+        int localLights,
+        int maxShadedLights,
+        ulong expected)
+    {
+        Assert.That(
+            VulkanRenderer.EstimateSimpleDdgiShadowRayUpperBound(
+                primaryRays,
+                directionalLights,
+                localLights,
+                maxShadedLights),
+            Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void SimpleDdgiEnvironmentSignature_InvalidatesEveryProbeTransportInput()
+    {
+        var baseline = new EnvironmentSettings
+        {
+            Enabled = true,
+            SourceKind = EnvironmentSourceKind.ProceduralSky,
+            SourcePath = string.Empty,
+            SkyIntensity = 0.45f,
+            RotationRadians = 0.0f,
+            EnvironmentSize = 1024,
+            IrradianceSize = 64,
+            TexturePrecision = EnvironmentTexturePrecision.Float16
+        };
+        ulong baselineSignature = VulkanRenderer.CreateSimpleDdgiEnvironmentSignature(baseline);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SignatureWith(baseline, environment => environment.Enabled = false), Is.Not.EqualTo(baselineSignature));
+            Assert.That(SignatureWith(baseline, environment => environment.SourceKind = EnvironmentSourceKind.HdrEquirectangular), Is.Not.EqualTo(baselineSignature));
+            Assert.That(SignatureWith(baseline, environment => environment.SourcePath = "alternate.hdr"), Is.Not.EqualTo(baselineSignature));
+            Assert.That(SignatureWith(baseline, environment => environment.SkyIntensity = 0.8f), Is.Not.EqualTo(baselineSignature));
+            Assert.That(SignatureWith(baseline, environment => environment.RotationRadians = 0.5f), Is.Not.EqualTo(baselineSignature));
+            Assert.That(SignatureWith(baseline, environment => environment.EnvironmentSize = 512), Is.Not.EqualTo(baselineSignature));
+            Assert.That(SignatureWith(baseline, environment => environment.IrradianceSize = 32), Is.Not.EqualTo(baselineSignature));
+            Assert.That(SignatureWith(baseline, environment => environment.TexturePrecision = EnvironmentTexturePrecision.Float32), Is.Not.EqualTo(baselineSignature));
+        });
+    }
+
+    private static ulong SignatureWith(EnvironmentSettings baseline, Action<EnvironmentSettings> mutate)
+    {
+        var copy = new EnvironmentSettings
+        {
+            Enabled = baseline.Enabled,
+            SourceKind = baseline.SourceKind,
+            SourcePath = baseline.SourcePath,
+            SkyIntensity = baseline.SkyIntensity,
+            DiffuseIntensity = baseline.DiffuseIntensity,
+            SpecularIntensity = baseline.SpecularIntensity,
+            RotationRadians = baseline.RotationRadians,
+            EnvironmentSize = baseline.EnvironmentSize,
+            IrradianceSize = baseline.IrradianceSize,
+            PrefilteredSize = baseline.PrefilteredSize,
+            BrdfLutSize = baseline.BrdfLutSize,
+            TexturePrecision = baseline.TexturePrecision
+        };
+        mutate(copy);
+        return VulkanRenderer.CreateSimpleDdgiEnvironmentSignature(copy);
+    }
+
+    [Test]
+    public void Renderer_PreparesOnlyTheSelectedDdgiBackendAndPublishesCurrentEmissiveRevision()
+    {
+        string renderer = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "VulkanRenderer.cs"));
+        int methodStart = renderer.IndexOf("private void PrepareDdgiProbeVolumes(", StringComparison.Ordinal);
+        int methodEnd = renderer.IndexOf(
+            "private void ScheduleReflectionProbeRecapturesFromGi(",
+            methodStart,
+            StringComparison.Ordinal);
+        string method = renderer[methodStart..methodEnd].Replace("\r\n", "\n", StringComparison.Ordinal);
+
+        int emissiveUpload = method.IndexOf("UploadDdgiEmissiveSources(", StringComparison.Ordinal);
+        int simpleDirtySignature = method.IndexOf("CreateSimpleDdgiDirtySignature(", StringComparison.Ordinal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(method, Does.Contain("if (ddgiActive)\n            {\n                _ddgiProbeVolumeManager.Upload("));
+            Assert.That(method, Does.Contain("if (simpleDdgiActive)\n            {\n                SimpleDdgiDirtySignature"));
+            Assert.That(method, Does.Contain("if (!ddgiActive)\n            {\n                _ddgiProbeVolumeManager.ClearGpuSchedulerValidationExpectedFrame"));
+            Assert.That(method, Does.Not.Contain("legacy DDGI upload above is intentionally overwritten"));
+            Assert.That(emissiveUpload, Is.GreaterThanOrEqualTo(0));
+            Assert.That(simpleDirtySignature, Is.GreaterThan(emissiveUpload));
+        });
+    }
+
+    [Test]
     public void Upload_EstablishesAtlasCapacityBeforeClassifyingVisibleFreshRecovery()
     {
         string source = File.ReadAllText(FindSourceFile(

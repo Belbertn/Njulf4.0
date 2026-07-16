@@ -255,7 +255,7 @@ namespace Njulf.Rendering.Resources
 
             return new EnvironmentPayload(
                 EnvironmentMapProcessor.GenerateProceduralSkyCubemap(signature.EnvironmentSize, 1, blur: 0.0f),
-                EnvironmentMapProcessor.GenerateProceduralSkyCubemap(signature.IrradianceSize, 1, blur: 0.85f),
+                EnvironmentMapProcessor.GenerateProceduralSkyIrradianceCubemap(signature.IrradianceSize),
                 EnvironmentMapProcessor.GenerateProceduralSkyCubemap(signature.PrefilteredSize, prefilteredMipCount, blur: 0.0f),
                 UsesFallback: true);
         }

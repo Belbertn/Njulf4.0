@@ -48,6 +48,8 @@ public sealed class EditorController
     public EditorSelection Selection { get; private set; } = EditorSelection.None;
     public Scene Scene => _scene;
     public FirstPersonCamera? Camera { get; set; }
+    public RenderSettings? RendererSettings => _renderer?.Settings;
+    public RendererDiagnostics? RendererDiagnostics => _renderer?.LastDiagnostics;
     public bool SuppressGameInput => Enabled && (_overlay?.WantCaptureKeyboard == true || _overlay?.WantCaptureMouse == true);
 
     public event Action<EditorSelection>? SelectionChanged;
@@ -234,6 +236,62 @@ public sealed class EditorController
         }, $"{type} Light");
     }
 
+    public GlobalIlluminationProbeVolume AddGlobalIlluminationProbeVolumeAtCamera()
+    {
+        var volume = new GlobalIlluminationProbeVolume
+        {
+            Name = NextGlobalIlluminationProbeVolumeName()
+        };
+        Vector3 center = Camera?.Position ?? Vector3.Zero;
+        volume.Origin = center - volume.Size * 0.5f;
+        _scene.Add(volume);
+        MarkDirty(EditorSelection.ForEntity(EditorSelectionKind.GiVolume, volume.Id));
+        return volume;
+    }
+
+    public int AddSimpleDdgiAuthoredVolumeAtCamera()
+    {
+        GlobalIlluminationSettings settings = RendererSettings?.GlobalIllumination ??
+            throw new InvalidOperationException("A Vulkan renderer is required to edit live GI settings.");
+        if (settings.SimpleDdgiAuthoredVolumes.Count >= GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount)
+            throw new InvalidOperationException($"Simple DDGI supports at most {GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount} authored overrides.");
+
+        Vector3 center = Camera?.Position ?? Vector3.Zero;
+        var halfSize = new Vector3(6f, 3f, 6f);
+        settings.SimpleDdgiAuthoredVolumes.Add(new SimpleDdgiAuthoredVolume(
+            center - halfSize,
+            center + halfSize,
+            settings.SimpleDdgiProbeSpacing,
+            purpose: SimpleDdgiVolumePurpose.ReceiverHero,
+            priority: 0));
+        return settings.SimpleDdgiAuthoredVolumes.Count - 1;
+    }
+
+    public bool UpdateSimpleDdgiAuthoredVolume(int index, SimpleDdgiAuthoredVolume volume)
+    {
+        IList<SimpleDdgiAuthoredVolume>? volumes = RendererSettings?.GlobalIllumination.SimpleDdgiAuthoredVolumes;
+        if (volumes == null || index < 0 || index >= volumes.Count)
+            return false;
+        volumes[index] = volume;
+        return true;
+    }
+
+    public bool RemoveSimpleDdgiAuthoredVolume(int index)
+    {
+        IList<SimpleDdgiAuthoredVolume>? volumes = RendererSettings?.GlobalIllumination.SimpleDdgiAuthoredVolumes;
+        if (volumes == null || index < 0 || index >= volumes.Count)
+            return false;
+        volumes.RemoveAt(index);
+        return true;
+    }
+
+    public void SaveRenderSettings(string path)
+    {
+        RenderSettings settings = RendererSettings ??
+            throw new InvalidOperationException("A Vulkan renderer is required to save live render settings.");
+        settings.Save(path);
+    }
+
     public RenderObject AddObjectAtCamera(SceneAssetReference reference, float forwardDistance = 3f)
     {
         FirstPersonCamera camera = Camera ?? throw new InvalidOperationException("An editor camera is required to add an object.");
@@ -352,6 +410,20 @@ public sealed class EditorController
             if (string.Equals(item.Name, selector, StringComparison.Ordinal))
                 return item;
         return null;
+    }
+
+    private string NextGlobalIlluminationProbeVolumeName()
+    {
+        const string baseName = "GI Probe Volume";
+        int suffix = _scene.GlobalIlluminationProbeVolumes.Count + 1;
+        string name;
+        do
+        {
+            name = $"{baseName} {suffix++}";
+        }
+        while (_scene.GlobalIlluminationProbeVolumes.Any(
+            volume => string.Equals(volume.Name, name, StringComparison.OrdinalIgnoreCase)));
+        return name;
     }
 
     private static bool Remove<T>(IIdentifiedSceneEntity? value, Action<T> remove) where T : class, IIdentifiedSceneEntity
