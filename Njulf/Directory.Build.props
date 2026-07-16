@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- GpuMemoryAllocator.vma ships an unused macos-arm64 asset. Njulf does not target macOS. -->
+    <NoWarn>$(NoWarn);NETSDK1206</NoWarn>
+  </PropertyGroup>
+</Project>
