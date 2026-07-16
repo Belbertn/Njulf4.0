@@ -1,3 +1,15 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:6e8468cae968659d90ad646069df2c71e8622455fa4ac67496c980f24058cb5e
-size 372
+using Njulf.Rendering.Diagnostics;
+
+namespace NjulfHelloGame;
+
+internal sealed class SampleLongRunMonitor
+{
+    private readonly LongRunStabilityTracker _tracker = new();
+
+    public LongRunStabilityTracker Tracker => _tracker;
+
+    public void Sample(int frameIndex)
+    {
+        _tracker.Sample(frameIndex, new DescriptorPressureSnapshot(0, 0, 0, 0, 0, 0, 0));
+    }
+}

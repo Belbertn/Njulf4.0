@@ -1,3 +1,24 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:8c074948fd8893e5c8031f22b39367d6277adee8808e59a8c53714e4b6ec1c8a
-size 670
+using System;
+using Njulf.Core.Math;
+
+namespace Njulf.Core.Interfaces
+{
+    public interface IInputManager
+    {
+        bool IsKeyDown(string action);
+        bool IsKeyPressed(string action);
+        bool IsKeyReleased(string action);
+        bool IsMouseButtonDown(int button);
+        bool IsMouseButtonPressed(int button);
+        bool IsMouseButtonReleased(int button);
+        Vector2 MousePosition { get; }
+        Vector2 MouseDelta { get; }
+        float MouseScrollDelta { get; }
+        
+        event Action<string> OnActionPressed;
+        event Action<string> OnActionReleased;
+        
+        void Update();
+        Vector2 ConsumeMouseDelta();
+    }
+}

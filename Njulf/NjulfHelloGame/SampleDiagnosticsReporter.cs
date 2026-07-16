@@ -1,3 +1,902 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:4a06a01ab3014ff6d3c13c621a3cf2e1db3d2de882147e1f55a4d3e77417aef6
-size 72975
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.Text;
+using Njulf.Core.Camera;
+using Njulf.Assets;
+using Njulf.Core.Interfaces;
+using Njulf.Core.Scene;
+using Njulf.Rendering;
+using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
+using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Resources;
+
+namespace NjulfHelloGame;
+
+internal enum SampleDiagnosticsFilter
+{
+    FullFrame,
+    DdgiOnly
+}
+
+internal sealed class SampleDiagnosticsReporter
+{
+    private readonly MaterialManager _materialManager;
+    private readonly IModelRenderUploadService? _uploadService;
+    private SampleDiagnosticsFilter _filter = SampleDiagnosticsFilter.FullFrame;
+    private bool _printedFrameDiagnostics;
+    private int _diagnosticFrameCounter;
+    private readonly PerformanceSampleWindow _movingFrameMs = new(180);
+    private readonly PerformanceSampleWindow _stillFrameMs = new(180);
+    private readonly PerformanceSampleWindow _movingCpuDrawMs = new(180);
+    private readonly PerformanceSampleWindow _stillCpuDrawMs = new(180);
+    private long _lastFrameTimestamp;
+    private bool _hasLastCameraPose;
+    private Njulf.Core.Math.Vector3 _lastCameraPosition;
+    private float _lastCameraYaw;
+    private float _lastCameraPitch;
+    private int _pacingFrameCounter;
+    private int _movingFrames;
+    private int _stillFrames;
+    private int _movingPayloadRebuilds;
+    private int _stillPayloadRebuilds;
+    private ulong _movingUploadedBytes;
+    private ulong _stillUploadedBytes;
+
+    public SampleDiagnosticsReporter(
+        MaterialManager materialManager,
+        IModelRenderUploadService? uploadService)
+    {
+        _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
+        _uploadService = uploadService;
+    }
+
+    public SampleDiagnosticsFilter Filter => _filter;
+
+    public SampleDiagnosticsFilter ToggleDdgiFilter()
+    {
+        _filter = _filter == SampleDiagnosticsFilter.DdgiOnly
+            ? SampleDiagnosticsFilter.FullFrame
+            : SampleDiagnosticsFilter.DdgiOnly;
+
+        Console.WriteLine($"Diagnostics filter: {_filter}");
+        return _filter;
+    }
+
+    public void SetFilter(SampleDiagnosticsFilter filter)
+    {
+        _filter = filter;
+        Console.WriteLine($"Diagnostics filter: {_filter}");
+    }
+
+    public void PrintModelSummary(Model model, SampleAssetManifest manifest)
+    {
+        if (model == null)
+            throw new ArgumentNullException(nameof(model));
+        if (manifest == null)
+            throw new ArgumentNullException(nameof(manifest));
+
+        var materialHandles = new HashSet<MaterialHandle>();
+        var dynamicTextureIndices = new HashSet<int>();
+
+        foreach (RenderObject renderObject in model.RenderObjects)
+        {
+            if (renderObject.Material is not MaterialHandle materialHandle || !materialHandle.IsValid)
+                continue;
+
+            materialHandles.Add(materialHandle);
+        }
+
+        foreach (MaterialHandle materialHandle in materialHandles)
+        {
+            GPUMaterialData material = _materialManager.GetMaterialData(materialHandle);
+            AddDynamicTextureIndex(dynamicTextureIndices, material.AlbedoTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, material.NormalTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, material.MetallicRoughnessTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, material.EmissiveTextureIndex);
+        }
+
+        ModelRenderUploadDiagnostics? uploadDiagnostics = _uploadService?.LastUploadDiagnostics;
+        string diagnostics = uploadDiagnostics == null
+            ? string.Empty
+            : $", uploadedMaterials={uploadDiagnostics.LoadedMaterialCount}, " +
+              $"uploadedTextures={uploadDiagnostics.LoadedTextureCount}, " +
+              $"defaultWhite={uploadDiagnostics.DefaultWhiteSubstitutions}, " +
+              $"defaultNormal={uploadDiagnostics.DefaultNormalSubstitutions}, " +
+              $"defaultBlack={uploadDiagnostics.DefaultBlackSubstitutions}, " +
+              $"blendMaterials={uploadDiagnostics.BlendMaterialCount}";
+
+        Console.WriteLine(
+            $"Loaded '{manifest.ModelPath}': objects={model.RenderObjects.Count}, " +
+            $"materials={materialHandles.Count}, importedDynamicTextures={dynamicTextureIndices.Count}{diagnostics}.");
+    }
+
+    public void PrintProceduralSceneSummary(Scene scene, string sceneName)
+    {
+        if (scene == null)
+            throw new ArgumentNullException(nameof(scene));
+        if (string.IsNullOrWhiteSpace(sceneName))
+            throw new ArgumentException("Scene name cannot be empty.", nameof(sceneName));
+
+        var materialHandles = new HashSet<MaterialHandle>();
+        foreach (RenderObject renderObject in scene.RenderObjects)
+        {
+            if (renderObject.Material is MaterialHandle materialHandle && materialHandle.IsValid)
+                materialHandles.Add(materialHandle);
+        }
+
+        Console.WriteLine(
+            $"Loaded procedural scene '{sceneName}': objects={scene.RenderObjects.Count}, " +
+            $"materials={materialHandles.Count}, probes={scene.ReflectionProbes.Count}, particles={scene.ParticleEffects.Count}.");
+    }
+
+    public void PrintFirstFrameDiagnostics(IRenderer renderer)
+    {
+        if (renderer is not VulkanRenderer vulkanRenderer)
+            return;
+
+        RendererDiagnostics diagnostics = vulkanRenderer.LastDiagnostics;
+        if (_filter == SampleDiagnosticsFilter.DdgiOnly)
+        {
+            _diagnosticFrameCounter++;
+
+            if (_diagnosticFrameCounter % 30 != 0)
+                return;
+
+            PrintDdgiTriageDiagnostics(diagnostics);
+            PrintGiDiagnostics(diagnostics);
+            PrintDdgiRingDiagnostics(diagnostics);
+            PrintDdgiVolumeActivityDiagnostics(diagnostics);
+            PrintDdgiSchedulerDiagnostics(diagnostics);
+            PrintDdgiUpdateDiagnostics(diagnostics);
+            return;
+        }
+
+        if (diagnostics.VisibleObjectCount == 0 && diagnostics.VisibleMeshletCount == 0)
+            return;
+
+        _diagnosticFrameCounter++;
+        if (_printedFrameDiagnostics && _diagnosticFrameCounter % 180 != 0)
+            return;
+
+        _printedFrameDiagnostics = true;
+        Console.WriteLine(
+            $"Frame diagnostics scene: visibleObjects={diagnostics.VisibleObjectCount}, visibleMeshlets={diagnostics.VisibleMeshletCount}, " +
+            $"opaqueObjects={diagnostics.OpaqueObjectCount}, maskedObjects={diagnostics.MaskedObjectCount}, transparentObjects={diagnostics.TransparentObjectCount}, " +
+            $"opaqueMeshlets={diagnostics.OpaqueMeshletCount}, transparentMeshlets={diagnostics.TransparentMeshletCount}, blendMaterials={diagnostics.BlendMaterialCount}, " +
+            $"lights={diagnostics.LightCount}, tiles={diagnostics.TileCountX}x{diagnostics.TileCountY}, " +
+            $"tileLightsAvgMax={diagnostics.AverageLightsPerNonEmptyTile:F1}/{diagnostics.MaxLightsInAnyTile}, " +
+            $"tileSaturated={diagnostics.LightTileSaturationCount}, lightCullRejected={diagnostics.LightCullRejectedPointCount}/{diagnostics.LightCullRejectedSpotCount}, " +
+            $"tileClearBytes={diagnostics.TiledLightHeaderBufferClearBytes}/{diagnostics.TiledLightIndexBufferClearBytes}, " +
+            $"materials={diagnostics.MaterialCount}, textures={diagnostics.TextureCount}.");
+        Console.WriteLine(
+            $"Frame diagnostics transparency/decals: mode={diagnostics.TransparencyMode}, debug={diagnostics.TransparencyDebugView}, " +
+            $"receiveShadows={diagnostics.TransparentReceiveShadows}, solidObjects={diagnostics.SolidObjectCount}, maskedObjects={diagnostics.MaskedObjectCount}, " +
+            $"transparentObjects={diagnostics.TransparentObjectCount}, decalObjects={diagnostics.GeometryDecalObjectCount}, solidMeshlets={diagnostics.SolidMeshletCount}, " +
+            $"maskedMeshlets={diagnostics.MaskedMeshletCount}, transparentMeshlets={diagnostics.TransparentMeshletCount}, decalMeshlets={diagnostics.GeometryDecalMeshletCount}, " +
+            $"maskMaterials={diagnostics.MaskMaterialCount}, blendMaterials={diagnostics.BlendMaterialCount}, decalMaterials={diagnostics.GeometryDecalMaterialCount}, " +
+            $"sortCandidates={diagnostics.TransparentSortCandidateCount}, sortUs={diagnostics.TransparentSortMicroseconds}, overflow={diagnostics.TransparentOverflowCount}, " +
+            $"weightedOit={diagnostics.WeightedOitEnabled}, oitMiB={diagnostics.WeightedOitRenderTargetBytes / (1024.0 * 1024.0):F1}, " +
+            $"decalDebug={diagnostics.DecalDebugView}, decalsEnabled={diagnostics.GeometryDecalsEnabled}, decalBias={diagnostics.GeometryDecalDepthBias:F5}, " +
+            $"decalSlopeBias={diagnostics.GeometryDecalSlopeScaledDepthBias:F2}.");
+        Console.WriteLine(
+            $"Frame diagnostics animation: enabled={diagnostics.AnimationEnabled}, skinning={diagnostics.AnimationSkinningMode}, debug={diagnostics.AnimationDebugView}, " +
+            $"skinnedObjects={diagnostics.SkinnedObjectCount}, skeletons={diagnostics.SkeletonCount}, skins={diagnostics.SkinCount}, clips={diagnostics.AnimationClipCount}, " +
+            $"activeAnimators={diagnostics.ActiveAnimatorCount}, playing={diagnostics.PlayingAnimatorCount}, paused={diagnostics.PausedAnimatorCount}, " +
+            $"jointMatrices={diagnostics.JointMatrixCount}, dispatches={diagnostics.SkinningDispatchCount}, bounds={diagnostics.AnimatedBoundsMode}.");
+        Console.WriteLine(
+            $"Frame diagnostics particles: enabled={diagnostics.ParticlesEnabled}, mode={diagnostics.ParticleSimulationMode}, debug={diagnostics.ParticleDebugView}, " +
+            $"effects={diagnostics.ParticleEffectCount}, emitters={diagnostics.ParticleEmitterCount}, live={diagnostics.LiveParticleCount}, " +
+            $"simulated={diagnostics.SimulatedParticleCount}, culled={diagnostics.CulledParticleCount}, rendered={diagnostics.RenderedParticleCount}, " +
+            $"batches={diagnostics.ParticleBatchCount}, alpha={diagnostics.AlphaParticleCount}, additive={diagnostics.AdditiveParticleCount}, " +
+            $"soft={diagnostics.SoftParticleCount}, flipbook={diagnostics.FlipbookParticleCount}, trails={diagnostics.TrailCount}, beams={diagnostics.BeamCount}, " +
+            $"uploadMiB={diagnostics.ParticleInstanceUploadBytes / (1024.0 * 1024.0):F2}, simUs={diagnostics.CpuParticleSimulationMicroseconds}, " +
+            $"buildUs={diagnostics.CpuParticleBuildMicroseconds}, budgetExceeded={diagnostics.ParticleBudgetExceeded}, uploadBudgetExceeded={diagnostics.ParticleUploadBudgetExceeded}.");
+        Console.WriteLine(
+            $"Frame diagnostics debug: enabled={diagnostics.DebugToolingEnabled}, overlay={diagnostics.DebugOverlayMode}, " +
+            $"cpuSnapshots={diagnostics.CpuDebugSnapshotsEnabled}, selected={diagnostics.DebugSelectedObjectIndex}:'{diagnostics.DebugSelectedObjectName}', " +
+            $"lines={diagnostics.DebugDrawLineCount}, persistentLines={diagnostics.DebugDrawPersistentLineCount}, droppedLines={diagnostics.DebugDrawDroppedLineCount}, " +
+            $"screenshotsPending={diagnostics.ScreenshotPendingCount}, renderDocAvailable={diagnostics.RenderDocAvailable}, renderDocRequested={diagnostics.RenderDocCaptureRequested}.");
+        if (vulkanRenderer.TryInspectObject(diagnostics.DebugSelectedObjectIndex, out SelectedObjectInspection inspection))
+        {
+            MaterialInspectionResult material = inspection.MaterialInfo;
+            Console.WriteLine(
+                $"Frame diagnostics selected material: object='{inspection.ObjectName}', material={material.MaterialIndex}, mode={material.RenderMode}, " +
+                $"metallic={material.Metallic:F2}, roughness={material.Roughness:F2}, ao={material.AmbientOcclusion:F2}, normal={material.NormalStrength:F2}, " +
+                $"textures={material.AlbedoTextureIndex}/{material.NormalTextureIndex}/{material.MetallicRoughnessTextureIndex}/{material.EmissiveTextureIndex}.");
+        }
+        Console.WriteLine(
+            $"Frame diagnostics CPU: totalDrawUs={diagnostics.CpuTotalDrawSceneMicroseconds}, sceneBuildUs={diagnostics.CpuSceneBuildMicroseconds}, " +
+            $"signatureUs={diagnostics.CpuPayloadSignatureMicroseconds}, objectCullUs={diagnostics.CpuObjectCullMicroseconds}, " +
+            $"meshletCullUs={diagnostics.CpuMeshletCullMicroseconds}, materialUploadUs={diagnostics.CpuMaterialUploadMicroseconds}, " +
+            $"uploadUs={diagnostics.CpuUploadMicroseconds}, payloadRebuilt={diagnostics.ScenePayloadRebuilt}.");
+        string gpuMemoryBudget = FormatGpuMemoryBudget(diagnostics);
+        Console.WriteLine(
+            $"Frame diagnostics budget: profile='{diagnostics.ActiveBudgetProfileName}', overall={diagnostics.BudgetOverallStatus}, " +
+            $"cpu={diagnostics.CpuFrameBudgetStatus}, gpu={diagnostics.GpuFrameBudgetStatus}, {gpuMemoryBudget}, " +
+            $"upload={diagnostics.UploadBudgetStatus}, " +
+            $"uploadMiB={diagnostics.UploadedBytes / (1024.0 * 1024.0):F2}/{diagnostics.UploadBudgetBytesPerFrame / (1024.0 * 1024.0):F2}, " +
+            $"stagingMiB={diagnostics.StagingBytesUsedThisFrame / (1024.0 * 1024.0):F2}, peakStagingMiB={diagnostics.StagingBytesPeakThisSession / (1024.0 * 1024.0):F2}, " +
+            $"stagingOverflow={diagnostics.StagingOverflowCountThisFrame}/{diagnostics.StagingOverflowCount}, retainedOverflow={diagnostics.StagingRetainedOverflowBufferCount}:{diagnostics.StagingRetainedOverflowBytes / (1024.0 * 1024.0):F2}MiB, " +
+            $"worstStall={diagnostics.RuntimeWorstStallReason}:{diagnostics.RuntimeWorstStallMicroseconds}us.");
+        Console.WriteLine(
+            $"Frame diagnostics memory: meshMiB={diagnostics.MeshBufferAllocatedBytes / (1024.0 * 1024.0):F1} used={diagnostics.MeshBufferUsedBytes / (1024.0 * 1024.0):F1}, " +
+            $"sceneMiB={diagnostics.SceneBufferAllocatedBytes / (1024.0 * 1024.0):F1}, materialMiB={diagnostics.MaterialBufferAllocatedBytes / (1024.0 * 1024.0):F1}, " +
+            $"lightMiB={(diagnostics.LightBufferAllocatedBytes + diagnostics.TiledLightBufferAllocatedBytes) / (1024.0 * 1024.0):F1}, texturesMiB={diagnostics.TextureAssetBytes / (1024.0 * 1024.0):F1}, " +
+            $"rtMiB={diagnostics.RenderTargetBytes / (1024.0 * 1024.0):F1}, rtScale={diagnostics.RequestedDynamicResolutionScale:F2}/{diagnostics.CommittedRenderTargetScale:F2}, " +
+            $"rtResizes={diagnostics.RenderTargetResizeCount}, rtReason='{diagnostics.LastRenderTargetRecreateReason}', shadowMiB={diagnostics.ShadowMapBytes / (1024.0 * 1024.0):F1}, " +
+            $"oitMiB={diagnostics.WeightedOitRenderTargetBytes / (1024.0 * 1024.0):F1}, " +
+            $"envMiB={diagnostics.EnvironmentTextureBytes / (1024.0 * 1024.0):F1}, reflectionMiB={diagnostics.ReflectionProbeBytes / (1024.0 * 1024.0):F1}, " +
+            $"swapchainMiB={diagnostics.SwapchainEstimatedBytes / (1024.0 * 1024.0):F1}, unknownMiB={diagnostics.UnknownGpuMemoryBytes / (1024.0 * 1024.0):F1}.");
+        Console.WriteLine(
+            $"Frame diagnostics static batches: batches={diagnostics.StaticInstanceBatchCount}, instances={diagnostics.StaticInstanceCount}, " +
+            $"visible={diagnostics.VisibleStaticInstanceCount}, culled={diagnostics.CulledStaticInstanceCount}, " +
+            $"meshletDraws={diagnostics.StaticBatchMeshletDrawCommandCount}, buildUs={diagnostics.CpuStaticBatchBuildMicroseconds}.");
+        Console.WriteLine(
+            $"Frame diagnostics foliage: patches={diagnostics.FoliagePatchCount}, prototypes={diagnostics.FoliagePrototypeCount}, " +
+            $"clusters={diagnostics.FoliageClusterCount}, visibleClusters={diagnostics.FoliageVisibleClusterCount}, " +
+            $"meshletDraws={diagnostics.FoliageVisibleMeshletDrawCount}, overflow={diagnostics.FoliageOverflowCount}, " +
+            $"drawOverflow={diagnostics.FoliageMeshletDrawOverflowCount}, indirect={(diagnostics.FoliageIndirectMeshletDispatchEnabled ? "on" : "off")}, " +
+            $"farImpostors={diagnostics.FoliageFarImpostorVisibleCount}, impostorAtlasBytes={diagnostics.FoliageImpostorAtlasBytes}, " +
+            $"cpuBuildUs={diagnostics.CpuFoliageBuildMicroseconds}, cpuUploadUs={diagnostics.CpuFoliageUploadMicroseconds}.");
+        Console.WriteLine(
+            $"Frame diagnostics GPU: depthUs={diagnostics.GpuDepthPrePassMicroseconds}, hizUs={diagnostics.GpuHiZBuildMicroseconds}, " +
+            $"lightCullUs={diagnostics.GpuLightCullMicroseconds}, forwardUs={diagnostics.GpuForwardOpaqueMicroseconds}, transparentUs={diagnostics.GpuTransparentMicroseconds}, " +
+            $"frameUs={diagnostics.GpuFrameMicroseconds}, timing={diagnostics.GpuTimingSupported}/{diagnostics.GpuTimingEnabled}/{diagnostics.GpuTimingPending}/{diagnostics.GpuTimingValid}, " +
+            $"timingReason='{diagnostics.GpuTimingUnavailableReason}', " +
+            $"depthPrePass={diagnostics.DepthPrePassEnabled}, hiz={diagnostics.HiZEnabled}, occlusion={diagnostics.OcclusionEnabled}, hizSize={diagnostics.HiZWidth}x{diagnostics.HiZHeight}, hizMips={diagnostics.HiZMipCount}, " +
+            $"hizConsumers={diagnostics.HiZConsumerCount}:{diagnostics.HiZConsumerSummary}, hizSkippedNoConsumer={diagnostics.HiZBuildSkippedBecauseNoConsumer}, " +
+            $"hizCounterSource={diagnostics.HiZCounterSource}, forwardHiZ={diagnostics.ForwardHiZTestedCount}/{diagnostics.ForwardHiZCulledCount}/{diagnostics.ForwardHiZCullRate:F3}, previousHiZValid={diagnostics.PreviousHiZFrameValid}, " +
+            $"hizFallback={diagnostics.HiZFallbackPath}, hizFallbackReason='{diagnostics.HiZFallbackReason}', hizValidateLegacy={diagnostics.HiZValidateAgainstLegacyPath}, " +
+            $"previousHiZSkip={diagnostics.PreviousHiZSkippedInvalidHistory}/{diagnostics.PreviousHiZSkippedCameraMotion}, previousHiZ={diagnostics.PreviousHiZTested}/{diagnostics.PreviousHiZCulled}, " +
+            $"hizPolicy={diagnostics.HiZPolicyStatus}, hizWarmup={diagnostics.HiZPolicyWarmupFramesRemaining}, hizReason='{diagnostics.HiZPolicyReason}', " +
+            $"hizAdaptiveStatus={diagnostics.HiZPolicyAdaptiveStatus}, hizAdaptiveSuppressed={diagnostics.HiZPolicyAdaptiveSuppressed}, " +
+            $"hizAdaptiveProbe={diagnostics.HiZPolicyAdaptiveProbe}, hizSuppressedFrames={diagnostics.HiZPolicyAdaptiveSuppressedFrameCount}, " +
+            $"hizCullRate={diagnostics.HiZPolicyAdaptiveCullRate:F3}, hizEstimatedUs={diagnostics.HiZPolicyAdaptiveEstimatedSavedMicroseconds}/" +
+            $"{diagnostics.HiZPolicyAdaptiveEstimatedCostMicroseconds}/{diagnostics.HiZPolicyAdaptiveEstimatedNetMicroseconds}.");
+        Console.WriteLine(
+            $"Frame diagnostics CPU passes: depthRecordUs={diagnostics.CpuDepthPrePassRecordMicroseconds}, hizRecordUs={diagnostics.CpuHiZBuildRecordMicroseconds}, " +
+            $"hizBreakdownUs=depthTransition:{diagnostics.CpuHiZDepthTransitionMicroseconds},pyramidTransition:{diagnostics.CpuHiZPyramidTransitionMicroseconds}," +
+            $"descriptorBinds:{diagnostics.CpuHiZDescriptorBindMicroseconds},dispatches:{diagnostics.CpuHiZPushDispatchMicroseconds}," +
+            $"mipDependenciesAndFinalLayout:{diagnostics.CpuHiZFinalBarrierMicroseconds}, " +
+            $"shadowRecordUs={diagnostics.CpuDirectionalShadowRecordMicroseconds}, lightCullRecordUs={diagnostics.CpuLightCullRecordMicroseconds}, forwardRecordUs={diagnostics.CpuForwardOpaqueRecordMicroseconds}, " +
+            $"transparentRecordUs={diagnostics.CpuTransparentRecordMicroseconds}, bloomExtractRecordUs={diagnostics.CpuBloomExtractRecordMicroseconds}, " +
+            $"bloomDownsampleRecordUs={diagnostics.CpuBloomDownsampleRecordMicroseconds}, bloomUpsampleRecordUs={diagnostics.CpuBloomUpsampleRecordMicroseconds}, " +
+            $"fogRecordUs={diagnostics.CpuFogRecordMicroseconds}, autoExposureRecordUs={diagnostics.CpuAutoExposureRecordMicroseconds}, " +
+            $"compositeRecordUs={diagnostics.CpuCompositeRecordMicroseconds}.");
+        Console.WriteLine(
+            $"Frame diagnostics graph: resources={diagnostics.Graph.ResourceCount}, passes={diagnostics.Graph.PassCount}, " +
+            $"pipeline='{diagnostics.ProductionPipelineName}', declaredPasses={diagnostics.ProductionPipelineDeclaredPassCount}, " +
+            $"activePasses={diagnostics.ProductionPipelineActivePassCount}, " +
+            $"ownedTargets={diagnostics.Graph.OwnedRenderTargetCount}, estimatedMiB={diagnostics.Graph.ResourceMemoryEstimateBytes / (1024.0 * 1024.0):F1}, " +
+            $"transient={diagnostics.Graph.TransientResourceCount}, persistent={diagnostics.Graph.PersistentResourceCount}, aliasable={diagnostics.Graph.AliasableResourceCount}, " +
+            $"barriers={diagnostics.GraphPlannedBarrierCount}/{diagnostics.GraphExecutedBarrierCount}, queueTransfers={diagnostics.GraphQueueOwnershipTransitionCount}, " +
+            $"asyncRequested={diagnostics.AsyncComputeRequested}, asyncEnabled={diagnostics.AsyncComputeEnabled}, asyncCandidates={diagnostics.AsyncComputeCandidatePassCount}, " +
+            $"asyncQueueTransfers={diagnostics.AsyncComputeQueueOwnershipTransitionCount}, skippedPasses={diagnostics.SkippedRenderPassCount}.");
+        Console.WriteLine(
+            $"Frame diagnostics shadows: enabled={diagnostics.DirectionalShadowsEnabled}, map={diagnostics.DirectionalShadowMapSize}, " +
+            $"cascades={diagnostics.DirectionalShadowCascadeCount}, lightIndex={diagnostics.ShadowedDirectionalLightIndex}, " +
+            $"pcf={diagnostics.DirectionalShadowPcfRadius}/{diagnostics.SpotShadowPcfRadius}/{diagnostics.PointShadowPcfRadius}, " +
+            $"forwardReceivers={diagnostics.ForwardShadowReceiverMeshletCount}, debug={diagnostics.ShadowDebugView}, " +
+            $"normalBias={diagnostics.ShadowNormalBias:F4}, slopeBias={diagnostics.ShadowSlopeScaledDepthBias:F2}.");
+        Console.WriteLine(
+            $"Frame diagnostics local shadows: spotEnabled={diagnostics.SpotShadowsEnabled}, spotCandidates={diagnostics.SpotShadowCandidateCount}, " +
+            $"spotSelected={diagnostics.SpotShadowSelectedCount}, spotRejected={diagnostics.SpotShadowRejectedByBudgetCount}, " +
+            $"atlas={diagnostics.SpotShadowAtlasSize} tile={diagnostics.SpotShadowTileSize}, atlasUsed={diagnostics.SpotShadowAtlasUsedTiles}/{diagnostics.SpotShadowAtlasCapacity}, " +
+            $"spotRecordUs={diagnostics.CpuSpotShadowRecordMicroseconds}, pointEnabled={diagnostics.PointShadowsEnabled}, " +
+            $"pointCandidates={diagnostics.PointShadowCandidateCount}, pointSelected={diagnostics.PointShadowSelectedCount}, " +
+            $"pointRejected={diagnostics.PointShadowRejectedByBudgetCount}, pointMap={diagnostics.PointShadowMapSize}, " +
+            $"pointFaces={diagnostics.PointShadowRenderedFaceCount}, pointRecordUs={diagnostics.CpuPointShadowRecordMicroseconds}, " +
+            $"localGpuJustified={diagnostics.SceneSubmissionLocalShadowGpuCompactionJustified}, spotTests={diagnostics.SceneSubmissionSpotShadowMeshletLightTests}, " +
+            $"pointTests={diagnostics.SceneSubmissionPointShadowMeshletFaceTests}, localGpuStatus='{diagnostics.SceneSubmissionLocalShadowGpuCompactionStatus}', " +
+            $"localOverflow='{diagnostics.SceneSubmissionLocalShadowOverflowSummary}'.");
+        Console.WriteLine(
+            $"Frame diagnostics HDR: enabled={diagnostics.HdrEnabled}, sceneColorFormat={diagnostics.SceneColorFormat}, " +
+            $"toneMapper={diagnostics.ToneMapper}, exposure={diagnostics.Exposure:F2}, autoExposure={diagnostics.AutoExposureEnabled}, " +
+            $"avgLum={diagnostics.AutoExposureAverageLuminance:F4}, targetExposure={diagnostics.AutoExposureTargetExposure:F2}, " +
+            $"samples={diagnostics.AutoExposureSampleCount}.");
+        Console.WriteLine(
+            $"Frame diagnostics bloom: enabled={diagnostics.BloomEnabled}, format={diagnostics.BloomFormat}, " +
+            $"base={diagnostics.BloomBaseWidth}x{diagnostics.BloomBaseHeight}, mips={diagnostics.BloomMipCount}, " +
+            $"intensity={diagnostics.BloomIntensity:F2}, threshold={diagnostics.BloomThreshold:F2}, knee={diagnostics.BloomKnee:F2}, " +
+            $"radius={diagnostics.BloomRadius:F2}, debug={diagnostics.BloomDebugView}, debugMip={diagnostics.BloomDebugMipLevel}.");
+        Console.WriteLine(
+            $"Frame diagnostics fog: enabled={diagnostics.FogEnabled}, mode={diagnostics.FogMode}, colorMode={diagnostics.FogColorMode}, " +
+            $"density={diagnostics.FogDensity:F3}, start={diagnostics.FogStartDistance:F1}, end={diagnostics.FogEndDistance:F1}, " +
+            $"height={diagnostics.FogHeight:F1}, falloff={diagnostics.FogHeightFalloff:F3}, heightDensity={diagnostics.FogHeightDensity:F3}, " +
+            $"maxOpacity={diagnostics.FogMaxOpacity:F2}, inscatter={diagnostics.FogDirectionalInscatteringEnabled}, " +
+            $"size={diagnostics.FogWidth}x{diagnostics.FogHeightPixels}, format={diagnostics.FogFormat}, debug={diagnostics.FogDebugView}.");
+        Console.WriteLine(
+            $"Frame diagnostics AO: enabled={diagnostics.AmbientOcclusionEnabled}, mode={diagnostics.AmbientOcclusionMode}, " +
+            $"size={diagnostics.AmbientOcclusionWidth}x{diagnostics.AmbientOcclusionHeight}, format={diagnostics.AmbientOcclusionFormat}, " +
+            $"scale={diagnostics.AmbientOcclusionResolutionScale:F2}, radius={diagnostics.AmbientOcclusionRadius:F2}, " +
+            $"intensity={diagnostics.AmbientOcclusionIntensity:F2}, bias={diagnostics.AmbientOcclusionBias:F3}, " +
+            $"samples={diagnostics.AmbientOcclusionSampleCount}, blur={diagnostics.AmbientOcclusionBlurRadius}, forwardSampling={diagnostics.AmbientOcclusionForwardSamplingMode}, " +
+            $"forwardDepthAwareSamples={diagnostics.AmbientOcclusionForwardDepthAwareSamples}, " +
+            $"debug={diagnostics.AmbientOcclusionDebugView}, aoRecordUs={diagnostics.CpuAmbientOcclusionRecordMicroseconds}, " +
+            $"blurRecordUs={diagnostics.CpuAmbientOcclusionBlurRecordMicroseconds}.");
+        PrintGiDiagnostics(diagnostics);
+        PrintDdgiRingDiagnostics(diagnostics);
+        PrintDdgiVolumeActivityDiagnostics(diagnostics);
+        PrintDdgiInvestigationDiagnostics(diagnostics);
+        PrintDdgiSchedulerDiagnostics(diagnostics);
+        PrintDdgiUpdateDiagnostics(diagnostics);
+        Console.WriteLine(
+            $"Frame diagnostics AA: mode={diagnostics.AntiAliasingMode}, size={diagnostics.AntiAliasingWidth}x{diagnostics.AntiAliasingHeight}, " +
+            $"input={diagnostics.AntiAliasingInputFormat}, output={diagnostics.AntiAliasingOutputFormat}, debug={diagnostics.AntiAliasingDebugView}, " +
+            $"smaaLookups={diagnostics.SmaaLookupTexturesReady}, fxaaRecordUs={diagnostics.CpuFxaaRecordMicroseconds}, " +
+            $"smaaEdgeUs={diagnostics.CpuSmaaEdgeRecordMicroseconds}, smaaBlendUs={diagnostics.CpuSmaaBlendRecordMicroseconds}, " +
+            $"smaaNeighborhoodUs={diagnostics.CpuSmaaNeighborhoodRecordMicroseconds}, jitter={diagnostics.JitterEnabled}:{diagnostics.JitterX:F6},{diagnostics.JitterY:F6}.");
+        Console.WriteLine(
+            $"Frame diagnostics environment: enabled={diagnostics.EnvironmentEnabled}, source={diagnostics.EnvironmentSourceKind}, " +
+            $"fallback={diagnostics.EnvironmentUsesFallback}, path='{diagnostics.EnvironmentSourcePath}', sky={diagnostics.SkyIntensity:F2}, " +
+            $"diffuse={diagnostics.DiffuseIblIntensity:F2}, specular={diagnostics.SpecularIblIntensity:F2}, " +
+            $"env={diagnostics.EnvironmentCubemapSize}, irradiance={diagnostics.IrradianceCubemapSize}, " +
+            $"prefilter={diagnostics.PrefilteredEnvironmentSize} mips={diagnostics.PrefilteredEnvironmentMipCount}, " +
+            $"brdf={diagnostics.BrdfLutSize}, debug={diagnostics.EnvironmentDebugView}, " +
+            $"textureMiB={diagnostics.EnvironmentTextureBytes / (1024.0 * 1024.0):F1}.");
+        Console.WriteLine(
+            $"Frame diagnostics reflections: enabled={diagnostics.ReflectionsEnabled}, mode={diagnostics.ReflectionMode}, " +
+            $"probes={diagnostics.ReflectionProbeCount}/{diagnostics.ReflectionProbeCapacity}, resolution={diagnostics.ReflectionProbeResolution}, " +
+            $"mips={diagnostics.ReflectionProbeMipCount}, maxPerPixel={diagnostics.MaxReflectionProbesPerPixel}, " +
+            $"estimatedMiB={diagnostics.ReflectionProbeEstimatedBytes / (1024.0 * 1024.0):F1}, debug={diagnostics.ReflectionDebugView}, " +
+            $"capturesQueued={diagnostics.ReflectionProbeCapturesQueued}, capturesCompleted={diagnostics.ReflectionProbeCapturesCompleted}, " +
+            $"uploadUs={diagnostics.CpuReflectionProbeUploadMicroseconds}, captureRecordUs={diagnostics.CpuReflectionProbeCaptureRecordMicroseconds}, " +
+            $"prefilterRecordUs={diagnostics.CpuReflectionProbePrefilterRecordMicroseconds}.");
+        Console.WriteLine(
+            $"Frame diagnostics culling: objectCandidatesCpu={diagnostics.ObjectCandidatesCpu}, objectFrustumCulledCpu={diagnostics.ObjectFrustumCulledCpu}, " +
+            $"meshletCandidatesCpu={diagnostics.MeshletCandidatesCpu}, meshletFrustumCulledCpu={diagnostics.MeshletFrustumCulledCpu}, " +
+            $"meshletLodSkippedCpu={diagnostics.MeshletLodSkippedCpu}, lod0Submitted={diagnostics.MeshletLod0SubmittedCpu}, " +
+            $"lod1Submitted={diagnostics.MeshletLod1SubmittedCpu}, lod2Submitted={diagnostics.MeshletLod2SubmittedCpu}, " +
+            $"gpuMeshletCounters={diagnostics.GpuMeshletCountersStatus}, " +
+            $"depthTasks={diagnostics.DepthTaskInvocations}, depthFrustumCulledGpu={diagnostics.DepthFrustumCulledMeshletsGpu}, depthEmitted={diagnostics.DepthEmittedMeshletsGpu}, " +
+            $"forwardTasks={diagnostics.ForwardTaskInvocations}, forwardFrustumCulledGpu={diagnostics.ForwardFrustumCulledMeshletsGpu}, " +
+            $"occlusionTested={diagnostics.ForwardOcclusionTestedMeshletsGpu}, occlusionCulled={diagnostics.OcclusionCulledMeshlets}, forwardEmitted={diagnostics.ForwardEmittedMeshletsGpu}.");
+        Console.WriteLine(
+            $"Frame diagnostics scene submission: mode={diagnostics.SceneSubmissionActiveMode}, forwardPath={diagnostics.SceneSubmissionForwardPath}, taskShader={diagnostics.SceneSubmissionForwardTaskShader}, cpuCandidates={diagnostics.SceneSubmissionCpuCandidateCount}, " +
+            $"gpuEmitted={diagnostics.SceneSubmissionGpuEmittedCount}, indirectTasks={diagnostics.SceneSubmissionIndirectTaskCount}, " +
+            $"forwardBuckets={diagnostics.ForwardSimpleMeshletCount}/{diagnostics.ForwardFullMaterialMeshletCount}/{diagnostics.ForwardLocalProbeMeshletCount}, " +
+            $"fallback='{diagnostics.SceneSubmissionFallbackReason}', compactionSkip='{diagnostics.SceneSubmissionCompactionSkipReason}', indirectSkip='{diagnostics.SceneSubmissionIndirectDispatchSkipReason}', " +
+            $"gpuSettings={diagnostics.SceneSubmissionGpuCompactionEnabled}/{diagnostics.SceneSubmissionGpuLodSelectionEnabled}/{diagnostics.SceneSubmissionGpuShadowCompactionEnabled}, " +
+            $"gpuCandidates={diagnostics.SceneSubmissionGpuOpaqueCandidateCount}, gpuRejected={diagnostics.SceneSubmissionGpuOpaqueFrustumRejectedCount}, gpuOverflow={diagnostics.SceneSubmissionGpuOpaqueOverflowCount}, " +
+            $"gpuLod={diagnostics.SceneSubmissionGpuLod0EmittedCount}/{diagnostics.SceneSubmissionGpuLod1EmittedCount}/{diagnostics.SceneSubmissionGpuLod2EmittedCount}, " +
+            $"gpuDepth={diagnostics.SceneSubmissionGpuCompactedSolidDepthMeshletCount}/{diagnostics.SceneSubmissionGpuCompactedMaskedDepthMeshletCount}, depthOverflow={diagnostics.SceneSubmissionGpuDepthOverflowCount}, " +
+            $"gpuDirShadow={diagnostics.SceneSubmissionGpuCompactedDirectionalShadowMeshletCount}/{diagnostics.SceneSubmissionGpuDirectionalShadowCandidateCount}, dirShadowOverflow={diagnostics.SceneSubmissionGpuDirectionalShadowOverflowCount}, " +
+            $"validation='{diagnostics.SceneSubmissionValidationStatus}', validationCounts={diagnostics.SceneSubmissionValidationCpuOpaqueCount}/{diagnostics.SceneSubmissionValidationGpuOpaqueCount}, " +
+            $"validationMismatches={diagnostics.SceneSubmissionValidationMismatchCount}, " +
+            $"compactedBytes={diagnostics.SceneSubmissionOpaqueCompactedMeshletDrawBufferSize}, depthCompactedBytes={diagnostics.SceneSubmissionSolidDepthCompactedMeshletDrawBufferSize}/{diagnostics.SceneSubmissionMaskedDepthCompactedMeshletDrawBufferSize}, shadowCompactedBytes={diagnostics.SceneSubmissionDirectionalShadowCompactedMeshletDrawBufferSize}, counterBytes={diagnostics.SceneSubmissionCounterBufferSize}, " +
+            $"indirectBytes={diagnostics.SceneSubmissionOpaqueIndirectDispatchBufferSize}.");
+        Console.WriteLine(
+            $"Frame diagnostics meshlets/uploads: totalMeshlets={diagnostics.MeshletCountTotal}, submittedCpu={diagnostics.MeshletCountSubmittedCpu}, " +
+            $"avgTris={diagnostics.AvgTrianglesPerSubmittedMeshlet:F1}, avgVerts={diagnostics.AvgVerticesPerSubmittedMeshlet:F1}, " +
+            $"under16Tris={diagnostics.SmallMeshletsUnder16Triangles}, under32Tris={diagnostics.SmallMeshletsUnder32Triangles}, " +
+            $"uploadedBytes={diagnostics.UploadedBytes}, objectBytes={diagnostics.ObjectUploadBytes}, instanceBytes={diagnostics.InstanceUploadBytes}, " +
+            $"meshletDrawBytes={diagnostics.MeshletDrawUploadBytes}, transparentMeshletDrawBytes={diagnostics.TransparentMeshletDrawUploadBytes}, " +
+            $"stableSceneInputUploadBytes={diagnostics.StableSceneInputUploadBytes}, cpuCandidateListUploadBytes={diagnostics.CpuCandidateListUploadBytes}, " +
+            $"cameraRebuiltCpuLists={diagnostics.CameraDrivenCpuDrawListRebuilt}, " +
+            $"materialBytes={diagnostics.MaterialUploadBytes}, materialExtensionBytes={diagnostics.MaterialExtensionUploadBytes}, materialExtensions={diagnostics.MaterialExtensionDataCount}, " +
+            $"materialDebug={diagnostics.MaterialDebugView}, lightBytes={diagnostics.LightUploadBytes}, uploads={diagnostics.SceneUploadCount}, uploadSkipped={diagnostics.SceneUploadSkipped}.");
+        Console.WriteLine(
+            $"Frame diagnostics assets: loadedFileTextures={diagnostics.LoadedFileTextureCount}, mipFallbacks={diagnostics.MipmapFallbackCount}, " +
+            $"downscaledTextures={diagnostics.DownscaledTextureCount}, maxTextureDim={diagnostics.MaxLoadedTextureDimension}, " +
+            $"estimatedTextureMiB={diagnostics.EstimatedTextureBytes / (1024.0 * 1024.0):F1}, " +
+            $"model='{diagnostics.LoadedModelName}', modelObjects={diagnostics.ModelRenderObjectCount}, registeredMeshes={diagnostics.RegisteredMeshCount}, " +
+            $"modelMaterials={diagnostics.LoadedMaterialCount}, modelTextures={diagnostics.LoadedTextureCount}, defaultWhite={diagnostics.DefaultWhiteSubstitutions}, " +
+            $"defaultNormal={diagnostics.DefaultNormalSubstitutions}, defaultBlack={diagnostics.DefaultBlackSubstitutions}.");
+    }
+
+    private static void PrintGiDiagnostics(RendererDiagnostics diagnostics)
+    {
+        Console.WriteLine(
+            $"Frame diagnostics GI: enabled={diagnostics.GlobalIlluminationEnabled}, mode={diagnostics.GlobalIlluminationMode}, debug={diagnostics.GlobalIlluminationDebugView}, " +
+            $"rayQuerySupported={diagnostics.GlobalIlluminationRayQuerySupported}, rayQueryActive={diagnostics.GlobalIlluminationRayQueryActive}, " +
+            $"ssgi={diagnostics.SsgiWidth}x{diagnostics.SsgiHeight}, ssgiScale={diagnostics.SsgiResolutionScale:F2}, ssgiRays={diagnostics.SsgiRayCount}, " +
+            $"history={diagnostics.SsgiHistoryValid}, rejected={diagnostics.SsgiRejectedHistoryPixelCount}, " +
+            $"ddgiVolumes={diagnostics.DdgiProbeVolumeCount}, ddgiProbes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount}, " +
+            $"ddgiUpdated={diagnostics.DdgiProbesUpdated}, ddgiRays={diagnostics.DdgiRaysPerProbe}, relocation={diagnostics.DdgiProbeRelocationCount}, " +
+            $"simpleState active/probes/updated/recenter/preserve/clear/fresh={diagnostics.SimpleDdgiActive}/{diagnostics.SimpleDdgiProbeCount}/{diagnostics.SimpleDdgiProbesUpdated}/" +
+            $"{diagnostics.SimpleDdgiRecentered}/{diagnostics.SimpleDdgiAtlasPreservedOnRecenter}/{diagnostics.SimpleDdgiAtlasCleared}/{diagnostics.SimpleDdgiAtlasFresh}, " +
+            $"updateExec={diagnostics.DdgiUpdateExecuted}:'{diagnostics.DdgiUpdateSkipReason}', publishExec={diagnostics.DdgiPublishExecuted}:'{diagnostics.DdgiPublishSkipReason}', " +
+            $"cacheGeneration={diagnostics.DdgiCacheGeneration}, cacheFrame={diagnostics.DdgiLastUpdatedFrameSerial}, cacheWarmup={diagnostics.DdgiCacheWarmupState}, cacheLatencyFrames={diagnostics.DdgiPublishedCacheLatencyFrames}, " +
+            $"gatherFallback={diagnostics.DdgiGatherFallbackTileCount}, forwardFallback={diagnostics.DdgiForwardGatherFallbackUsed}/{diagnostics.DdgiForwardGatherFallbackDisabled}, emptyTiles={diagnostics.DdgiForwardGatherTileEmpty}, " +
+            $"gatherFractions local/clipmap/fallback={diagnostics.DdgiGatherSelectedLocalTileFraction:F3}/{diagnostics.DdgiGatherSelectedClipmapTileFraction:F3}/{diagnostics.DdgiGatherFallbackTileFraction:F3}, " +
+            $"ddgiClipmapCoverage attempts/ok/fail/avgEdgeFade/avgBlend=" +
+            $"{diagnostics.DdgiClipmapInfoPrimaryAttemptCount}/{diagnostics.DdgiClipmapInfoPrimaryOkCount}/{diagnostics.DdgiClipmapInfoPrimaryFailedCount}/" +
+            $"{diagnostics.DdgiClipmapInfoPrimaryEdgeFadeAverage:F3}/{diagnostics.DdgiClipmapInfoPrimaryBlendWeightAverage:F3}, " +
+            $"ddgiEstimate spatial/support/data/visibility/leak/effective/sampledIrrLum/ddgiDiffuseLum/hybridFinalLum/fallbackWeight/ownership/reloc/inactive=" +
+            $"{diagnostics.DdgiAverageSpatialCoverageEstimate:F3}/{diagnostics.DdgiAverageSupportCoverageEstimate:F3}/{diagnostics.DdgiAverageDataConfidenceEstimate:F3}/" +
+            $"{diagnostics.DdgiAverageVisibilityConfidenceEstimate:F3}/{diagnostics.DdgiAverageLeakAttenuationEstimate:F3}/{diagnostics.DdgiAverageEffectiveContributionEstimate:F3}/" +
+            $"{diagnostics.DdgiForwardEstimateSampledIrradianceLuminance:F5}/{diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F5}/{diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F5}/{diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight:F3}/{diagnostics.DdgiAverageOwnershipConsumedEstimate:F3}/" +
+            $"{diagnostics.DdgiAverageRelocationFractionEstimate:F3}/{diagnostics.DdgiClassifiedInactiveProbeCountEstimate}, " +
+            $"ddgiSampledProbeUse currentFrustum/sideRear/staleAge={diagnostics.DdgiSampledProbeCurrentFrustumCount}/{diagnostics.DdgiSampledProbeSideRearCount}/{diagnostics.DdgiSampledProbeStaleAgeCount}, " +
+            $"ddgiSupportReject inactive/zeroAlpha/lowQuality={diagnostics.DdgiSupportRejectedInactiveCount}/{diagnostics.DdgiSupportRejectedZeroIrradianceAlphaCount}/{diagnostics.DdgiSupportRejectedLowQualityCount}, " +
+            $"ddgiFastGather attempt/accepted/reject spatial/support/data/ownership={diagnostics.DdgiFastGatherAttemptCount}/{diagnostics.DdgiFastGatherAcceptedCount}/{diagnostics.DdgiFastGatherRejectedZeroSpatialCount}/{diagnostics.DdgiFastGatherRejectedZeroSupportCount}/{diagnostics.DdgiFastGatherRejectedZeroDataCount}/{diagnostics.DdgiFastGatherRejectedZeroOwnershipCount}, " +
+            $"ddgiShaderFallback attempt/accepted/empty={diagnostics.DdgiShaderGatherFallbackAttemptCount}/{diagnostics.DdgiShaderGatherFallbackAcceptedCount}/{diagnostics.DdgiShaderGatherFallbackEmptyCount}, " +
+            $"ddgiTrace diagSamples/hit/miss/rayLum/directLum/directNoShadowLum/emissiveLum/stableLum/skyLum/zeroDirect/directHit=" +
+            $"{diagnostics.DdgiTraceEnergySampleCount}/{diagnostics.DdgiTraceEnergyHitCount}/{diagnostics.DdgiTraceEnergyMissCount}/" +
+            $"{diagnostics.DdgiTraceEnergyRayLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectNoShadowLuminanceAverage:F5}/" +
+            $"{diagnostics.DdgiTraceEnergyEmissiveLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyStableLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergySkyLuminanceAverage:F5}/" +
+            $"{diagnostics.DdgiTraceEnergyHitZeroDirectCount}/{diagnostics.DdgiTraceEnergyHitWithDirectCount}, " +
+            $"ddgiLight selectedDir/local/visibility/skippedLocal={diagnostics.DdgiSelectedDirectionalHitCount}/{diagnostics.DdgiSelectedLocalHitCount}/{diagnostics.DdgiVisibilityRayCount}/{diagnostics.DdgiSkippedLocalLightCount}, " +
+            $"ddgiBlend diagSamples/irrLum/conf/lowConf/nonzero/nonfinite/firefly=" +
+            $"{diagnostics.DdgiBlendEnergySampleCount}/{diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage:F5}/{diagnostics.DdgiBlendEnergyConfidenceAverage:F3}/" +
+            $"{diagnostics.DdgiBlendEnergyLowConfidenceCount}/{diagnostics.DdgiBlendEnergyNonzeroIrradianceCount}/{diagnostics.DdgiBlendEnergyNonFiniteIrradianceCount}/{diagnostics.DdgiBlendEnergyFireflySuppressedCount}, " +
+            $"ddgiProbeConfidence alpha/qx/qy/qz={diagnostics.DdgiProbeIrradianceAlphaAverage:F3}/{diagnostics.DdgiProbeQualityXAverage:F3}/{diagnostics.DdgiProbeQualityYAverage:F3}/{diagnostics.DdgiProbeQualityZAverage:F3}, " +
+            $"warmup={diagnostics.DdgiWarmupState}:{diagnostics.DdgiWarmedVisibleProbeFraction:F3}/{diagnostics.DdgiWarmedLocalProbeFraction:F3}/{diagnostics.DdgiWarmedCascade0ProbeFraction:F3}, " +
+            $"volumeDesign={FormatDdgiVolumeDesignSummary(diagnostics)}, " +
+            $"classification={diagnostics.DdgiProbeClassificationCount}, cpuSsgiUs={diagnostics.CpuSsgiRecordMicroseconds}, cpuDdgiUs={diagnostics.CpuDdgiRecordMicroseconds}, " +
+            $"gpuSsgiUs={diagnostics.GpuSsgiTraceMicroseconds + diagnostics.GpuSsgiTemporalMicroseconds + diagnostics.GpuSsgiDenoiseMicroseconds}, " +
+            $"gpuDdgiUs={diagnostics.GpuDdgiUpdateMicroseconds}, bytes={diagnostics.GlobalIlluminationRenderTargetBytes + diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes + diagnostics.AccelerationStructureBytes}.");
+    }
+
+    private static void PrintDdgiSchedulerDiagnostics(RendererDiagnostics diagnostics)
+    {
+        Console.WriteLine(
+            $"Frame diagnostics DDGI scheduler: mode={diagnostics.DdgiSchedulerMode}, considered={diagnostics.DdgiGpuSchedulerConsideredProbeCount}, " +
+            $"requestBudget={diagnostics.DdgiScheduledRequestBudget}, primaryRayBudget={diagnostics.DdgiScheduledPrimaryRayBudget}, " +
+            $"ddgiDispatchCapacity={diagnostics.DdgiGpuSchedulerPredictedRequestUpperBound}, ddgiActualRequests={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerActualRequestCount)}, " +
+            $"ddgiActualPrimaryRays={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerActualPrimaryRayCount)}, " +
+            $"scanFull={diagnostics.DdgiGpuSchedulerFullScan}, candidateOutput={diagnostics.DdgiGpuSchedulerCandidateOutputCapacity}, " +
+            $"candidates={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerCandidateCount)}, requests={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerRequestCount)}, primaryRays={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerPrimaryRayCount)}, " +
+            $"priority={diagnostics.DdgiGpuSchedulerPriority0RequestCount}/{diagnostics.DdgiGpuSchedulerPriority1RequestCount}/{diagnostics.DdgiGpuSchedulerPriority2RequestCount}/{diagnostics.DdgiGpuSchedulerPriority3RequestCount}, priorityMismatchSkip={diagnostics.DdgiGpuSchedulerPriorityBucketMismatchSkipCount}, " +
+            $"rejected request/primary/duplicate/invalid={diagnostics.DdgiGpuSchedulerRequestBudgetRejectedCount}/{diagnostics.DdgiGpuSchedulerPrimaryRayBudgetRejectedCount}/{diagnostics.DdgiGpuSchedulerDuplicateRequestCount}/{diagnostics.DdgiGpuSchedulerInvalidProbeCount}, " +
+            $"candidateDrop buffer/bucketCap/total={diagnostics.DdgiGpuSchedulerCandidateBufferOverflowCount}/{diagnostics.DdgiGpuSchedulerPerBucketOverflowCount}/{diagnostics.DdgiGpuSchedulerOverflowCount}, saturated request/ray={diagnostics.DdgiGpuSchedulerRequestBudgetSaturated}/{diagnostics.DdgiGpuSchedulerPrimaryRayBudgetSaturated}, " +
+            $"reasons dirty/visible/safety/age/variance/confidence/stable={diagnostics.DdgiGpuSchedulerDirtyRegionCount}/{diagnostics.DdgiGpuSchedulerVisibleFrustumCandidateCount}/" +
+            $"{diagnostics.DdgiGpuSchedulerSafetyShellCandidateCount}/{diagnostics.DdgiGpuSchedulerAgeRefreshCandidateCount}/{diagnostics.DdgiGpuSchedulerHighVarianceCandidateCount}/" +
+            $"{diagnostics.DdgiGpuSchedulerLowConfidenceCandidateCount}/{diagnostics.DdgiGpuSchedulerStableSkippedCount}, readback={FormatReadbackStatus(diagnostics)}, " +
+            $"validation={diagnostics.DdgiGpuSchedulerValidationStatus}:{diagnostics.DdgiGpuSchedulerValidationMismatchCount}, fallback={diagnostics.DdgiGpuSchedulerFallbackActive}:'{diagnostics.DdgiGpuSchedulerFallbackReason}', " +
+            $"schedulerReinit={diagnostics.DdgiGpuSchedulerResourceReinitializationCount}/{diagnostics.DdgiGpuSchedulerTotalResourceReinitializationCount}, " +
+            $"scheduleUs={diagnostics.GpuDdgiScheduleMicroseconds}, scheduleWindowP95Us={diagnostics.GpuDdgiScheduleP95Microseconds}, scheduleOverBudget={diagnostics.GpuDdgiScheduleOverBudget}, " +
+            $"scheduleStages reset/score/prefix/compact/finalize/readback/barrier={diagnostics.GpuDdgiScheduleResetMicroseconds}/{diagnostics.GpuDdgiScheduleScoreMicroseconds}/" +
+            $"{diagnostics.GpuDdgiSchedulePrefixMicroseconds}/{diagnostics.GpuDdgiScheduleCompactMicroseconds}/{diagnostics.GpuDdgiScheduleFinalizeMicroseconds}/" +
+            $"{diagnostics.GpuDdgiScheduleReadbackMicroseconds}/{diagnostics.GpuDdgiScheduleBarrierMicroseconds}.");
+    }
+
+    private static void PrintDdgiInvestigationDiagnostics(RendererDiagnostics diagnostics)
+    {
+        Console.WriteLine(
+            $"Frame diagnostics DDGI investigation: " +
+            $"simpleEvents recenter/clear/preserve/framesSinceClear/framesSinceRecenter={diagnostics.SimpleDdgiRecenterCount}/{diagnostics.SimpleDdgiAtlasClearCount}/{diagnostics.SimpleDdgiAtlasPreserveOnRecenterCount}/{diagnostics.SimpleDdgiFramesSinceLastClear}/{diagnostics.SimpleDdgiFramesSinceLastRecenter}, " +
+            $"simpleForward fresh/zero/nonzero/avgIrrLum/avgVisibility/lowVisibility={diagnostics.SimpleDdgiFreshAtlasForwardSampleCount}/{diagnostics.SimpleDdgiZeroIrradianceSampleCount}/{diagnostics.SimpleDdgiNonzeroIrradianceSampleCount}/{diagnostics.SimpleDdgiAverageSampledIrradianceLuminance:F5}/{diagnostics.SimpleDdgiAverageVisibility:F3}/{diagnostics.SimpleDdgiLowVisibilitySampleCount}, " +
+            $"simpleGather primary/second/rate={diagnostics.SimpleDdgiGatherSampleCount}/{diagnostics.SimpleDdgiSecondVolumeGatherCount}/{FormatSimpleDdgiSecondVolumeGatherRate(diagnostics)}, " +
+            $"updateFrames full/partial/updatedFraction/start/end/skipped={diagnostics.DdgiFullRefreshFrameCount}/{diagnostics.DdgiPartialRefreshFrameCount}/{diagnostics.DdgiUpdatedProbeFraction:F3}/{diagnostics.DdgiProbeUpdateStartIndex}/{diagnostics.DdgiProbeUpdateEndIndex}/{diagnostics.DdgiSkippedProbeCount}, " +
+            $"probeAge p50/p95/max={diagnostics.DdgiFramesSinceProbeUpdatedP50:F1}/{diagnostics.DdgiFramesSinceProbeUpdatedP95:F1}/{diagnostics.DdgiFramesSinceProbeUpdatedMax:F1}, " +
+            $"invalidated={diagnostics.DdgiNewlyInvalidatedProbeCount}, reasons recenter/dirty/age/visibility/full={diagnostics.DdgiRefreshReasonRecenterProbeCount}/{diagnostics.DdgiRefreshReasonDirtyProbeCount}/{diagnostics.DdgiRefreshReasonAgeProbeCount}/{diagnostics.DdgiRefreshReasonVisibilityProbeCount}/{diagnostics.DdgiRefreshReasonFullRefreshProbeCount}, " +
+            $"forward simple/legacy/zeroFinal/zeroDdgiIbl/zeroDdgiNoIbl/outOfGrid/clamped/nonfinite={diagnostics.DdgiForwardSimplePathSampleCount}/{diagnostics.DdgiForwardLegacyPathSampleCount}/{diagnostics.DdgiForwardZeroFinalIndirectCount}/{diagnostics.DdgiForwardZeroDdgiButNonzeroIblCount}/{diagnostics.DdgiForwardZeroDdgiAndZeroIblCount}/{diagnostics.DdgiForwardOutOfGridSampleCount}/{diagnostics.DdgiForwardClampedProbeSampleCount}/{diagnostics.DdgiForwardNanOrInfSampleCount}, " +
+            $"atlas zeroIrrTexel/zeroVisMoment/writeProbe/writeTexel/zeroRayWeight/nonzeroIrr/prevAtlas/hystZero={diagnostics.DdgiIrradianceAtlasZeroTexelSampleCount}/{diagnostics.DdgiVisibilityAtlasZeroMomentSampleCount}/{diagnostics.DdgiAtlasWriteProbeCount}/{diagnostics.DdgiAtlasWriteTexelCount}/{diagnostics.DdgiBlendZeroRayWeightProbeCount}/{diagnostics.DdgiBlendNonzeroIrradianceProbeCount}/{diagnostics.DdgiBlendPreviousAtlasUsedCount}/{diagnostics.DdgiBlendHysteresisZeroFrameCount}, " +
+            $"trace hit/miss/zeroRadiance/direct/emissive/farHit/farMiss/tlasUnavailable={diagnostics.DdgiSimpleTraceHitCount}/{diagnostics.DdgiSimpleTraceMissCount}/{diagnostics.DdgiSimpleTraceZeroRadianceHitCount}/{diagnostics.DdgiSimpleTraceDirectLightHitCount}/{diagnostics.DdgiSimpleTraceEmissiveHitCount}/{diagnostics.DdgiSimpleTraceFarFieldHitCount}/{diagnostics.DdgiSimpleTraceFarFieldMissCount}/{diagnostics.DdgiSimpleTraceTlasUnavailableFrameCount}, " +
+            $"simpleFar skySamples/avg/farSun/occluded/roughSpec/nonzero={diagnostics.SimpleDdgiSkyVisibilitySampleCount}/{diagnostics.SimpleDdgiAverageSkyVisibility:F3}/{diagnostics.FarFieldSunShadowSampleCount}/{diagnostics.FarFieldSunShadowOccludedCount}/{diagnostics.SimpleDdgiRoughSpecularSampleCount}/{diagnostics.SimpleDdgiRoughSpecularNonzeroCount}, " +
+            $"farSteps<=4/<=8/<=16/<=32/>32={diagnostics.DdgiSimpleTraceFarFieldStepBucket0Count}/{diagnostics.DdgiSimpleTraceFarFieldStepBucket1Count}/{diagnostics.DdgiSimpleTraceFarFieldStepBucket2Count}/{diagnostics.DdgiSimpleTraceFarFieldStepBucket3Count}/{diagnostics.DdgiSimpleTraceFarFieldStepBucket4Count}, " +
+            $"black suspect/afterRecenter/afterClear/duringFresh/movement={diagnostics.DdgiBlackFrameSuspect}/{diagnostics.DdgiBlackFrameAfterRecenter}/{diagnostics.DdgiBlackFrameAfterAtlasClear}/{diagnostics.DdgiBlackFrameDuringFreshAtlas}/{diagnostics.DdgiBlackFrameMovementClass}.");
+    }
+
+    private static void PrintDdgiUpdateDiagnostics(RendererDiagnostics diagnostics)
+    {
+        Console.WriteLine(
+            $"Frame diagnostics DDGI update: traceDispatchGroups={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceDispatchGroupCount)}, " +
+            $"traceProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceProbeCount)}, " +
+            $"earlyOutDisabled={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutDisabledCount)}, earlyOutBeyondRequestCount={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutBeyondRequestCount)}, " +
+            $"earlyOutResolveBounds={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutResolveBoundsCount)}, earlyOutResolveProbeRange={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutResolveProbeRangeCount)}, " +
+            $"earlyOutResolveClipmapCell={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutResolveClipmapCellCount)}, earlyOutResolveClipmapRing={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutResolveClipmapRingCount)}, " +
+            $"ringMismatchCorrected={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceRingMismatchCorrectedCount)}, " +
+            $"ringMismatchSample='{FormatDdgiRingMismatchSample(diagnostics)}', " +
+            $"traceRayCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceRayCount)}, " +
+            $"blendProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiBlendProbeCount)}, relocateClassifyProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiRelocateClassifyProbeCount)}, " +
+            $"publishProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiPublishProbeCount)}.");
+    }
+
+    private static void PrintDdgiTriageDiagnostics(RendererDiagnostics diagnostics)
+    {
+        string state = ClassifyDdgiState(diagnostics);
+        (string severity, string reason, string next) = DescribeDdgiTriageState(state);
+        Console.WriteLine(
+            $"DDGI TRIAGE: state={state} severity={severity} reason='{reason}' next='{next}'");
+        Console.WriteLine(
+            $"DDGI TRIAGE VALUES: volumes={diagnostics.DdgiProbeVolumeCount} probes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount} " +
+            $"updated={diagnostics.DdgiProbesUpdated} cache={diagnostics.DdgiCacheGeneration}:{diagnostics.DdgiCacheWarmupState} " +
+            $"gather={diagnostics.DdgiGatherSelectedLocalTileFraction:F3}/{diagnostics.DdgiGatherSelectedClipmapTileFraction:F3}/{diagnostics.DdgiGatherFallbackTileFraction:F3} " +
+            $"fallback={diagnostics.DdgiForwardGatherFallbackUsed}/{diagnostics.DdgiForwardGatherFallbackDisabled} " +
+            $"fast={diagnostics.DdgiFastGatherAttemptCount}/{diagnostics.DdgiFastGatherAcceptedCount} " +
+            $"shaderFallback={diagnostics.DdgiShaderGatherFallbackAttemptCount}/{diagnostics.DdgiShaderGatherFallbackAcceptedCount}/{diagnostics.DdgiShaderGatherFallbackEmptyCount} " +
+            $"samples={diagnostics.DdgiForwardEstimateSampleCount}/{diagnostics.DdgiProbeQualitySampleCount} " +
+            $"trace={diagnostics.DdgiTraceEnergySampleCount}/{diagnostics.DdgiTraceEnergyHitCount}/{diagnostics.DdgiTraceEnergyMissCount}/{diagnostics.DdgiTraceEnergyRayLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectNoShadowLuminanceAverage:F5} " +
+            $"forwardEnergy sampledIrr/ddgiDiffuse/hybrid/fallbackWeight={diagnostics.DdgiForwardEstimateSampledIrradianceLuminance:F5}/{diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F5}/{diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F5}/{diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight:F3} " +
+            $"blend={diagnostics.DdgiBlendEnergySampleCount}/{diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage:F5}/{diagnostics.DdgiBlendEnergyConfidenceAverage:F3}/{diagnostics.DdgiBlendEnergyNonFiniteIrradianceCount}/{diagnostics.DdgiBlendEnergyFireflySuppressedCount} " +
+            $"support/data/effective={diagnostics.DdgiAverageSupportCoverageEstimate:F3}/{diagnostics.DdgiAverageDataConfidenceEstimate:F3}/{diagnostics.DdgiAverageEffectiveContributionEstimate:F3} " +
+            $"alpha/q={diagnostics.DdgiProbeIrradianceAlphaAverage:F3}/{diagnostics.DdgiProbeQualityXAverage:F3}/{diagnostics.DdgiProbeQualityYAverage:F3}/{diagnostics.DdgiProbeQualityZAverage:F3} " +
+            $"inactive={diagnostics.DdgiClassifiedInactiveProbeCountEstimate}");
+    }
+
+    private static string ClassifyDdgiState(RendererDiagnostics d)
+    {
+        if (d.GlobalIlluminationEnabled == 0 || d.GlobalIlluminationMode == GlobalIlluminationMode.Disabled)
+            return "Disabled";
+
+        if (d.GlobalIlluminationMode == GlobalIlluminationMode.Ddgi &&
+            d.GlobalIlluminationRayQueryActive == 0)
+            return "RayQueryInactive";
+
+        if (d.DdgiProbeVolumeCount <= 0 || d.DdgiActiveProbeCount <= 0)
+            return "NoVolumesOrProbes";
+
+        if (d.DdgiUpdateExecuted == 0 || d.DdgiProbesUpdated <= 0)
+            return "NoProbeUpdates";
+
+        bool fastGatherOnly =
+            d.DdgiGatherSelectedClipmapTileFraction > 0.95f &&
+            d.DdgiGatherFallbackTileFraction < 0.001f &&
+            d.DdgiForwardGatherFallbackUsed == 0 &&
+            d.DdgiForwardGatherFallbackDisabled == 0;
+
+        bool fastGatherMeasured =
+            d.DdgiFastGatherAttemptCount > 0 ||
+            d.DdgiShaderGatherFallbackAttemptCount > 0;
+        bool fullForwardEstimateMeasured = d.DdgiForwardEstimateSampleCount > 0;
+        bool probeQualityMeasured = d.DdgiProbeQualitySampleCount > 0;
+
+        bool noForwardContribution =
+            d.DdgiAverageSupportCoverageEstimate <= 0.0001f &&
+            d.DdgiAverageDataConfidenceEstimate <= 0.0001f &&
+            d.DdgiAverageEffectiveContributionEstimate <= 0.0001f &&
+            d.DdgiForwardEstimateRawDiffuseLuminance <= 0.0001f &&
+            d.DdgiForwardEstimateFinalDiffuseLuminance <= 0.0001f;
+
+        if (d.DdgiFastGatherAcceptedCount > 0 && !fullForwardEstimateMeasured)
+            return "FastGatherAcceptedEstimateUnmeasured";
+
+        if (fastGatherOnly && noForwardContribution && !fastGatherMeasured)
+            return "FastGatherUnmeasured";
+
+        if (fastGatherOnly && noForwardContribution && fullForwardEstimateMeasured)
+            return "FastGatherBlackHole";
+
+        if (d.DdgiShaderGatherFallbackAttemptCount > 0 &&
+            d.DdgiShaderGatherFallbackAcceptedCount == 0 &&
+            noForwardContribution)
+            return "ShaderFallbackEmpty";
+
+        bool noProbeQuality =
+            d.DdgiProbeIrradianceAlphaAverage <= 0.0001f &&
+            d.DdgiProbeQualityXAverage <= 0.0001f &&
+            d.DdgiProbeQualityYAverage <= 0.0001f &&
+            d.DdgiProbeQualityZAverage <= 0.0001f;
+
+        if (noProbeQuality && probeQualityMeasured && d.DdgiCacheGeneration > 0)
+            return "ProbeQualityZero";
+
+        if (d.DdgiClassifiedInactiveProbeCountEstimate > 0 &&
+            d.DdgiAverageSupportCoverageEstimate <= 0.0001f)
+            return "ClassificationOrActiveStateSuppressed";
+
+        if (d.DdgiAverageSpatialCoverageEstimate > 0.0f &&
+            d.DdgiAverageSupportCoverageEstimate <= 0.0001f)
+            return "SpatialCoverageWithoutSupport";
+
+        if (d.DdgiAverageEffectiveContributionEstimate > 0.0f ||
+            d.DdgiForwardEstimateFinalDiffuseLuminance > 0.0f)
+            return "Contributing";
+
+        return "UnknownZeroContribution";
+    }
+
+    private static (string Severity, string Reason, string Next) DescribeDdgiTriageState(string state)
+    {
+        return state switch
+        {
+            "Disabled" => ("Gray", "GI is disabled or not in an active GI mode", "enable DDGI render settings"),
+            "RayQueryInactive" => ("Red", "DDGI mode is selected but ray queries are inactive", "device feature and GI ray-query setup"),
+            "NoVolumesOrProbes" => ("Red", "DDGI has no active volumes or probes", "scene DDGI volume creation"),
+            "NoProbeUpdates" => ("Red", "DDGI probes exist but no probe update executed", "DDGI scheduler and update skip reason"),
+            "FastGatherUnmeasured" => ("Amber", "clipmap tiles are selected but fast gather counters were not collected", "enable gather debug or forward estimate counters"),
+            "FastGatherAcceptedEstimateUnmeasured" => ("Amber", "fast gather accepts samples but full forward estimate counters were not collected", "enable forward estimate counters for contribution averages"),
+            "FastGatherBlackHole" => ("Red", "clipmap tiles selected but forward support/data/effective all zero and fallback unused", "shader fast-gather acceptance fallback"),
+            "ShaderFallbackEmpty" => ("Red", "shader fallback ran but found no usable DDGI sample", "probe atlas quality and volume sample addressing"),
+            "ProbeQualityZero" => ("Red", "probe cache exists but irradiance alpha and quality averages are zero", "probe publish atlas quality data"),
+            "ClassificationOrActiveStateSuppressed" => ("Amber", "inactive probe classification is present while support is zero", "probe classification and active-state upload"),
+            "SpatialCoverageWithoutSupport" => ("Amber", "pixels have spatial DDGI coverage but no accepted support", "support acceptance thresholds"),
+            "Contributing" => ("Green", "DDGI has measurable effective or final forward contribution", "compare visual output against expected lighting"),
+            _ => ("Amber", "DDGI reached zero contribution without a more specific classifier", "inspect GI/DDGI diagnostics below")
+        };
+    }
+
+    private static string FormatDdgiVolumeDesignSummary(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.DdgiVolumes.Count == 0)
+            return "none";
+
+        int localCount = 0;
+        int warningCount = 0;
+        float minSpacing = float.PositiveInfinity;
+        float maxBudgetFraction = 0.0f;
+        string dominantPreset = string.Empty;
+        for (int i = 0; i < diagnostics.DdgiVolumes.Count; i++)
+        {
+            DdgiVolumeDiagnosticsEntry volume = diagnostics.DdgiVolumes[i];
+            if (volume.Kind == DdgiProbeVolumeKind.Authored)
+                localCount++;
+            if (!string.IsNullOrEmpty(volume.BudgetWarning))
+                warningCount++;
+            if (volume.MinProbeSpacing > 0.0f)
+                minSpacing = MathF.Min(minSpacing, volume.MinProbeSpacing);
+            if (volume.ActiveProbeBudgetFraction > maxBudgetFraction)
+            {
+                maxBudgetFraction = volume.ActiveProbeBudgetFraction;
+                dominantPreset = volume.DesignPreset;
+            }
+        }
+
+        if (!float.IsFinite(minSpacing))
+            minSpacing = 0.0f;
+
+        return $"locals={localCount},minSpacing={minSpacing:F2},maxBudget={maxBudgetFraction:P0}:{dominantPreset},warnings={warningCount}";
+    }
+
+    private static void PrintDdgiRingDiagnostics(RendererDiagnostics diagnostics)
+    {
+        Console.WriteLine($"Frame diagnostics DDGI rings: {FormatDdgiRingDiagnostics(diagnostics)}.");
+    }
+
+    private static string FormatDdgiRingDiagnostics(RendererDiagnostics diagnostics)
+    {
+        var result = new StringBuilder();
+        for (int ringIndex = 0; ringIndex < 3; ringIndex++)
+        {
+            DdgiVolumeDiagnosticsEntry? ring = null;
+            for (int i = 0; i < diagnostics.DdgiVolumes.Count; i++)
+            {
+                DdgiVolumeDiagnosticsEntry candidate = diagnostics.DdgiVolumes[i];
+                if (candidate.CascadeIndex == ringIndex &&
+                    string.Equals(candidate.DesignPreset, "simple-ring", StringComparison.Ordinal))
+                {
+                    ring = candidate;
+                    break;
+                }
+            }
+
+            if (ring == null)
+                continue;
+
+            if (result.Length > 0)
+                result.Append("; ");
+
+            int gridX = GridCountFromSize(ring.SizeX, ring.ProbeSpacingX);
+            int gridY = GridCountFromSize(ring.SizeY, ring.ProbeSpacingY);
+            int gridZ = GridCountFromSize(ring.SizeZ, ring.ProbeSpacingZ);
+            float horizontalReach = Math.Max(ring.SizeX, ring.SizeZ) * 0.5f;
+            float verticalReach = ring.SizeY * 0.5f;
+            result.Append("ring")
+                .Append(ringIndex)
+                .Append(" grid=")
+                .Append(gridX)
+                .Append('x')
+                .Append(gridY)
+                .Append('x')
+                .Append(gridZ)
+                .Append(" spacing=")
+                .Append(ring.ProbeSpacingX.ToString("F2", CultureInfo.InvariantCulture))
+                .Append(" reach=±")
+                .Append(horizontalReach.ToString("F1", CultureInfo.InvariantCulture))
+                .Append("/±")
+                .Append(verticalReach.ToString("F1", CultureInfo.InvariantCulture))
+                .Append("m ageP95=")
+                .Append(ring.EstimatedAgeP95Frames.ToString("F0", CultureInfo.InvariantCulture));
+        }
+
+        return result.Length == 0 ? "none" : result.ToString();
+    }
+
+    private static int GridCountFromSize(float size, float spacing)
+    {
+        if (spacing <= 0.0f || !float.IsFinite(spacing))
+            return 0;
+        return Math.Max(2, (int)MathF.Round(size / spacing) + 1);
+    }
+
+    private static void PrintDdgiVolumeActivityDiagnostics(RendererDiagnostics diagnostics)
+    {
+        Console.WriteLine($"Frame diagnostics DDGI volumes: {FormatDdgiVolumeActivityDiagnostics(diagnostics)}.");
+    }
+
+    private static string FormatDdgiVolumeActivityDiagnostics(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.DdgiVolumes.Count == 0)
+            return "none";
+
+        var result = new StringBuilder();
+        for (int i = 0; i < diagnostics.DdgiVolumes.Count; i++)
+        {
+            DdgiVolumeDiagnosticsEntry volume = diagnostics.DdgiVolumes[i];
+            if (result.Length > 0)
+                result.Append("; ");
+
+            string label = string.Equals(volume.DesignPreset, "simple-ring", StringComparison.Ordinal)
+                ? $"ring{volume.CascadeIndex}"
+                : volume.Kind == DdgiProbeVolumeKind.Authored
+                    ? "authored"
+                    : volume.Kind.ToString();
+            result.Append('v')
+                .Append(volume.VolumeIndex)
+                .Append(' ')
+                .Append(label)
+                .Append(" active/inactive=")
+                .Append(volume.ActiveProbeCount)
+                .Append('/')
+                .Append(volume.InactiveProbeCount)
+                .Append(" state=")
+                .Append(volume.ProbeStateCountsValid != 0 ? "measured" : "pending")
+                .Append(" gather primary/sampled=");
+            if (volume.GatherCountersReadbackValid != 0)
+            {
+                result.Append(volume.PrimaryGatherCount)
+                    .Append('/')
+                    .Append(volume.SampledGatherCount);
+            }
+            else
+            {
+                result.Append("pending");
+            }
+        }
+
+        return result.ToString();
+    }
+
+    public void PrintMovementFrameDiagnostics(IRenderer renderer, FirstPersonCamera camera)
+    {
+        if (renderer is not VulkanRenderer vulkanRenderer)
+            return;
+        if (camera == null)
+            return;
+
+        RendererDiagnostics diagnostics = vulkanRenderer.LastDiagnostics;
+        long now = Stopwatch.GetTimestamp();
+        if (_lastFrameTimestamp == 0)
+        {
+            _lastFrameTimestamp = now;
+            CaptureCameraPose(camera);
+            return;
+        }
+
+        double frameMs = Stopwatch.GetElapsedTime(_lastFrameTimestamp, now).TotalMilliseconds;
+        _lastFrameTimestamp = now;
+
+        bool cameraMoved = CameraMoved(camera);
+        CaptureCameraPose(camera);
+
+        double cpuDrawMs = diagnostics.CpuTotalDrawSceneMicroseconds / 1000.0;
+        if (cameraMoved)
+        {
+            _movingFrameMs.Add(frameMs);
+            _movingCpuDrawMs.Add(cpuDrawMs);
+            _movingFrames++;
+            _movingPayloadRebuilds += diagnostics.ScenePayloadRebuilt != 0 ? 1 : 0;
+            _movingUploadedBytes += diagnostics.UploadedBytes;
+        }
+        else
+        {
+            _stillFrameMs.Add(frameMs);
+            _stillCpuDrawMs.Add(cpuDrawMs);
+            _stillFrames++;
+            _stillPayloadRebuilds += diagnostics.ScenePayloadRebuilt != 0 ? 1 : 0;
+            _stillUploadedBytes += diagnostics.UploadedBytes;
+        }
+
+        _pacingFrameCounter++;
+        if (_pacingFrameCounter % 120 != 0)
+            return;
+
+        PerformanceSampleStats movingFrame = _movingFrameMs.GetStats();
+        PerformanceSampleStats stillFrame = _stillFrameMs.GetStats();
+        PerformanceSampleStats movingCpu = _movingCpuDrawMs.GetStats();
+        PerformanceSampleStats stillCpu = _stillCpuDrawMs.GetStats();
+        double movingUploadMiB = _movingFrames == 0 ? 0.0 : _movingUploadedBytes / (1024.0 * 1024.0 * _movingFrames);
+        double stillUploadMiB = _stillFrames == 0 ? 0.0 : _stillUploadedBytes / (1024.0 * 1024.0 * _stillFrames);
+
+        Console.WriteLine(
+            $"Movement pacing: movingFrames={_movingFrames}, frameMs avg/p95/max={movingFrame.Average:F2}/{movingFrame.P95:F2}/{movingFrame.Max:F2}, " +
+            $"cpuDrawMs avg/p95/max={movingCpu.Average:F2}/{movingCpu.P95:F2}/{movingCpu.Max:F2}, " +
+            $"rebuilds={_movingPayloadRebuilds}, avgUploadMiB={movingUploadMiB:F2}; " +
+            $"stillFrames={_stillFrames}, frameMs avg/p95/max={stillFrame.Average:F2}/{stillFrame.P95:F2}/{stillFrame.Max:F2}, " +
+            $"cpuDrawMs avg/p95/max={stillCpu.Average:F2}/{stillCpu.P95:F2}/{stillCpu.Max:F2}, " +
+            $"rebuilds={_stillPayloadRebuilds}, avgUploadMiB={stillUploadMiB:F2}; " +
+            $"last sceneBuildUs={diagnostics.CpuSceneBuildMicroseconds}, meshCullUs={diagnostics.CpuMeshletCullMicroseconds}, " +
+            $"uploadUs={diagnostics.CpuUploadMicroseconds}, primaryRecordUs={diagnostics.CpuPrimaryCommandRecordMicroseconds}, " +
+            $"validation={diagnostics.ValidationMode}, stall={diagnostics.RuntimeWorstStallReason}:{diagnostics.RuntimeWorstStallMicroseconds}us.");
+
+        _movingFrames = 0;
+        _stillFrames = 0;
+        _movingPayloadRebuilds = 0;
+        _stillPayloadRebuilds = 0;
+        _movingUploadedBytes = 0;
+        _stillUploadedBytes = 0;
+    }
+
+    private bool CameraMoved(FirstPersonCamera camera)
+    {
+        if (!_hasLastCameraPose)
+            return false;
+
+        const float PositionEpsilonSquared = 0.0000001f;
+        const float RotationEpsilon = 0.000001f;
+        return (camera.Position - _lastCameraPosition).LengthSquared() > PositionEpsilonSquared ||
+               MathF.Abs(camera.Yaw - _lastCameraYaw) > RotationEpsilon ||
+               MathF.Abs(camera.Pitch - _lastCameraPitch) > RotationEpsilon;
+    }
+
+    private void CaptureCameraPose(FirstPersonCamera camera)
+    {
+        _lastCameraPosition = camera.Position;
+        _lastCameraYaw = camera.Yaw;
+        _lastCameraPitch = camera.Pitch;
+        _hasLastCameraPose = true;
+    }
+
+    private static void AddDynamicTextureIndex(HashSet<int> indices, int textureIndex)
+    {
+        if (textureIndex >= BindlessIndex.FirstDynamicTextureIndex)
+            indices.Add(textureIndex);
+    }
+
+    private static string FormatGpuMemoryBudget(RendererDiagnostics diagnostics)
+    {
+        const double BytesPerMiB = 1024.0 * 1024.0;
+        string trackedUsage = (diagnostics.TrackedGpuMemoryBytes / BytesPerMiB).ToString("F1", CultureInfo.InvariantCulture);
+        string trackedBudget = (diagnostics.GpuMemoryBudgetBytes / BytesPerMiB).ToString("F1", CultureInfo.InvariantCulture);
+        RenderBudgetStatus trackedStatus = RenderBudgetEvaluator.Classify(
+            diagnostics.TrackedGpuMemoryBytes,
+            diagnostics.GpuMemoryBudgetBytes);
+
+        if (diagnostics.GpuMemoryBudgetQueryAvailable == 0 || diagnostics.ActualGpuMemoryBudgetBytes == 0)
+            return $"trackedMemory={diagnostics.GpuMemoryBudgetStatus}:{trackedUsage}/{trackedBudget}MiB";
+
+        string heapUsage = (diagnostics.ActualGpuMemoryUsageBytes / BytesPerMiB).ToString("F1", CultureInfo.InvariantCulture);
+        string heapBudget = (diagnostics.ActualGpuMemoryBudgetBytes / BytesPerMiB).ToString("F1", CultureInfo.InvariantCulture);
+        return $"heapMemory={diagnostics.GpuMemoryBudgetStatus}:{heapUsage}/{heapBudget}MiB, " +
+               $"trackedMemory={trackedStatus}:{trackedUsage}/{trackedBudget}MiB";
+    }
+
+    private static string FormatPendingUInt(int readbackValid, uint value)
+    {
+        return readbackValid != 0 ? value.ToString(CultureInfo.InvariantCulture) : "pending";
+    }
+
+    private static string FormatDdgiUpdateCount(RendererDiagnostics diagnostics, uint value)
+    {
+        return diagnostics.DdgiSchedulerMode == DdgiSchedulerMode.CpuReference
+            ? value.ToString(CultureInfo.InvariantCulture)
+            : FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, value);
+    }
+
+    private static string FormatDdgiCounterReadback(RendererDiagnostics diagnostics, uint value)
+    {
+        return FormatPendingUInt(diagnostics.DdgiForwardEstimateCountersReadbackValid, value);
+    }
+
+    private static string FormatSimpleDdgiSecondVolumeGatherRate(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.DdgiInvestigationCountersReadbackValid == 0)
+            return "pending";
+        if (diagnostics.SimpleDdgiGatherSampleCount == 0)
+            return "n/a";
+        return (diagnostics.SimpleDdgiSecondVolumeGatherCount /
+            (double)diagnostics.SimpleDdgiGatherSampleCount).ToString("P1", CultureInfo.InvariantCulture);
+    }
+
+    private static string FormatDdgiRingMismatchSample(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.DdgiForwardEstimateCountersReadbackValid == 0)
+            return "pending";
+        return diagnostics.DdgiTraceRingMismatchSample.Length == 0
+            ? "none"
+            : diagnostics.DdgiTraceRingMismatchSample;
+    }
+
+    private static string FormatReadbackStatus(RendererDiagnostics diagnostics)
+    {
+        return diagnostics.DdgiGpuSchedulerReadbackValid != 0
+            ? $"valid:{diagnostics.DdgiGpuSchedulerReadbackLatencyFrames}f"
+            : "pending";
+    }
+}

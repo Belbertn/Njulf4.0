@@ -1,3 +1,43 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:b3224f4b7f2beac298c6cb691a7a0a234ca40bcbcaf6abfe24b3e2fd2e016108
-size 1011
+namespace NjulfHelloGame;
+
+public enum SamplePerformanceScenario
+{
+    Normal,
+    ManyLights,
+    ManyMaterials,
+    ManyTransparentObjects,
+    LargeMeshletCount,
+    FoliageLikeStaticInstances,
+    FoliageDebugFallback,
+    DenseGrassField,
+    ShrubFoliage,
+    MixedTreeLineFoliage,
+    MixedTreeLineFoliageNoShadows,
+    ForestFoliage,
+    ReflectionHeavy,
+    GiSponzaRightWallStationary,
+    GiSimpleDdgiFurnace,
+    GiCornellRoom,
+    GiQualityInterior,
+    GiThinWallLeakTest,
+    GiMovingPointLight,
+    GiMovingRigidObject,
+    GiBrightExteriorRoom,
+    GiLongCorridorOcclusion,
+    GiEmissiveMaterialRoom,
+    GiLocalVolumeStreaming,
+    GiFastTraversalTeleport,
+    GiVerticalityRings,
+    GiInstancedCityStress,
+    UploadBurst,
+    CombinedWorstCase
+}
+
+internal sealed record SamplePerformanceScenarioSummary(
+    SamplePerformanceScenario Scenario,
+    int ObjectCount,
+    int LightCount,
+    int MaterialCount,
+    int TransparentObjectCount,
+    int ReflectionProbeCount,
+    string Notes);

@@ -1,3 +1,22 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:d4aa2d69be117a678b5707f32ce52ffb43bf6d8b107550e1ebfc3eae6c640835
-size 598
+using Njulf.Core.Math;
+
+namespace Njulf.Core.Interfaces
+{
+    public interface ICamera
+    {
+        Vector3 Position { get; set; }
+        Matrix4x4 ViewMatrix { get; }
+        Matrix4x4 ProjectionMatrix { get; }
+        Matrix4x4 ViewProjectionMatrix { get; }
+        Vector3 Forward { get; }
+        Vector3 Right { get; }
+        Vector3 Up { get; }
+        float NearPlane { get; set; }
+        float FarPlane { get; set; }
+        float FieldOfView { get; set; }
+        float AspectRatio { get; set; }
+        
+        void Update();
+        void LookAt(Vector3 target, Vector3 up);
+    }
+}

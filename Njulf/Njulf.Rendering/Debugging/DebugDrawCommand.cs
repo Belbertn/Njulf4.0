@@ -1,3 +1,34 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:9303f16bece0fefb09f406aa54a8ba0a9d25d667ec4f9ebd2c0d1fbbf8da91ef
-size 833
+using Njulf.Core.Math;
+
+namespace Njulf.Rendering.Debug
+{
+    public enum DebugDrawDepthMode
+    {
+        DepthTested,
+        AlwaysVisible,
+        XRay
+    }
+
+    public enum DebugDrawLifetime
+    {
+        OneFrame,
+        Persistent
+    }
+
+    public readonly record struct DebugLine(Vector3 A, Vector3 B, Vector4 Color);
+
+    public readonly record struct DebugDrawCommand(DebugLine Line, DebugDrawDepthMode DepthMode);
+
+    public sealed record DebugDrawFrameSnapshot(
+        IReadOnlyList<DebugDrawCommand> Lines,
+        int LineCount,
+        int PersistentLineCount,
+        int DroppedLineCount)
+    {
+        public static DebugDrawFrameSnapshot Empty { get; } = new(
+            Array.Empty<DebugDrawCommand>(),
+            LineCount: 0,
+            PersistentLineCount: 0,
+            DroppedLineCount: 0);
+    }
+}

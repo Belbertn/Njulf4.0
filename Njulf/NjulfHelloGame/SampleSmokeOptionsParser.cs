@@ -1,3 +1,379 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:9701102b95eaf4fc9a27fe6144ba42498f7ca12e0a1ee755387f44ba40c65645
-size 19304
+using System;
+using Njulf.Rendering.Data;
+using Njulf.Rendering.Diagnostics;
+
+namespace NjulfHelloGame;
+
+public static class SampleSmokeOptionsParser
+{
+    public static SampleSmokeOptions Parse(string[] args)
+    {
+        if (args == null)
+            throw new ArgumentNullException(nameof(args));
+
+        string? smokeModeEnvironment = Environment.GetEnvironmentVariable("NJULF_RENDERER_SMOKE_MODE");
+        bool smokeModeSpecified = !string.IsNullOrWhiteSpace(smokeModeEnvironment);
+        bool sceneSpecified = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE"));
+        SampleSmokeMode mode = ParseMode(smokeModeEnvironment, SampleSmokeMode.None);
+        int frameCount = ParsePositiveInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_SMOKE_FRAMES"), 0, "NJULF_RENDERER_SMOKE_FRAMES");
+        int sceneReloadCount = ParsePositiveInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_RELOAD_COUNT"), 1, "NJULF_RENDERER_SCENE_RELOAD_COUNT");
+        SampleSceneKind sceneKind = ParseSceneKind(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE"));
+        SamplePerformanceScenario performanceScenario = ParsePerformanceScenario(Environment.GetEnvironmentVariable("NJULF_RENDERER_PERFORMANCE_SCENARIO"));
+        TransparencyMode transparencyMode = ParseTransparencyMode(Environment.GetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE"));
+        string? startupLogPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_STARTUP_LOG"));
+        string? healthReportPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_HEALTH_REPORT"));
+        string? baselineSnapshotDirectory = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR"));
+        string? sponzaGiCaptureDirectory = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_SPONZA_GI_CAPTURE_DIR"));
+        string? benchmarkReportPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_REPORT"));
+        bool forceMissingAssets = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_FORCE_MISSING_ASSETS"));
+        bool failOnValidationMessage = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_FAIL_ON_VALIDATION_MESSAGE"));
+        bool enableGpuTiming = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_GPU_TIMING"));
+        bool enableSceneGpuCompaction = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_COMPACTION"));
+        bool enableSceneIndirectDispatch = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_INDIRECT_DISPATCH"));
+        bool enableSceneGpuLodSelection = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_LOD"));
+        bool enableSceneGpuShadowCompaction = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_SHADOW_COMPACTION"));
+        bool enableSceneSubmissionValidation = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_SUBMISSION_VALIDATION"));
+        bool enableAsyncCompute = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE"));
+        bool enableFarFieldClipmap = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_FAR_FIELD_CLIPMAP"));
+        bool enableFarFieldForceAll = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_FAR_FIELD_FORCE_ALL"));
+        enableFarFieldClipmap |= enableFarFieldForceAll;
+        DdgiSchedulerMode? ddgiSchedulerModeOverride = ParseDdgiSchedulerMode(Environment.GetEnvironmentVariable("NJULF_RENDERER_DDGI_SCHEDULER_MODE"));
+        bool enableBenchmark = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK")) ||
+            !string.IsNullOrWhiteSpace(benchmarkReportPath);
+        int benchmarkWarmupFrames = ParseNonNegativeInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_WARMUP_FRAMES"), 30, "NJULF_RENDERER_BENCHMARK_WARMUP_FRAMES");
+        int benchmarkMeasureFrames = ParsePositiveInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_MEASURE_FRAMES"), 120, "NJULF_RENDERER_BENCHMARK_MEASURE_FRAMES");
+
+        if (!RendererValidationSettings.TryParseMode(
+                Environment.GetEnvironmentVariable("NJULF_RENDERER_VALIDATION"),
+                out RendererValidationMode validationMode,
+                out string? validationError))
+        {
+            throw new ArgumentException(validationError);
+        }
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            string arg = args[i];
+            string value = ReadValue(args, ref i);
+            switch (arg.Split('=', 2)[0])
+            {
+                case "--smoke-frames":
+                    frameCount = ParsePositiveInt(value, 0, "--smoke-frames");
+                    break;
+                case "--smoke-mode":
+                    mode = ParseMode(value, SampleSmokeMode.None);
+                    smokeModeSpecified = true;
+                    break;
+                case "--scene-reloads":
+                    sceneReloadCount = ParsePositiveInt(value, 1, "--scene-reloads");
+                    break;
+                case "--scene":
+                    sceneKind = ParseSceneKind(value);
+                    sceneSpecified = true;
+                    break;
+                case "--performance-scenario":
+                    performanceScenario = ParsePerformanceScenario(value);
+                    break;
+                case "--transparency-mode":
+                    transparencyMode = ParseTransparencyMode(value);
+                    break;
+                case "--health-report":
+                    healthReportPath = RequirePath(value, "--health-report");
+                    break;
+                case "--baseline-snapshot-dir":
+                    baselineSnapshotDirectory = RequirePath(value, "--baseline-snapshot-dir");
+                    break;
+                case "--sponza-gi-capture-dir":
+                    sponzaGiCaptureDirectory = RequirePath(value, "--sponza-gi-capture-dir");
+                    break;
+                case "--benchmark":
+                    enableBenchmark = ParseBool(value);
+                    break;
+                case "--benchmark-report":
+                    benchmarkReportPath = RequirePath(value, "--benchmark-report");
+                    enableBenchmark = true;
+                    break;
+                case "--benchmark-warmup-frames":
+                    benchmarkWarmupFrames = ParseNonNegativeInt(value, 30, "--benchmark-warmup-frames");
+                    break;
+                case "--benchmark-measure-frames":
+                    benchmarkMeasureFrames = ParsePositiveInt(value, 120, "--benchmark-measure-frames");
+                    break;
+                case "--startup-log":
+                    startupLogPath = RequirePath(value, "--startup-log");
+                    break;
+                case "--validation":
+                    if (!RendererValidationSettings.TryParseMode(value, out validationMode, out validationError))
+                        throw new ArgumentException(validationError);
+                    break;
+                case "--force-missing-assets":
+                    forceMissingAssets = true;
+                    break;
+                case "--fail-on-validation-message":
+                    failOnValidationMessage = true;
+                    break;
+                case "--gpu-timing":
+                    enableGpuTiming = ParseBool(value);
+                    break;
+                case "--scene-gpu-compaction":
+                    enableSceneGpuCompaction = ParseBool(value);
+                    break;
+                case "--scene-indirect-dispatch":
+                    enableSceneIndirectDispatch = ParseBool(value);
+                    break;
+                case "--scene-gpu-lod":
+                    enableSceneGpuLodSelection = ParseBool(value);
+                    break;
+                case "--scene-gpu-shadow-compaction":
+                    enableSceneGpuShadowCompaction = ParseBool(value);
+                    break;
+                case "--scene-submission-validation":
+                    enableSceneSubmissionValidation = ParseBool(value);
+                    break;
+                case "--async-compute":
+                    enableAsyncCompute = ParseBool(value);
+                    break;
+                case "--far-field-clipmap":
+                    enableFarFieldClipmap = ParseBool(value);
+                    break;
+                case "--far-field-force-all":
+                    enableFarFieldForceAll = ParseBool(value);
+                    enableFarFieldClipmap |= enableFarFieldForceAll;
+                    break;
+                case "--ddgi-scheduler-mode":
+                    ddgiSchedulerModeOverride = ParseDdgiSchedulerMode(value) ??
+                        throw new ArgumentException("--ddgi-scheduler-mode requires a scheduler mode.");
+                    break;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(sponzaGiCaptureDirectory))
+        {
+            if (!string.IsNullOrWhiteSpace(baselineSnapshotDirectory))
+            {
+                throw new ArgumentException(
+                    "--sponza-gi-capture-dir already emits endpoint snapshots and cannot be combined with --baseline-snapshot-dir.");
+            }
+            if (sceneSpecified && sceneKind != SampleSceneKind.SponzaPlaza)
+            {
+                throw new ArgumentException(
+                    "--sponza-gi-capture-dir requires the Sponza plaza scene; do not combine it with another --scene value.");
+            }
+            if (performanceScenario is not (SamplePerformanceScenario.Normal or SamplePerformanceScenario.GiSponzaRightWallStationary))
+            {
+                throw new ArgumentException(
+                    "--sponza-gi-capture-dir requires the stationary Sponza GI scenario; do not combine it with another --performance-scenario value.");
+            }
+            if (mode != SampleSmokeMode.None || frameCount > 0)
+            {
+                throw new ArgumentException(
+                    "--sponza-gi-capture-dir owns its deterministic frame sequence and cannot be combined with smoke mode or --smoke-frames.");
+            }
+
+            sceneKind = SampleSceneKind.SponzaPlaza;
+            performanceScenario = SamplePerformanceScenario.GiSponzaRightWallStationary;
+            enableGpuTiming = true;
+        }
+        else
+        {
+            if (mode == SampleSmokeMode.None && !string.IsNullOrWhiteSpace(baselineSnapshotDirectory) && !smokeModeSpecified)
+                mode = SampleSmokeMode.Startup;
+            if (mode == SampleSmokeMode.None && sceneSpecified && !smokeModeSpecified)
+                mode = SampleSmokeMode.Startup;
+            if (mode == SampleSmokeMode.None && performanceScenario != SamplePerformanceScenario.Normal && !smokeModeSpecified)
+                mode = SampleSmokeMode.Startup;
+            if (mode == SampleSmokeMode.None && transparencyMode != TransparencyMode.SortedAlphaBlend && !smokeModeSpecified)
+                mode = SampleSmokeMode.Startup;
+            if (mode == SampleSmokeMode.None && enableAsyncCompute && !smokeModeSpecified)
+                mode = SampleSmokeMode.Startup;
+            if (mode == SampleSmokeMode.None && (enableFarFieldClipmap || enableFarFieldForceAll) && !smokeModeSpecified)
+                mode = SampleSmokeMode.Startup;
+            if (mode == SampleSmokeMode.None && ddgiSchedulerModeOverride.HasValue && !smokeModeSpecified)
+                mode = SampleSmokeMode.Startup;
+            if (mode == SampleSmokeMode.None && frameCount > 0)
+                mode = SampleSmokeMode.Resize;
+        }
+        if (mode != SampleSmokeMode.None && frameCount <= 0)
+            frameCount = mode == SampleSmokeMode.LongRun ? 1000 : 3;
+        if (enableBenchmark)
+            enableGpuTiming = true;
+
+        var benchmark = new SampleBenchmarkOptions(
+            enableBenchmark,
+            benchmarkWarmupFrames,
+            benchmarkMeasureFrames,
+            benchmarkReportPath);
+        return new SampleSmokeOptions(
+            mode,
+            frameCount,
+            sceneReloadCount,
+            startupLogPath,
+            healthReportPath,
+            validationMode,
+            failOnValidationMessage,
+            forceMissingAssets,
+            performanceScenario,
+            enableGpuTiming,
+            enableSceneGpuCompaction,
+            enableSceneIndirectDispatch,
+            enableSceneGpuLodSelection,
+            enableSceneGpuShadowCompaction,
+            enableSceneSubmissionValidation,
+            enableAsyncCompute,
+            enableFarFieldClipmap,
+            enableFarFieldForceAll,
+            baselineSnapshotDirectory,
+            ddgiSchedulerModeOverride,
+            sceneKind,
+            transparencyMode,
+            benchmark,
+            sponzaGiCaptureDirectory);
+    }
+
+    private static string ReadValue(string[] args, ref int index)
+    {
+        string arg = args[index];
+        int equals = arg.IndexOf('=');
+        if (equals >= 0)
+            return arg[(equals + 1)..];
+
+        if (arg is "--force-missing-assets" or
+            "--fail-on-validation-message" or
+            "--benchmark" or
+            "--gpu-timing" or
+            "--scene-gpu-compaction" or
+            "--scene-indirect-dispatch" or
+            "--scene-gpu-lod" or
+            "--scene-gpu-shadow-compaction" or
+            "--scene-submission-validation" or
+            "--async-compute" or
+            "--far-field-clipmap" or
+            "--far-field-force-all")
+            return "true";
+
+        if (index + 1 >= args.Length)
+            throw new ArgumentException($"{arg} requires a value.");
+
+        index++;
+        return args[index];
+    }
+
+    private static SampleSmokeMode ParseMode(string? value, SampleSmokeMode defaultMode)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return defaultMode;
+
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "none" => SampleSmokeMode.None,
+            "startup" => SampleSmokeMode.Startup,
+            "resize" => SampleSmokeMode.Resize,
+            "fullscreen" => SampleSmokeMode.Fullscreen,
+            "minimize" => SampleSmokeMode.Minimize,
+            "scene-reload" or "scene_reload" or "scenereload" => SampleSmokeMode.SceneReload,
+            "missing-assets" or "missing_assets" or "missingassets" => SampleSmokeMode.MissingAssets,
+            "long-run" or "long_run" or "longrun" => SampleSmokeMode.LongRun,
+            "all" => SampleSmokeMode.All,
+            _ => throw new ArgumentException($"Invalid smoke mode '{value}'. Valid values: none, startup, resize, fullscreen, minimize, scene-reload, missing-assets, long-run, all.")
+        };
+    }
+
+    private static SamplePerformanceScenario ParsePerformanceScenario(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return SamplePerformanceScenario.Normal;
+
+        string normalized = value.Trim().Replace("-", string.Empty).Replace("_", string.Empty);
+        foreach (SamplePerformanceScenario scenario in Enum.GetValues<SamplePerformanceScenario>())
+        {
+            string scenarioName = scenario.ToString().Replace("-", string.Empty).Replace("_", string.Empty);
+            if (scenarioName.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+                return scenario;
+        }
+
+        throw new ArgumentException($"Invalid performance scenario '{value}'. Valid values: {string.Join(", ", Enum.GetNames<SamplePerformanceScenario>())}.");
+    }
+
+    private static DdgiSchedulerMode? ParseDdgiSchedulerMode(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        string normalized = value.Trim().Replace("-", string.Empty).Replace("_", string.Empty);
+        foreach (DdgiSchedulerMode mode in Enum.GetValues<DdgiSchedulerMode>())
+        {
+            string modeName = mode.ToString().Replace("-", string.Empty).Replace("_", string.Empty);
+            if (modeName.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+                return mode;
+        }
+
+        throw new ArgumentException("Invalid DDGI scheduler mode '" + value + "'. Valid values: cpu-reference, gpu, cpu-gpu-compare.");
+    }
+
+    private static SampleSceneKind ParseSceneKind(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return SampleSceneKind.GlobalIlluminationTest;
+
+        string normalized = value.Trim().Replace("-", string.Empty).Replace("_", string.Empty);
+        foreach (SampleSceneKind sceneKind in Enum.GetValues<SampleSceneKind>())
+        {
+            string sceneName = sceneKind.ToString().Replace("-", string.Empty).Replace("_", string.Empty);
+            if (sceneName.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+                return sceneKind;
+        }
+
+        throw new ArgumentException($"Invalid scene '{value}'. Valid values: {string.Join(", ", Enum.GetNames<SampleSceneKind>())}.");
+    }
+
+    private static TransparencyMode ParseTransparencyMode(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return TransparencyMode.SortedAlphaBlend;
+
+        string normalized = value.Trim().Replace("-", string.Empty).Replace("_", string.Empty);
+        return normalized.ToLowerInvariant() switch
+        {
+            "sorted" or "sortedalpha" or "sortedalphablend" => TransparencyMode.SortedAlphaBlend,
+            "weighted" or "weightedoit" or "weightedblendedoit" => TransparencyMode.WeightedBlendedOit,
+            _ => throw new ArgumentException($"Invalid transparency mode '{value}'. Valid values: sorted-alpha-blend, weighted-blended-oit.")
+        };
+    }
+
+    private static int ParsePositiveInt(string? value, int defaultValue, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return defaultValue;
+        if (!int.TryParse(value, out int parsed) || parsed <= 0)
+            throw new ArgumentException($"{name} requires a positive integer value.");
+        return parsed;
+    }
+
+    private static int ParseNonNegativeInt(string? value, int defaultValue, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return defaultValue;
+        if (!int.TryParse(value, out int parsed) || parsed < 0)
+            throw new ArgumentException($"{name} requires a non-negative integer value.");
+        return parsed;
+    }
+
+    private static bool ParseBool(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        return value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("on", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string RequirePath(string value, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"{name} requires a non-empty path.");
+
+        return System.IO.Path.GetFullPath(value);
+    }
+}

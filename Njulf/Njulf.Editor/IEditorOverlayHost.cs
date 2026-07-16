@@ -1,3 +1,12 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:2fc1f4808bfb84c696c3b2b22f5faf5c7970b81814b99aa8aaebfcb1d70020ad
-size 381
+namespace Njulf.Editor;
+
+/// <summary>
+/// Rendering/input integration point for an immediate-mode overlay. The engine remains editor-free
+/// unless a host implementing this interface is registered by an application.
+/// </summary>
+public interface IEditorOverlayHost
+{
+    bool WantCaptureMouse { get; }
+    bool WantCaptureKeyboard { get; }
+    void SetEnabled(bool enabled);
+}

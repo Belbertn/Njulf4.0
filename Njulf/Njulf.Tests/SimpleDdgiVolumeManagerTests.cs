@@ -1,3 +1,387 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:dedc51404f8b21f505d6c3afa2b8733b2be1f5bf5255aa145349450eba1eb861
-size 15732
+using Njulf.Rendering.Resources;
+using NUnit.Framework;
+using System;
+using System.IO;
+using System.Linq;
+using Njulf.Rendering;
+using Njulf.Core.Math;
+using Njulf.Rendering.Data;
+
+namespace Njulf.Tests;
+
+[TestFixture]
+public sealed class SimpleDdgiVolumeManagerTests
+{
+    [Test]
+    public void DirtyLatencyPercentiles_AreDeterministicAndSaturateTheFinalBucket()
+    {
+        uint[] histogram = new uint[16];
+        histogram[0] = 10;
+        histogram[1] = 5;
+        histogram[8] = 5;
+        histogram[15] = 1;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SimpleDdgiVolumeManager.CalculateLatencyPercentile(histogram, 0, 0.95f), Is.EqualTo(0));
+            Assert.That(SimpleDdgiVolumeManager.CalculateLatencyPercentile(histogram, 21, 0.50f), Is.EqualTo(1));
+            Assert.That(SimpleDdgiVolumeManager.CalculateLatencyPercentile(histogram, 21, 0.95f), Is.EqualTo(8));
+            Assert.That(SimpleDdgiVolumeManager.CalculateLatencyPercentile(histogram, 21, 1.0f), Is.EqualTo(15));
+        });
+    }
+
+    [Test]
+    public void DirtyLatencyPercentiles_PreserveLongTailFramesBeforeTheCensoredBucket()
+    {
+        uint[] histogram = new uint[4_096];
+        histogram[0] = 90;
+        histogram[773] = 10;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SimpleDdgiVolumeManager.CalculateLatencyPercentile(histogram, 100, 0.50f), Is.EqualTo(0));
+            Assert.That(SimpleDdgiVolumeManager.CalculateLatencyPercentile(histogram, 100, 0.95f), Is.EqualTo(773));
+            Assert.That(SimpleDdgiVolumeManager.CalculateLatencyPercentile(histogram, 100, 1.0f), Is.EqualTo(773));
+        });
+    }
+
+    [TestCase(-1, 0)]
+    [TestCase(0, 0)]
+    [TestCase(131_072, 131_072)]
+    public void ConfiguredSimpleDdgiPrimaryRayBudget_IsNeverDerivedFromScheduledWork(int configured, int expected)
+    {
+        Assert.That(VulkanRenderer.ResolveConfiguredSimpleDdgiPrimaryRayBudget(configured), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void BufferResizes_DeferOldGpuBuffersUntilFramesInFlightComplete()
+    {
+        string source = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiVolumeManager.cs"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Contain("BeginFrameResourceRetirement();"));
+            Assert.That(source, Does.Contain("RetireBufferResource(previousHandle);"));
+            Assert.That(source, Does.Contain("RenderingConstants.FramesInFlight + 1UL"));
+            Assert.That(source, Does.Not.Contain("_bufferManager.DestroyBuffer(handle);"));
+        });
+    }
+
+    [Test]
+    public void UpdateQuotas_ConsumeConfiguredBudgetBeyondPreferredRingMaximums()
+    {
+        int[] quotas = new int[3];
+        int[] minimums = [512, 96, 24];
+        int[] preferredMaximums = [1_024, 324, 128];
+        int[] capacities = [10_976, 3_240, 1_152];
+        int[] weights = [6, 3, 1];
+
+        SimpleDdgiVolumeManager.AllocateUpdateQuotas(
+            quotas,
+            minimums,
+            preferredMaximums,
+            capacities,
+            weights,
+            updateBudget: 2_048);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(quotas.Sum(), Is.EqualTo(2_048));
+            Assert.That(quotas, Is.All.GreaterThanOrEqualTo(0));
+            Assert.That(quotas[0], Is.GreaterThan(preferredMaximums[0]));
+            Assert.That(quotas[1], Is.GreaterThan(preferredMaximums[1]));
+            Assert.That(quotas[2], Is.GreaterThan(preferredMaximums[2]));
+        });
+    }
+
+    [TestCase(true, true, true, true, 2, SimpleDdgiSchedulerWorkClass.FreshExposedVisible)]
+    [TestCase(false, true, true, true, 1, SimpleDdgiSchedulerWorkClass.VisibleDirty)]
+    [TestCase(false, true, false, true, 0, SimpleDdgiSchedulerWorkClass.VisibleRetry)]
+    [TestCase(false, false, true, true, 0, SimpleDdgiSchedulerWorkClass.NearMaintenance)]
+    [TestCase(false, false, true, true, 1, SimpleDdgiSchedulerWorkClass.MidMaintenance)]
+    [TestCase(false, false, true, true, 2, SimpleDdgiSchedulerWorkClass.FarMaintenance)]
+    public void SchedulerWorkClasses_PreserveVisibleFirstPriority(
+        bool freshOrExposed,
+        bool visible,
+        bool dirty,
+        bool retry,
+        int ringIndex,
+        SimpleDdgiSchedulerWorkClass expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveSchedulerWorkClass(
+                freshOrExposed,
+                visible,
+                dirty,
+                retry,
+                ringIndex),
+            Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void SchedulerClassQuotas_ReserveDirtyRetryAndMaintenanceDuringContinuousExposure()
+    {
+        int[] pending = new int[(int)SimpleDdgiSchedulerWorkClass.Count];
+        pending[(int)SimpleDdgiSchedulerWorkClass.FreshExposedVisible] = 100;
+        pending[(int)SimpleDdgiSchedulerWorkClass.VisibleDirty] = 100;
+        pending[(int)SimpleDdgiSchedulerWorkClass.VisibleRetry] = 100;
+        pending[(int)SimpleDdgiSchedulerWorkClass.NearMaintenance] = 100;
+        int[] quotas = new int[pending.Length];
+
+        SimpleDdgiVolumeManager.AllocateSchedulerClassQuotas(
+            volumeQuota: 32,
+            pending,
+            quotas);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(quotas.Sum(), Is.EqualTo(32));
+            Assert.That(quotas[(int)SimpleDdgiSchedulerWorkClass.FreshExposedVisible], Is.EqualTo(18));
+            Assert.That(quotas[(int)SimpleDdgiSchedulerWorkClass.VisibleDirty], Is.EqualTo(8));
+            Assert.That(quotas[(int)SimpleDdgiSchedulerWorkClass.VisibleRetry], Is.EqualTo(4));
+            Assert.That(quotas[(int)SimpleDdgiSchedulerWorkClass.NearMaintenance], Is.EqualTo(2));
+            Assert.That(quotas[(int)SimpleDdgiSchedulerWorkClass.MidMaintenance], Is.Zero);
+            Assert.That(quotas[(int)SimpleDdgiSchedulerWorkClass.FarMaintenance], Is.Zero);
+        });
+    }
+
+    [Test]
+    public void SchedulerClassQuotas_TinyBudgetsRemainStrictlyVisibleFirst()
+    {
+        int[] pending = Enumerable.Repeat(1, (int)SimpleDdgiSchedulerWorkClass.Count).ToArray();
+        int[] quotas = new int[pending.Length];
+
+        SimpleDdgiVolumeManager.AllocateSchedulerClassQuotas(
+            volumeQuota: 1,
+            pending,
+            quotas);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(quotas.Sum(), Is.EqualTo(1));
+            Assert.That(quotas[(int)SimpleDdgiSchedulerWorkClass.FreshExposedVisible], Is.EqualTo(1));
+            Assert.That(quotas.Skip(1), Is.All.Zero);
+        });
+    }
+
+    [TestCase(256, 128, false, 128)]
+    [TestCase(256, 128, true, 256)]
+    [TestCase(256, 0, false, 256)]
+    [TestCase(-1, 128, false, 0)]
+    public void SchedulerFeedbackBudget_RemainsBoundedAndValidationCanStayFixed(
+        int hardBudget,
+        int feedbackCap,
+        bool deterministicFixedBudget,
+        int expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveFeedbackLimitedUpdateBudget(
+                hardBudget,
+                feedbackCap,
+                deterministicFixedBudget),
+            Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void SchedulerTelemetryHooks_AreBoundedAndAllocationFreeOnTheRenderThread()
+    {
+        string source = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiVolumeManager.cs"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Contain("private readonly int[] _volumeWorkClassPendingScratch"));
+            Assert.That(source, Does.Contain("private readonly byte[] _queuedWorkClassScratch"));
+            Assert.That(source, Does.Contain("public void ReportSchedulingFeedback(in SimpleDdgiSchedulingFeedback feedback)"));
+            Assert.That(source, Does.Contain("SimpleDdgiSchedulerPressureReason.FeedbackReducedBudget"));
+        });
+    }
+
+    [Test]
+    public void Renderer_FeedsCompletedSimpleDdgiGpuTimingBackIntoScheduler()
+    {
+        string source = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "VulkanRenderer.cs"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Contain("HasCompletedSimpleDdgiGpuTiming(completedGpuTimings)"));
+            Assert.That(source, Does.Contain("_simpleDdgiVolumeManager.ReportSchedulingFeedback"));
+            Assert.That(source, Does.Contain("EffectiveDdgiAdaptiveBudgetTimeMilliseconds"));
+        });
+    }
+
+    [Test]
+    public void PerRingGridSelection_UsesExplicitNearMidAndFarSettings()
+    {
+        var settings = new GlobalIlluminationSettings
+        {
+            SimpleDdgiNearRingGridSizeX = 28,
+            SimpleDdgiNearRingGridSizeY = 14,
+            SimpleDdgiNearRingGridSizeZ = 28,
+            SimpleDdgiMidRingGridSizeX = 18,
+            SimpleDdgiMidRingGridSizeY = 10,
+            SimpleDdgiMidRingGridSizeZ = 18,
+            SimpleDdgiFarRingGridSizeX = 12,
+            SimpleDdgiFarRingGridSizeY = 8,
+            SimpleDdgiFarRingGridSizeZ = 12
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SimpleDdgiVolumeManager.ResolveRingGrid(settings, 0), Is.EqualTo((28, 14, 28)));
+            Assert.That(SimpleDdgiVolumeManager.ResolveRingGrid(settings, 1), Is.EqualTo((18, 10, 18)));
+            Assert.That(SimpleDdgiVolumeManager.ResolveRingGrid(settings, 2), Is.EqualTo((12, 8, 12)));
+
+            settings.SimpleDdgiRingGridSizeX = 9;
+            settings.SimpleDdgiRingGridSizeY = 7;
+            settings.SimpleDdgiRingGridSizeZ = 5;
+            Assert.That(SimpleDdgiVolumeManager.ResolveRingGrid(settings, 0), Is.EqualTo((9, 7, 5)));
+            Assert.That(SimpleDdgiVolumeManager.ResolveRingGrid(settings, 1), Is.EqualTo((9, 7, 5)));
+            Assert.That(SimpleDdgiVolumeManager.ResolveRingGrid(settings, 2), Is.EqualTo((9, 7, 5)));
+        });
+    }
+
+    [Test]
+    public void ProbeAgePercentile_UsesExactNearestRankWithinTheRequestedVolume()
+    {
+        uint[] ages = Enumerable.Range(0, 20).Select(static value => (uint)value).ToArray();
+        uint[] scratch = new uint[ages.Length];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SimpleDdgiVolumeManager.CalculateProbeAgePercentile(ages, scratch, 0.50f), Is.EqualTo(9u));
+            Assert.That(SimpleDdgiVolumeManager.CalculateProbeAgePercentile(ages, scratch, 0.95f), Is.EqualTo(18u));
+            Assert.That(SimpleDdgiVolumeManager.CalculateProbeAgePercentile(ages, scratch, 1.0f), Is.EqualTo(19u));
+            Assert.That(SimpleDdgiVolumeManager.CalculateProbeAgePercentile(ages, scratch[..5], 0.95f), Is.Zero);
+        });
+    }
+
+    [Test]
+    public void AuthoredLatticePhase_OffsetsAndWrapsProbePlanesWithoutMovingBounds()
+    {
+        Vector3 min = new(-2.1f, 0.1f, 4.2f);
+        Vector3 origin = SimpleDdgiVolumeManager.ResolveAuthoredLatticeOrigin(
+            min,
+            spacing: 1.0f,
+            latticePhase: new Vector3(0.5f, 0.25f, 0.75f));
+        Vector3 wrappedOrigin = SimpleDdgiVolumeManager.ResolveAuthoredLatticeOrigin(
+            new Vector3(0.1f, 0.1f, 0.1f),
+            spacing: 1.0f,
+            latticePhase: new Vector3(-0.25f, 1.25f, float.NaN));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(origin, Is.EqualTo(new Vector3(-2.5f, -0.75f, 3.75f)));
+            Assert.That(origin.X, Is.LessThanOrEqualTo(min.X));
+            Assert.That(origin.Y, Is.LessThanOrEqualTo(min.Y));
+            Assert.That(origin.Z, Is.LessThanOrEqualTo(min.Z));
+            Assert.That(wrappedOrigin, Is.EqualTo(new Vector3(-0.25f, -0.75f, 0.0f)));
+        });
+    }
+
+    [Test]
+    public void InfluenceBounds_PlaceTransitionOutsideAuthoredCoreReceivers()
+    {
+        Vector3 coreMin = new(-3.25f, -0.15f, -8.75f);
+        Vector3 coreMax = new(3.25f, 4.25f, -2.25f);
+        const float fadeDistance = 1.125f;
+
+        (Vector3 influenceMin, Vector3 influenceMax) =
+            SimpleDdgiVolumeManager.ResolveInfluenceBounds(coreMin, coreMax, fadeDistance);
+        Vector3 floorReceiver = new(0.0f, 0.0f, -5.5f);
+        Vector3 wallReceiver = new(3.0f, 2.0f, -5.5f);
+        float floorEdgeDistance = MinimumFaceDistance(floorReceiver, influenceMin, influenceMax);
+        float wallEdgeDistance = MinimumFaceDistance(wallReceiver, influenceMin, influenceMax);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(influenceMin, Is.EqualTo(new Vector3(-4.375f, -1.275f, -9.875f)));
+            Assert.That(influenceMax, Is.EqualTo(new Vector3(4.375f, 5.375f, -1.125f)));
+            Assert.That(floorEdgeDistance, Is.GreaterThanOrEqualTo(fadeDistance));
+            Assert.That(wallEdgeDistance, Is.GreaterThanOrEqualTo(fadeDistance));
+        });
+    }
+
+    private static float MinimumFaceDistance(Vector3 point, Vector3 minimum, Vector3 maximum)
+    {
+        Vector3 distance = Vector3.Min(point - minimum, maximum - point);
+        return MathF.Min(distance.X, MathF.Min(distance.Y, distance.Z));
+    }
+
+    [Test]
+    public void SecondVolumeOwnershipEarlyOutThreshold_ClampsFiniteValuesAndFallsBackForNonFiniteValues()
+    {
+        var settings = new GlobalIlluminationSettings();
+
+        settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = -1.0f;
+        Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.Zero);
+
+        settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = 2.0f;
+        Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.EqualTo(1.0f));
+
+        settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = float.NaN;
+        Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.EqualTo(0.95f));
+
+        settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = float.PositiveInfinity;
+        Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.EqualTo(0.95f));
+    }
+
+    [Test]
+    public void ProbeUpdateStride_DispersesAndVisitsEveryProbeExactlyOnce()
+    {
+        const int probeCount = 6_912;
+        int stride = SimpleDdgiVolumeManager.ResolveProbeUpdateStride(probeCount);
+        bool[] visited = new bool[probeCount];
+        int cursor = 0;
+        for (int i = 0; i < probeCount; i++)
+        {
+            Assert.That(visited[cursor], Is.False, $"duplicate at sequence index {i}");
+            visited[cursor] = true;
+            cursor = (int)((cursor + (long)stride) % probeCount);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stride, Is.GreaterThan(probeCount / 4));
+            Assert.That(visited, Is.All.True);
+            Assert.That(cursor, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void ProbeUpdateMetadata_PreservesGenerationAndClampsElapsedAge()
+    {
+        uint metadata = SimpleDdgiVolumeManager.PackProbeUpdateMetadata(0x00abcdeu, 400u);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SimpleDdgiVolumeManager.ReadProbeUpdateGeneration(metadata), Is.EqualTo(0x00abcdeu));
+            Assert.That(SimpleDdgiVolumeManager.ReadProbeUpdateAge(metadata), Is.EqualTo(255u));
+        });
+    }
+
+    private static string FindSourceFile(params string[] relativeParts)
+    {
+        string directory = TestContext.CurrentContext.TestDirectory;
+        for (int depth = 0; depth < 8; depth++)
+        {
+            string candidate = Path.Combine(directory, Path.Combine(relativeParts));
+            if (File.Exists(candidate))
+                return candidate;
+
+            DirectoryInfo? parent = Directory.GetParent(directory);
+            if (parent == null)
+                break;
+            directory = parent.FullName;
+        }
+
+        throw new FileNotFoundException("Could not locate source file.", Path.Combine(relativeParts));
+    }
+}

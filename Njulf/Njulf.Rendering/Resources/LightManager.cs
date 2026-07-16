@@ -1,3 +1,626 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:0963dfae4b470c51720f1d37b0cfd7278dae32575fa5e2397c43bbbcaecdd905
-size 21669
+using System;
+using System.Numerics;
+using System.Runtime.InteropServices;
+using Njulf.Rendering.Core;
+using Njulf.Rendering.Data;
+using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Memory;
+using Silk.NET.Vulkan;
+
+namespace Njulf.Rendering.Resources
+{
+    public enum LightType : int
+    {
+        Point = 0,
+        Directional = 1,
+        Spot = 2
+    }
+
+    /// <summary>
+    /// A stable, generation-checked reference to a light owned by <see cref="LightManager"/>.
+    /// Packed GPU indices are intentionally not exposed through this type.
+    /// </summary>
+    public readonly struct LightHandle : IEquatable<LightHandle>
+    {
+        internal LightHandle(int slot, int generation)
+        {
+            Slot = slot;
+            Generation = generation;
+        }
+
+        public int Slot { get; }
+        public int Generation { get; }
+        public bool IsValid => Slot >= 0 && Generation > 0;
+
+        public bool Equals(LightHandle other) => Slot == other.Slot && Generation == other.Generation;
+        public override bool Equals(object? obj) => obj is LightHandle other && Equals(other);
+        public override int GetHashCode() => HashCode.Combine(Slot, Generation);
+        public static bool operator ==(LightHandle left, LightHandle right) => left.Equals(right);
+        public static bool operator !=(LightHandle left, LightHandle right) => !left.Equals(right);
+        public override string ToString() => IsValid ? $"Light({Slot}:{Generation})" : "Light(invalid)";
+    }
+    
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct Light
+    {
+        public Vector3 Position;
+        public float Intensity;
+        public Vector3 Color;
+        public float Range;
+        public Vector3 Direction;
+        public float SpotAngle;
+        public LightType Type;
+        public bool CastsShadows;
+        public float ShadowStrength;
+        public uint ShadowMapSizeOverride;
+        public float ShadowNearPlane;
+        public float ShadowFarPlane;
+        public int ShadowPriority;
+    }
+
+    public readonly struct LightFrameSnapshot
+    {
+        public LightFrameSnapshot(
+            ReadOnlyMemory<Light> lights,
+            int count,
+            int directionalLightCount,
+            int localLightCount,
+            int firstShadowCastingDirectionalLightIndex,
+            Light firstShadowCastingDirectionalLight,
+            ulong revision)
+        {
+            Lights = lights;
+            Count = count;
+            DirectionalLightCount = directionalLightCount;
+            LocalLightCount = localLightCount;
+            FirstShadowCastingDirectionalLightIndex = firstShadowCastingDirectionalLightIndex;
+            FirstShadowCastingDirectionalLight = firstShadowCastingDirectionalLight;
+            Revision = revision;
+        }
+
+        public ReadOnlyMemory<Light> Lights { get; }
+        public int Count { get; }
+        public int DirectionalLightCount { get; }
+        public int LocalLightCount { get; }
+        public bool HasShadowCastingDirectionalLight => FirstShadowCastingDirectionalLightIndex >= 0;
+        public int FirstShadowCastingDirectionalLightIndex { get; }
+        public Light FirstShadowCastingDirectionalLight { get; }
+        public ulong Revision { get; }
+    }
+
+    /// <summary>Stable CPU-side light record for editor and scene-source bridges.</summary>
+    public readonly record struct LightRecord(LightHandle Handle, Guid Id, string? Name, Light Light);
+    
+    public sealed unsafe class LightManager : IDisposable
+    {
+        private readonly VulkanContext _context;
+        private readonly BufferManager _bufferManager;
+        private readonly object _lock = new object();
+        
+        private BufferHandle _lightBuffer;
+        private Light[] _cpuLights;
+        // Lights remain densely packed for the renderer. These tables provide stable editor-facing identity.
+        private readonly int[] _slotToIndex = new int[MaxLights];
+        private readonly int[] _indexToSlot = new int[MaxLights];
+        private readonly int[] _slotGenerations = new int[MaxLights];
+        private readonly string?[] _slotNames = new string?[MaxLights];
+        private readonly Guid[] _slotIds = new Guid[MaxLights];
+        private readonly Dictionary<Guid, int> _slotsById = new();
+        private readonly Stack<int> _freeSlots = new();
+        private Light[] _snapshotLights = Array.Empty<Light>();
+        private GPULight[] _gpuLightScratch = Array.Empty<GPULight>();
+        private LightFrameSnapshot _cachedSnapshot;
+        private ulong _revision;
+        private ulong _snapshotRevision = ulong.MaxValue;
+        private int _lightCount;
+        private bool _needsUpload;
+        private ulong _lastUploadBytes;
+        private bool _disposed;
+        
+        public const int MaxLights = 1024;
+        private static readonly ulong LightStride = (ulong)Marshal.SizeOf<GPULight>();
+        private static readonly ulong LightBufferSize = checked((ulong)MaxLights * (ulong)Marshal.SizeOf<GPULight>());
+        
+        public LightManager(VulkanContext context, BufferManager bufferManager)
+        {
+            _context = context ?? throw new ArgumentNullException(nameof(context));
+            _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
+            _cpuLights = new Light[MaxLights];
+            Array.Fill(_slotToIndex, -1);
+            Array.Fill(_indexToSlot, -1);
+            for (int slot = MaxLights - 1; slot >= 0; slot--)
+            {
+                _slotGenerations[slot] = 1;
+                _freeSlots.Push(slot);
+            }
+            _lightCount = 0;
+            _needsUpload = false;
+            
+            _lightBuffer = _bufferManager.CreateDeviceBuffer(
+                LightBufferSize,
+                BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
+                true,
+                MemoryBudgetCategory.LightBuffers,
+                "Light Buffer");
+            
+            System.Diagnostics.Debug.WriteLine("Light manager created");
+        }
+        
+        public int AddLight(Light light)
+        {
+            lock (_lock)
+            {
+                return AddLightUnsafe(light, name: null, id: null).index;
+            }
+        }
+
+        /// <summary>Adds a light and returns a stable handle safe across packed-array swap-removals.</summary>
+        public LightHandle AddLightHandle(in Light light, string? name = null, Guid? id = null)
+        {
+            lock (_lock)
+                return AddLightUnsafe(light, name, id).handle;
+        }
+        
+        public void RemoveLight(int index)
+        {
+            lock (_lock)
+            {
+                if (index < 0 || index >= _lightCount)
+                    return;
+
+                RemoveAtIndexUnsafe(index);
+            }
+        }
+        
+        public void UpdateLight(int index, Light light)
+        {
+            lock (_lock)
+            {
+                if (index < 0 || index >= _lightCount)
+                    return;
+                
+                _cpuLights[index] = light;
+                _needsUpload = true;
+                _revision++;
+            }
+        }
+
+        public bool RemoveLight(LightHandle handle)
+        {
+            lock (_lock)
+            {
+                if (!TryResolveHandleUnsafe(handle, out int index))
+                    return false;
+
+                RemoveAtIndexUnsafe(index);
+                return true;
+            }
+        }
+
+        public bool UpdateLight(LightHandle handle, in Light light)
+        {
+            lock (_lock)
+            {
+                if (!TryResolveHandleUnsafe(handle, out int index))
+                    return false;
+
+                _cpuLights[index] = light;
+                _needsUpload = true;
+                _revision++;
+                return true;
+            }
+        }
+
+        public bool TryGetLight(LightHandle handle, out Light light)
+        {
+            lock (_lock)
+            {
+                if (TryResolveHandleUnsafe(handle, out int index))
+                {
+                    light = _cpuLights[index];
+                    return true;
+                }
+            }
+
+            light = default;
+            return false;
+        }
+
+        public bool TryGetLightHandle(int packedIndex, out LightHandle handle)
+        {
+            lock (_lock)
+            {
+                if (packedIndex >= 0 && packedIndex < _lightCount)
+                {
+                    int slot = _indexToSlot[packedIndex];
+                    handle = new LightHandle(slot, _slotGenerations[slot]);
+                    return true;
+                }
+            }
+
+            handle = default;
+            return false;
+        }
+
+        /// <summary>Resolves the stable scene identifier assigned when a light was created.</summary>
+        public bool TryGetLightId(LightHandle handle, out Guid id)
+        {
+            lock (_lock)
+            {
+                if (TryResolveHandleUnsafe(handle, out _))
+                {
+                    id = _slotIds[handle.Slot];
+                    return true;
+                }
+            }
+
+            id = Guid.Empty;
+            return false;
+        }
+
+        /// <summary>Finds a live light by its stable scene identifier without exposing packed indices.</summary>
+        public bool TryGetLightHandle(Guid id, out LightHandle handle)
+        {
+            lock (_lock)
+            {
+                if (id != Guid.Empty && _slotsById.TryGetValue(id, out int slot) && _slotToIndex[slot] >= 0)
+                {
+                    handle = new LightHandle(slot, _slotGenerations[slot]);
+                    return true;
+                }
+            }
+
+            handle = default;
+            return false;
+        }
+
+        public bool TryGetLightName(LightHandle handle, out string? name)
+        {
+            lock (_lock)
+            {
+                if (TryResolveHandleUnsafe(handle, out _))
+                {
+                    name = _slotNames[handle.Slot];
+                    return true;
+                }
+            }
+
+            name = null;
+            return false;
+        }
+
+        public bool SetLightName(LightHandle handle, string? name)
+        {
+            lock (_lock)
+            {
+                if (!TryResolveHandleUnsafe(handle, out _))
+                    return false;
+
+                _slotNames[handle.Slot] = name;
+                return true;
+            }
+        }
+        
+        public void ClearLights()
+        {
+            lock (_lock)
+            {
+                for (int index = 0; index < _lightCount; index++)
+                {
+                    int slot = _indexToSlot[index];
+                    ReleaseSlotUnsafe(slot);
+                    _indexToSlot[index] = -1;
+                }
+                _lightCount = 0;
+                _needsUpload = true;
+                _revision++;
+            }
+        }
+        
+        public BufferHandle LightBuffer => _lightBuffer;
+        public ulong LightBufferAllocatedBytes => LightBufferSize;
+        public int LightCount => _lightCount;
+        public int MaxLightCount => MaxLights;
+        public ulong LastUploadBytes
+        {
+            get
+            {
+                lock (_lock)
+                    return _lastUploadBytes;
+            }
+        }
+
+        public int DirectionalLightCount => CountLights(LightType.Directional);
+        public int LocalLightCount
+        {
+            get
+            {
+                lock (_lock)
+                    return _lightCount - CountLightsUnsafe(LightType.Directional);
+            }
+        }
+
+        private int CountLights(LightType type)
+        {
+            lock (_lock)
+                return CountLightsUnsafe(type);
+        }
+
+        private int CountLightsUnsafe(LightType type)
+        {
+            int count = 0;
+            for (int i = 0; i < _lightCount; i++)
+            {
+                if (_cpuLights[i].Type == type)
+                    count++;
+            }
+
+            return count;
+        }
+
+        public bool TryGetFirstDirectionalLight(out int index, out Light light)
+        {
+            lock (_lock)
+            {
+                for (int i = 0; i < _lightCount; i++)
+                {
+                    if (_cpuLights[i].Type == LightType.Directional)
+                    {
+                        index = i;
+                        light = _cpuLights[i];
+                        return true;
+                    }
+                }
+            }
+
+            index = -1;
+            light = default;
+            return false;
+        }
+
+        public bool TryGetFirstShadowCastingDirectionalLight(out int index, out Light light)
+        {
+            lock (_lock)
+            {
+                for (int i = 0; i < _lightCount; i++)
+                {
+                    if (_cpuLights[i].Type == LightType.Directional && _cpuLights[i].CastsShadows)
+                    {
+                        index = i;
+                        light = _cpuLights[i];
+                        return true;
+                    }
+                }
+            }
+
+            index = -1;
+            light = default;
+            return false;
+        }
+
+        public Light[] GetLightSnapshot()
+        {
+            lock (_lock)
+            {
+                Light[] snapshot = new Light[_lightCount];
+                Array.Copy(_cpuLights, snapshot, _lightCount);
+                return snapshot;
+            }
+        }
+
+        public LightFrameSnapshot GetFrameSnapshot()
+        {
+            lock (_lock)
+            {
+                if (_snapshotRevision == _revision)
+                    return _cachedSnapshot;
+
+                if (_snapshotLights.Length < _lightCount)
+                    _snapshotLights = new Light[Math.Min(MaxLights, Math.Max(16, _lightCount * 2))];
+
+                int directionalLightCount = 0;
+                int firstShadowCastingDirectionalIndex = -1;
+                Light firstShadowCastingDirectionalLight = default;
+                for (int i = 0; i < _lightCount; i++)
+                {
+                    Light light = _cpuLights[i];
+                    _snapshotLights[i] = light;
+                    if (light.Type != LightType.Directional)
+                        continue;
+
+                    directionalLightCount++;
+                    if (firstShadowCastingDirectionalIndex < 0 && light.CastsShadows)
+                    {
+                        firstShadowCastingDirectionalIndex = i;
+                        firstShadowCastingDirectionalLight = light;
+                    }
+                }
+
+                _cachedSnapshot = new LightFrameSnapshot(
+                    _snapshotLights.AsMemory(0, _lightCount),
+                    _lightCount,
+                    directionalLightCount,
+                    _lightCount - directionalLightCount,
+                    firstShadowCastingDirectionalIndex,
+                    firstShadowCastingDirectionalLight,
+                    _revision);
+                _snapshotRevision = _revision;
+                return _cachedSnapshot;
+            }
+        }
+
+        public void RegisterBuffer(BindlessHeap bindlessHeap, int bindlessIndex)
+        {
+            if (bindlessHeap == null)
+                throw new ArgumentNullException(nameof(bindlessHeap));
+
+            bindlessHeap.RegisterStorageBuffer(
+                bindlessIndex,
+                _bufferManager.GetBuffer(_lightBuffer),
+                0,
+                Vk.WholeSize);
+        }
+        
+        public void UploadToGPU(StagingRing stagingRing, CommandBuffer commandBuffer)
+        {
+            if (stagingRing == null)
+                throw new ArgumentNullException(nameof(stagingRing));
+            if (commandBuffer.Handle == 0)
+                throw new ArgumentException("A valid command buffer is required for light upload.", nameof(commandBuffer));
+
+            if (!_needsUpload)
+            {
+                lock (_lock)
+                    _lastUploadBytes = 0;
+                return;
+            }
+            
+            lock (_lock)
+            {
+                _lastUploadBytes = 0;
+                if (_lightCount == 0)
+                {
+                    _needsUpload = false;
+                    return;
+                }
+
+                if (_gpuLightScratch.Length < _lightCount)
+                    Array.Resize(ref _gpuLightScratch, _lightCount);
+                for (int i = 0; i < _lightCount; i++)
+                    _gpuLightScratch[i] = ToGpuLight(_cpuLights[i]);
+
+                ulong dataSize = GpuBufferUploader.UploadSpanToBuffer(
+                    _context,
+                    _bufferManager,
+                    stagingRing,
+                    commandBuffer,
+                    _lightBuffer,
+                    _gpuLightScratch.AsSpan(0, _lightCount),
+                    barrierDescription: new UploadBarrierDescription(
+                        PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+                        AccessFlags2.ShaderStorageReadBit)).ByteCount;
+                _lastUploadBytes = dataSize;
+                _needsUpload = false;
+            }
+        }
+
+        private static GPULight ToGpuLight(Light light)
+        {
+            return new GPULight
+            {
+                Position = new Njulf.Core.Math.Vector3(light.Position.X, light.Position.Y, light.Position.Z),
+                Intensity = light.Intensity,
+                Color = new Njulf.Core.Math.Vector3(light.Color.X, light.Color.Y, light.Color.Z),
+                Range = light.Range,
+                Direction = new Njulf.Core.Math.Vector3(light.Direction.X, light.Direction.Y, light.Direction.Z),
+                SpotAngle = light.SpotAngle,
+                Type = (int)light.Type
+            };
+        }
+
+        /// <summary>Copies live lights with stable IDs. Intended for infrequent tooling/save paths.</summary>
+        public IReadOnlyList<LightRecord> GetLightRecords()
+        {
+            lock (_lock)
+            {
+                var records = new LightRecord[_lightCount];
+                for (int index = 0; index < _lightCount; index++)
+                {
+                    int slot = _indexToSlot[index];
+                    records[index] = new LightRecord(
+                        new LightHandle(slot, _slotGenerations[slot]),
+                        _slotIds[slot],
+                        _slotNames[slot],
+                        _cpuLights[index]);
+                }
+                return records;
+            }
+        }
+
+        private (int index, LightHandle handle) AddLightUnsafe(in Light light, string? name, Guid? id)
+        {
+            if (_lightCount >= MaxLights || _freeSlots.Count == 0)
+                throw new InvalidOperationException($"Forward+ supports at most {MaxLights} lights.");
+
+            int index = _lightCount++;
+            int slot = _freeSlots.Pop();
+            Guid stableId = id.GetValueOrDefault(Guid.NewGuid());
+            if (stableId == Guid.Empty)
+                throw new ArgumentException("Light IDs must not be empty.", nameof(id));
+            if (_slotsById.ContainsKey(stableId))
+                throw new InvalidOperationException($"A light with ID '{stableId}' already exists.");
+            _cpuLights[index] = light;
+            _slotToIndex[slot] = index;
+            _indexToSlot[index] = slot;
+            _slotNames[slot] = name;
+            _slotIds[slot] = stableId;
+            _slotsById.Add(stableId, slot);
+            _needsUpload = true;
+            _revision++;
+            return (index, new LightHandle(slot, _slotGenerations[slot]));
+        }
+
+        private bool TryResolveHandleUnsafe(LightHandle handle, out int index)
+        {
+            if (!handle.IsValid || handle.Slot >= MaxLights || _slotGenerations[handle.Slot] != handle.Generation)
+            {
+                index = -1;
+                return false;
+            }
+
+            index = _slotToIndex[handle.Slot];
+            return index >= 0 && index < _lightCount;
+        }
+
+        private void RemoveAtIndexUnsafe(int index)
+        {
+            int removedSlot = _indexToSlot[index];
+            int lastIndex = --_lightCount;
+            if (index != lastIndex)
+            {
+                _cpuLights[index] = _cpuLights[lastIndex];
+                int movedSlot = _indexToSlot[lastIndex];
+                _indexToSlot[index] = movedSlot;
+                _slotToIndex[movedSlot] = index;
+            }
+
+            _cpuLights[lastIndex] = default;
+            _indexToSlot[lastIndex] = -1;
+            ReleaseSlotUnsafe(removedSlot);
+            _needsUpload = true;
+            _revision++;
+        }
+
+        private void ReleaseSlotUnsafe(int slot)
+        {
+            _slotToIndex[slot] = -1;
+            _slotNames[slot] = null;
+            if (_slotIds[slot] != Guid.Empty)
+                _slotsById.Remove(_slotIds[slot]);
+            _slotIds[slot] = Guid.Empty;
+            _slotGenerations[slot] = _slotGenerations[slot] == int.MaxValue ? 1 : _slotGenerations[slot] + 1;
+            _freeSlots.Push(slot);
+        }
+        
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+        
+        private void Dispose(bool disposing)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            
+            lock (_lock)
+            {
+                if (_lightBuffer.IsValid)
+                    _bufferManager.DestroyBuffer(_lightBuffer);
+            }
+            
+            System.Diagnostics.Debug.WriteLine("Light manager disposed.");
+        }
+    }
+}

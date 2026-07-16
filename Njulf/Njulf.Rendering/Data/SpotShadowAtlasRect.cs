@@ -1,3 +1,18 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:12408337cfa373ab25ef6879e388eaeaa35e1d7868a0a2bf050f4915efbffd22
-size 418
+namespace Njulf.Rendering.Data
+{
+    public readonly struct SpotShadowAtlasRect
+    {
+        public SpotShadowAtlasRect(uint x, uint y, uint width, uint height)
+        {
+            X = x;
+            Y = y;
+            Width = width;
+            Height = height;
+        }
+
+        public uint X { get; }
+        public uint Y { get; }
+        public uint Width { get; }
+        public uint Height { get; }
+    }
+}

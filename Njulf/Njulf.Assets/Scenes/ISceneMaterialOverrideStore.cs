@@ -1,3 +1,10 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:2e33c52204eec3f98de575648316ae80f45197c294620791cc3d7774bc485bcd
-size 368
+using Njulf.Core.Scene;
+
+namespace Njulf.Assets.Scenes;
+
+/// <summary>Renderer-neutral bridge for applying and capturing editable material values.</summary>
+public interface ISceneMaterialOverrideStore
+{
+    void Apply(RenderObject renderObject, SceneMaterialOverrideDocument materialOverride);
+    SceneMaterialOverrideDocument? Capture(RenderObject renderObject);
+}

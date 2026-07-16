@@ -1,3 +1,21 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:00024c46d87ba593c88e1f227c3a8d0d375e4f84f2173b65027572b306587697
-size 603
+namespace Njulf.Rendering.Diagnostics
+{
+    public sealed class RenderBudgetSettings
+    {
+        private RenderBudgetProfileKind _activeProfile = RenderBudgetProfileKind.Development;
+
+        public bool Enabled { get; set; } = true;
+
+        public RenderBudgetProfileKind ActiveProfile
+        {
+            get => _activeProfile;
+            set
+            {
+                _activeProfile = value;
+                Profile = RenderBudgetProfile.GetDefault(value);
+            }
+        }
+
+        public RenderBudgetProfile Profile { get; private set; } = RenderBudgetProfile.Development;
+    }
+}

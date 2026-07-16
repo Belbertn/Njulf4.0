@@ -1,3 +1,16 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:253ba25f3606cf594751c7835df966897174aba70ef5975949647ae9ec955d79
-size 377
+using Njulf.Core.Math;
+using Njulf.Rendering.Resources;
+
+namespace Njulf.Rendering.Debug
+{
+    public sealed record ObjectDebugSnapshot(
+        int ObjectIndex,
+        Guid EntityId,
+        string Name,
+        MeshHandle Mesh,
+        MaterialHandle Material,
+        Matrix4x4 WorldMatrix,
+        BoundingBox WorldBounds,
+        bool Visible,
+        bool CpuCulled);
+}

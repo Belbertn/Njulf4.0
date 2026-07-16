@@ -1,3 +1,120 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:73524aea7b6b7da3935fe9faae3fdf284ebc1cbe1fb2b40966349fdeffc245f0
-size 5786
+using System.Collections.Generic;
+using System.Linq;
+
+namespace NjulfHelloGame;
+
+public sealed record SampleBenchmarkSceneDescriptor(
+    string Name,
+    SamplePerformanceScenario Scenario,
+    string Coverage,
+    bool RequiredForProductionGate = true);
+
+public static class SampleDdgiBenchmarkSuite
+{
+    public static IReadOnlyList<SampleBenchmarkSceneDescriptor> Scenes { get; } =
+    [
+        new(
+            "ddgi-closed-room",
+            SamplePerformanceScenario.GiCornellRoom,
+            "Closed room with colored bounce, default camera-relative DDGI clipmaps, and shadowed point light."),
+        new(
+            "ddgi-quality-interior",
+            SamplePerformanceScenario.GiQualityInterior,
+            "Interior GI quality fixture with transparent panes, fog, particles, rough-specular DDGI, sky fallback, and far sun shadows."),
+        new(
+            "simple-ddgi-furnace",
+            SamplePerformanceScenario.GiSimpleDdgiFurnace,
+            "Closed uniform-emissive diffuse furnace for Simple DDGI analytic energy validation."),
+        new(
+            "ddgi-open-sky-ground",
+            SamplePerformanceScenario.GiSponzaRightWallStationary,
+            "Phase 10 open sky box with diffuse ground for stable sunlit and shadowed indirect luminance metrics."),
+        new(
+            "ddgi-thin-wall-corridor",
+            SamplePerformanceScenario.GiLongCorridorOcclusion,
+            "Phase 10 thin-wall corridor with sunlight at one end for visibility, leakage, and zero-visible-covered metrics."),
+        new(
+            "ddgi-sponza-courtyard",
+            SamplePerformanceScenario.GiSponzaRightWallStationary,
+            "Phase 10 Sponza-like courtyard with sunlit upper wall and shadowed lower arcade."),
+        new(
+            "ddgi-local-volume-room",
+            SamplePerformanceScenario.GiLocalVolumeStreaming,
+            "Phase 10 local dense DDGI volume inside a small room."),
+        new(
+            "ddgi-camera-relative-scroll",
+            SamplePerformanceScenario.GiLocalVolumeStreaming,
+            "Phase 10 camera-relative scrolling test for clipmap stability and per-volume distribution."),
+        new(
+            "ddgi-teleport-cut",
+            SamplePerformanceScenario.GiFastTraversalTeleport,
+            "Phase 10 teleport and camera-cut test for warmup recovery and cache invalidation."),
+        new(
+            "ddgi-open-plaza",
+            SamplePerformanceScenario.GiSponzaRightWallStationary,
+            "Open plaza baseline with fixed camera and large-world clipmap coverage."),
+        new(
+            "ddgi-verticality-rings",
+            SamplePerformanceScenario.GiVerticalityRings,
+            "Rings-only tall-world scene with tower and distant large occluders for vertical coverage."),
+        new(
+            "ddgi-instanced-city-stress",
+            SamplePerformanceScenario.GiInstancedCityStress,
+            "Instanced city stress scene for TLAS growth and far-field trace scalability."),
+        new(
+            "ddgi-thin-wall",
+            SamplePerformanceScenario.GiThinWallLeakTest,
+            "Adjacent rooms separated by thin opaque geometry for leak validation."),
+        new(
+            "ddgi-long-corridor",
+            SamplePerformanceScenario.GiLongCorridorOcclusion,
+            "Long corridor with alternating occluders for distance falloff, visibility, and clipmap age validation."),
+        new(
+            "ddgi-foliage-heavy",
+            SamplePerformanceScenario.ForestFoliage,
+            "Foliage-heavy scene for AS visibility policy and indirect-lighting integration."),
+        new(
+            "ddgi-moving-object",
+            SamplePerformanceScenario.GiMovingRigidObject,
+            "Moving rigid occluder for dynamic dirty bounds and TLAS update cost."),
+        new(
+            "ddgi-moving-light",
+            SamplePerformanceScenario.GiMovingPointLight,
+            "Moving point light invalidation and probe refresh behavior."),
+        new(
+            "ddgi-emissive-material",
+            SamplePerformanceScenario.GiEmissiveMaterialRoom,
+            "Emissive material fixture for hit-lighting emissive contribution and color bleeding."),
+        new(
+            "ddgi-local-volume-streaming",
+            SamplePerformanceScenario.GiLocalVolumeStreaming,
+            "Multiple authored DDGI volumes around clipmaps to validate local-volume streaming and clipmap reservation."),
+        new(
+            "ddgi-fast-traversal-teleport",
+            SamplePerformanceScenario.GiFastTraversalTeleport,
+            "Fast traversal and teleport reset scene for clipmap invalidation without resource churn."),
+        new(
+            "ddgi-bright-exterior-room",
+            SamplePerformanceScenario.GiBrightExteriorRoom,
+            "Small room with bright exterior aperture and emissive/direct-light pressure.",
+            RequiredForProductionGate: false),
+        new(
+            "ddgi-reflection-heavy",
+            SamplePerformanceScenario.ReflectionHeavy,
+            "Reflection probe memory/timing alongside DDGI and AO diagnostics.",
+            RequiredForProductionGate: false),
+        new(
+            "ddgi-many-lights",
+            SamplePerformanceScenario.ManyLights,
+            "Many-light stress scene for DDGI hit-lighting upper-bound counters.",
+            RequiredForProductionGate: false),
+        new(
+            "ddgi-combined-worst-case",
+            SamplePerformanceScenario.CombinedWorstCase,
+            "Combined deterministic stress scene for budget and p95 validation.",
+            RequiredForProductionGate: false)
+    ];
+
+    public static IReadOnlyList<SampleBenchmarkSceneDescriptor> RequiredProductionGateScenes { get; } =
+        Scenes.Where(scene => scene.RequiredForProductionGate).ToArray();
+}

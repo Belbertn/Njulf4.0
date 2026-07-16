@@ -1,3 +1,281 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:d13d2b4b89df3e33f06e5b545dc45d7a826329b4c6782a579d7269a63acc522a
-size 11629
+using System;
+using System.Numerics;
+using Njulf.Core.Camera;
+using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
+using NUnit.Framework;
+using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
+using CoreVector3 = Njulf.Core.Math.Vector3;
+
+namespace Njulf.Tests
+{
+    [TestFixture]
+    public sealed class LocalShadowTests
+    {
+        [Test]
+        public void LocalShadowSettings_ClampToSupportedRanges()
+        {
+            var settings = new ShadowSettings
+            {
+                MaxShadowedSpotLights = 99,
+                SpotShadowAtlasSize = 9000,
+                SpotShadowTileSize = 64,
+                SpotNormalBias = -1f,
+                SpotConstantDepthBias = 1f,
+                SpotSlopeScaledDepthBias = 99f,
+                SpotPcfRadius = 99,
+                MaxShadowedPointLights = 99,
+                PointShadowMapSize = 7,
+                PointNormalBias = -1f,
+                PointConstantDepthBias = 1f,
+                PointSlopeScaledDepthBias = 99f,
+                PointPcfRadius = 99
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.MaxShadowedSpotLights, Is.EqualTo(32));
+                Assert.That(settings.SpotShadowAtlasSize, Is.EqualTo(8192));
+                Assert.That(settings.SpotShadowTileSize, Is.EqualTo(128));
+                Assert.That(settings.SpotNormalBias, Is.EqualTo(0f));
+                Assert.That(settings.SpotConstantDepthBias, Is.EqualTo(0.1f));
+                Assert.That(settings.SpotSlopeScaledDepthBias, Is.EqualTo(16f));
+                Assert.That(settings.SpotPcfRadius, Is.EqualTo(3));
+                Assert.That(settings.MaxShadowedPointLights, Is.EqualTo(4));
+                Assert.That(settings.PointShadowMapSize, Is.EqualTo(128));
+                Assert.That(settings.PointNormalBias, Is.EqualTo(0f));
+                Assert.That(settings.PointConstantDepthBias, Is.EqualTo(0.1f));
+                Assert.That(settings.PointSlopeScaledDepthBias, Is.EqualTo(16f));
+                Assert.That(settings.PointPcfRadius, Is.EqualTo(3));
+            });
+        }
+
+        [Test]
+        public void SpotAtlasCapacityAndTileRects_AreStable()
+        {
+            Assert.That(LocalShadowAllocator.CalculateSpotAtlasCapacity(2048, 512), Is.EqualTo(16));
+
+            SpotShadowAtlasRect rect = LocalShadowAllocator.GetSpotTileRect(2048, 512, 5);
+            Assert.Multiple(() =>
+            {
+                Assert.That(rect.X, Is.EqualTo(512));
+                Assert.That(rect.Y, Is.EqualTo(512));
+                Assert.That(rect.Width, Is.EqualTo(512));
+                Assert.That(rect.Height, Is.EqualTo(512));
+            });
+        }
+
+        [Test]
+        public void ShadowImageAllocationPolicy_RequiresAnActualSelectedShadow()
+        {
+            var settings = new ShadowSettings
+            {
+                DirectionalShadowsEnabled = true,
+                SpotShadowsEnabled = true,
+                PointShadowsEnabled = true,
+                MaxShadowedSpotLights = 2,
+                MaxShadowedPointLights = 2
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(DirectionalShadowResources.ShouldAllocateImage(settings, requiresShadowMap: false), Is.False);
+                Assert.That(DirectionalShadowResources.ShouldAllocateImage(settings, requiresShadowMap: true), Is.True);
+                Assert.That(SpotShadowAtlas.ShouldAllocateImage(settings, requiredShadowCount: 0), Is.False);
+                Assert.That(SpotShadowAtlas.ShouldAllocateImage(settings, requiredShadowCount: 1), Is.True);
+                Assert.That(PointShadowCubemapArray.ShouldAllocateImage(settings, requiredShadowCount: 0), Is.False);
+                Assert.That(PointShadowCubemapArray.ShouldAllocateImage(settings, requiredShadowCount: 1), Is.True);
+            });
+        }
+
+        [Test]
+        public void ShadowImageAllocationPolicy_HonorsDisabledFeatures()
+        {
+            var settings = new ShadowSettings
+            {
+                DirectionalShadowsEnabled = false,
+                SpotShadowsEnabled = false,
+                PointShadowsEnabled = false
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(DirectionalShadowResources.ShouldAllocateImage(settings, requiresShadowMap: true), Is.False);
+                Assert.That(SpotShadowAtlas.ShouldAllocateImage(settings, requiredShadowCount: 1), Is.False);
+                Assert.That(PointShadowCubemapArray.ShouldAllocateImage(settings, requiredShadowCount: 1), Is.False);
+            });
+        }
+
+        [Test]
+        public void PointShadowCapacityRetention_AvoidsRecreationWhenSelectionDrops()
+        {
+            var settings = new ShadowSettings
+            {
+                MaxShadowedPointLights = 2,
+                PointShadowMapSize = 512
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    PointShadowCubemapArray.CanRetainCapacity(512, currentCapacity: 2, settings: settings, requiredShadowCount: 1),
+                    Is.True,
+                    "A two-light allocation should remain valid when selection drops to one.");
+                Assert.That(
+                    PointShadowCubemapArray.CanRetainCapacity(512, currentCapacity: 1, settings: settings, requiredShadowCount: 2),
+                    Is.False,
+                    "A larger selection must grow the cubemap array.");
+                Assert.That(
+                    PointShadowCubemapArray.CanRetainCapacity(1024, currentCapacity: 2, settings: settings, requiredShadowCount: 1),
+                    Is.False,
+                    "A map-size change must recreate the image.");
+
+                settings.MaxShadowedPointLights = 1;
+                Assert.That(
+                    PointShadowCubemapArray.CanRetainCapacity(512, currentCapacity: 2, settings: settings, requiredShadowCount: 1),
+                    Is.False,
+                    "A lowered configured cap intentionally shrinks the array.");
+            });
+        }
+
+        [Test]
+        public void Selector_EnforcesBudgetsAndPrefersPriority()
+        {
+            var camera = CreateCamera();
+            var settings = new ShadowSettings
+            {
+                SpotShadowsEnabled = true,
+                MaxShadowedSpotLights = 1,
+                PointShadowsEnabled = true,
+                MaxShadowedPointLights = 1
+            };
+            Light[] lights =
+            [
+                Spot(priority: 0, x: 0f),
+                Spot(priority: 10, x: 1f),
+                Point(priority: 0, x: 2f),
+                Point(priority: 20, x: 3f)
+            ];
+
+            LocalShadowSelection selection = new LocalShadowSelector().Select(lights, camera, settings);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(selection.SpotCandidateCount, Is.EqualTo(2));
+                Assert.That(selection.PointCandidateCount, Is.EqualTo(2));
+                Assert.That(selection.SpotLights, Has.Length.EqualTo(1));
+                Assert.That(selection.PointLights, Has.Length.EqualTo(1));
+                Assert.That(selection.SpotLights[0].LightIndex, Is.EqualTo(1));
+                Assert.That(selection.PointLights[0].LightIndex, Is.EqualTo(3));
+                Assert.That(selection.SpotRejectedByBudgetCount, Is.EqualTo(1));
+                Assert.That(selection.PointRejectedByBudgetCount, Is.EqualTo(1));
+            });
+        }
+
+        [Test]
+        public void ShadowIndexMap_MapsOnlySelectedLights()
+        {
+            SelectedLocalShadow[] spots = [new(2, Spot(priority: 0, x: 0f), 1f)];
+            SelectedLocalShadow[] points = [new(4, Point(priority: 0, x: 0f), 1f)];
+
+            GPULocalLightShadowIndex[] map = LocalShadowDataBuilder.BuildShadowIndexMap(5, spots, points);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(map[0].SpotShadowIndex, Is.EqualTo(-1));
+                Assert.That(map[2].SpotShadowIndex, Is.EqualTo(0));
+                Assert.That(map[4].PointShadowIndex, Is.EqualTo(0));
+            });
+        }
+
+        [Test]
+        public void LocalShadowMatrices_AreFinite()
+        {
+            GPUSpotShadow[] spotShadows = LocalShadowDataBuilder.BuildSpotShadows(
+                [new SelectedLocalShadow(0, Spot(priority: 0, x: 0f), 1f)],
+                new ShadowSettings());
+            GPUPointShadow[] pointShadows = LocalShadowDataBuilder.BuildPointShadows(
+                [new SelectedLocalShadow(0, Point(priority: 0, x: 0f), 1f)],
+                new ShadowSettings());
+
+            AssertMatrixFinite(spotShadows[0].LightViewProjection);
+            AssertMatrixFinite(pointShadows[0].FaceViewProjection0);
+            AssertMatrixFinite(pointShadows[0].FaceViewProjection5);
+        }
+
+        [Test]
+        public void PointShadowMatrices_OverlapCubeFaceEdges()
+        {
+            var settings = new ShadowSettings
+            {
+                PointShadowMapSize = 512,
+                PointPcfRadius = 1
+            };
+            GPUPointShadow[] pointShadows = LocalShadowDataBuilder.BuildPointShadows(
+                [new SelectedLocalShadow(0, Point(priority: 0, x: 0f), 1f)],
+                settings);
+
+            CoreVector3 lightPosition = new(0f, 2f, 0f);
+            CoreVector3 ndc = ProjectPoint(
+                lightPosition + new CoreVector3(1f, -1f, 0f).Normalized() * 3f,
+                pointShadows[0].FaceViewProjection0);
+
+            Assert.That(MathF.Abs(ndc.Y), Is.LessThan(0.999f));
+        }
+
+        private static FirstPersonCamera CreateCamera()
+        {
+            var camera = new FirstPersonCamera(new CoreVector3(0f, 0f, 8f), 0f, 0f);
+            camera.Update();
+            return camera;
+        }
+
+        private static Light Spot(int priority, float x)
+        {
+            return new Light
+            {
+                Type = LightType.Spot,
+                Position = new Vector3(x, 2f, 0f),
+                Direction = new Vector3(0f, -1f, 0f),
+                Color = Vector3.One,
+                Intensity = 10f,
+                Range = 8f,
+                SpotAngle = MathF.PI / 5f,
+                CastsShadows = true,
+                ShadowPriority = priority
+            };
+        }
+
+        private static Light Point(int priority, float x)
+        {
+            return new Light
+            {
+                Type = LightType.Point,
+                Position = new Vector3(x, 2f, 0f),
+                Color = Vector3.One,
+                Intensity = 10f,
+                Range = 8f,
+                CastsShadows = true,
+                ShadowPriority = priority
+            };
+        }
+
+        private static void AssertMatrixFinite(Njulf.Core.Math.Matrix4x4 matrix)
+        {
+            for (int row = 0; row < 4; row++)
+            {
+                for (int col = 0; col < 4; col++)
+                    Assert.That(float.IsFinite(matrix[row, col]), Is.True, $"Matrix element [{row},{col}] must be finite.");
+            }
+        }
+
+        private static CoreVector3 ProjectPoint(CoreVector3 point, CoreMatrix4x4 matrix)
+        {
+            float x = point.X * matrix.M11 + point.Y * matrix.M21 + point.Z * matrix.M31 + matrix.M41;
+            float y = point.X * matrix.M12 + point.Y * matrix.M22 + point.Z * matrix.M32 + matrix.M42;
+            float z = point.X * matrix.M13 + point.Y * matrix.M23 + point.Z * matrix.M33 + matrix.M43;
+            float w = point.X * matrix.M14 + point.Y * matrix.M24 + point.Z * matrix.M34 + matrix.M44;
+            return new CoreVector3(x / w, y / w, z / w);
+        }
+    }
+}

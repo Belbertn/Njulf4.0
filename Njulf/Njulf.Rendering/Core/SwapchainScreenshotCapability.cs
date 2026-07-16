@@ -1,3 +1,26 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:55c2f7db87e94888b2f5c7818e875137347095ac02915f74325d514b3d229881
-size 1202
+using Silk.NET.Vulkan;
+
+namespace Njulf.Rendering.Core
+{
+    /// <summary>
+    /// Describes whether a presentation surface permits a swapchain image to be
+    /// copied into a renderer-owned readback buffer.  The surface capability is
+    /// intentionally kept separate from pixel-format support: a surface can
+    /// allow transfer reads while still exposing a format the PNG capture path
+    /// deliberately rejects.
+    /// </summary>
+    public readonly record struct SwapchainScreenshotCapability(bool TransferSourceSupported, string Reason)
+    {
+        public static SwapchainScreenshotCapability Evaluate(ImageUsageFlags supportedUsageFlags)
+        {
+            bool supported = (supportedUsageFlags & ImageUsageFlags.TransferSrcBit) != 0;
+            return supported
+                ? new SwapchainScreenshotCapability(
+                    true,
+                    "The presentation surface supports TransferSrc usage for swapchain images.")
+                : new SwapchainScreenshotCapability(
+                    false,
+                    "The presentation surface does not support TransferSrc usage for swapchain images; renderer PNG capture is unavailable.");
+        }
+    }
+}

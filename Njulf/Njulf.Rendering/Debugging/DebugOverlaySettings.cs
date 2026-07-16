@@ -1,3 +1,26 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:fc2b7031604178b38cae0907f71841eb2829e483146b3026f93db2883b206bab
-size 1036
+namespace Njulf.Rendering.Debug
+{
+    public sealed class DebugOverlaySettings
+    {
+        private int _maxDebugLineSegments = DebugDrawList.DefaultMaxLineSegments;
+
+        public bool Enabled { get; set; }
+        public DebugOverlayMode Mode { get; set; } = DebugOverlayMode.None;
+        public bool ShowLabels { get; set; }
+        public bool ShowDepthTestedVolumes { get; set; } = true;
+        public bool ShowXRayVolumes { get; set; } = true;
+        public int SelectedObjectIndex { get; set; } = -1;
+        public int SelectedLightIndex { get; set; } = -1;
+        public int SelectedReflectionProbeIndex { get; set; } = -1;
+        public bool AllowGpuTiming { get; set; }
+        public bool AllowScreenshots { get; set; }
+        public bool AllowRenderDocCapture { get; set; }
+        public bool CpuSnapshotsEnabled { get; set; }
+
+        public int MaxDebugLineSegments
+        {
+            get => _maxDebugLineSegments;
+            set => _maxDebugLineSegments = Math.Clamp(value, 0, 1_000_000);
+        }
+    }
+}

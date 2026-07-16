@@ -1,3 +1,14 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:65028888283a8508fbf9e9288913af843a7f406ea91318a296bb157f96c9c4aa
-size 450
+using System;
+using System.Collections.Generic;
+using Njulf.Core.Math;
+
+namespace Njulf.Core.Animation
+{
+    public sealed class Skin
+    {
+        public string Name { get; init; } = string.Empty;
+        public Skeleton Skeleton { get; init; } = new();
+        public IReadOnlyList<int> JointIndices { get; init; } = Array.Empty<int>();
+        public IReadOnlyList<Matrix4x4> InverseBindMatrices { get; init; } = Array.Empty<Matrix4x4>();
+    }
+}

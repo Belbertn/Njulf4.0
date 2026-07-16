@@ -1,3 +1,29 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:2f0952ce1c5f9c4ef70dce2725d2ae4dcb7bffbf623f4088cccffa89e4511273
-size 727
+using System;
+using System.Collections.Generic;
+
+namespace Njulf.Rendering.Diagnostics;
+
+public sealed class ContentFallbackDiagnostics
+{
+    private readonly List<ContentFallbackEvent> _events = new();
+
+    public IReadOnlyList<ContentFallbackEvent> Events => _events;
+
+    public void Record(
+        string assetKind,
+        string assetPath,
+        string? materialName,
+        string? objectName,
+        ContentFallbackPolicy policy,
+        string reason)
+    {
+        _events.Add(new ContentFallbackEvent(
+            DateTimeOffset.UtcNow,
+            assetKind,
+            System.IO.Path.GetFullPath(assetPath),
+            materialName,
+            objectName,
+            policy,
+            reason));
+    }
+}

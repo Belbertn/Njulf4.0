@@ -1,3 +1,792 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:8783b572da4331f59025235f02c185948891b655f796c98c787caa403ee35073
-size 38417
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using Njulf.Core.Math;
+using Njulf.Rendering.Core;
+using Silk.NET.Vulkan;
+using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Memory;
+using Njulf.Rendering.Utilities;
+using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
+using Njulf.Rendering.Resources;
+using VkBuffer = Silk.NET.Vulkan.Buffer;
+
+namespace Njulf.Rendering.Pipeline
+{
+    /// <summary>
+    /// Forward+ pass: renders all visible meshlets with per-tile lighting.
+    /// Input: meshlet data, material data, textures, light index buffers
+    /// Uses mesh shaders and bindless resource access.
+    /// </summary>
+    public sealed unsafe class ForwardPlusPass : RenderPassBase
+    {
+        private readonly PipelineObjects.MeshPipeline _meshPipeline;
+        private readonly PipelineObjects.FoliagePipeline? _foliagePipeline;
+        private readonly BufferManager? _bufferManager;
+        private readonly FoliageManager? _foliageManager;
+        private readonly RenderTargetManager _renderTargets;
+        private readonly RenderSettings _settings;
+        private bool _lastGlobalIlluminationEnabled;
+        private GlobalIlluminationMode _lastGlobalIlluminationMode = GlobalIlluminationMode.Disabled;
+        private float _lastGlobalIlluminationResolutionScale = -1.0f;
+        
+        public ForwardPlusPass(
+            VulkanContext context,
+            SwapchainManager swapchain,
+            BindlessHeap bindlessHeap,
+            PipelineObjects.MeshPipeline meshPipeline,
+            RenderTargetManager renderTargets,
+            RenderSettings settings,
+            PipelineObjects.FoliagePipeline? foliagePipeline = null,
+            BufferManager? bufferManager = null,
+            FoliageManager? foliageManager = null)
+            : base("ForwardPlusPass", context, swapchain, bindlessHeap)
+        {
+            _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
+            _foliagePipeline = foliagePipeline;
+            _bufferManager = bufferManager;
+            _foliageManager = foliageManager;
+            _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
+            _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        }
+        
+        public override void Initialize()
+        {
+        }
+        
+        public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
+        {
+            if (!sceneData.HasCurrentDepthPrePass)
+            {
+                throw new InvalidOperationException(
+                    "ForwardPlusPass requires depth produced by DepthPrePass in the current frame.");
+            }
+
+            if (sceneData.LocalLightCount > 0 && !sceneData.HasCurrentTiledLightCulling)
+            {
+                throw new InvalidOperationException(
+                    "ForwardPlusPass requires tiled local-light culling produced from current-frame depth.");
+            }
+
+            ResetGlobalIlluminationHistoryIfInputsChanged();
+            Extent2D renderExtent = _renderTargets.SceneColor.Extent;
+            bool ssgiEnabled = ShouldApplySsgi(sceneData);
+            SetFullViewportAndScissor(cmd, renderExtent);
+            BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
+            
+            _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
+            if (ssgiEnabled)
+                _renderTargets.SsgiTraceSource.TransitionToColorAttachment(cmd);
+            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
+            
+            var colorAttachment = ColorAttachment(
+                _renderTargets.SceneColor.View,
+                ImageLayout.ColorAttachmentOptimal,
+                AttachmentLoadOp.Clear,
+                AttachmentStoreOp.Store,
+                new ClearValue(new ClearColorValue(
+                    sceneData.ClearColor.X,
+                    sceneData.ClearColor.Y,
+                    sceneData.ClearColor.Z,
+                    sceneData.ClearColor.W)));
+            var colorAttachments = stackalloc RenderingAttachmentInfo[2];
+            colorAttachments[0] = colorAttachment;
+            if (ssgiEnabled)
+            {
+                colorAttachments[1] = ColorAttachment(
+                    _renderTargets.SsgiTraceSource.View,
+                    ImageLayout.ColorAttachmentOptimal,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f)));
+            }
+            var depthAttachment = DepthAttachment(
+                _renderTargets.SceneDepth.View,
+                ImageLayout.DepthStencilReadOnlyOptimal,
+                AttachmentLoadOp.Load,
+                AttachmentStoreOp.Store,
+                new ClearValue(null, new ClearDepthStencilValue(0.0f, 0)));
+            
+            var renderingInfo = new RenderingInfo
+            {
+                SType = StructureType.RenderingInfo,
+                RenderArea = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = renderExtent },
+                LayerCount = 1,
+                ColorAttachmentCount = ssgiEnabled ? 2u : 1u,
+                PColorAttachments = colorAttachments,
+                PDepthAttachment = &depthAttachment,
+                PStencilAttachment = null
+            };
+            
+            _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
+            
+            sceneData.ForwardTaskInvocations = 0;
+            sceneData.ForwardSimpleMeshletCount = 0;
+            sceneData.ForwardFullMaterialMeshletCount = 0;
+            sceneData.ForwardLocalProbeMeshletCount = 0;
+            sceneData.ForwardShadowReceiverMeshletCount = 0;
+            sceneData.SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ResolveForwardPath(sceneData);
+            sceneData.SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderLegacyCull;
+            sceneData.SceneSubmissionIndirectDispatchSkipReason =
+                sceneData.SceneSubmissionIndirectMeshletDispatchEnabled
+                    ? "GPU compaction inactive"
+                    : "indirect dispatch disabled";
+            if (sceneData.SceneSubmissionGpuCompactionActive &&
+                sceneData.SceneSubmissionGpuOpaqueCandidateCount > 0 &&
+                sceneData.SceneSubmissionGpuCompactedOpaqueCapacity > 0 &&
+                sceneData.SceneSubmissionFallbackReason.Length == 0)
+            {
+                if (sceneData.ForwardVisibilityCompactionActive)
+                {
+                    sceneData.SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ForwardPathGpuCompactedIndirect;
+                    sceneData.SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedEmit;
+                    sceneData.SceneSubmissionIndirectDispatchSkipReason = string.Empty;
+                    UpdateCompactedForwardVariantDiagnostics(sceneData);
+                    UpdateCompactedForwardShadowDiagnostics(
+                        sceneData,
+                        sceneData.ForwardVisibilitySimpleCapacity +
+                        sceneData.ForwardVisibilitySimpleNormalCapacity +
+                        sceneData.ForwardVisibilityFullCapacity);
+                    DrawForwardVisibilityBucketsIndirect(cmd, sceneData);
+                }
+                else if (sceneData.SceneSubmissionIndirectMeshletDispatchEnabled)
+                {
+                    int compactedDrawCapacity = Math.Min(
+                        sceneData.SceneSubmissionGpuOpaqueCandidateCount,
+                        sceneData.SceneSubmissionGpuCompactedOpaqueCapacity);
+                    string indirectSkipReason = BuildSceneOpaqueIndirectDispatchSkipReason(sceneData);
+                    sceneData.SceneSubmissionIndirectDispatchSkipReason = indirectSkipReason;
+                    if (indirectSkipReason.Length == 0)
+                    {
+                        sceneData.SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ForwardPathGpuCompactedIndirect;
+                        sceneData.SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedEmit;
+                        UpdateCompactedForwardVariantDiagnostics(sceneData);
+                        UpdateCompactedForwardShadowDiagnostics(sceneData, compactedDrawCapacity);
+                        DrawCompactedForwardBucketsIndirect(
+                            cmd,
+                            sceneData);
+                    }
+                    else
+                    {
+                        sceneData.SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ForwardPathGpuCompactedDirect;
+                        sceneData.SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedCounter;
+                        UpdateCompactedForwardVariantDiagnostics(sceneData);
+                        UpdateCompactedForwardShadowDiagnostics(sceneData, compactedDrawCapacity);
+                        DrawCompactedForwardBucketsDirect(
+                            cmd,
+                            sceneData);
+                    }
+                }
+                else
+                {
+                    int compactedDrawCapacity = Math.Min(
+                        sceneData.SceneSubmissionGpuOpaqueCandidateCount,
+                        sceneData.SceneSubmissionGpuCompactedOpaqueCapacity);
+                    sceneData.SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ForwardPathGpuCompactedDirect;
+                    sceneData.SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedCounter;
+                    UpdateCompactedForwardVariantDiagnostics(sceneData);
+                    UpdateCompactedForwardShadowDiagnostics(sceneData, compactedDrawCapacity);
+                    DrawCompactedForwardBucketsDirect(
+                        cmd,
+                        sceneData);
+                }
+            }
+            else
+            {
+                sceneData.SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ResolveForwardPath(sceneData);
+                ForwardOpaqueVariantSelection variantSelection = ResolveOpaqueVariantSelection(sceneData);
+                sceneData.ForwardSimpleMeshletCount = variantSelection.SimpleMeshletCount;
+                sceneData.ForwardFullMaterialMeshletCount = variantSelection.FullMaterialMeshletCount;
+                sceneData.ForwardLocalProbeMeshletCount = variantSelection.LocalProbeMeshletCount;
+                sceneData.ForwardShadowReceiverMeshletCount = ResolveForwardShadowReceiverMeshletCount(sceneData);
+
+                DrawForwardBucket(
+                    cmd,
+                    sceneData,
+                    variantSelection.UseSimpleGlobalIblPipeline
+                        ? _meshPipeline.ForwardSimpleGlobalIblPipeline
+                        : _meshPipeline.ForwardFullMaterialPipeline,
+                    sceneData.SimpleOpaqueMeshletCount,
+                    BindlessIndex.MeshletDrawBufferBase);
+                DrawForwardBucket(
+                    cmd,
+                    sceneData,
+                    variantSelection.UseSimpleGlobalIblPipeline
+                        ? _meshPipeline.ForwardSimpleFullInputGlobalIblPipeline
+                        : _meshPipeline.ForwardFullMaterialPipeline,
+                    sceneData.SimpleNormalOpaqueMeshletCount,
+                    BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferBase);
+                DrawForwardBucket(
+                    cmd,
+                    sceneData,
+                    _meshPipeline.ForwardFullMaterialPipeline,
+                    sceneData.FullOpaqueMeshletCount,
+                    BindlessIndex.FullOpaqueMeshletDrawBufferBase);
+            }
+            DrawFoliageForward(cmd, sceneData);
+            
+            _context.KhrDynamicRendering.CmdEndRendering(cmd);
+        }
+
+        /// <summary>
+        /// GPU timestamps cannot isolate instructions inside a fragment shader, but
+        /// this nested scope gives GI accounting a conservative, explicit owner for
+        /// the forward pass whenever its DDGI gather code is active.  The capture
+        /// records it as an inclusive forward-GI timing rather than pretending it is
+        /// a pure shader-instruction measurement.
+        /// </summary>
+        public override void Execute(
+            CommandBuffer cmd,
+            int frameIndex,
+            Data.SceneRenderingData sceneData,
+            GpuTimestampRecorder? timestamps)
+        {
+            bool giGatherActive = sceneData.GlobalIlluminationDdgiActive != 0 || sceneData.SimpleDdgiActive != 0;
+            if (giGatherActive)
+                timestamps?.BeginPass(cmd, frameIndex, "ForwardGiGatherPass");
+
+            try
+            {
+                Execute(cmd, frameIndex, sceneData);
+            }
+            finally
+            {
+                if (giGatherActive)
+                    timestamps?.EndPass(cmd, frameIndex);
+            }
+        }
+
+        internal static ForwardOpaqueVariantSelection ResolveOpaqueVariantSelection(Data.SceneRenderingData sceneData)
+        {
+            int simpleMeshlets = Math.Max(0, sceneData.SimpleOpaqueMeshletCount);
+            int simpleNormalMeshlets = Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount);
+            int fullMeshlets = Math.Max(0, sceneData.FullOpaqueMeshletCount);
+            bool requiresLocalProbeEvaluation = RequiresLocalReflectionProbeEvaluation(sceneData);
+            bool forceFullForDebug = sceneData.ReflectionDebugView != ReflectionDebugView.None;
+            bool useSimpleGlobalIblPipeline = !forceFullForDebug && !requiresLocalProbeEvaluation;
+            int simpleVariantMeshlets = simpleMeshlets + simpleNormalMeshlets;
+
+            return new ForwardOpaqueVariantSelection(
+                UseSimpleGlobalIblPipeline: useSimpleGlobalIblPipeline,
+                SimpleMeshletCount: useSimpleGlobalIblPipeline ? simpleVariantMeshlets : 0,
+                FullMaterialMeshletCount: fullMeshlets + (useSimpleGlobalIblPipeline ? 0 : simpleVariantMeshlets),
+                LocalProbeMeshletCount: requiresLocalProbeEvaluation ? simpleVariantMeshlets + fullMeshlets : 0);
+        }
+
+        private static bool RequiresLocalReflectionProbeEvaluation(Data.SceneRenderingData sceneData)
+        {
+            if (!sceneData.ReflectionsEnabled)
+                return false;
+
+            if (sceneData.ReflectionMode is ReflectionMode.Disabled or ReflectionMode.GlobalEnvironmentOnly)
+                return false;
+
+            return sceneData.ReflectionProbeCount > 0;
+        }
+
+        private static void UpdateCompactedForwardVariantDiagnostics(Data.SceneRenderingData sceneData)
+        {
+            ForwardOpaqueVariantSelection variantSelection = ResolveOpaqueVariantSelection(sceneData);
+            sceneData.ForwardSimpleMeshletCount = variantSelection.SimpleMeshletCount;
+            sceneData.ForwardFullMaterialMeshletCount = variantSelection.FullMaterialMeshletCount;
+            sceneData.ForwardLocalProbeMeshletCount = variantSelection.LocalProbeMeshletCount;
+        }
+
+        private static void UpdateCompactedForwardVariantDiagnostics(
+            Data.SceneRenderingData sceneData,
+            int compactedDrawCapacity)
+        {
+            int meshletCount = Math.Max(0, compactedDrawCapacity);
+            sceneData.ForwardSimpleMeshletCount = 0;
+            sceneData.ForwardFullMaterialMeshletCount = meshletCount;
+            sceneData.ForwardLocalProbeMeshletCount = RequiresLocalReflectionProbeEvaluation(sceneData) ? meshletCount : 0;
+        }
+
+        private static void UpdateCompactedForwardShadowDiagnostics(
+            Data.SceneRenderingData sceneData,
+            int compactedDrawCapacity)
+        {
+            sceneData.ForwardShadowReceiverMeshletCount = HasForwardShadowReceivers(sceneData)
+                ? Math.Max(0, compactedDrawCapacity)
+                : 0;
+        }
+
+        private static int ResolveForwardShadowReceiverMeshletCount(Data.SceneRenderingData sceneData)
+        {
+            if (!HasForwardShadowReceivers(sceneData))
+                return 0;
+
+            return Math.Max(0, sceneData.SimpleOpaqueMeshletCount) +
+                   Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount) +
+                   Math.Max(0, sceneData.FullOpaqueMeshletCount);
+        }
+
+        private static bool HasForwardShadowReceivers(Data.SceneRenderingData sceneData)
+        {
+            return sceneData.DirectionalShadowPassEnabled ||
+                   sceneData.SpotShadowSelectedCount > 0 ||
+                   sceneData.PointShadowSelectedCount > 0;
+        }
+
+        internal readonly record struct ForwardOpaqueVariantSelection(
+            bool UseSimpleGlobalIblPipeline,
+            int SimpleMeshletCount,
+            int FullMaterialMeshletCount,
+            int LocalProbeMeshletCount);
+
+        private string BuildSceneOpaqueIndirectDispatchSkipReason(Data.SceneRenderingData sceneData)
+        {
+            if (_bufferManager == null)
+                return "scene opaque indirect dispatch buffer unavailable";
+
+            return SceneSubmissionDiagnosticsPolicy.BuildIndirectDispatchSkipReason(
+                sceneData,
+                SceneOpaqueCompactionPass.GetFullOpaqueIndirectDispatchOffset() +
+                (ulong)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+        }
+
+        private void DrawForwardBucket(
+            CommandBuffer cmd,
+            Data.SceneRenderingData sceneData,
+            Silk.NET.Vulkan.Pipeline pipeline,
+            int meshletCount,
+            int meshletDrawBufferBaseIndex)
+        {
+            if (meshletCount <= 0)
+                return;
+
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
+
+            var pushConstants = new Data.GPUForwardPushConstants
+            {
+                ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
+                InverseViewMatrix = sceneData.InverseViewMatrix,
+                InverseProjectionMatrix = sceneData.InverseProjectionMatrix,
+                CameraPosition = sceneData.CameraPosition,
+                Time = sceneData.Time,
+                ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                MeshletDrawCount = (uint)meshletCount,
+                MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex,
+                LightCount = (uint)sceneData.LightCount,
+                LocalLightCount = (uint)sceneData.LocalLightCount,
+                HiZMipCount = sceneData.HiZMipCount,
+                OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? (uint)sceneData.HiZTestMode : (uint)HiZTestMode.Off,
+                OcclusionBias = sceneData.OcclusionBias,
+                DebugAndAoFlags = Data.GPUForwardPushConstants.PackDebugAndAoFlags(
+                    sceneData.DebugViewMode,
+                    sceneData.AmbientOcclusionEnabled,
+                    (uint)sceneData.AmbientOcclusionDebugView,
+                    transparentReceiveShadows: true,
+                    transparencyDebugView: (uint)sceneData.TransparencyDebugView,
+                    ambientOcclusionForwardSamplingMode: (uint)sceneData.AmbientOcclusionForwardSamplingMode,
+                    globalIlluminationEnabled: ShouldApplyGlobalIllumination(sceneData),
+                    screenSpaceGlobalIlluminationEnabled: false),
+                DiagnosticFlags = Data.GPUForwardPushConstants.PackDiagnosticFlags(
+                    ShouldCollectDdgiForwardEstimateCounters(sceneData),
+                    ShouldCollectDdgiClipmapCoverageCounters(sceneData))
+            };
+
+            uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
+            _context.Api.CmdPushConstants(
+                cmd,
+                _meshPipeline.Layout,
+                ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit | ShaderStageFlags.TaskBitExt,
+                0,
+                size,
+                &pushConstants);
+
+            sceneData.ForwardTaskInvocations += meshletCount;
+            _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
+        }
+
+        private void DrawCompactedForwardBucketsIndirect(
+            CommandBuffer cmd,
+            Data.SceneRenderingData sceneData)
+        {
+            bool useSimpleGlobalIblPipeline = ResolveOpaqueVariantSelection(sceneData).UseSimpleGlobalIblPipeline;
+            DrawForwardBucketIndirect(
+                cmd,
+                sceneData,
+                useSimpleGlobalIblPipeline
+                    ? _meshPipeline.ForwardCompactedSimpleGlobalIblPipeline
+                    : _meshPipeline.ForwardCompactedPipeline,
+                Math.Max(0, sceneData.SimpleOpaqueMeshletCount),
+                BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase,
+                SceneOpaqueCompactionPass.GetSimpleOpaqueIndirectDispatchOffset(),
+                sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer);
+            DrawForwardBucketIndirect(
+                cmd,
+                sceneData,
+                useSimpleGlobalIblPipeline
+                    ? _meshPipeline.ForwardCompactedSimpleFullInputGlobalIblPipeline
+                    : _meshPipeline.ForwardCompactedPipeline,
+                Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount),
+                BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase,
+                SceneOpaqueCompactionPass.GetSimpleNormalOpaqueIndirectDispatchOffset(),
+                sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer);
+            DrawForwardBucketIndirect(
+                cmd,
+                sceneData,
+                _meshPipeline.ForwardCompactedPipeline,
+                Math.Max(0, sceneData.FullOpaqueMeshletCount),
+                BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase,
+                SceneOpaqueCompactionPass.GetFullOpaqueIndirectDispatchOffset(),
+                sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer);
+        }
+
+        private void DrawForwardVisibilityBucketsIndirect(
+            CommandBuffer cmd,
+            Data.SceneRenderingData sceneData)
+        {
+            bool useSimpleGlobalIblPipeline = ResolveOpaqueVariantSelection(sceneData).UseSimpleGlobalIblPipeline;
+            DrawForwardBucketIndirect(
+                cmd,
+                sceneData,
+                useSimpleGlobalIblPipeline
+                    ? _meshPipeline.ForwardCompactedSimpleGlobalIblPipeline
+                    : _meshPipeline.ForwardCompactedPipeline,
+                Math.Max(0, sceneData.ForwardVisibilitySimpleCapacity),
+                BindlessIndex.ForwardVisibleSimpleOpaqueMeshletDrawBufferBase,
+                ForwardVisibilityCompactionPass.GetSimpleOpaqueIndirectDispatchOffset(),
+                sceneData.ForwardVisibilityIndirectDispatchBuffer);
+            DrawForwardBucketIndirect(
+                cmd,
+                sceneData,
+                useSimpleGlobalIblPipeline
+                    ? _meshPipeline.ForwardCompactedSimpleFullInputGlobalIblPipeline
+                    : _meshPipeline.ForwardCompactedPipeline,
+                Math.Max(0, sceneData.ForwardVisibilitySimpleNormalCapacity),
+                BindlessIndex.ForwardVisibleSimpleNormalOpaqueMeshletDrawBufferBase,
+                ForwardVisibilityCompactionPass.GetSimpleNormalOpaqueIndirectDispatchOffset(),
+                sceneData.ForwardVisibilityIndirectDispatchBuffer);
+            DrawForwardBucketIndirect(
+                cmd,
+                sceneData,
+                _meshPipeline.ForwardCompactedPipeline,
+                Math.Max(0, sceneData.ForwardVisibilityFullCapacity),
+                BindlessIndex.ForwardVisibleFullOpaqueMeshletDrawBufferBase,
+                ForwardVisibilityCompactionPass.GetFullOpaqueIndirectDispatchOffset(),
+                sceneData.ForwardVisibilityIndirectDispatchBuffer);
+        }
+
+        private void DrawCompactedForwardBucketsDirect(
+            CommandBuffer cmd,
+            Data.SceneRenderingData sceneData)
+        {
+            bool useSimpleGlobalIblPipeline = ResolveOpaqueVariantSelection(sceneData).UseSimpleGlobalIblPipeline;
+            DrawForwardBucket(
+                cmd,
+                sceneData,
+                useSimpleGlobalIblPipeline
+                    ? _meshPipeline.ForwardSimpleGlobalIblPipeline
+                    : _meshPipeline.ForwardFullMaterialPipeline,
+                Math.Max(0, sceneData.SimpleOpaqueMeshletCount),
+                BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase);
+            DrawForwardBucket(
+                cmd,
+                sceneData,
+                useSimpleGlobalIblPipeline
+                    ? _meshPipeline.ForwardSimpleFullInputGlobalIblPipeline
+                    : _meshPipeline.ForwardFullMaterialPipeline,
+                Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount),
+                BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase);
+            DrawForwardBucket(
+                cmd,
+                sceneData,
+                _meshPipeline.ForwardFullMaterialPipeline,
+                Math.Max(0, sceneData.FullOpaqueMeshletCount),
+                BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase);
+        }
+
+        private void DrawForwardBucketIndirect(
+            CommandBuffer cmd,
+            Data.SceneRenderingData sceneData,
+            Silk.NET.Vulkan.Pipeline pipeline,
+            int meshletCapacity,
+            int meshletDrawBufferBaseIndex,
+            ulong indirectOffset,
+            BufferHandle indirectBufferHandle)
+        {
+            if (meshletCapacity <= 0 || _bufferManager == null)
+                return;
+
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
+
+            var pushConstants = new Data.GPUForwardPushConstants
+            {
+                ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
+                InverseViewMatrix = sceneData.InverseViewMatrix,
+                InverseProjectionMatrix = sceneData.InverseProjectionMatrix,
+                CameraPosition = sceneData.CameraPosition,
+                Time = sceneData.Time,
+                ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                MeshletDrawCount = (uint)meshletCapacity,
+                MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex,
+                LightCount = (uint)sceneData.LightCount,
+                LocalLightCount = (uint)sceneData.LocalLightCount,
+                HiZMipCount = sceneData.HiZMipCount,
+                OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? (uint)sceneData.HiZTestMode : (uint)HiZTestMode.Off,
+                OcclusionBias = sceneData.OcclusionBias,
+                DebugAndAoFlags = Data.GPUForwardPushConstants.PackDebugAndAoFlags(
+                    sceneData.DebugViewMode,
+                    sceneData.AmbientOcclusionEnabled,
+                    (uint)sceneData.AmbientOcclusionDebugView,
+                    transparentReceiveShadows: true,
+                    transparencyDebugView: (uint)sceneData.TransparencyDebugView,
+                    ambientOcclusionForwardSamplingMode: (uint)sceneData.AmbientOcclusionForwardSamplingMode,
+                    globalIlluminationEnabled: ShouldApplyGlobalIllumination(sceneData),
+                    screenSpaceGlobalIlluminationEnabled: false),
+                DiagnosticFlags = Data.GPUForwardPushConstants.PackDiagnosticFlags(
+                    ShouldCollectDdgiForwardEstimateCounters(sceneData),
+                    ShouldCollectDdgiClipmapCoverageCounters(sceneData))
+            };
+
+            uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
+            _context.Api.CmdPushConstants(
+                cmd,
+                _meshPipeline.Layout,
+                ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit | ShaderStageFlags.TaskBitExt,
+                0,
+                size,
+                &pushConstants);
+
+            VkBuffer indirect = _bufferManager.GetBuffer(indirectBufferHandle);
+            int diagnosticTaskCount = Math.Max(0, meshletCapacity);
+            sceneData.SceneSubmissionGpuIndirectMeshletTaskCount += diagnosticTaskCount;
+            sceneData.ForwardTaskInvocations += diagnosticTaskCount;
+            _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                cmd,
+                indirect,
+                indirectOffset,
+                1,
+                (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+        }
+
+        private bool ShouldApplyGlobalIllumination(Data.SceneRenderingData sceneData) =>
+            ShouldApplyGlobalIllumination(sceneData, _settings.GlobalIllumination);
+
+        private bool ShouldCollectDdgiForwardEstimateCounters(Data.SceneRenderingData sceneData)
+        {
+            return ShouldCollectDdgiForwardEstimateCounters(
+                sceneData,
+                _settings.GlobalIllumination,
+                _settings.Diagnostics);
+        }
+
+        internal static bool ShouldCollectDdgiForwardEstimateCounters(
+            Data.SceneRenderingData sceneData,
+            GlobalIlluminationSettings gi,
+            RenderDiagnosticsSettings diagnostics)
+        {
+            if (diagnostics == null)
+                throw new ArgumentNullException(nameof(diagnostics));
+
+            return diagnostics.DdgiForwardEstimateCountersEnabled &&
+                ShouldApplyDdgi(sceneData, gi);
+        }
+
+        private bool ShouldCollectDdgiClipmapCoverageCounters(Data.SceneRenderingData sceneData)
+        {
+            return ShouldCollectDdgiClipmapCoverageCounters(
+                sceneData,
+                _settings.GlobalIllumination,
+                _settings.Diagnostics);
+        }
+
+        internal static bool ShouldCollectDdgiClipmapCoverageCounters(
+            Data.SceneRenderingData sceneData,
+            GlobalIlluminationSettings gi,
+            RenderDiagnosticsSettings diagnostics)
+        {
+            if (diagnostics == null)
+                throw new ArgumentNullException(nameof(diagnostics));
+
+            return ShouldApplyDdgi(sceneData, gi) &&
+                (diagnostics.DdgiForwardEstimateCountersEnabled ||
+                 IsDdgiGatherDebugView(gi.DebugView));
+        }
+
+        private static bool IsDdgiGatherDebugView(GlobalIlluminationDebugView view)
+        {
+            return view is GlobalIlluminationDebugView.DdgiGatherLocalVolume
+                or GlobalIlluminationDebugView.DdgiGatherClipmap
+                or GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight
+                or GlobalIlluminationDebugView.DdgiGatherBlendWeight
+                or GlobalIlluminationDebugView.DdgiGatherFallback;
+        }
+
+        internal static bool ShouldApplyGlobalIllumination(
+            Data.SceneRenderingData sceneData,
+            GlobalIlluminationSettings gi)
+        {
+            if (sceneData.AnimationDebugView != AnimationDebugView.None)
+                return false;
+
+            if (!RenderFeatureIsolationPolicy.AllowsPostProcessing(sceneData.ActiveFeatureIsolation))
+                return false;
+
+            return ShouldApplyDdgi(sceneData, gi) || ShouldApplySsgi(sceneData, gi);
+        }
+
+        private bool ShouldApplySsgi(Data.SceneRenderingData sceneData) =>
+            ShouldApplySsgi(sceneData, _settings.GlobalIllumination);
+
+        internal static bool ShouldApplySsgi(
+            Data.SceneRenderingData sceneData,
+            GlobalIlluminationSettings gi)
+        {
+            return gi.EffectiveUseSsgi && sceneData.DepthPrePassEnabled;
+        }
+
+        internal static bool ShouldApplyDdgi(
+            Data.SceneRenderingData sceneData,
+            GlobalIlluminationSettings gi)
+        {
+            return (gi.EffectiveUseDdgi || gi.EffectiveUseSimpleDdgi) &&
+                   sceneData.DdgiProbeCount > 0 &&
+                   (sceneData.DepthPrePassEnabled || gi.DdgiAllowForwardWithoutDepthPrePass);
+        }
+
+        private void ResetGlobalIlluminationHistoryIfInputsChanged()
+        {
+            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+            bool enabled = gi.EffectiveUseSsgi;
+            bool changed = _lastGlobalIlluminationEnabled != enabled ||
+                _lastGlobalIlluminationMode != gi.Mode ||
+                MathF.Abs(_lastGlobalIlluminationResolutionScale - gi.ResolutionScale) > 0.0001f;
+
+            if (changed)
+            {
+                _lastGlobalIlluminationEnabled = enabled;
+                _lastGlobalIlluminationMode = gi.Mode;
+                _lastGlobalIlluminationResolutionScale = gi.ResolutionScale;
+            }
+        }
+
+        private void DrawFoliageForward(CommandBuffer cmd, Data.SceneRenderingData sceneData)
+        {
+            if (_foliagePipeline == null || sceneData.FoliageClusterCount <= 0 || sceneData.FoliageDrawBufferBytes == 0)
+                return;
+
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _foliagePipeline.ForwardPipeline);
+            BindFoliageDescriptorSets(cmd);
+
+            var pushConstants = new GPUFoliageDrawPushConstants
+            {
+                ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
+                CameraPositionTime = new Vector4(sceneData.CameraPosition.X, sceneData.CameraPosition.Y, sceneData.CameraPosition.Z, sceneData.Time),
+                ScreenDimensions = new Vector4(sceneData.ScreenWidth, sceneData.ScreenHeight, 1.0f / Math.Max(1u, sceneData.ScreenWidth), 1.0f / Math.Max(1u, sceneData.ScreenHeight)),
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                ClusterDrawCount = checked((uint)sceneData.FoliageClusterCount),
+                VisibleClusterBufferBaseIndex = (uint)BindlessIndex.FoliageVisibleClusterBufferBase,
+                Flags = 0u,
+                DebugView = sceneData.FoliageDebugView,
+                ShadowDensityScale = 1.0f
+            };
+
+            _context.Api.CmdPushConstants(
+                cmd,
+                _foliagePipeline.GraphicsLayout,
+                ShaderStageFlags.TaskBitExt | ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit,
+                0,
+                (uint)Marshal.SizeOf<GPUFoliageDrawPushConstants>(),
+                &pushConstants);
+
+            sceneData.ForwardTaskInvocations += sceneData.FoliageClusterCount;
+            _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)sceneData.FoliageClusterCount, 1, 1);
+
+            DrawAuthoredFoliageForward(cmd, sceneData);
+        }
+
+        private void DrawAuthoredFoliageForward(CommandBuffer cmd, Data.SceneRenderingData sceneData)
+        {
+            if (_foliagePipeline == null || _bufferManager == null || _foliageManager == null || sceneData.FoliageDrawBufferBytes == 0)
+                return;
+
+            FoliageRuntimeBuffers buffers = _foliageManager.GetBuffers((int)sceneData.CurrentFrameIndex);
+            if (!buffers.IndirectDispatchBuffer.IsValid || buffers.MeshletDrawCapacity <= 0)
+                return;
+
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _foliagePipeline.AuthoredForwardPipeline);
+            BindFoliageDescriptorSets(cmd);
+
+            var pushConstants = new GPUFoliageDrawPushConstants
+            {
+                ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
+                CameraPositionTime = new Vector4(sceneData.CameraPosition.X, sceneData.CameraPosition.Y, sceneData.CameraPosition.Z, sceneData.Time),
+                ScreenDimensions = new Vector4(sceneData.ScreenWidth, sceneData.ScreenHeight, 1.0f / Math.Max(1u, sceneData.ScreenWidth), 1.0f / Math.Max(1u, sceneData.ScreenHeight)),
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                ClusterDrawCount = checked((uint)buffers.MeshletDrawCapacity),
+                VisibleClusterBufferBaseIndex = (uint)BindlessIndex.FoliageVisibleClusterBufferBase,
+                Flags = 0u,
+                DebugView = sceneData.FoliageDebugView,
+                ShadowDensityScale = 1.0f
+            };
+
+            _context.Api.CmdPushConstants(
+                cmd,
+                _foliagePipeline.GraphicsLayout,
+                ShaderStageFlags.TaskBitExt | ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit,
+                0,
+                (uint)Marshal.SizeOf<GPUFoliageDrawPushConstants>(),
+                &pushConstants);
+
+            if (sceneData.FoliageIndirectMeshletDispatchEnabled)
+            {
+                VkBuffer indirect = _bufferManager.GetBuffer(buffers.IndirectDispatchBuffer);
+                _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                    cmd,
+                    indirect,
+                    0,
+                    1,
+                    (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+                return;
+            }
+
+            _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)buffers.MeshletDrawCapacity, 1, 1);
+        }
+
+        private void BindFoliageDescriptorSets(CommandBuffer cmd)
+        {
+            var storageSet = _bindlessHeap.StorageBufferSet;
+            var textureSet = _bindlessHeap.TextureSamplerSet;
+
+            _context.Api.CmdBindDescriptorSets(
+                cmd,
+                PipelineBindPoint.Graphics,
+                _foliagePipeline!.GraphicsLayout,
+                0,
+                1,
+                &storageSet,
+                0,
+                null);
+
+            _context.Api.CmdBindDescriptorSets(
+                cmd,
+                PipelineBindPoint.Graphics,
+                _foliagePipeline.GraphicsLayout,
+                1,
+                1,
+                &textureSet,
+                0,
+                null);
+        }
+        
+        public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
+        {
+            yield break;
+        }
+        
+        public override void OnSwapchainRecreated()
+        {
+        }
+        
+        public override void Cleanup()
+        {
+        }
+    }
+    
+}

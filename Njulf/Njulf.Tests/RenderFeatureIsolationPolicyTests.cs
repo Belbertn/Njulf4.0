@@ -1,3 +1,110 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:702be2cbc86fa1a72fb9200f8e2a2ab308b2488df5563e5d1e12dd7abbb3ea05
-size 6913
+using System.Linq;
+using Njulf.Rendering;
+using Njulf.Rendering.Data;
+using Njulf.Rendering.Pipeline;
+using NUnit.Framework;
+
+namespace Njulf.Tests
+{
+    [TestFixture]
+    public sealed class RenderFeatureIsolationPolicyTests
+    {
+        [Test]
+        public void FullFrame_AllowsProductionRenderPasses()
+        {
+            Assert.That(
+                VulkanRenderer.ProductionRenderPassOrder.All(passName =>
+                    RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.FullFrame, passName)),
+                Is.True);
+        }
+
+        [Test]
+        public void Geometry_SkipsFeaturePassesButKeepsPresentationPath()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "DirectionalShadowPass"), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "AmbientOcclusionPass"), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "SsgiTracePass"), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "SsgiTemporalPass"), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "SsgiDenoisePass"), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "DdgiSchedulePass"), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "DdgiTracePass"), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "DdgiBlendPass"), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "DdgiRelocateClassifyPass"), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "DdgiPublishPass"), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "ParticlePass"), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "ForwardPlusPass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "ToneMapCompositePass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "AntiAliasingPass"), Is.True);
+            });
+        }
+
+        [Test]
+        public void PostProcessing_AllowsPostPassesAndSkipsUnrelatedFeaturePasses()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "AmbientOcclusionPass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "SsgiTracePass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "SsgiTemporalPass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "SsgiDenoisePass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "DdgiSchedulePass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "DdgiTracePass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "DdgiBlendPass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "DdgiRelocateClassifyPass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "DdgiPublishPass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "FogPass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "BloomPass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "DirectionalShadowPass"), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "ParticlePass"), Is.False);
+            });
+        }
+
+        [Test]
+        public void FeatureHelpers_AreModeScoped()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(RenderFeatureIsolationPolicy.AllowsShadows(RenderFeatureIsolationMode.Shadows), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.AllowsPostProcessing(RenderFeatureIsolationMode.PostProcessing), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.AllowsReflections(RenderFeatureIsolationMode.Reflections), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.AllowsAnimation(RenderFeatureIsolationMode.Animation), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.AllowsParticles(RenderFeatureIsolationMode.Particles), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.AllowsParticles(RenderFeatureIsolationMode.Geometry), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.AllowsAnimation(RenderFeatureIsolationMode.Geometry), Is.False);
+            });
+        }
+
+        [Test]
+        public void RenderSettings_QualityPresetPreservesFeatureIsolation()
+        {
+            var settings = new RenderSettings
+            {
+                FeatureIsolation = RenderFeatureIsolationMode.Particles
+            };
+
+            settings.ApplyQualityPreset(RenderQualityPreset.Low);
+
+            Assert.That(settings.FeatureIsolation, Is.EqualTo(RenderFeatureIsolationMode.Particles));
+        }
+
+        [Test]
+        public void SceneRenderingData_ClearResetsIsolationDiagnostics()
+        {
+            var sceneData = new SceneRenderingData
+            {
+                ActiveFeatureIsolation = RenderFeatureIsolationMode.Shadows,
+                SkippedRenderPassCount = 4
+            };
+
+            sceneData.Clear();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(sceneData.ActiveFeatureIsolation, Is.EqualTo(RenderFeatureIsolationMode.FullFrame));
+                Assert.That(sceneData.SkippedRenderPassCount, Is.Zero);
+            });
+        }
+    }
+}

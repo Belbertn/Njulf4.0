@@ -1,3 +1,17 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:0295a77f0a45c6837dbefddd141443709b444c1cda799f14fd7e24e29cf3dc6b
-size 424
+namespace Njulf.Core.Animation
+{
+    public enum AnimationChannelPath
+    {
+        Translation,
+        Rotation,
+        Scale
+    }
+
+    public sealed class AnimationChannel
+    {
+        public int TargetNodeIndex { get; init; } = -1;
+        public int TargetJointIndex { get; init; } = -1;
+        public AnimationChannelPath Path { get; init; }
+        public AnimationSampler Sampler { get; init; } = new();
+    }
+}

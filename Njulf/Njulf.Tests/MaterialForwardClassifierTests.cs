@@ -1,3 +1,124 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:a0d1cf23b55787cde8ad25d19164cc23986e06c707646bc61c3c202e4034f9c2
-size 5167
+using Njulf.Core.Math;
+using Njulf.Rendering.Data;
+using Njulf.Rendering.Descriptors;
+using NUnit.Framework;
+
+namespace Njulf.Tests
+{
+    [TestFixture]
+    public sealed class MaterialForwardClassifierTests
+    {
+        [Test]
+        public void Classify_DefaultOpaqueMaterial_UsesSimpleOpaque()
+        {
+            GPUMaterialData material = CreateDefaultMaterial();
+
+            MaterialForwardClass materialClass = MaterialForwardClassifier.Classify(
+                material,
+                MaterialRenderMetadata.FromGpuMaterial(material));
+
+            Assert.That(materialClass, Is.EqualTo(MaterialForwardClass.SimpleOpaque));
+        }
+
+        [Test]
+        public void Classify_OpaqueNormalMap_UsesSimpleOpaqueNormal()
+        {
+            GPUMaterialData material = CreateDefaultMaterial();
+            material.NormalTextureIndex = BindlessIndex.FirstDynamicTextureIndex;
+            material.NormalScaleBias = new Vector4(0.8f, 0f, 0.5f, 0f);
+
+            MaterialForwardClass materialClass = MaterialForwardClassifier.Classify(
+                material,
+                MaterialRenderMetadata.FromGpuMaterial(material));
+
+            Assert.That(materialClass, Is.EqualTo(MaterialForwardClass.SimpleOpaqueNormal));
+            Assert.That(MaterialForwardClassifier.IsSimpleOpaque(materialClass), Is.False);
+            Assert.That(MaterialForwardClassifier.IsSimpleNormalOpaque(materialClass), Is.True);
+        }
+
+        [Test]
+        public void Classify_ExtensionMaterial_UsesFullOpaque()
+        {
+            GPUMaterialData material = CreateDefaultMaterial();
+            material.FeatureFlags = (uint)MaterialFeatureFlags.Clearcoat;
+            material.ExtensionDataIndex = 0;
+
+            MaterialForwardClass materialClass = MaterialForwardClassifier.Classify(
+                material,
+                MaterialRenderMetadata.FromGpuMaterial(material));
+
+            Assert.That(materialClass, Is.EqualTo(MaterialForwardClass.FullOpaque));
+        }
+
+        [Test]
+        public void Classify_TextureTransform_UsesFullOpaque()
+        {
+            GPUMaterialData material = CreateDefaultMaterial();
+            material.BaseColorOffsetScale = new Vector4(0.1f, 0f, 1f, 1f);
+
+            MaterialForwardClass materialClass = MaterialForwardClassifier.Classify(
+                material,
+                MaterialRenderMetadata.FromGpuMaterial(material));
+
+            Assert.That(materialClass, Is.EqualTo(MaterialForwardClass.FullOpaque));
+        }
+
+        [Test]
+        public void Classify_MaskedAndTransparentMaterials_KeepDedicatedPaths()
+        {
+            GPUMaterialData masked = CreateDefaultMaterial();
+            masked.NormalScaleBias = new Vector4(1f, 1f, 0.5f, 0f);
+
+            GPUMaterialData transparent = CreateDefaultMaterial();
+            transparent.NormalScaleBias = new Vector4(1f, 2f, 0.5f, 0f);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    MaterialForwardClassifier.Classify(masked, MaterialRenderMetadata.FromGpuMaterial(masked)),
+                    Is.EqualTo(MaterialForwardClass.Masked));
+                Assert.That(
+                    MaterialForwardClassifier.Classify(transparent, MaterialRenderMetadata.FromGpuMaterial(transparent)),
+                    Is.EqualTo(MaterialForwardClass.Transparent));
+            });
+        }
+
+        [Test]
+        public void Classify_Bc5NormalMap_StaysOnSimpleOpaqueNormalPath()
+        {
+            GPUMaterialData material = CreateDefaultMaterial();
+            material.NormalTextureIndex = BindlessIndex.FirstDynamicTextureIndex;
+            material.NormalScaleBias = new Vector4(1f, 0f, 0.5f, 0f);
+            material.FeatureFlags = (uint)MaterialFeatureFlags.CompressedNormalBc5;
+
+            MaterialForwardClass materialClass = MaterialForwardClassifier.Classify(
+                material,
+                MaterialRenderMetadata.FromGpuMaterial(material));
+
+            Assert.That(materialClass, Is.EqualTo(MaterialForwardClass.SimpleOpaqueNormal));
+        }
+
+        private static GPUMaterialData CreateDefaultMaterial()
+        {
+            return new GPUMaterialData
+            {
+                Albedo = Vector4.One,
+                Emissive = Vector4.Zero,
+                NormalScaleBias = new Vector4(1f, 0f, 0.5f, 0f),
+                MetallicRoughnessAO = new Vector4(0f, 1f, 1f, 0f),
+                BaseColorOffsetScale = new Vector4(0f, 0f, 1f, 1f),
+                NormalOffsetScale = new Vector4(0f, 0f, 1f, 1f),
+                MetallicRoughnessOffsetScale = new Vector4(0f, 0f, 1f, 1f),
+                EmissiveOffsetScale = new Vector4(0f, 0f, 1f, 1f),
+                TextureRotations = Vector4.Zero,
+                TextureTexCoordSets = Vector4.Zero,
+                AlbedoTextureIndex = BindlessIndex.DefaultWhiteTexture,
+                NormalTextureIndex = BindlessIndex.DefaultNormalTexture,
+                MetallicRoughnessTextureIndex = BindlessIndex.DefaultBlackTexture,
+                EmissiveTextureIndex = BindlessIndex.DefaultBlackTexture,
+                FeatureFlags = 0u,
+                ExtensionDataIndex = -1
+            };
+        }
+    }
+}

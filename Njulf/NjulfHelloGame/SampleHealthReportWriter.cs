@@ -1,3 +1,42 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:306f13317d58ec2fa81363888703008c6ab5770dd7ab21f66ef788218b6c7654
-size 1106
+using System;
+using System.Collections.Generic;
+using Njulf.Rendering.Data;
+using Njulf.Rendering.Diagnostics;
+
+namespace NjulfHelloGame;
+
+internal sealed class SampleHealthReportWriter
+{
+    private readonly RendererHealthReportWriter _writer = new();
+
+    public void TryWrite(
+        SampleSmokeOptions options,
+        string? startupLogPath,
+        IReadOnlyList<SampleSmokeOperationResult> operations,
+        RendererDiagnostics diagnostics,
+        string status,
+        string? failure)
+    {
+        if (string.IsNullOrWhiteSpace(options.HealthReportPath))
+            return;
+
+        try
+        {
+            _writer.Write(options.HealthReportPath, new
+            {
+                kind = "renderer-health",
+                timestampUtc = DateTimeOffset.UtcNow,
+                status,
+                failure,
+                startupLogPath,
+                options,
+                operations,
+                diagnostics
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Health report write failed: {ex.Message}");
+        }
+    }
+}

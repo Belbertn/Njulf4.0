@@ -1,3 +1,16 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:6f0f45e20133db633d795a242fc7de2da7db47426e894e886607882926a73a41
-size 405
+namespace NjulfHelloGame;
+
+public sealed record SampleBenchmarkOptions(
+    bool Enabled,
+    int WarmupFrameCount,
+    int MeasureFrameCount,
+    string? ReportPath,
+    bool DisableVSync = true)
+{
+    public static SampleBenchmarkOptions Disabled { get; } = new(
+        Enabled: false,
+        WarmupFrameCount: 0,
+        MeasureFrameCount: 0,
+        ReportPath: null,
+        DisableVSync: true);
+}

@@ -1,3 +1,13 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:b80ccd33f3c8070baeadee55a85b32fc4322b077ab61baaefb9eea4fca3e361b
-size 319
+using System;
+
+namespace Njulf.Rendering.Diagnostics;
+
+public sealed record RendererStartupStep(
+    string Name,
+    RendererStartupStepStatus Status,
+    DateTimeOffset TimestampUtc,
+    long ElapsedMicroseconds,
+    string? Detail,
+    string? ExceptionType,
+    string? ExceptionMessage,
+    string? VulkanResult);

@@ -1,3 +1,12 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:47fe42208c7146eaaad0d246a2599c3de5ccf915d731a5ce8bfb6c035b9c33bc
-size 569
+namespace Njulf.Core.Vfx
+{
+    public sealed class ParticleEffect
+    {
+        public string Name { get; init; } = string.Empty;
+        public IReadOnlyList<ParticleEmitterDefinition> Emitters { get; init; } = Array.Empty<ParticleEmitterDefinition>();
+        public IReadOnlyList<TrailDefinition> Trails { get; init; } = Array.Empty<TrailDefinition>();
+        public IReadOnlyList<BeamDefinition> Beams { get; init; } = Array.Empty<BeamDefinition>();
+        public int MaxParticles { get; init; } = int.MaxValue;
+        public int Priority { get; init; }
+    }
+}

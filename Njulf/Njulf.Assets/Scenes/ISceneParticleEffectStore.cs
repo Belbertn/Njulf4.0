@@ -1,3 +1,10 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:4530e68967f4cd7a41b15a43514c445465b92ee815bcbcf3aba08705afdf1860
-size 310
+using Njulf.Core.Scene;
+using Njulf.Core.Vfx;
+
+namespace Njulf.Assets.Scenes;
+
+/// <summary>Application-owned effect resolver for scene documents; particle effect authoring stays renderer-neutral.</summary>
+public interface ISceneParticleEffectStore
+{
+    ParticleEffect Load(SceneAssetReference reference);
+}
