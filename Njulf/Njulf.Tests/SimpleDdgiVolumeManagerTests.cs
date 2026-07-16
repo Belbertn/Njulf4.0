@@ -185,6 +185,26 @@ public sealed class SimpleDdgiVolumeManagerTests
             Is.EqualTo(expected));
     }
 
+    [TestCase(2_048, 1, false, 632, 632)]
+    [TestCase(2_048, 1, false, 0, 1)]
+    [TestCase(256, 1, false, 512, 256)]
+    [TestCase(256, 1, true, 64, 256)]
+    public void SchedulerFeedbackBudget_PreservesBoundedVisibleFreshRecovery(
+        int hardBudget,
+        int feedbackCap,
+        bool deterministicFixedBudget,
+        int minimumRecoveryBudget,
+        int expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveFeedbackLimitedUpdateBudget(
+                hardBudget,
+                feedbackCap,
+                deterministicFixedBudget,
+                minimumRecoveryBudget),
+            Is.EqualTo(expected));
+    }
+
     [Test]
     public void SchedulerTelemetryHooks_AreBoundedAndAllocationFreeOnTheRenderThread()
     {
@@ -203,6 +223,34 @@ public sealed class SimpleDdgiVolumeManagerTests
     }
 
     [Test]
+    public void Upload_EstablishesAtlasCapacityBeforeClassifyingVisibleFreshRecovery()
+    {
+        string source = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiVolumeManager.cs"));
+
+        int ensureCapacity = source.IndexOf(
+            "EnsureCapacity(_probeCount, _raysPerProbe, dirtyBoostedBudget, commandBuffer);",
+            StringComparison.Ordinal);
+        int markFresh = source.IndexOf("MarkFreshForNewOrScrolledProbes();", StringComparison.Ordinal);
+        int refreshImportance = source.IndexOf(
+            "int visibleFreshRecoveryBudget = RefreshProbeSchedulingImportance();",
+            StringComparison.Ordinal);
+        int resolveFeedback = source.IndexOf(
+            "int updateBudget = ResolveFeedbackLimitedUpdateBudget(",
+            StringComparison.Ordinal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ensureCapacity, Is.GreaterThanOrEqualTo(0));
+            Assert.That(markFresh, Is.GreaterThan(ensureCapacity));
+            Assert.That(refreshImportance, Is.GreaterThan(markFresh));
+            Assert.That(resolveFeedback, Is.GreaterThan(refreshImportance));
+        });
+    }
+
+    [Test]
     public void Renderer_FeedsCompletedSimpleDdgiGpuTimingBackIntoScheduler()
     {
         string source = File.ReadAllText(FindSourceFile(
@@ -214,6 +262,9 @@ public sealed class SimpleDdgiVolumeManagerTests
             Assert.That(source, Does.Contain("HasCompletedSimpleDdgiGpuTiming(completedGpuTimings)"));
             Assert.That(source, Does.Contain("_simpleDdgiVolumeManager.ReportSchedulingFeedback"));
             Assert.That(source, Does.Contain("EffectiveDdgiAdaptiveBudgetTimeMilliseconds"));
+            Assert.That(source, Does.Contain("detailedDdgiInstrumentationActive"));
+            Assert.That(source, Does.Contain("fixedSimpleDdgiBudget || hasCompletedSimpleDdgiGpuTiming"));
+            Assert.That(source, Does.Contain("DeterministicFixedBudget: fixedSimpleDdgiBudget"));
         });
     }
 

@@ -1842,16 +1842,28 @@ namespace Njulf.Rendering
                 frameAsyncComputePlan.SubmissionPlan,
                 completedGpuTimings);
             GlobalIlluminationSettings giSettings = Settings.GlobalIllumination;
+            bool detailedDdgiInstrumentationActive =
+                Settings.Diagnostics.DdgiForwardEstimateCountersEnabled ||
+                giSettings.DebugView != GlobalIlluminationDebugView.None;
+            bool fixedSimpleDdgiBudget =
+                !giSettings.DdgiAdaptiveBudgetingEnabled ||
+                detailedDdgiInstrumentationActive;
+            bool hasCompletedSimpleDdgiGpuTiming = HasCompletedSimpleDdgiGpuTiming(completedGpuTimings);
             if (_simpleDdgiVolumeManager != null &&
                 sceneData.SimpleDdgiActive != 0 &&
-                HasCompletedSimpleDdgiGpuTiming(completedGpuTimings))
+                (fixedSimpleDdgiBudget || hasCompletedSimpleDdgiGpuTiming))
             {
                 ulong targetGpuMicroseconds = checked((ulong)Math.Round(
                     Math.Max(0.0f, giSettings.EffectiveDdgiAdaptiveBudgetTimeMilliseconds) * 1_000.0));
                 _simpleDdgiVolumeManager.ReportSchedulingFeedback(new SimpleDdgiSchedulingFeedback(
-                    CompletedGpuMicroseconds: checked((ulong)Math.Max(0L, sceneData.GpuDdgiUpdateMicroseconds)),
+                    CompletedGpuMicroseconds: hasCompletedSimpleDdgiGpuTiming
+                        ? checked((ulong)Math.Max(0L, sceneData.GpuDdgiUpdateMicroseconds))
+                        : 0UL,
                     TargetGpuMicroseconds: targetGpuMicroseconds,
-                    DeterministicFixedBudget: !giSettings.DdgiAdaptiveBudgetingEnabled));
+                    // Diagnostic atomics intentionally perturb the timed trace and
+                    // blend workload. Keep investigation captures reproducible and
+                    // do not train the production feedback controller on that cost.
+                    DeterministicFixedBudget: fixedSimpleDdgiBudget));
             }
             _ddgiProbeVolumeManager?.ReportCompletedGpuUpdateMicroseconds(
                 sceneData.GpuDdgiUpdateMicroseconds,

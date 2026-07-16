@@ -1024,14 +1024,20 @@ namespace Njulf.Rendering.Resources
                 : Math.Min(_probeCount, gi.SimpleDdgiProbeUpdatesPerFrame);
             _schedulerConfiguredRequestBudget = baseUpdateBudget;
             int dirtyBoostedBudget = ResolveLightingDirtyUpdateBudget(gi, baseUpdateBudget);
-            int updateBudget = ResolveFeedbackLimitedUpdateBudget(dirtyBoostedBudget);
-            _schedulerEffectiveRequestBudget = updateBudget;
-            EnsureCapacity(_probeCount, _raysPerProbe, updateBudget, commandBuffer);
+            // Atlas growth can invalidate every physical slot. Establish storage
+            // first so MarkFreshForNewOrScrolledProbes observes that invalidation;
+            // transient feedback throttling must not change persistent capacity.
+            EnsureCapacity(_probeCount, _raysPerProbe, dirtyBoostedBudget, commandBuffer);
             _schedulerCameraPosition = cameraPosition;
             MarkFreshForNewOrScrolledProbes();
             if (hasRegionalDirtyWork)
                 MarkRegionalDirtyProbes(dirtyRegions!);
-            RefreshProbeSchedulingImportance();
+            int visibleFreshRecoveryBudget = RefreshProbeSchedulingImportance();
+
+            int updateBudget = ResolveFeedbackLimitedUpdateBudget(
+                dirtyBoostedBudget,
+                visibleFreshRecoveryBudget);
+            _schedulerEffectiveRequestBudget = updateBudget;
             _probesToUpdate = BuildUpdateQueue(updateBudget);
             BeginUpdateTransaction(_probesToUpdate > 0);
             _updateStartProbe = _probesToUpdate > 0 ? (int)_updateQueueScratch[0].ProbeIndex : 0;
@@ -1513,7 +1519,9 @@ namespace Njulf.Rendering.Resources
             return boosted;
         }
 
-        private int ResolveFeedbackLimitedUpdateBudget(int requestedBudget)
+        private int ResolveFeedbackLimitedUpdateBudget(
+            int requestedBudget,
+            int minimumRecoveryBudget)
         {
             int hardBudget = Math.Clamp(
                 requestedBudget,
@@ -1522,7 +1530,8 @@ namespace Njulf.Rendering.Resources
             return ResolveFeedbackLimitedUpdateBudget(
                 hardBudget,
                 _schedulerFeedbackRequestBudgetCap,
-                _schedulerDeterministicFixedBudget);
+                _schedulerDeterministicFixedBudget,
+                minimumRecoveryBudget);
         }
 
         internal static int ResolveFeedbackLimitedUpdateBudget(
@@ -1530,18 +1539,35 @@ namespace Njulf.Rendering.Resources
             int feedbackRequestBudgetCap,
             bool deterministicFixedBudget)
         {
+            return ResolveFeedbackLimitedUpdateBudget(
+                hardBudget,
+                feedbackRequestBudgetCap,
+                deterministicFixedBudget,
+                minimumRecoveryBudget: 0);
+        }
+
+        internal static int ResolveFeedbackLimitedUpdateBudget(
+            int hardBudget,
+            int feedbackRequestBudgetCap,
+            bool deterministicFixedBudget,
+            int minimumRecoveryBudget)
+        {
             int clampedHardBudget = Math.Max(0, hardBudget);
             if (deterministicFixedBudget || feedbackRequestBudgetCap <= 0)
                 return clampedHardBudget;
-            return Math.Min(clampedHardBudget, feedbackRequestBudgetCap);
+
+            int feedbackLimitedBudget = Math.Min(clampedHardBudget, feedbackRequestBudgetCap);
+            int clampedRecoveryBudget = Math.Clamp(minimumRecoveryBudget, 0, clampedHardBudget);
+            return Math.Max(feedbackLimitedBudget, clampedRecoveryBudget);
         }
 
-        private void RefreshProbeSchedulingImportance()
+        private int RefreshProbeSchedulingImportance()
         {
             if (_probeCount <= 0)
-                return;
+                return 0;
 
             bool globalDirty = _lightingDirtyFrames > 0;
+            int visibleFreshRecoveryBudget = 0;
             int requiredStableUpdates = Math.Max(
                 1,
                 _settings.GlobalIllumination.SimpleDdgiStableMaintenanceUpdateCount);
@@ -1550,6 +1576,7 @@ namespace Njulf.Rendering.Resources
                 GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
                 int firstProbe = FirstProbe(volume);
                 int probeCount = VolumeProbeCount(volume);
+                int visibleFreshCount = 0;
                 for (int local = 0; local < probeCount; local++)
                 {
                     int probeIndex = firstProbe + local;
@@ -1575,11 +1602,29 @@ namespace Njulf.Rendering.Resources
                     byte importance = CalculateProbeSchedulingImportance(probeIndex, volumeIndex);
                     _probeVisibilityImportance[probeIndex] = importance;
                     if (importance >= SchedulerVisibleImportanceThreshold)
+                    {
                         _probeSchedulingFlags[probeIndex] |= ProbeSchedulingVisibleFlag;
+                        bool freshOrExposed = _probeFresh[probeIndex] != 0 ||
+                            (_probeSchedulingFlags[probeIndex] & ProbeSchedulingScrollExposedFlag) != 0;
+                        if (freshOrExposed)
+                            visibleFreshCount++;
+                    }
                     else
                         _probeSchedulingFlags[probeIndex] &= unchecked((byte)~ProbeSchedulingVisibleFlag);
                 }
+
+                // The per-ring minimum is also the bounded recovery guarantee for
+                // visible cells invalidated by camera-relative scrolling. Adaptive
+                // feedback may still reduce maintenance work after these cells are
+                // populated, but it cannot leave a moving receiver sampling empty
+                // atlas slots one probe at a time.
+                int volumeMinimum = Math.Max(0, ResolveVolumeQuality(volumeIndex).MinimumUpdateQuota);
+                visibleFreshRecoveryBudget = SaturatingAdd(
+                    visibleFreshRecoveryBudget,
+                    Math.Min(visibleFreshCount, volumeMinimum));
             }
+
+            return visibleFreshRecoveryBudget;
         }
 
         private byte CalculateProbeSchedulingImportance(int probeIndex, int volumeIndex)
