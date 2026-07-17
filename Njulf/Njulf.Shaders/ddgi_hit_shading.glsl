@@ -24,6 +24,14 @@
 #define DDGI_HIT_MATERIAL_TEXTURE_MAX_CASCADE pc.MaterialTextureMaxCascade
 #endif
 
+#ifndef DDGI_HIT_ALPHA_MASK_TRANSPORT_ENABLED
+#define DDGI_HIT_ALPHA_MASK_TRANSPORT_ENABLED true
+#endif
+
+#ifndef DDGI_HIT_CANDIDATE_MATERIAL_TEXTURES_ALLOWED
+#define DDGI_HIT_CANDIDATE_MATERIAL_TEXTURES_ALLOWED true
+#endif
+
 const uint DDGI_HIT_TOP_LIGHT_LIMIT = 8u;
 const uint DDGI_HIT_LIGHT_CANDIDATE_LIMIT = 64u;
 
@@ -217,6 +225,61 @@ bool ResolveCommittedHitSurface(
     return true;
 }
 
+// The TLAS marks alpha-mask instances non-opaque. Only those intersections take
+// this path; ordinary opaque geometry remains on Vulkan's fast opaque traversal.
+// Use a fixed LOD so a cutout has deterministic transport visibility independent
+// of probe direction or ray differentials, neither of which ray queries expose.
+bool DdgiCandidatePassesOpacity(uint instanceIndex, uint primitiveIndex, vec2 barycentrics)
+{
+    if (!DDGI_HIT_ALPHA_MASK_TRANSPORT_ENABLED)
+        return true;
+
+    GPUDdgiRayQueryInstance instance = ReadDdgiRayQueryInstance(instanceIndex);
+    GPUMaterialData material = ReadMaterial(instance.MaterialIndex);
+    if (int(round(material.NormalScaleBias.y)) != 1)
+        return true;
+
+    uint triangleIndexBase = instance.IndexOffset + primitiveIndex * 3u;
+    uint i0 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 0u);
+    uint i1 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 1u);
+    uint i2 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 2u);
+    uint v0 = instance.VertexOffset + i0;
+    uint v1 = instance.VertexOffset + i1;
+    uint v2 = instance.VertexOffset + i2;
+    vec3 bary = vec3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
+    vec2 uv0 =
+        ReadSplitVertexTexCoord(v0) * bary.x +
+        ReadSplitVertexTexCoord(v1) * bary.y +
+        ReadSplitVertexTexCoord(v2) * bary.z;
+    vec2 uv1 =
+        ReadSplitVertexTexCoord2(v0) * bary.x +
+        ReadSplitVertexTexCoord2(v1) * bary.y +
+        ReadSplitVertexTexCoord2(v2) * bary.z;
+    float vertexAlpha = clamp(
+        ReadSplitVertexColor(v0).a * bary.x +
+        ReadSplitVertexColor(v1).a * bary.y +
+        ReadSplitVertexColor(v2).a * bary.z,
+        0.0,
+        1.0);
+    float alpha = clamp(material.Albedo.a, 0.0, 1.0) * vertexAlpha;
+    // Coarse cascades deliberately use compact material transport.  Preserve
+    // their bounded cost here too: factor/vertex alpha still works, while
+    // texture alpha is evaluated only where the cascade permits textures.
+    if (material.AlbedoTextureIndex != DEFAULT_WHITE_TEXTURE &&
+        DDGI_HIT_CANDIDATE_MATERIAL_TEXTURES_ALLOWED)
+    {
+        vec2 uv = MaterialDdgiHitUv(
+            uv0,
+            uv1,
+            material.TextureTexCoordSets.x,
+            material.BaseColorOffsetScale,
+            material.TextureRotations.x);
+        alpha *= clamp(SampleDdgiMaterialTexture(material.AlbedoTextureIndex, uv, 0.0, vec4(1.0)).a, 0.0, 1.0);
+    }
+
+    return alpha >= clamp(material.NormalScaleBias.z, 0.0, 1.0);
+}
+
 float TraceLightVisibility(vec3 worldPosition, vec3 normal, vec3 lightDirection, float maxDistance)
 {
     float normalOffset = DDGI_PROBE_TRACE_EPSILON * 4.0;
@@ -228,7 +291,7 @@ float TraceLightVisibility(vec3 worldPosition, vec3 normal, vec3 lightDirection,
     rayQueryInitializeEXT(
         shadowQuery,
         SceneTlas,
-        gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT,
+        gl_RayFlagsTerminateOnFirstHitEXT,
         0xff,
         origin,
         rayTMin,
@@ -237,6 +300,14 @@ float TraceLightVisibility(vec3 worldPosition, vec3 normal, vec3 lightDirection,
 
     while (rayQueryProceedEXT(shadowQuery))
     {
+        if (rayQueryGetIntersectionTypeEXT(shadowQuery, false) == gl_RayQueryCandidateIntersectionTriangleEXT)
+        {
+            uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(shadowQuery, false);
+            uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(shadowQuery, false);
+            vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(shadowQuery, false);
+            if (DdgiCandidatePassesOpacity(instanceIndex, primitiveIndex, barycentrics))
+                rayQueryConfirmIntersectionEXT(shadowQuery);
+        }
     }
 
     uint hitType = rayQueryGetIntersectionTypeEXT(shadowQuery, true);
@@ -359,13 +430,13 @@ vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
     if (DdgiHitLuminance(noShadowDiffuse) <= 0.0001)
         return vec3(0.0);
 
-    float shadowStrength = clamp(light.ShadowStrength, 0.0, 1.0);
-    if ((uint(light.ShadowFlags) & GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS) == 0u || shadowStrength <= 0.0)
+    if ((uint(light.ShadowFlags) & GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS) == 0u)
         return noShadowDiffuse;
 
     float tracedVisibility = TraceLightVisibility(worldPosition, normal, lightDirection, visibilityDistance);
-    float visibility = mix(1.0, tracedVisibility, shadowStrength);
-    return noShadowDiffuse * visibility;
+    // DDGI is the transport reference: shadow strength is an artistic raster
+    // control, not a source of unoccluded direct energy behind geometry.
+    return noShadowDiffuse * tracedVisibility;
 }
 
 vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(vec3 worldPosition, vec3 normal, vec3 albedo)

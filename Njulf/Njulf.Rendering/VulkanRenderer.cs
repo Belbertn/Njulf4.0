@@ -1391,6 +1391,11 @@ namespace Njulf.Rendering
             _lightManager.UploadToGPU(_stagingRing, _currentCommandBuffer);
             ulong lightUploadBytes = _lightManager.LastUploadBytes;
             LightFrameSnapshot lightSnapshot = _lightManager.GetFrameSnapshot();
+            // The next BeginFrame safely recreates the procedural environment if
+            // this authoritative sun snapshot materially changed. Keeping the
+            // update here ensures sky, DDGI misses, and directional shadows all
+            // derive from the same scene light rather than independent constants.
+            _environmentManager?.UpdateProceduralSkyLighting(lightSnapshot);
             int lightCount = lightSnapshot.Count;
             int directionalLightCount = lightSnapshot.DirectionalLightCount;
             int localLightCount = lightSnapshot.LocalLightCount;
@@ -9500,7 +9505,8 @@ namespace Njulf.Rendering
                         ? gi.GiAccelerationStructureMaximumStaticInstances
                         : int.MaxValue,
                     gi.GiAccelerationStructureEvictionGraceFrames,
-                    AllowStaticMemoryCulling: farFieldCoverageReady));
+                    AllowStaticMemoryCulling: farFieldCoverageReady),
+                alphaMaskedTransportEnabled: gi.DdgiAlphaMaskedTransportEnabled);
             sceneData.AccelerationStructureBottomLevelCount = stats.BottomLevelCount;
             sceneData.AccelerationStructureTopLevelInstanceCount = stats.TopLevelInstanceCount;
             sceneData.AccelerationStructureBlasBuildCount = stats.BlasBuildCount;

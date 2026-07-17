@@ -68,7 +68,9 @@ internal static class SampleLighting
             Intensity = 14f,
             Range = 10f,
             CastsShadows = true,
-            ShadowStrength = 0.85f,
+            // Reference lighting has fully occluded direct sun. Softness belongs
+            // to a finite-area sun/shadow filter, never a constant light leak.
+            ShadowStrength = 1.0f,
             ShadowPriority = 10
         });
     }

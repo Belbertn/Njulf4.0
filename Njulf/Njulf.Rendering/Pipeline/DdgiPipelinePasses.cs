@@ -113,8 +113,10 @@ namespace Njulf.Rendering.Pipeline
                 SType = StructureType.MemoryBarrier2,
                 SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
                 SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
-                DstStageMask = PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit,
-                DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderSampledReadBit
+                // This is a local dependency in the compute submission.  The render graph
+                // records the separate compute-to-graphics handoff for later sampling.
+                DstStageMask = PipelineStageFlags2.ComputeShaderBit,
+                DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit
             };
             var dependencyInfo = new DependencyInfo
             {
@@ -136,6 +138,7 @@ namespace Njulf.Rendering.Pipeline
         private const uint RawAtlasRadianceConventionFlag = 1u << 4;
         private const uint TraceEnergyDiagnosticsFlag = 1u << 6;
         private const uint ProbeL1MetadataFlag = 1u << 7;
+        private const uint AlphaMaskTransportEnabledFlag = 1u << 8;
 
         private readonly string _shaderName;
         private readonly RenderSettings _settings;
@@ -177,8 +180,11 @@ namespace Njulf.Rendering.Pipeline
         public override bool SupportsAsyncCompute => true;
         public override string AsyncComputeReason => "DDGI split update work is compute-only and writes probe buffers.";
 
-        protected virtual PipelineStageFlags2 BarrierDestinationStage => PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit;
-        protected virtual AccessFlags2 BarrierDestinationAccess => AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderSampledReadBit;
+        // These barriers order the next DDGI compute pass.  Graphics consumers are
+        // synchronized by render-graph queue handoffs, so fragment stages must not be
+        // named in a command buffer allocated from a compute-only queue family.
+        protected virtual PipelineStageFlags2 BarrierDestinationStage => PipelineStageFlags2.ComputeShaderBit;
+        protected virtual AccessFlags2 BarrierDestinationAccess => AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit;
 
         public override void Initialize()
         {
@@ -364,6 +370,8 @@ namespace Njulf.Rendering.Pipeline
                 flags |= TraceEnergyDiagnosticsFlag;
             if (settings.DdgiProbeL1MetadataEnabled)
                 flags |= ProbeL1MetadataFlag;
+            if (settings.DdgiAlphaMaskedTransportEnabled)
+                flags |= AlphaMaskTransportEnabledFlag;
             if (IsGpuSchedulerRenderingActive(settings) &&
                 sceneData.DdgiGpuSchedulerFallbackActive == 0 &&
                 sceneData.DdgiGpuSchedulerConsideredProbeCount > 0)

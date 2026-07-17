@@ -654,8 +654,10 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_DIRECT_LUMINANCE_COUNTER"));
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_DIRECT_NO_SHADOW_LUMINANCE_COUNTER"));
             Assert.That(shader, Does.Contain("directNoShadowDiffuse"));
-            Assert.That(hitShading, Does.Contain("gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT"));
-            Assert.That(hitShading, Does.Not.Contain("gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsCullBackFacingTrianglesEXT"));
+            Assert.That(hitShading, Does.Contain("gl_RayFlagsTerminateOnFirstHitEXT"));
+            Assert.That(hitShading, Does.Contain("DdgiCandidatePassesOpacity"));
+            Assert.That(hitShading, Does.Contain("DDGI_HIT_CANDIDATE_MATERIAL_TEXTURES_ALLOWED"));
+            Assert.That(hitShading, Does.Not.Contain("gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT"));
             Assert.That(hitShading, Does.Contain("float normalOffset = DDGI_PROBE_TRACE_EPSILON * 4.0;"));
             Assert.That(hitShading, Does.Contain("float rayDistance = max(maxDistance - normalOffset, rayTMin);"));
             Assert.That(hitShading, Does.Contain("vec3 origin = worldPosition + normal * normalOffset;"));
@@ -806,7 +808,8 @@ public sealed class ShaderBuildTests
             Assert.That(common, Does.Contain("light.ShadowFlags = int(ReadStorageWord(uint(LIGHT_BUFFER_INDEX), baseWord + 13u));"));
             Assert.That(common, Does.Contain("light.ShadowStrength = ReadStorageFloat(uint(LIGHT_BUFFER_INDEX), baseWord + 14u);"));
             Assert.That(hitShading, Does.Contain("(uint(light.ShadowFlags) & GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS) == 0u"));
-            Assert.That(hitShading, Does.Contain("float visibility = mix(1.0, tracedVisibility, shadowStrength);"));
+            Assert.That(hitShading, Does.Contain("return noShadowDiffuse * tracedVisibility;"));
+            Assert.That(hitShading, Does.Not.Contain("mix(1.0, tracedVisibility, shadowStrength)"));
             Assert.That(forward, Does.Contain("return mix(1.0, shadow, clamp(shadowSettings.x, 0.0, 1.0));"));
             Assert.That(hitShading, Does.Contain("#define DDGI_HIT_MAX_SHADED_LIGHTS pc.MaxShadedLights"));
             Assert.That(hitShading, Does.Contain("uint selectedLightCapacity = min(DDGI_HIT_MAX_SHADED_LIGHTS, DDGI_MAX_SELECTED_HIT_LIGHTS);"));

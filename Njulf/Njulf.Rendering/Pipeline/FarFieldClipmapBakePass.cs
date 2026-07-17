@@ -455,8 +455,10 @@ namespace Njulf.Rendering.Pipeline
                 SType = StructureType.MemoryBarrier2,
                 SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
                 SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
-                DstStageMask = PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
-                DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderSampledReadBit | AccessFlags2.ShaderStorageWriteBit
+                // This dependency only orders the next bake dispatch.  Any subsequent
+                // graphics sampling is synchronized by the render graph's queue handoff.
+                DstStageMask = PipelineStageFlags2.ComputeShaderBit,
+                DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit
             };
             var dependencyInfo = new DependencyInfo
             {

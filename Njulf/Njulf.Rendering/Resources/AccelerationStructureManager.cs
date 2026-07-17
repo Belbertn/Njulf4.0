@@ -212,7 +212,8 @@ namespace Njulf.Rendering.Resources
             bool enabled,
             GpuTimestampRecorder? gpuTimestamps = null,
             int frameIndex = 0,
-            AccelerationStructureResidencyPolicy? residencyPolicy = null)
+            AccelerationStructureResidencyPolicy? residencyPolicy = null,
+            bool alphaMaskedTransportEnabled = true)
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
@@ -239,7 +240,7 @@ namespace Njulf.Rendering.Resources
             try
             {
                 InvalidateCachedStructuresIfMeshBuffersChanged();
-                CollectStaticOpaqueInstances(scene, _instanceScratch);
+                CollectStaticOpaqueInstances(scene, _instanceScratch, alphaMaskedTransportEnabled);
                 ApplyResidencyPolicy(_instanceScratch);
                 if (!ApplyMemoryResidencyPolicy(_instanceScratch))
                 {
@@ -335,7 +336,10 @@ namespace Njulf.Rendering.Resources
             }
         }
 
-        internal void CollectStaticOpaqueInstances(Scene scene, List<StaticOpaqueInstance> instances)
+        internal void CollectStaticOpaqueInstances(
+            Scene scene,
+            List<StaticOpaqueInstance> instances,
+            bool alphaMaskedTransportEnabled = true)
         {
             instances.Clear();
 
@@ -356,7 +360,9 @@ namespace Njulf.Rendering.Resources
                     renderObject.Name,
                     requestedDomain,
                     out MeshInfo meshInfo,
-                    out uint materialIndex))
+                    out uint materialIndex,
+                    out GeometryInstanceFlagsKHR instanceFlags,
+                    alphaMaskedTransportEnabled))
                     continue;
 
                 AccelerationStructureGeometryDomain domain = meshInfo.IsSkinned
@@ -368,7 +374,8 @@ namespace Njulf.Rendering.Resources
                     meshInfo,
                     materialIndex,
                     renderObject.WorldMatrix,
-                    domain));
+                    domain,
+                    instanceFlags));
             }
 
             foreach (StaticInstanceBatch batch in scene.StaticInstanceBatches)
@@ -383,7 +390,9 @@ namespace Njulf.Rendering.Resources
                     batch.Name,
                     AccelerationStructureGeometryDomain.Static,
                     out MeshInfo meshInfo,
-                    out uint materialIndex))
+                    out uint materialIndex,
+                    out GeometryInstanceFlagsKHR instanceFlags,
+                    alphaMaskedTransportEnabled))
                     continue;
 
                 IReadOnlyList<CoreMatrix4x4> worldMatrices = batch.WorldMatrices;
@@ -393,7 +402,8 @@ namespace Njulf.Rendering.Resources
                         meshInfo,
                         materialIndex,
                         worldMatrices[i],
-                        AccelerationStructureGeometryDomain.Static));
+                        AccelerationStructureGeometryDomain.Static,
+                        instanceFlags));
             }
         }
 
@@ -667,10 +677,13 @@ namespace Njulf.Rendering.Resources
             string? ownerName,
             AccelerationStructureGeometryDomain domain,
             out MeshInfo meshInfo,
-            out uint materialIndex)
+            out uint materialIndex,
+            out GeometryInstanceFlagsKHR instanceFlags,
+            bool alphaMaskedTransportEnabled)
         {
             meshInfo = default;
             materialIndex = 0;
+            instanceFlags = GeometryInstanceFlagsKHR.ForceOpaqueBitKhr;
             try
             {
                 meshInfo = _meshManager.GetMeshInfo(meshHandle);
@@ -691,6 +704,10 @@ namespace Njulf.Rendering.Resources
                     return false;
 
                 materialIndex = checked((uint)Math.Max(materialHandle.Index, 0));
+                instanceFlags = policy.VisibilityPolicy == DdgiAccelerationStructureVisibilityPolicy.AlphaMaskTested &&
+                                alphaMaskedTransportEnabled
+                    ? default
+                    : policy.InstanceFlags;
                 return true;
             }
             catch (InvalidOperationException)
@@ -1034,7 +1051,10 @@ namespace Njulf.Rendering.Resources
                 SType = StructureType.AccelerationStructureGeometryKhr,
                 GeometryType = GeometryTypeKHR.TrianglesKhr,
                 Geometry = new AccelerationStructureGeometryDataKHR { Triangles = triangles },
-                Flags = GeometryFlagsKHR.OpaqueBitKhr
+                // Opaqueness is selected per TLAS instance.  Opaque instances use
+                // ForceOpaqueBitKhr, while alpha-mask instances expose candidates
+                // to the DDGI shader for the material cutoff test.
+                Flags = default
             };
         }
 
@@ -1071,7 +1091,12 @@ namespace Njulf.Rendering.Resources
                 StaticOpaqueInstance instance = instances[i];
                 BottomLevelAccelerationStructure blas = _blasCache[instance.Mesh];
                 ulong blasAddress = GetAccelerationStructureDeviceAddress(blas.Handle);
-                _gpuInstanceScratch.Add(CreateInstance(instance.WorldMatrix, blasAddress, (uint)i, StaticOpaqueInstanceMask));
+                _gpuInstanceScratch.Add(CreateInstance(
+                    instance.WorldMatrix,
+                    blasAddress,
+                    (uint)i,
+                    StaticOpaqueInstanceMask,
+                    instance.InstanceFlags));
                 _rayQueryInstanceScratch.Add(CreateRayQueryInstanceMetadata(instance));
             }
 
@@ -1457,7 +1482,8 @@ namespace Njulf.Rendering.Resources
             CoreMatrix4x4 worldMatrix,
             ulong blasAddress,
             uint instanceCustomIndex,
-            byte mask)
+            byte mask,
+            GeometryInstanceFlagsKHR flags = GeometryInstanceFlagsKHR.ForceOpaqueBitKhr)
         {
             return new AccelerationStructureInstanceKHR
             {
@@ -1465,7 +1491,7 @@ namespace Njulf.Rendering.Resources
                 InstanceCustomIndex = instanceCustomIndex & 0x00FF_FFFFu,
                 Mask = mask,
                 InstanceShaderBindingTableRecordOffset = 0,
-                Flags = GeometryInstanceFlagsKHR.ForceOpaqueBitKhr,
+                Flags = flags,
                 AccelerationStructureReference = blasAddress
             };
         }
@@ -1533,9 +1559,9 @@ namespace Njulf.Rendering.Resources
                 return new DdgiAccelerationStructureGeometryPolicy(
                     true,
                     StaticOpaqueInstanceMask,
-                    GeometryInstanceFlagsKHR.ForceOpaqueBitKhr,
-                    DdgiAccelerationStructureVisibilityPolicy.AlphaMaskApproximateOpaque,
-                    "alpha-masked geometry is approximated as opaque for stable DDGI visibility");
+                    default,
+                    DdgiAccelerationStructureVisibilityPolicy.AlphaMaskTested,
+                    "alpha-masked geometry is evaluated at ray-query candidates using the glTF cutoff");
             }
 
             return new DdgiAccelerationStructureGeometryPolicy(
@@ -1583,6 +1609,7 @@ namespace Njulf.Rendering.Resources
                 hash = HashAdd(hash, instance.MeshInfo.IndexCount);
                 hash = HashAdd(hash, instance.MaterialIndex);
                 hash = HashAdd(hash, (int)instance.Domain);
+                hash = HashAdd(hash, (uint)instance.InstanceFlags);
                 hash = HashAdd(hash, instance.WorldMatrix);
             }
 
@@ -1841,7 +1868,8 @@ namespace Njulf.Rendering.Resources
             MeshInfo MeshInfo,
             uint MaterialIndex,
             CoreMatrix4x4 WorldMatrix,
-            AccelerationStructureGeometryDomain Domain = AccelerationStructureGeometryDomain.Static);
+            AccelerationStructureGeometryDomain Domain = AccelerationStructureGeometryDomain.Static,
+            GeometryInstanceFlagsKHR InstanceFlags = GeometryInstanceFlagsKHR.ForceOpaqueBitKhr);
 
         private sealed class BottomLevelAccelerationStructure
         {
@@ -1935,7 +1963,7 @@ namespace Njulf.Rendering.Resources
     internal enum DdgiAccelerationStructureVisibilityPolicy
     {
         OpaqueTriangles = 0,
-        AlphaMaskApproximateOpaque = 1,
+        AlphaMaskTested = 1,
         ExcludedTransparent = 2,
         ExcludedGeometryDecal = 3,
         SkinnedBindPoseProxy = 4,

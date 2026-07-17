@@ -47,6 +47,7 @@ const uint DDGI_UPDATE_FLAG_RAW_ATLAS_RADIANCE_CONVENTION = 1u << 4;
 const uint DDGI_DEBUG_FORCE_PROBE_ACTIVE_FLAG = 1u << 5;
 const uint DDGI_UPDATE_FLAG_TRACE_ENERGY_DIAGNOSTICS = 1u << 6;
 const uint DDGI_UPDATE_FLAG_PROBE_L1_METADATA = 1u << 7;
+const uint DDGI_UPDATE_FLAG_ALPHA_MASK_TRANSPORT_ENABLED = 1u << 8;
 const uint DDGI_PROBE_UPDATE_REASON_NEW_CELL = 1u << 0;
 const uint DDGI_PROBE_UPDATE_REASON_DIRTY_BOUNDS = 1u << 1;
 const uint DDGI_PROBE_UPDATE_REASON_VISIBLE_FRUSTUM = 1u << 2;
@@ -692,8 +693,15 @@ void StableDdgiBilinearOctahedralTexels(
     c11 = RemapStableDdgiOctahedralTexelCoord(baseCoord + ivec2(1, 1), texelsPerProbe);
 }
 
+// This is assigned before each probe ray and also covers its direct-light
+// visibility queries.  Candidate alpha texture fetches must follow the same
+// cascade texture policy as committed-hit shading.
+uint ddgiCurrentTraceVolumeCascadeIndex;
+
 #define DDGI_HIT_USE_SELECTED_LIGHTS 1
 #define DDGI_HIT_ENABLE_ENVIRONMENT_WRAPPER 1
+#define DDGI_HIT_ALPHA_MASK_TRANSPORT_ENABLED ((pc.Flags & DDGI_UPDATE_FLAG_ALPHA_MASK_TRANSPORT_ENABLED) != 0u)
+#define DDGI_HIT_CANDIDATE_MATERIAL_TEXTURES_ALLOWED ShouldSampleDdgiMaterialTextures(ddgiCurrentTraceVolumeCascadeIndex)
 #include "ddgi_hit_shading.glsl"
 
 float ResolveStableDdgiRoundedBoxEdgeFade(vec3 edgeDistance, vec3 blendDistance)
@@ -1288,6 +1296,7 @@ void TraceProbeRay(
     out vec3 stableDiffuseOut,
     out vec3 skyDiffuseOut)
 {
+    ddgiCurrentTraceVolumeCascadeIndex = volumeCascadeIndex;
     directDiffuseOut = vec3(0.0);
     directNoShadowDiffuseOut = vec3(0.0);
     emissiveDiffuseOut = vec3(0.0);
@@ -1300,7 +1309,7 @@ void TraceProbeRay(
     rayQueryInitializeEXT(
         query,
         SceneTlas,
-        gl_RayFlagsOpaqueEXT,
+        0u,
         0xff,
         origin,
         tMin,
@@ -1309,6 +1318,14 @@ void TraceProbeRay(
 
     while (rayQueryProceedEXT(query))
     {
+        if (rayQueryGetIntersectionTypeEXT(query, false) == gl_RayQueryCandidateIntersectionTriangleEXT)
+        {
+            uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(query, false);
+            uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, false);
+            vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, false);
+            if (DdgiCandidatePassesOpacity(instanceIndex, primitiveIndex, barycentrics))
+                rayQueryConfirmIntersectionEXT(query);
+        }
     }
 
     uint hitType = rayQueryGetIntersectionTypeEXT(query, true);

@@ -43,6 +43,7 @@ const float DDGI_DIRECTIONAL_SHADOW_RAY_DISTANCE = 256.0;
 // Keep that exact representation authoritative across the entire probe ray;
 // the far-field cache remains a bounded streaming substitute for lower tiers.
 const uint SIMPLE_DDGI_TRACE_FLAG_COMPLETE_RAY_SCENE = 1u << 6;
+const uint SIMPLE_DDGI_TRACE_FLAG_ALPHA_MASK_TRANSPORT_ENABLED = 1u << 7;
 
 #define DDGI_HIT_USE_SELECTED_LIGHTS 0
 #define DDGI_HIT_ENABLE_ENVIRONMENT_WRAPPER 0
@@ -51,9 +52,12 @@ const uint SIMPLE_DDGI_TRACE_FLAG_COMPLETE_RAY_SCENE = 1u << 6;
 // direct-light logic while allowing the scheduler to cap far-ring work.
 uint simpleDdgiCurrentMaxShadedLights;
 uint simpleDdgiCurrentMaterialTextureMaxCascade;
+uint simpleDdgiCurrentVolumeCascade;
 #define DDGI_HIT_DIRECT_LIGHT_CAP simpleDdgiCurrentMaxShadedLights
 #define DDGI_HIT_MAX_SHADED_LIGHTS simpleDdgiCurrentMaxShadedLights
 #define DDGI_HIT_MATERIAL_TEXTURE_MAX_CASCADE simpleDdgiCurrentMaterialTextureMaxCascade
+#define DDGI_HIT_ALPHA_MASK_TRANSPORT_ENABLED ((pc.Flags & SIMPLE_DDGI_TRACE_FLAG_ALPHA_MASK_TRANSPORT_ENABLED) != 0u)
+#define DDGI_HIT_CANDIDATE_MATERIAL_TEXTURES_ALLOWED ShouldSampleDdgiMaterialTextures(simpleDdgiCurrentVolumeCascade)
 #include "ddgi_hit_shading.glsl"
 
 void WriteSimpleRayResult(uint rayResultIndex, vec3 radiance, float distance, vec3 direction, float hitKind)
@@ -95,6 +99,7 @@ void main()
     if (!SimpleDdgiUpdateMatchesProbeGeneration(update, probeState))
         return;
     uint volumeCascade = SimpleDdgiVolumeQualityCascade(volume);
+    simpleDdgiCurrentVolumeCascade = volumeCascade;
     int materialTextureMaxCascade = SimpleDdgiUpdateMaterialTextureMaxCascade(update);
     simpleDdgiCurrentMaterialTextureMaxCascade = materialTextureMaxCascade < 0
         ? DDGI_MATERIAL_TEXTURE_DISABLED_CASCADE
@@ -132,9 +137,17 @@ void main()
     if (nearTlasMaxDistance > DDGI_PROBE_TRACE_EPSILON)
     {
         rayQueryEXT query;
-        rayQueryInitializeEXT(query, SceneTlas, gl_RayFlagsOpaqueEXT, 0xff, probePosition, DDGI_PROBE_TRACE_EPSILON, direction, nearTlasMaxDistance);
+        rayQueryInitializeEXT(query, SceneTlas, 0u, 0xff, probePosition, DDGI_PROBE_TRACE_EPSILON, direction, nearTlasMaxDistance);
         while (rayQueryProceedEXT(query))
         {
+            if (rayQueryGetIntersectionTypeEXT(query, false) == gl_RayQueryCandidateIntersectionTriangleEXT)
+            {
+                uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(query, false);
+                uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, false);
+                vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, false);
+                if (DdgiCandidatePassesOpacity(instanceIndex, primitiveIndex, barycentrics))
+                    rayQueryConfirmIntersectionEXT(query);
+            }
         }
 
         if (rayQueryGetIntersectionTypeEXT(query, true) != gl_RayQueryCommittedIntersectionNoneEXT)

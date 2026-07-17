@@ -312,7 +312,7 @@ public sealed class SimpleDdgiVolumeManagerTests
             Enabled = true,
             SourceKind = EnvironmentSourceKind.ProceduralSky,
             SourcePath = string.Empty,
-            SkyIntensity = 0.45f,
+            SkyIntensity = 1.0f,
             RotationRadians = 0.0f,
             EnvironmentSize = 1024,
             IrradianceSize = 64,

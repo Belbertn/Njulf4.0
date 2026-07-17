@@ -32,9 +32,6 @@ namespace Njulf.Rendering.Pipeline
             return checked((uint)Math.Max(1UL, (rayCount + 63UL) / 64UL));
         }
 
-        protected override AccessFlags2 BarrierDestinationAccess => AccessFlags2.ShaderStorageReadBit;
-        protected override PipelineStageFlags2 BarrierDestinationStage => PipelineStageFlags2.ComputeShaderBit;
-
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             // The trace is the transaction producer.  If the ray-query resource is
@@ -156,8 +153,6 @@ namespace Njulf.Rendering.Pipeline
             VolumeManager.MarkRelocateClassifyExecuted();
         }
 
-        protected override PipelineStageFlags2 BarrierDestinationStage => PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit;
-        protected override AccessFlags2 BarrierDestinationAccess => AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit;
     }
 
     public abstract unsafe class SimpleDdgiComputePass : RenderPassBase
@@ -170,6 +165,7 @@ namespace Njulf.Rendering.Pipeline
         private const uint ClassificationSchedulingEnabledFlag = 1u << 4;
         private const uint ReducedBlendEnabledFlag = 1u << 5;
         private const uint CompleteRaySceneFlag = 1u << 6;
+        private const uint AlphaMaskTransportEnabledFlag = 1u << 7;
 
         private readonly string _shaderName;
         private readonly RenderSettings _settings;
@@ -213,8 +209,6 @@ namespace Njulf.Rendering.Pipeline
         public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
         public override bool SupportsAsyncCompute => true;
         public override string AsyncComputeReason => "Simple DDGI update work is compute-only and writes probe buffers.";
-        protected virtual PipelineStageFlags2 BarrierDestinationStage => PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit;
-        protected virtual AccessFlags2 BarrierDestinationAccess => AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderSampledReadBit;
 
         public override void Initialize()
         {
@@ -270,7 +264,7 @@ namespace Njulf.Rendering.Pipeline
                 &pushConstants);
 
             _context.Api.CmdDispatch(cmd, CalculateGroupCount(sceneData), 1, 1);
-            InsertWriteBarrier(cmd, sceneData.DdgiAsyncComputeEnabled != 0);
+            InsertWriteBarrier(cmd);
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
@@ -334,6 +328,8 @@ namespace Njulf.Rendering.Pipeline
                 flags |= ReducedBlendEnabledFlag;
             if (gi.DdgiQualityTier is DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra)
                 flags |= CompleteRaySceneFlag;
+            if (gi.DdgiAlphaMaskedTransportEnabled)
+                flags |= AlphaMaskTransportEnabledFlag;
 
             return new GPUSimpleDdgiPushConstants
             {
@@ -518,14 +514,13 @@ namespace Njulf.Rendering.Pipeline
             _boundTlas = tlas;
         }
 
-        private void InsertWriteBarrier(CommandBuffer cmd, bool asyncComputeQueue)
+        private void InsertWriteBarrier(CommandBuffer cmd)
         {
-            PipelineStageFlags2 destinationStage = asyncComputeQueue
-                ? PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TransferBit
-                : BarrierDestinationStage;
-            AccessFlags2 destinationAccess = asyncComputeQueue
-                ? AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit | AccessFlags2.TransferReadBit
-                : BarrierDestinationAccess;
+            // This is an intra-DDGI dependency.  Render-graph barriers handle
+            // visibility to later graphics consumers, which keeps this legal on a
+            // compute-only queue family as well as on the graphics queue.
+            PipelineStageFlags2 destinationStage = PipelineStageFlags2.ComputeShaderBit;
+            AccessFlags2 destinationAccess = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit;
             var memoryBarrier = new MemoryBarrier2
             {
                 SType = StructureType.MemoryBarrier2,

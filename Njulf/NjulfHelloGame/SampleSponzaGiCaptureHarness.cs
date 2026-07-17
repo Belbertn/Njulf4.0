@@ -328,12 +328,12 @@ public sealed class SampleSponzaGiCaptureContract
         if (settings.Animation.Enabled)
             violations.Add("Animation must be disabled for the locked GI comparison.");
         if (!settings.Environment.Enabled ||
-            !NearlyEqual(settings.Environment.SkyIntensity, 0.45f) ||
-            !NearlyEqual(settings.Environment.DiffuseIntensity, 0.10f) ||
-            !NearlyEqual(settings.Environment.SpecularIntensity, 0.25f) ||
+            !NearlyEqual(settings.Environment.SkyIntensity, 1.0f) ||
+            !NearlyEqual(settings.Environment.DiffuseIntensity, 1.0f) ||
+            !NearlyEqual(settings.Environment.SpecularIntensity, 1.0f) ||
             !NearlyEqual(settings.Environment.RotationRadians, 0.0f))
         {
-            violations.Add("The canonical static Sponza environment must be enabled with locked intensities and rotation.");
+            violations.Add("The canonical static Sponza environment must be enabled with physical unity intensities and locked rotation.");
         }
         if (!settings.Shadows.DirectionalShadowsEnabled ||
             settings.Shadows.DirectionalShadowMapSize != 2048 ||

@@ -104,9 +104,9 @@ internal static class SamplePlazaGlobalIllumination
     private static void ConfigureSharedLighting(RenderSettings settings)
     {
         settings.Environment.Enabled = true;
-        settings.Environment.SkyIntensity = 0.45f;
-        settings.Environment.DiffuseIntensity = 0.10f;
-        settings.Environment.SpecularIntensity = 0.25f;
+        settings.Environment.SkyIntensity = 1.0f;
+        settings.Environment.DiffuseIntensity = 1.0f;
+        settings.Environment.SpecularIntensity = 1.0f;
         settings.Shadows.SpotShadowsEnabled = false;
         settings.Shadows.MaxShadowedSpotLights = 0;
         settings.Shadows.PointShadowsEnabled = false;

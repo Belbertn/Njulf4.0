@@ -84,8 +84,8 @@ public sealed class SamplePlazaGlobalIlluminationTests
             Assert.That(gi.SimpleDdgiNearRingGridSizeX, Is.EqualTo(28));
             Assert.That(gi.SimpleDdgiNearRingGridSizeY, Is.EqualTo(14));
             Assert.That(gi.SimpleDdgiNearRingGridSizeZ, Is.EqualTo(28));
-            Assert.That(settings.Environment.SkyIntensity, Is.EqualTo(0.45f));
-            Assert.That(settings.Environment.DiffuseIntensity, Is.EqualTo(0.10f));
+            Assert.That(settings.Environment.SkyIntensity, Is.EqualTo(1.0f));
+            Assert.That(settings.Environment.DiffuseIntensity, Is.EqualTo(1.0f));
             Assert.That(settings.Shadows.DirectionalShadowMapSize, Is.EqualTo(2048));
             Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(3));
             Assert.That(settings.Shadows.PcfRadius, Is.EqualTo(1));

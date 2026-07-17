@@ -199,8 +199,8 @@ public sealed unsafe class AccelerationStructureManagerTests
             Assert.That(opaque.Include, Is.True);
             Assert.That(opaque.VisibilityPolicy, Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.OpaqueTriangles));
             Assert.That(masked.Include, Is.True);
-            Assert.That(masked.VisibilityPolicy, Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.AlphaMaskApproximateOpaque));
-            Assert.That(masked.InstanceFlags, Is.EqualTo(GeometryInstanceFlagsKHR.ForceOpaqueBitKhr));
+            Assert.That(masked.VisibilityPolicy, Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.AlphaMaskTested));
+            Assert.That(masked.InstanceFlags, Is.EqualTo(default(GeometryInstanceFlagsKHR)));
             Assert.That(transparent.Include, Is.False);
             Assert.That(transparent.VisibilityPolicy, Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.ExcludedTransparent));
             Assert.That(skinned.Include, Is.True);

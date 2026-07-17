@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.IO;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
@@ -34,8 +35,57 @@ namespace Njulf.Rendering.Resources
     {
         private const int DiffuseIrradianceSampleCount = 128;
         private const int SpecularPrefilterSampleCount = 128;
+        private const int ProceduralSkyCalibrationSampleCount = 256;
         private const float Pi = MathF.PI;
         private const float TwoPi = MathF.PI * 2.0f;
+
+        /// <summary>
+        /// Physical inputs shared by the procedural skybox and DDGI environment.
+        /// The directional light remains the sole direct-sun transport source;
+        /// procedural-sky irradiance deliberately excludes its visible sun disc.
+        /// </summary>
+        internal readonly record struct ProceduralSkyParameters(
+            Vector3 ToSunDirection,
+            Vector3 SunRadiance,
+            float DiffuseFraction,
+            float GroundAlbedo)
+        {
+            public static ProceduralSkyParameters Default => new(
+                Vector3.Normalize(new Vector3(-0.3f, 0.72f, 0.62f)),
+                new Vector3(8.0f, 6.88f, 4.96f),
+                DiffuseFraction: 0.15f,
+                GroundAlbedo: 0.20f);
+
+            public ProceduralSkyParameters Normalized()
+            {
+                Vector3 direction = ToSunDirection.LengthSquared() > 0.000001f
+                    ? Vector3.Normalize(ToSunDirection)
+                    : Default.ToSunDirection;
+                return new ProceduralSkyParameters(
+                    direction,
+                    Vector3.Max(SunRadiance, Vector3.Zero),
+                    Math.Clamp(DiffuseFraction, 0.01f, 0.50f),
+                    Math.Clamp(GroundAlbedo, 0.0f, 1.0f));
+            }
+
+            public ProceduralSkyParameters Quantized(float step = 0.01f)
+            {
+                ProceduralSkyParameters normalized = Normalized();
+                return new ProceduralSkyParameters(
+                    Quantize(normalized.ToSunDirection, step),
+                    Quantize(normalized.SunRadiance, step),
+                    Quantize(normalized.DiffuseFraction, step),
+                    Quantize(normalized.GroundAlbedo, step));
+            }
+
+            private static Vector3 Quantize(Vector3 value, float step) => new(
+                Quantize(value.X, step),
+                Quantize(value.Y, step),
+                Quantize(value.Z, step));
+
+            private static float Quantize(float value, float step) =>
+                MathF.Round(value / step, MidpointRounding.AwayFromZero) * step;
+        }
 
         public static HdrEquirectangularImage LoadRadianceHdr(string path)
         {
@@ -159,21 +209,29 @@ namespace Njulf.Rendering.Resources
             return Vec3.Lerp(Vec3.Lerp(c00, c10, tx), Vec3.Lerp(c01, c11, tx), ty);
         }
 
-        internal static byte[] GenerateProceduralSkyCubemap(uint baseSize, uint mipLevels, float blur)
+        internal static byte[] GenerateProceduralSkyCubemap(
+            uint baseSize,
+            uint mipLevels,
+            float blur,
+            ProceduralSkyParameters? parameters = null)
         {
+            ProceduralSkyModel model = CreateProceduralSkyModel(parameters ?? ProceduralSkyParameters.Default);
             return GenerateCubemap(null, baseSize, mipLevels, (_, direction, mip, totalMips) =>
             {
                 float mipBlur = Math.Clamp(blur + (totalMips <= 1 ? 0f : mip / (float)(totalMips - 1)), 0f, 1f);
-                return ProceduralSky(direction, mipBlur);
+                return SampleProceduralSky(direction, mipBlur, model, includeSunDisc: true);
             });
         }
 
         internal static byte[] GenerateProceduralSkyIrradianceCubemap(
             uint cubeSize,
-            int sampleCount = DiffuseIrradianceSampleCount)
+            int sampleCount = DiffuseIrradianceSampleCount,
+            ProceduralSkyParameters? parameters = null)
         {
             if (sampleCount <= 0)
                 throw new ArgumentOutOfRangeException(nameof(sampleCount));
+
+            ProceduralSkyModel model = CreateProceduralSkyModel(parameters ?? ProceduralSkyParameters.Default);
 
             // Keep the same representation as GenerateIrradianceCubemap: each
             // texel stores hemispherical irradiance E = integral(L cos(theta) dw).
@@ -188,7 +246,9 @@ namespace Njulf.Rendering.Resources
                     (float u, float v) = Hammersley(i, sampleCount);
                     Vec3 local = CosineSampleHemisphere(u, v);
                     Vec3 direction = (tangent * local.X + bitangent * local.Y + normal * local.Z).Normalized();
-                    sum += ProceduralSky(direction, blur: 0.0f);
+                    // The directional light already supplies direct sun transport.
+                    // Integrating the skybox disc here would count that energy twice.
+                    sum += SampleProceduralSky(direction, blur: 0.0f, model, includeSunDisc: false);
                 }
 
                 return sum * (Pi / sampleCount);
@@ -270,24 +330,126 @@ namespace Njulf.Rendering.Resources
             return direction.Normalized();
         }
 
-        private static Vec3 ProceduralSky(Vec3 direction, float blur)
+        internal static float EstimateProceduralSkyHorizontalIrradianceLuminance(
+            ProceduralSkyParameters parameters,
+            int sampleCount = ProceduralSkyCalibrationSampleCount)
+        {
+            if (sampleCount <= 0)
+                throw new ArgumentOutOfRangeException(nameof(sampleCount));
+
+            ProceduralSkyModel model = CreateProceduralSkyModel(parameters);
+            return EstimateHorizontalIrradianceLuminance(model, sampleCount);
+        }
+
+        internal static Vector3 SampleProceduralSkyRadiance(
+            Vector3 direction,
+            ProceduralSkyParameters parameters,
+            bool includeSunDisc)
+        {
+            ProceduralSkyModel model = CreateProceduralSkyModel(parameters);
+            Vec3 sample = SampleProceduralSky(
+                new Vec3(direction.X, direction.Y, direction.Z).Normalized(),
+                blur: 0.0f,
+                model,
+                includeSunDisc);
+            return new Vector3(sample.X, sample.Y, sample.Z);
+        }
+
+        private static ProceduralSkyModel CreateProceduralSkyModel(ProceduralSkyParameters parameters)
+        {
+            ProceduralSkyParameters normalized = parameters.Normalized();
+            Vec3 toSun = new(normalized.ToSunDirection.X, normalized.ToSunDirection.Y, normalized.ToSunDirection.Z);
+            Vec3 sunRadiance = new(normalized.SunRadiance.X, normalized.SunRadiance.Y, normalized.SunRadiance.Z);
+            float sunHorizontalIrradiance = Luminance(sunRadiance) * MathF.Max(toSun.Y, 0.0f);
+            float targetSkyIrradiance = sunHorizontalIrradiance > 0.0001f
+                ? normalized.DiffuseFraction / MathF.Max(1.0f - normalized.DiffuseFraction, 0.0001f) * sunHorizontalIrradiance
+                : 0.0f;
+            float baseIrradiance = EstimateBaseSkyHorizontalIrradianceLuminance(ProceduralSkyCalibrationSampleCount);
+            float domeScale = targetSkyIrradiance > 0.0f
+                ? targetSkyIrradiance / MathF.Max(baseIrradiance, 0.0001f)
+                : 1.0f;
+            float globalHorizontalIrradiance = sunHorizontalIrradiance + targetSkyIrradiance;
+            Vec3 groundRadiance = new(
+                normalized.GroundAlbedo * globalHorizontalIrradiance / Pi,
+                normalized.GroundAlbedo * globalHorizontalIrradiance / Pi,
+                normalized.GroundAlbedo * globalHorizontalIrradiance / Pi);
+            return new ProceduralSkyModel(toSun, sunRadiance, domeScale, groundRadiance);
+        }
+
+        private static Vec3 SampleProceduralSky(Vec3 direction, float blur, ProceduralSkyModel model, bool includeSunDisc)
         {
             float t = Math.Clamp(direction.Y * 0.5f + 0.5f, 0.0f, 1.0f);
-            var ground = new Vec3(0.03f, 0.035f, 0.04f);
             var horizon = new Vec3(0.85f, 0.92f, 1.0f);
             var zenith = new Vec3(0.12f, 0.35f, 0.85f);
-            Vec3 sky = Vec3.Lerp(horizon, zenith, t * t);
+            Vec3 sky = Vec3.Lerp(horizon, zenith, t * t) * model.DomeScale;
             Vec3 color = direction.Y < 0.0f
-                ? Vec3.Lerp(ground, horizon, Math.Clamp((direction.Y + 1.0f) * 0.35f, 0.0f, 1.0f))
+                // Match the upper-hemisphere horizon exactly; the former fixed
+                // 0.35 blend left a visible radiance discontinuity at y == 0.
+                ? Vec3.Lerp(model.GroundRadiance, horizon * model.DomeScale, Math.Clamp(direction.Y + 1.0f, 0.0f, 1.0f))
                 : sky;
 
-            float sunDot = Math.Clamp(direction.X * -0.3f + direction.Y * 0.72f + direction.Z * 0.62f, 0.0f, 1.0f);
-            float sun = MathF.Pow(sunDot, 512.0f) * (1.0f - blur) * 8.0f;
-            color += new Vec3(sun, sun * 0.86f, sun * 0.62f);
+            if (includeSunDisc)
+            {
+                float sunDot = Math.Clamp(Vec3.Dot(direction, model.ToSunDirection), 0.0f, 1.0f);
+                // The disc is visual/specular only. Its narrow lobe is intentionally
+                // excluded from diffuse irradiance because the directional light owns
+                // direct solar energy.
+                float sunDisc = MathF.Pow(sunDot, 2048.0f) * (1.0f - blur) * 0.75f;
+                color += model.SunRadiance * sunDisc;
+            }
 
-            var average = new Vec3(0.34f, 0.45f, 0.58f);
+            var average = new Vec3(0.34f, 0.45f, 0.58f) * model.DomeScale;
             return Vec3.Lerp(color, average, blur * 0.8f);
         }
+
+        private static float EstimateBaseSkyHorizontalIrradianceLuminance(int sampleCount)
+        {
+            Vec3 up = new(0.0f, 1.0f, 0.0f);
+            BuildTangentBasis(up, out Vec3 tangent, out Vec3 bitangent);
+            float sum = 0.0f;
+            for (int i = 0; i < sampleCount; i++)
+            {
+                (float u, float v) = Hammersley(i, sampleCount);
+                Vec3 local = CosineSampleHemisphere(u, v);
+                Vec3 direction = (tangent * local.X + bitangent * local.Y + up * local.Z).Normalized();
+                sum += Luminance(BaseSkyRadiance(direction));
+            }
+
+            return sum * Pi / sampleCount;
+        }
+
+        private static float EstimateHorizontalIrradianceLuminance(ProceduralSkyModel model, int sampleCount)
+        {
+            Vec3 up = new(0.0f, 1.0f, 0.0f);
+            BuildTangentBasis(up, out Vec3 tangent, out Vec3 bitangent);
+            float sum = 0.0f;
+            for (int i = 0; i < sampleCount; i++)
+            {
+                (float u, float v) = Hammersley(i, sampleCount);
+                Vec3 local = CosineSampleHemisphere(u, v);
+                Vec3 direction = (tangent * local.X + bitangent * local.Y + up * local.Z).Normalized();
+                sum += Luminance(SampleProceduralSky(direction, 0.0f, model, includeSunDisc: false));
+            }
+
+            return sum * Pi / sampleCount;
+        }
+
+        private static Vec3 BaseSkyRadiance(Vec3 direction)
+        {
+            float t = Math.Clamp(direction.Y * 0.5f + 0.5f, 0.0f, 1.0f);
+            var horizon = new Vec3(0.85f, 0.92f, 1.0f);
+            var zenith = new Vec3(0.12f, 0.35f, 0.85f);
+            return Vec3.Lerp(horizon, zenith, t * t);
+        }
+
+        private static float Luminance(Vec3 value) =>
+            MathF.Max(0.0f, value.X) * 0.2126f + MathF.Max(0.0f, value.Y) * 0.7152f + MathF.Max(0.0f, value.Z) * 0.0722f;
+
+        private readonly record struct ProceduralSkyModel(
+            Vec3 ToSunDirection,
+            Vec3 SunRadiance,
+            float DomeScale,
+            Vec3 GroundRadiance);
 
         private static Vec3 GetPixelWrapped(HdrEquirectangularImage source, int x, int y)
         {

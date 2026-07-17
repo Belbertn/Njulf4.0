@@ -89,6 +89,34 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
         });
     }
 
+    [Test]
+    public void SponzaProfile_UsesPhysicalEnvironmentAndInteractiveExposureWhileCaptureRemainsLocked()
+    {
+        var settings = new RenderSettings();
+
+        SampleSponzaGlobalIlluminationProfile.Configure(settings);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.Environment.SkyIntensity, Is.EqualTo(1.0f));
+            Assert.That(settings.Environment.DiffuseIntensity, Is.EqualTo(1.0f));
+            Assert.That(settings.Environment.SpecularIntensity, Is.EqualTo(1.0f));
+            Assert.That(settings.AutoExposure.Enabled, Is.True);
+            Assert.That(settings.AutoExposure.MinExposure, Is.EqualTo(0.5f));
+            Assert.That(settings.AutoExposure.MaxExposure, Is.EqualTo(8.0f));
+            Assert.That(settings.GlobalIllumination.DdgiAlphaMaskedTransportEnabled, Is.True);
+        });
+
+        SampleSponzaGlobalIlluminationProfile.ApplyValidationOverlay(settings);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.AutoExposure.Enabled, Is.False);
+            Assert.That(settings.Exposure, Is.EqualTo(1.0f));
+            Assert.That(settings.Environment.SkyIntensity, Is.EqualTo(1.0f));
+        });
+    }
+
     [TestCase(SamplePerformanceScenario.GiCornellRoom)]
     [TestCase(SamplePerformanceScenario.GiSimpleDdgiFurnace)]
     public void ConfigureRenderSettings_EnclosedScenesRetainZeroEnvironmentFallback(

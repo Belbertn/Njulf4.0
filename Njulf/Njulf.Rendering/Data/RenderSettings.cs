@@ -1706,6 +1706,13 @@ namespace Njulf.Rendering.Data
         public bool DdgiDebugForceProbeActive { get; set; }
         public bool DdgiThinWallPolicyEnabled { get; set; } = true;
         public bool DdgiRoomSpacingScaledBiasEnabled { get; set; } = true;
+        /// <summary>
+        /// Evaluates glTF alpha-mask cutoffs at ray-query candidates. This keeps
+        /// curtains, fences, and cutout foliage from becoming opaque DDGI walls.
+        /// Disabling it restores the conservative opaque approximation for A/B
+        /// performance investigation only.
+        /// </summary>
+        public bool DdgiAlphaMaskedTransportEnabled { get; set; } = true;
         public bool DdgiSimpleEnabled { get; set; } = true;
         public bool SimpleDdgiSharedMemoryBlendEnabled { get; set; } = true;
         public bool SimpleDdgiClassificationSchedulingEnabled { get; set; } = true;
@@ -4116,6 +4123,7 @@ namespace Njulf.Rendering.Data
             public bool DdgiDebugForceProbeActive { get; init; }
             public bool DdgiThinWallPolicyEnabled { get; init; } = true;
             public bool DdgiRoomSpacingScaledBiasEnabled { get; init; } = true;
+            public bool DdgiAlphaMaskedTransportEnabled { get; init; } = true;
             public bool DdgiSimpleEnabled { get; init; } = true;
             public SimpleDdgiAuthoredVolumeFile[] SimpleDdgiAuthoredVolumes { get; init; } = Array.Empty<SimpleDdgiAuthoredVolumeFile>();
             public bool SimpleDdgiSharedMemoryBlendEnabled { get; init; } = true;
@@ -4308,6 +4316,7 @@ namespace Njulf.Rendering.Data
                     DdgiDebugForceProbeActive = settings.DdgiDebugForceProbeActive,
                     DdgiThinWallPolicyEnabled = settings.DdgiThinWallPolicyEnabled,
                     DdgiRoomSpacingScaledBiasEnabled = settings.DdgiRoomSpacingScaledBiasEnabled,
+                    DdgiAlphaMaskedTransportEnabled = settings.DdgiAlphaMaskedTransportEnabled,
                     DdgiSimpleEnabled = settings.DdgiSimpleEnabled,
                     SimpleDdgiAuthoredVolumes = settings.SimpleDdgiAuthoredVolumes
                         .Take(GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount)
@@ -4500,6 +4509,7 @@ namespace Njulf.Rendering.Data
                 settings.DdgiDebugForceProbeActive = DdgiDebugForceProbeActive;
                 settings.DdgiThinWallPolicyEnabled = DdgiThinWallPolicyEnabled;
                 settings.DdgiRoomSpacingScaledBiasEnabled = DdgiRoomSpacingScaledBiasEnabled;
+                settings.DdgiAlphaMaskedTransportEnabled = DdgiAlphaMaskedTransportEnabled;
                 settings.DdgiSimpleEnabled = DdgiSimpleEnabled;
                 settings.SimpleDdgiAuthoredVolumes.Clear();
                 foreach (SimpleDdgiAuthoredVolumeFile? authoredVolume in

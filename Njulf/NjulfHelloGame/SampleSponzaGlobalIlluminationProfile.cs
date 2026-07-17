@@ -63,9 +63,20 @@ public static class SampleSponzaGlobalIlluminationProfile
     private static void ConfigureReferenceOutput(RenderSettings settings)
     {
         settings.Environment.Enabled = true;
-        settings.Environment.SkyIntensity = 0.45f;
-        settings.Environment.DiffuseIntensity = 0.10f;
-        settings.Environment.SpecularIntensity = 0.25f;
+        // DDGI owns probe-covered diffuse transport. Keep every environment
+        // channel physically authored at unity; ownership composition prevents
+        // diffuse IBL from being counted twice at valid DDGI receivers.
+        settings.Environment.SkyIntensity = 1.0f;
+        settings.Environment.DiffuseIntensity = 1.0f;
+        settings.Environment.SpecularIntensity = 1.0f;
+        // Interactive presentation follows the camera into shaded galleries.
+        // ApplyValidationOverlay intentionally overrides this for deterministic
+        // linear-light validation captures.
+        settings.AutoExposure.Enabled = true;
+        settings.AutoExposure.TargetLuminance = 0.18f;
+        settings.AutoExposure.MinExposure = 0.5f;
+        settings.AutoExposure.MaxExposure = 8.0f;
+        settings.AutoExposure.AdaptationSpeed = 2.0f;
         settings.Reflections.Enabled = true;
         settings.Shadows.DirectionalShadowMapSize = 2048;
         settings.Shadows.DirectionalCascadeCount = 3;

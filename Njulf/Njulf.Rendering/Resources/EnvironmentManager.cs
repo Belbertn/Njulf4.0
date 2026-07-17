@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
@@ -29,6 +30,11 @@ namespace Njulf.Rendering.Resources
         private ulong _estimatedBytes;
         private bool _usesFallback = true;
         private bool _disposed;
+        // Updated from the renderer's authoritative directional-light snapshot.
+        // Rebuild is intentionally deferred to the next BeginFrame resource check,
+        // where replacing sampled textures is safe and never stalls an open command buffer.
+        private EnvironmentMapProcessor.ProceduralSkyParameters _proceduralSkyParameters =
+            EnvironmentMapProcessor.ProceduralSkyParameters.Default;
 
         public EnvironmentManager(
             VulkanContext context,
@@ -78,6 +84,36 @@ namespace Njulf.Rendering.Resources
             _prefilteredCubemap,
             _brdfLut
         ];
+
+        /// <summary>
+        /// Couples the procedural dome to the same primary shadow-casting
+        /// directional light used by direct illumination. HDR environments ignore
+        /// this input. Values are quantized so small animation noise does not
+        /// trigger an environment rebake every frame.
+        /// </summary>
+        public void UpdateProceduralSkyLighting(in LightFrameSnapshot lights)
+        {
+            if (_settings.Environment.SourceKind != EnvironmentSourceKind.ProceduralSky)
+                return;
+
+            EnvironmentMapProcessor.ProceduralSkyParameters parameters =
+                EnvironmentMapProcessor.ProceduralSkyParameters.Default;
+            if (lights.HasShadowCastingDirectionalLight)
+            {
+                Light sun = lights.FirstShadowCastingDirectionalLight;
+                Vector3 toSun = sun.Direction.LengthSquared() > 0.000001f
+                    ? Vector3.Normalize(-sun.Direction)
+                    : EnvironmentMapProcessor.ProceduralSkyParameters.Default.ToSunDirection;
+                Vector3 radiance = Vector3.Max(sun.Color, Vector3.Zero) * MathF.Max(sun.Intensity, 0.0f);
+                parameters = new EnvironmentMapProcessor.ProceduralSkyParameters(
+                    toSun,
+                    radiance,
+                    DiffuseFraction: 0.15f,
+                    GroundAlbedo: 0.20f);
+            }
+
+            _proceduralSkyParameters = parameters.Quantized();
+        }
 
         public void EnsureResourcesCurrent(BindlessHeap? bindlessHeap = null, Action? waitIdle = null)
         {
@@ -254,9 +290,19 @@ namespace Njulf.Rendering.Resources
             }
 
             return new EnvironmentPayload(
-                EnvironmentMapProcessor.GenerateProceduralSkyCubemap(signature.EnvironmentSize, 1, blur: 0.0f),
-                EnvironmentMapProcessor.GenerateProceduralSkyIrradianceCubemap(signature.IrradianceSize),
-                EnvironmentMapProcessor.GenerateProceduralSkyCubemap(signature.PrefilteredSize, prefilteredMipCount, blur: 0.0f),
+                EnvironmentMapProcessor.GenerateProceduralSkyCubemap(
+                    signature.EnvironmentSize,
+                    1,
+                    blur: 0.0f,
+                    signature.ProceduralSkyParameters),
+                EnvironmentMapProcessor.GenerateProceduralSkyIrradianceCubemap(
+                    signature.IrradianceSize,
+                    parameters: signature.ProceduralSkyParameters),
+                EnvironmentMapProcessor.GenerateProceduralSkyCubemap(
+                    signature.PrefilteredSize,
+                    prefilteredMipCount,
+                    blur: 0.0f,
+                    signature.ProceduralSkyParameters),
                 UsesFallback: true);
         }
 
@@ -292,7 +338,8 @@ namespace Njulf.Rendering.Resources
                 _settings.Environment.IrradianceSize,
                 _settings.Environment.PrefilteredSize,
                 _settings.Environment.BrdfLutSize,
-                _settings.Environment.TexturePrecision);
+                _settings.Environment.TexturePrecision,
+                _proceduralSkyParameters);
         }
 
         private static string? ResolveEnvironmentSourcePath(string? sourcePath)
@@ -434,6 +481,7 @@ namespace Njulf.Rendering.Resources
             uint IrradianceSize,
             uint PrefilteredSize,
             uint BrdfLutSize,
-            EnvironmentTexturePrecision TexturePrecision);
+            EnvironmentTexturePrecision TexturePrecision,
+            EnvironmentMapProcessor.ProceduralSkyParameters ProceduralSkyParameters);
     }
 }
