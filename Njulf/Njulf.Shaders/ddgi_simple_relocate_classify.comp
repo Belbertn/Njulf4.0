@@ -27,6 +27,10 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint ProbeStateBufferIndex;
     uint ProbeUpdateQueueBufferIndex;
     uint RelocationClassificationBufferIndex;
+    uint TransportSourceCacheBufferIndex;
+    uint TransportReadIrradianceAtlasBufferIndex;
+    uint TransportWriteIrradianceAtlasBufferIndex;
+    uint TransportGeneration;
     uint Padding0;
 } pc;
 

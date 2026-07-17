@@ -1613,6 +1613,12 @@ namespace Njulf.Rendering.Data
         private int _simpleDdgiLightingDirtyFrameCount = 30;
         private int _simpleDdgiStableMaintenanceUpdateCount = 3;
         private float _simpleDdgiStableMaintenanceEmaThreshold = 0.03f;
+        private float _simpleDdgiTransportSolverRelaxation = 0.70f;
+        private float _simpleDdgiTransportAlbedoClamp = 0.95f;
+        private float _simpleDdgiTransportResidualThreshold = 0.025f;
+        private int _simpleDdgiTransportMaximumSolverGenerations = 8;
+        private int _simpleDdgiTransportSourceRefreshFrames = 240;
+        private float _simpleDdgiAutomaticProbeDensityScale = 0.70f;
         private float _simpleDdgiNormalBias = 0.1f;
         private float _simpleDdgiViewBias = 0.3f;
         // Bias remains spacing-aware for self-intersection resistance, but the
@@ -1721,6 +1727,18 @@ namespace Njulf.Rendering.Data
         public bool SimpleDdgiLightingDirtyBoostEnabled { get; set; } = true;
         public bool SimpleDdgiDynamicGeometryDirtyBoostEnabled { get; set; } = true;
         public bool SimpleDdgiAdaptiveRaysEnabled { get; set; } = true;
+        /// <summary>
+        /// Uses the V2 source-cache/Jacobi transport path.  V2 separates source
+        /// tracing from recursive bounce solve and publishes only completed
+        /// irradiance generations.  Disable only for an explicit V1 rollback.
+        /// </summary>
+        public bool SimpleDdgiTransportV2Enabled { get; set; } = true;
+        /// <summary>
+        /// Keeps the V2 field entirely camera-clipmap driven.  No authored
+        /// volumes participate while this mode is enabled; the near and mid rings
+        /// instead use the automatic density policy below.
+        /// </summary>
+        public bool SimpleDdgiAutomaticProbeDensityEnabled { get; set; } = true;
         /// <summary>
         /// Uses the support-aware DDGI gather result in forward shading.  This is the
         /// production path: invalid, fresh, and exposed probe slots contribute no support
@@ -2102,6 +2120,62 @@ namespace Njulf.Rendering.Data
         {
             get => _simpleDdgiStableMaintenanceEmaThreshold;
             set => _simpleDdgiStableMaintenanceEmaThreshold = Clamp(value, 0.0f, 1.0f);
+        }
+
+        /// <summary>
+        /// Jacobi relaxation used when a completed V2 transport iteration is
+        /// published.  Values below one damp Monte-Carlo noise without trapping
+        /// indirect energy in the old 0.97 temporal-history regime.
+        /// </summary>
+        public float SimpleDdgiTransportSolverRelaxation
+        {
+            get => _simpleDdgiTransportSolverRelaxation;
+            set => _simpleDdgiTransportSolverRelaxation = Clamp(value, 0.05f, 1.0f);
+        }
+
+        /// <summary>Conservative diffuse reflectance ceiling for recursive transport.</summary>
+        public float SimpleDdgiTransportAlbedoClamp
+        {
+            get => _simpleDdgiTransportAlbedoClamp;
+            set => _simpleDdgiTransportAlbedoClamp = Clamp(value, 0.50f, 0.99f);
+        }
+
+        /// <summary>
+        /// Relative luminance residual below which a cached probe can wait for a
+        /// periodic source refresh instead of continuously consuming solver work.
+        /// </summary>
+        public float SimpleDdgiTransportResidualThreshold
+        {
+            get => _simpleDdgiTransportResidualThreshold;
+            set => _simpleDdgiTransportResidualThreshold = Clamp(value, 0.001f, 1.0f);
+        }
+
+        /// <summary>Maximum published solve iterations admitted per source refresh.</summary>
+        public int SimpleDdgiTransportMaximumSolverGenerations
+        {
+            get => _simpleDdgiTransportMaximumSolverGenerations;
+            set => _simpleDdgiTransportMaximumSolverGenerations = Clamp(value, 1, 64);
+        }
+
+        /// <summary>
+        /// Periodic source-ray refresh interval for otherwise static physical
+        /// probe slots.  Lighting edits and remapped cells refresh immediately.
+        /// </summary>
+        public int SimpleDdgiTransportSourceRefreshFrames
+        {
+            get => _simpleDdgiTransportSourceRefreshFrames;
+            set => _simpleDdgiTransportSourceRefreshFrames = Clamp(value, 1, 4_096);
+        }
+
+        /// <summary>
+        /// Multiplies near-ring spacing (with a gentler mid-ring ramp) when V2
+        /// automatic density is active.  Physical probe count stays bounded;
+        /// density is obtained by concentrating the camera clipmaps.
+        /// </summary>
+        public float SimpleDdgiAutomaticProbeDensityScale
+        {
+            get => _simpleDdgiAutomaticProbeDensityScale;
+            set => _simpleDdgiAutomaticProbeDensityScale = Clamp(value, 0.45f, 1.0f);
         }
 
         public float SimpleDdgiNormalBias
@@ -2756,6 +2830,12 @@ namespace Njulf.Rendering.Data
             DdgiExhaustiveGatherFallbackEnabled = true;
             SimpleDdgiStructuredGatherEnabled = true;
             SimpleDdgiLayoutAdmissionMode = SimpleDdgiLayoutAdmissionMode.Degrade;
+            SimpleDdgiTransportV2Enabled = true;
+            SimpleDdgiAutomaticProbeDensityEnabled = true;
+            SimpleDdgiTransportSolverRelaxation = 0.70f;
+            SimpleDdgiTransportAlbedoClamp = 0.95f;
+            SimpleDdgiTransportResidualThreshold = 0.025f;
+            SimpleDdgiTransportMaximumSolverGenerations = 8;
             SimpleDdgiVerticalRingPolicy = SimpleDdgiVerticalRingPolicy.CameraRelativeWithHysteresis;
             SimpleDdgiVerticalRecenterHysteresisFraction = 0.25f;
             SimpleDdgiReducedBlendEnabled = tier is DdgiQualityTier.DdgiLow or DdgiQualityTier.DdgiMedium;
@@ -2924,6 +3004,20 @@ namespace Njulf.Rendering.Data
             SimpleDdgiAdaptiveRaysEnabled = true;
             SimpleDdgiClassificationSchedulingEnabled = true;
             SimpleDdgiClassificationReadbackEnabled = true;
+            SimpleDdgiAutomaticProbeDensityScale = tier switch
+            {
+                DdgiQualityTier.DdgiLow => 0.90f,
+                DdgiQualityTier.DdgiMedium => 0.80f,
+                DdgiQualityTier.DdgiUltra => 0.60f,
+                _ => 0.70f
+            };
+            SimpleDdgiTransportSourceRefreshFrames = tier switch
+            {
+                DdgiQualityTier.DdgiLow => 360,
+                DdgiQualityTier.DdgiMedium => 300,
+                DdgiQualityTier.DdgiUltra => 120,
+                _ => 240
+            };
 
             switch (tier)
             {
@@ -4133,6 +4227,8 @@ namespace Njulf.Rendering.Data
             public bool SimpleDdgiLightingDirtyBoostEnabled { get; init; } = true;
             public bool SimpleDdgiDynamicGeometryDirtyBoostEnabled { get; init; } = true;
             public bool SimpleDdgiAdaptiveRaysEnabled { get; init; } = true;
+            public bool SimpleDdgiTransportV2Enabled { get; init; } = true;
+            public bool SimpleDdgiAutomaticProbeDensityEnabled { get; init; } = true;
             public bool SimpleDdgiStructuredGatherEnabled { get; init; } = true;
             public SimpleDdgiLayoutAdmissionMode SimpleDdgiLayoutAdmissionMode { get; init; } = SimpleDdgiLayoutAdmissionMode.Degrade;
             public bool SimpleDdgiReducedBlendEnabled { get; init; }
@@ -4185,6 +4281,12 @@ namespace Njulf.Rendering.Data
             public int SimpleDdgiLightingDirtyFrameCount { get; init; } = 30;
             public int SimpleDdgiStableMaintenanceUpdateCount { get; init; } = 3;
             public float SimpleDdgiStableMaintenanceEmaThreshold { get; init; } = 0.03f;
+            public float SimpleDdgiTransportSolverRelaxation { get; init; } = 0.70f;
+            public float SimpleDdgiTransportAlbedoClamp { get; init; } = 0.95f;
+            public float SimpleDdgiTransportResidualThreshold { get; init; } = 0.025f;
+            public int SimpleDdgiTransportMaximumSolverGenerations { get; init; } = 8;
+            public int SimpleDdgiTransportSourceRefreshFrames { get; init; } = 240;
+            public float SimpleDdgiAutomaticProbeDensityScale { get; init; } = 0.70f;
             // These are spacing-relative authoring controls used by the shared
             // forward gather.  Persist them with the layout so a capture or
             // reload cannot silently change interpolation/visibility behavior.
@@ -4329,6 +4431,8 @@ namespace Njulf.Rendering.Data
                     SimpleDdgiLightingDirtyBoostEnabled = settings.SimpleDdgiLightingDirtyBoostEnabled,
                     SimpleDdgiDynamicGeometryDirtyBoostEnabled = settings.SimpleDdgiDynamicGeometryDirtyBoostEnabled,
                     SimpleDdgiAdaptiveRaysEnabled = settings.SimpleDdgiAdaptiveRaysEnabled,
+                    SimpleDdgiTransportV2Enabled = settings.SimpleDdgiTransportV2Enabled,
+                    SimpleDdgiAutomaticProbeDensityEnabled = settings.SimpleDdgiAutomaticProbeDensityEnabled,
                     SimpleDdgiStructuredGatherEnabled = settings.SimpleDdgiStructuredGatherEnabled,
                     SimpleDdgiLayoutAdmissionMode = settings.SimpleDdgiLayoutAdmissionMode,
                     SimpleDdgiReducedBlendEnabled = settings.SimpleDdgiReducedBlendEnabled,
@@ -4381,6 +4485,12 @@ namespace Njulf.Rendering.Data
                     SimpleDdgiLightingDirtyFrameCount = settings.SimpleDdgiLightingDirtyFrameCount,
                     SimpleDdgiStableMaintenanceUpdateCount = settings.SimpleDdgiStableMaintenanceUpdateCount,
                     SimpleDdgiStableMaintenanceEmaThreshold = settings.SimpleDdgiStableMaintenanceEmaThreshold,
+                    SimpleDdgiTransportSolverRelaxation = settings.SimpleDdgiTransportSolverRelaxation,
+                    SimpleDdgiTransportAlbedoClamp = settings.SimpleDdgiTransportAlbedoClamp,
+                    SimpleDdgiTransportResidualThreshold = settings.SimpleDdgiTransportResidualThreshold,
+                    SimpleDdgiTransportMaximumSolverGenerations = settings.SimpleDdgiTransportMaximumSolverGenerations,
+                    SimpleDdgiTransportSourceRefreshFrames = settings.SimpleDdgiTransportSourceRefreshFrames,
+                    SimpleDdgiAutomaticProbeDensityScale = settings.SimpleDdgiAutomaticProbeDensityScale,
                     SimpleDdgiNormalBias = settings.SimpleDdgiNormalBias,
                     SimpleDdgiViewBias = settings.SimpleDdgiViewBias,
                     SimpleDdgiMaximumWorldBiasMeters = settings.SimpleDdgiMaximumWorldBiasMeters,
@@ -4526,6 +4636,8 @@ namespace Njulf.Rendering.Data
                 settings.SimpleDdgiLightingDirtyBoostEnabled = SimpleDdgiLightingDirtyBoostEnabled;
                 settings.SimpleDdgiDynamicGeometryDirtyBoostEnabled = SimpleDdgiDynamicGeometryDirtyBoostEnabled;
                 settings.SimpleDdgiAdaptiveRaysEnabled = SimpleDdgiAdaptiveRaysEnabled;
+                settings.SimpleDdgiTransportV2Enabled = SimpleDdgiTransportV2Enabled;
+                settings.SimpleDdgiAutomaticProbeDensityEnabled = SimpleDdgiAutomaticProbeDensityEnabled;
                 settings.SimpleDdgiStructuredGatherEnabled = SimpleDdgiStructuredGatherEnabled;
                 settings.SimpleDdgiLayoutAdmissionMode = SimpleDdgiLayoutAdmissionMode;
                 settings.SimpleDdgiReducedBlendEnabled = SimpleDdgiReducedBlendEnabled;
@@ -4578,6 +4690,12 @@ namespace Njulf.Rendering.Data
                 settings.SimpleDdgiLightingDirtyFrameCount = SimpleDdgiLightingDirtyFrameCount;
                 settings.SimpleDdgiStableMaintenanceUpdateCount = SimpleDdgiStableMaintenanceUpdateCount;
                 settings.SimpleDdgiStableMaintenanceEmaThreshold = SimpleDdgiStableMaintenanceEmaThreshold;
+                settings.SimpleDdgiTransportSolverRelaxation = SimpleDdgiTransportSolverRelaxation;
+                settings.SimpleDdgiTransportAlbedoClamp = SimpleDdgiTransportAlbedoClamp;
+                settings.SimpleDdgiTransportResidualThreshold = SimpleDdgiTransportResidualThreshold;
+                settings.SimpleDdgiTransportMaximumSolverGenerations = SimpleDdgiTransportMaximumSolverGenerations;
+                settings.SimpleDdgiTransportSourceRefreshFrames = SimpleDdgiTransportSourceRefreshFrames;
+                settings.SimpleDdgiAutomaticProbeDensityScale = SimpleDdgiAutomaticProbeDensityScale;
                 settings.SimpleDdgiNormalBias = SimpleDdgiNormalBias;
                 settings.SimpleDdgiViewBias = SimpleDdgiViewBias;
                 settings.SimpleDdgiMaximumWorldBiasMeters = SimpleDdgiMaximumWorldBiasMeters;

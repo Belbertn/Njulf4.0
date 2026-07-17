@@ -801,6 +801,31 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiProbeCount { get; init; }
         public int SimpleDdgiProbesUpdated { get; init; }
         public ulong SimpleDdgiRaysPerFrame { get; init; }
+        public int SimpleDdgiTransportV2Active { get; init; }
+        public int SimpleDdgiAutomaticProbeDensityActive { get; init; }
+        public int SimpleDdgiTransportSourceRefreshProbeCount { get; init; }
+        public int SimpleDdgiTransportSourceCacheReuseProbeCount { get; init; }
+        public ulong SimpleDdgiTransportSourceRayCount { get; init; }
+        public ulong SimpleDdgiTransportSolveRayCount { get; init; }
+        public int SimpleDdgiTransportPublishedProbeCount { get; init; }
+        public int SimpleDdgiTransportPublishRegionCount { get; init; }
+        public ulong SimpleDdgiTransportSourceCacheInvalidationCount { get; init; }
+        public uint SimpleDdgiSourceLightingGeneration { get; init; }
+        public uint SimpleDdgiTransportGeneration { get; init; }
+        public int SimpleDdgiTransportSourceReadyProbeCount { get; init; }
+        public int SimpleDdgiTransportSourceStaleProbeCount { get; init; }
+        public int SimpleDdgiTransportConvergedProbeCount { get; init; }
+        public int SimpleDdgiTransportPendingSolverProbeCount { get; init; }
+        public int SimpleDdgiTransportGlobalConvergencePending { get; init; }
+        public int SimpleDdgiTransportGlobalConvergenceElapsedFrames { get; init; }
+        public ulong SimpleDdgiTransportCalibrationChangeCount { get; init; }
+        public ulong SimpleDdgiTransportIrradianceAtlasBytes { get; init; }
+        public ulong SimpleDdgiTransportSourceCacheBytes { get; init; }
+        public float SimpleDdgiTransportSolverRelaxation { get; init; }
+        public float SimpleDdgiTransportAlbedoClamp { get; init; }
+        public float SimpleDdgiTransportResidualThreshold { get; init; }
+        public int SimpleDdgiTransportMaximumSolverGenerations { get; init; }
+        public int SimpleDdgiTransportSourceRefreshFrames { get; init; }
         public int SimpleDdgiInactiveProbeCount { get; init; }
         public int SimpleDdgiInactiveProbeSkipCount { get; init; }
         public ulong SimpleDdgiSavedRaysPerFrame { get; init; }
@@ -1023,6 +1048,12 @@ namespace Njulf.Rendering.Data
         public uint DdgiBlendEnergyNonzeroIrradianceCount { get; init; }
         public uint DdgiBlendEnergyNonFiniteIrradianceCount { get; init; }
         public uint DdgiBlendEnergyFireflySuppressedCount { get; init; }
+        public uint SimpleDdgiTransportEnergySampleCount { get; init; }
+        public uint SimpleDdgiTransportSourceCacheHitCount { get; init; }
+        public uint SimpleDdgiTransportSourceCacheMissCount { get; init; }
+        public float SimpleDdgiTransportBounceLuminanceAverage { get; init; }
+        public float SimpleDdgiTransportSourceLuminanceAverage { get; init; }
+        public float SimpleDdgiTransportTotalLuminanceAverage { get; init; }
         public float DdgiVisibilityMomentMeanAverage { get; init; }
         public float DdgiVisibilityMomentVarianceAverage { get; init; }
         public float DdgiVisibilityProbeDistanceAverage { get; init; }
@@ -1133,6 +1164,7 @@ namespace Njulf.Rendering.Data
         public long GpuDdgiPublishMicroseconds { get; init; }
         public long GpuDdgiUpdateMicroseconds { get; init; }
         public long GpuSimpleDdgiTraceMicroseconds { get; init; }
+        public long GpuSimpleDdgiTransportMicroseconds { get; init; }
         public long GpuSimpleDdgiBlendMicroseconds { get; init; }
         public long GpuGiCompositeMicroseconds { get; init; }
         public ulong GlobalIlluminationRenderTargetBytes { get; init; }

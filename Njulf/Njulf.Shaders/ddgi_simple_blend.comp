@@ -40,6 +40,10 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint ProbeStateBufferIndex;
     uint ProbeUpdateQueueBufferIndex;
     uint RelocationClassificationBufferIndex;
+    uint TransportSourceCacheBufferIndex;
+    uint TransportReadIrradianceAtlasBufferIndex;
+    uint TransportWriteIrradianceAtlasBufferIndex;
+    uint TransportGeneration;
     uint Padding0;
 } pc;
 
@@ -114,6 +118,12 @@ float SimpleDdgiCadenceAdjustedHysteresis(SimpleDdgiParams params, SimpleDdgiPro
     if ((update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u)
         return 0.0;
 
+    // V2 is an explicit Jacobi solve. Its old/new interpolation is the solver
+    // relaxation, not a frame-cadence-dependent history filter; the latter was
+    // the main reason recursive energy took hundreds of sparse updates to move.
+    if ((params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u)
+        return 1.0 - params.transportSolverRelaxation;
+
     float baseHysteresis = clamp(params.hysteresis, 0.0, 1.0);
     // The near-ring full-update cadence (roughly eight frames at production
     // budgets) is the reference response. Sparse updates retain comparable
@@ -126,6 +136,20 @@ float SimpleDdgiCadenceAdjustedHysteresis(SimpleDdgiParams params, SimpleDdgiPro
     float referenceCadence = SimpleDdgiUpdateIsMaintenance(update) ? 16.0 : 8.0;
     float cadenceExponent = clamp(elapsedFrames / referenceCadence, 1.0, 8.0);
     return pow(baseHysteresis, cadenceExponent);
+}
+
+uint SimpleDdgiIrradianceReadBuffer(SimpleDdgiParams params)
+{
+    return (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u
+        ? pc.TransportReadIrradianceAtlasBufferIndex
+        : pc.IrradianceAtlasBufferIndex;
+}
+
+uint SimpleDdgiIrradianceWriteBuffer(SimpleDdgiParams params)
+{
+    return (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u
+        ? pc.TransportWriteIrradianceAtlasBufferIndex
+        : pc.IrradianceAtlasBufferIndex;
 }
 
 void LoadSimpleRayCache(SimpleDdgiParams params, uint localProbeOffset, uint activeRayCount)
@@ -188,15 +212,23 @@ float BlendIrradianceTexel(SimpleDdgiParams params, uint probeIndex, uint localP
         weightSum += weight;
     }
 
-    vec4 previous = ReadSimpleDdgiAtlasTexel(pc.IrradianceAtlasBufferIndex, probeIndex, texel, params.irradianceTexels);
+    uint irradianceReadBuffer = SimpleDdgiIrradianceReadBuffer(params);
+    uint irradianceWriteBuffer = SimpleDdgiIrradianceWriteBuffer(params);
+    vec4 previous = ReadSimpleDdgiAtlasTexel(irradianceReadBuffer, probeIndex, texel, params.irradianceTexels);
     if (weightSum <= 0.000001)
     {
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_ZERO_RAY_WEIGHT_PROBE_COUNTER, 1u);
         if (previous.w > 0.0001 && !freshUpdate)
+        {
+            // A V2 target is private and may not contain the canonical texel yet.
+            // Preserve the published value explicitly instead of leaving a hole
+            // that would be copied into the next receiver-visible generation.
+            WriteSimpleDdgiAtlasTexel(irradianceWriteBuffer, probeIndex, texel, params.irradianceTexels, previous);
             return 0.0;
+        }
         if (freshUpdate)
         {
-            WriteSimpleDdgiAtlasTexel(pc.IrradianceAtlasBufferIndex, probeIndex, texel, params.irradianceTexels, vec4(0.0));
+            WriteSimpleDdgiAtlasTexel(irradianceWriteBuffer, probeIndex, texel, params.irradianceTexels, vec4(0.0));
             return 1.0;
         }
     }
@@ -218,7 +250,7 @@ float BlendIrradianceTexel(SimpleDdgiParams params, uint probeIndex, uint localP
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_NONZERO_IRRADIANCE_PROBE_COUNTER, 1u);
     if (probeHysteresis > 0.0001 && previous.w > 0.0001)
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_PREVIOUS_ATLAS_USED_COUNTER, 1u);
-    WriteSimpleDdgiAtlasTexel(pc.IrradianceAtlasBufferIndex, probeIndex, texel, params.irradianceTexels, blended);
+    WriteSimpleDdgiAtlasTexel(irradianceWriteBuffer, probeIndex, texel, params.irradianceTexels, blended);
     return previous.w > 0.0001
         ? SimpleDdgiStableRelativeDelta(SimpleDdgiLuminance(irradiance), SimpleDdgiLuminance(previous.rgb), 0.02)
         : 1.0;
@@ -343,10 +375,12 @@ float BlendReducedIrradianceTexel(SimpleDdgiParams params, uint probeIndex, uint
         texel,
         irradiance,
         1.0);
-    vec4 previous = ReadSimpleDdgiAtlasTexel(pc.IrradianceAtlasBufferIndex, probeIndex, texel, params.irradianceTexels);
+    uint irradianceReadBuffer = SimpleDdgiIrradianceReadBuffer(params);
+    uint irradianceWriteBuffer = SimpleDdgiIrradianceWriteBuffer(params);
+    vec4 previous = ReadSimpleDdgiAtlasTexel(irradianceReadBuffer, probeIndex, texel, params.irradianceTexels);
     if (freshUpdate && SimpleDdgiLuminance(irradiance) <= 0.000001)
     {
-        WriteSimpleDdgiAtlasTexel(pc.IrradianceAtlasBufferIndex, probeIndex, texel, params.irradianceTexels, vec4(0.0));
+        WriteSimpleDdgiAtlasTexel(irradianceWriteBuffer, probeIndex, texel, params.irradianceTexels, vec4(0.0));
         return 1.0;
     }
     float texelHysteresis = SimpleDdgiAdaptiveIrradianceHysteresis(params, previous, irradiance, probeHysteresis, maintenanceUpdate);
@@ -356,7 +390,7 @@ float BlendReducedIrradianceTexel(SimpleDdgiParams params, uint probeIndex, uint
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_NONZERO_IRRADIANCE_PROBE_COUNTER, 1u);
     if (probeHysteresis > 0.0001 && previous.w > 0.0001)
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_PREVIOUS_ATLAS_USED_COUNTER, 1u);
-    WriteSimpleDdgiAtlasTexel(pc.IrradianceAtlasBufferIndex, probeIndex, texel, params.irradianceTexels, blended);
+    WriteSimpleDdgiAtlasTexel(irradianceWriteBuffer, probeIndex, texel, params.irradianceTexels, blended);
     return previous.w > 0.0001
         ? SimpleDdgiStableRelativeDelta(SimpleDdgiLuminance(irradiance), SimpleDdgiLuminance(previous.rgb), 0.02)
         : 1.0;
@@ -381,13 +415,31 @@ void main()
     SimpleDdgiProbeState initialState = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
     if (!SimpleDdgiUpdateMatchesProbeGeneration(update, initialState))
         return;
+    uint local = gl_LocalInvocationID.x;
     // Relocation committed a position different from the origin used by this
     // update's rays. Do not publish a spatially mismatched atlas. The pending
     // state also keeps forward gather on its environment/coarser fallback until
     // a full retry traces from the committed position.
     if ((initialState.flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u)
+    {
+        // The V2 target is intentionally private until the entire update is
+        // complete. A relocation retry must therefore copy the current
+        // canonical texels into that target before the CPU publishes this
+        // probe range; otherwise an old target allocation could overwrite a
+        // valid receiver-visible probe with unrelated data.
+        if ((params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u)
+        {
+            uint readBuffer = SimpleDdgiIrradianceReadBuffer(params);
+            uint writeBuffer = SimpleDdgiIrradianceWriteBuffer(params);
+            uint texelCount = params.irradianceTexels * params.irradianceTexels;
+            for (uint texel = local; texel < texelCount; texel += gl_WorkGroupSize.x)
+            {
+                vec4 canonical = ReadSimpleDdgiAtlasTexel(readBuffer, probeIndex, texel, params.irradianceTexels);
+                WriteSimpleDdgiAtlasTexel(writeBuffer, probeIndex, texel, params.irradianceTexels, canonical);
+            }
+        }
         return;
-    uint local = gl_LocalInvocationID.x;
+    }
     uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
     bool maintenanceUpdate = SimpleDdgiUpdateIsMaintenance(update);
     bool freshUpdate = (update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u ||

@@ -701,6 +701,12 @@ namespace Njulf.Rendering.Data
         public uint DdgiBlendEnergyNonzeroIrradianceCount { get; set; }
         public uint DdgiBlendEnergyNonFiniteIrradianceCount { get; set; }
         public uint DdgiBlendEnergyFireflySuppressedCount { get; set; }
+        public uint SimpleDdgiTransportEnergySampleCount { get; set; }
+        public uint SimpleDdgiTransportSourceCacheHitCount { get; set; }
+        public uint SimpleDdgiTransportSourceCacheMissCount { get; set; }
+        public float SimpleDdgiTransportBounceLuminanceAverage { get; set; }
+        public float SimpleDdgiTransportSourceLuminanceAverage { get; set; }
+        public float SimpleDdgiTransportTotalLuminanceAverage { get; set; }
         public float DdgiVisibilityMomentMeanAverage { get; set; }
         public float DdgiVisibilityMomentVarianceAverage { get; set; }
         public float DdgiVisibilityProbeDistanceAverage { get; set; }
@@ -722,6 +728,35 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiProbeCount { get; set; }
         public int SimpleDdgiProbesUpdated { get; set; }
         public ulong SimpleDdgiRaysPerFrame { get; set; }
+        /// <summary>V2 uses cached source radiance plus an explicit Jacobi transport solve.</summary>
+        public int SimpleDdgiTransportV2Active { get; set; }
+        public int SimpleDdgiAutomaticProbeDensityActive { get; set; }
+        public int SimpleDdgiTransportSourceRefreshProbeCount { get; set; }
+        public int SimpleDdgiTransportSourceCacheReuseProbeCount { get; set; }
+        public ulong SimpleDdgiTransportSourceRayCount { get; set; }
+        public ulong SimpleDdgiTransportSolveRayCount { get; set; }
+        public int SimpleDdgiTransportPublishedProbeCount { get; set; }
+        public int SimpleDdgiTransportPublishRegionCount { get; set; }
+        public ulong SimpleDdgiTransportSourceCacheInvalidationCount { get; set; }
+        public uint SimpleDdgiSourceLightingGeneration { get; set; }
+        public uint SimpleDdgiTransportGeneration { get; set; }
+        public int SimpleDdgiTransportSourceReadyProbeCount { get; set; }
+        public int SimpleDdgiTransportSourceStaleProbeCount { get; set; }
+        public int SimpleDdgiTransportConvergedProbeCount { get; set; }
+        public int SimpleDdgiTransportPendingSolverProbeCount { get; set; }
+        /// <summary>Global V2 warmup keeps every probe solving until the configured bounce floor is reached.</summary>
+        public int SimpleDdgiTransportGlobalConvergencePending { get; set; }
+        /// <summary>Age of the active field-wide V2 warmup; zero once local convergence policy resumes.</summary>
+        public int SimpleDdgiTransportGlobalConvergenceElapsedFrames { get; set; }
+        /// <summary>Monotonic live source/solver calibration changes that restarted V2 convergence.</summary>
+        public ulong SimpleDdgiTransportCalibrationChangeCount { get; set; }
+        public ulong SimpleDdgiTransportIrradianceAtlasBytes { get; set; }
+        public ulong SimpleDdgiTransportSourceCacheBytes { get; set; }
+        public float SimpleDdgiTransportSolverRelaxation { get; set; }
+        public float SimpleDdgiTransportAlbedoClamp { get; set; }
+        public float SimpleDdgiTransportResidualThreshold { get; set; }
+        public int SimpleDdgiTransportMaximumSolverGenerations { get; set; }
+        public int SimpleDdgiTransportSourceRefreshFrames { get; set; }
         public int SimpleDdgiInactiveProbeCount { get; set; }
         public int SimpleDdgiInactiveProbeSkipCount { get; set; }
         public ulong SimpleDdgiSavedRaysPerFrame { get; set; }
@@ -976,6 +1011,7 @@ namespace Njulf.Rendering.Data
         public long GpuDdgiPublishMicroseconds { get; set; }
         public long GpuDdgiUpdateMicroseconds { get; set; }
         public long GpuSimpleDdgiTraceMicroseconds { get; set; }
+        public long GpuSimpleDdgiTransportMicroseconds { get; set; }
         public long GpuSimpleDdgiBlendMicroseconds { get; set; }
         public long GpuFarFieldUpdateMicroseconds { get; set; }
         public int GpuFarFieldUpdateTimingValid { get; set; }
@@ -1782,6 +1818,12 @@ namespace Njulf.Rendering.Data
             DdgiBlendEnergyNonzeroIrradianceCount = 0;
             DdgiBlendEnergyNonFiniteIrradianceCount = 0;
             DdgiBlendEnergyFireflySuppressedCount = 0;
+            SimpleDdgiTransportEnergySampleCount = 0;
+            SimpleDdgiTransportSourceCacheHitCount = 0;
+            SimpleDdgiTransportSourceCacheMissCount = 0;
+            SimpleDdgiTransportBounceLuminanceAverage = 0;
+            SimpleDdgiTransportSourceLuminanceAverage = 0;
+            SimpleDdgiTransportTotalLuminanceAverage = 0;
             DdgiVisibilityMomentMeanAverage = 0;
             DdgiVisibilityMomentVarianceAverage = 0;
             DdgiVisibilityProbeDistanceAverage = 0;
@@ -1803,6 +1845,31 @@ namespace Njulf.Rendering.Data
             SimpleDdgiProbeCount = 0;
             SimpleDdgiProbesUpdated = 0;
             SimpleDdgiRaysPerFrame = 0;
+            SimpleDdgiTransportV2Active = 0;
+            SimpleDdgiAutomaticProbeDensityActive = 0;
+            SimpleDdgiTransportSourceRefreshProbeCount = 0;
+            SimpleDdgiTransportSourceCacheReuseProbeCount = 0;
+            SimpleDdgiTransportSourceRayCount = 0;
+            SimpleDdgiTransportSolveRayCount = 0;
+            SimpleDdgiTransportPublishedProbeCount = 0;
+            SimpleDdgiTransportPublishRegionCount = 0;
+            SimpleDdgiTransportSourceCacheInvalidationCount = 0;
+            SimpleDdgiSourceLightingGeneration = 0;
+            SimpleDdgiTransportGeneration = 0;
+            SimpleDdgiTransportSourceReadyProbeCount = 0;
+            SimpleDdgiTransportSourceStaleProbeCount = 0;
+            SimpleDdgiTransportConvergedProbeCount = 0;
+            SimpleDdgiTransportPendingSolverProbeCount = 0;
+            SimpleDdgiTransportGlobalConvergencePending = 0;
+            SimpleDdgiTransportGlobalConvergenceElapsedFrames = 0;
+            SimpleDdgiTransportCalibrationChangeCount = 0;
+            SimpleDdgiTransportIrradianceAtlasBytes = 0;
+            SimpleDdgiTransportSourceCacheBytes = 0;
+            SimpleDdgiTransportSolverRelaxation = 0;
+            SimpleDdgiTransportAlbedoClamp = 0;
+            SimpleDdgiTransportResidualThreshold = 0;
+            SimpleDdgiTransportMaximumSolverGenerations = 0;
+            SimpleDdgiTransportSourceRefreshFrames = 0;
             SimpleDdgiInactiveProbeCount = 0;
             SimpleDdgiInactiveProbeSkipCount = 0;
             SimpleDdgiSavedRaysPerFrame = 0;
@@ -2057,6 +2124,7 @@ namespace Njulf.Rendering.Data
             GpuDdgiPublishMicroseconds = 0;
             GpuDdgiUpdateMicroseconds = 0;
             GpuSimpleDdgiTraceMicroseconds = 0;
+            GpuSimpleDdgiTransportMicroseconds = 0;
             GpuSimpleDdgiBlendMicroseconds = 0;
             GpuFarFieldUpdateMicroseconds = 0;
             GpuFarFieldUpdateTimingValid = 0;

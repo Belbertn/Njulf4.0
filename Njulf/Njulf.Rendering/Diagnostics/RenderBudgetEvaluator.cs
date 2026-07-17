@@ -61,10 +61,15 @@ namespace Njulf.Rendering.Diagnostics
             ulong globalIlluminationMemoryBytes = giResidency.UniqueResidentBytes;
             ulong ddgiMemoryBytes = diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes;
             // Full DDGI stores atlases in images. Simple DDGI keeps its canonical
-            // writer in SSBOs and may add a sampled-image mirror, so its explicit
-            // atlas total is the only accurate atlas-only budget input.
+            // writer in SSBOs and may add a sampled-image mirror. V2 additionally
+            // owns a private Jacobi target and persistent source-ray cache, all
+            // charged against the same hard layout budget.
             ulong ddgiAtlasMemoryBytes = diagnostics.SimpleDdgiActive != 0
-                ? diagnostics.SimpleDdgiAtlasBytes
+                ? SaturatingAdd(
+                    SaturatingAdd(
+                        diagnostics.SimpleDdgiAtlasBytes,
+                        diagnostics.SimpleDdgiTransportIrradianceAtlasBytes),
+                    diagnostics.SimpleDdgiTransportSourceCacheBytes)
                 : diagnostics.DdgiTextureBytes;
             bool forwardGiRequired = diagnostics.GlobalIlluminationDdgiActive != 0 ||
                 diagnostics.SimpleDdgiActive != 0;
@@ -233,6 +238,9 @@ namespace Njulf.Rendering.Diagnostics
                 return RenderBudgetStatus.Unavailable;
             return value > failureThreshold ? RenderBudgetStatus.OverBudget : RenderBudgetStatus.WithinBudget;
         }
+
+        private static ulong SaturatingAdd(ulong left, ulong right) =>
+            ulong.MaxValue - left < right ? ulong.MaxValue : left + right;
 
         private static RenderBudgetStatus Combine(IReadOnlyList<BudgetMetric> metrics)
         {

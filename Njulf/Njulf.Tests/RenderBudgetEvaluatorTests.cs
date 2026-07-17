@@ -562,6 +562,31 @@ namespace Njulf.Tests
             Assert.That(Metric(snapshot, "DDGI atlas memory").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
         }
 
+        [Test]
+        public void RenderBudgetEvaluator_ChargesPrivateV2TransportStorageToSimpleDdgiBudget()
+        {
+            RenderBudgetProfile profile = RenderBudgetProfile.Development;
+            RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+            {
+                GlobalIlluminationEnabled = 1,
+                GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+                SimpleDdgiActive = 1,
+                SimpleDdgiAtlasBytes = 32,
+                SimpleDdgiTransportIrradianceAtlasBytes = 16,
+                SimpleDdgiTransportSourceCacheBytes = 32,
+                DdgiAtlasMemoryBudgetBytes = 64
+            };
+
+            RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+                profile,
+                diagnostics,
+                MemoryBudgetSnapshot.Empty,
+                new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0, [], RenderBudgetStatus.WithinBudget),
+                new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+            Assert.That(Metric(snapshot, "DDGI atlas memory").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+        }
+
         private static BudgetMetric Metric(RenderBudgetSnapshot snapshot, string name)
         {
             return snapshot.Metrics.Single(metric => metric.Name == name);

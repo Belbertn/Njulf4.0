@@ -938,6 +938,7 @@ namespace Njulf.Tests
                     "FarFieldClipmapBakePass",
                     "SimpleDdgiTracePass",
                     "SimpleDdgiRelocateClassifyPass",
+                    "SimpleDdgiTransportPass",
                     "SimpleDdgiBlendPass",
                     "DdgiSchedulePass",
                     "DdgiTracePass",

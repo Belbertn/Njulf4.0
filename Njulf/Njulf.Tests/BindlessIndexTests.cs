@@ -179,6 +179,8 @@ namespace Njulf.Tests
                 ["SIMPLE_DDGI_PROBE_STATE_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiProbeStateBuffer,
                 ["SIMPLE_DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiProbeUpdateQueueBuffer,
                 ["SIMPLE_DDGI_RELOCATION_CLASSIFICATION_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiRelocationClassificationBuffer,
+                ["SIMPLE_DDGI_TRANSPORT_IRRADIANCE_ATLAS_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer,
+                ["SIMPLE_DDGI_TRANSPORT_SOURCE_CACHE_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiTransportSourceCacheBuffer,
                 ["FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapParamsBuffer,
                 ["FAR_FIELD_CLIPMAP_VOXEL_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapVoxelBuffer,
                 ["FAR_FIELD_CLIPMAP_INSTANCE_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapInstanceBuffer,
@@ -475,6 +477,8 @@ namespace Njulf.Tests
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiIrradianceAtlasBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiIrradianceAtlasBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiVisibilityAtlasBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiVisibilityAtlasBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiRayResultScratchBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiRayResultScratchBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiTransportSourceCacheBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiTransportSourceCacheBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapParamsBuffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapParamsBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapVoxelBuffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapVoxelBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapInstanceBuffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapInstanceBuffer)));
@@ -641,6 +645,8 @@ namespace Njulf.Tests
             yield return BindlessIndex.SimpleDdgiProbeStateBuffer;
             yield return BindlessIndex.SimpleDdgiProbeUpdateQueueBuffer;
             yield return BindlessIndex.SimpleDdgiRelocationClassificationBuffer;
+            yield return BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer;
+            yield return BindlessIndex.SimpleDdgiTransportSourceCacheBuffer;
             yield return BindlessIndex.FarFieldClipmapParamsBuffer;
             yield return BindlessIndex.FarFieldClipmapVoxelBuffer;
             yield return BindlessIndex.FarFieldClipmapInstanceBuffer;

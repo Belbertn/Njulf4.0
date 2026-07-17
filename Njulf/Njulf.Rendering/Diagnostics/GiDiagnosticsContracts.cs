@@ -279,7 +279,9 @@ namespace Njulf.Rendering.Diagnostics
     {
         public static SimpleDdgiLayoutTelemetry Create(
             SimpleDdgiLayoutReport? report,
-            bool sampledAtlasRequested = false)
+            bool sampledAtlasRequested = false,
+            bool transportV2Enabled = false,
+            int transportRayCapacity = 0)
         {
             if (report == null)
                 return SimpleDdgiLayoutTelemetry.Unavailable("Simple DDGI did not produce a resolved layout report.");
@@ -300,7 +302,9 @@ namespace Njulf.Rendering.Diagnostics
                 // cost here to keep the persisted pre-allocation evidence exact for both paths.
                 ulong requestedPersistentBytes = SimpleDdgiLayoutCompiler.EstimatePersistentBytes(
                     request.ProbeCount,
-                    sampledAtlasRequested);
+                    sampledAtlasRequested,
+                    transportV2Enabled,
+                    transportRayCapacity);
                 volumes.Add(new SimpleDdgiLayoutVolumeTelemetry(
                     request.Id,
                     request.SourceOrdinal,
@@ -575,6 +579,7 @@ namespace Njulf.Rendering.Diagnostics
                 CreateSsgiState(diagnostics),
                 CreateDdgiState(diagnostics),
                 CreateSimpleDdgiState(diagnostics),
+                CreateSimpleDdgiTransportState(diagnostics),
                 CreateRayQueryGiState(diagnostics),
                 CreatePagedFarFieldState(diagnostics),
                 CreateAsyncComputeState(diagnostics),
@@ -698,6 +703,35 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics,
                 "The resolved Simple-DDGI path is active.",
                 "Simple DDGI was requested but no resolved Simple-DDGI layout is active.");
+        }
+
+        private static GiFeatureState CreateSimpleDdgiTransportState(RendererDiagnostics diagnostics)
+        {
+            bool simpleDdgiActive = diagnostics.SimpleDdgiActive != 0;
+            bool active = diagnostics.SimpleDdgiTransportV2Active != 0;
+            bool requested = simpleDdgiActive || active;
+            if (!requested)
+                return new GiFeatureState("simple-ddgi-transport-v2", true, true, false, false, GiFeatureStateStatus.Disabled, "Simple DDGI is inactive.");
+            if (diagnostics.GlobalIlluminationEmergencyFallbackEnabled != 0)
+                return new GiFeatureState("simple-ddgi-transport-v2", true, true, true, false, GiFeatureStateStatus.Fallback, "Emergency GI fallback is active; V2 transport is intentionally suppressed.");
+            if (active)
+            {
+                string progress = diagnostics.SimpleDdgiTransportSourceReadyProbeCount > 0
+                    ? $"V2 source/solve transport is active; {diagnostics.SimpleDdgiTransportConvergedProbeCount}/{diagnostics.SimpleDdgiTransportSourceReadyProbeCount} source-ready probes are converged."
+                    : "V2 source/solve transport is active; source cache warmup is pending.";
+                if (diagnostics.SimpleDdgiTransportGlobalConvergencePending != 0)
+                    progress += $" Field-wide minimum-bounce convergence is still in progress ({diagnostics.SimpleDdgiTransportGlobalConvergenceElapsedFrames} DDGI frames).";
+                return new GiFeatureState("simple-ddgi-transport-v2", true, true, true, true, GiFeatureStateStatus.Active, progress);
+            }
+
+            return new GiFeatureState(
+                "simple-ddgi-transport-v2",
+                true,
+                true,
+                true,
+                false,
+                GiFeatureStateStatus.Fallback,
+                "Simple DDGI is using the explicit V1 compatibility transport path.");
         }
 
         private static GiFeatureState CreateRayQueryGiState(RendererDiagnostics diagnostics)
@@ -1393,7 +1427,7 @@ namespace Njulf.Rendering.Diagnostics
                     diagnostics.DdgiAtlasMemoryBudgetBytes,
                     false,
                     diagnostics.SimpleDdgiActive != 0
-                        ? "Simple DDGI canonical atlas (including optional sampled mirror)."
+                        ? "Simple DDGI receiver-visible atlas, optional sampled mirror, and V2 private transport/source-cache storage."
                         : "DDGI irradiance and visibility atlas accounting."),
                 CreateComponent(
                     "DDGI state and update queues",
@@ -1479,7 +1513,18 @@ namespace Njulf.Rendering.Diagnostics
         private static ulong ResolveDdgiCacheBytes(RendererDiagnostics diagnostics)
         {
             if (diagnostics.SimpleDdgiActive != 0)
-                return diagnostics.SimpleDdgiAtlasBytes;
+            {
+                // V2 deliberately keeps its Jacobi target private until a
+                // completed generation is published, and stores source rays in
+                // a separate persistent buffer. Both allocations are governed
+                // by the same simple-DDGI layout cap; excluding them made a V2
+                // capture appear substantially cheaper than it really was.
+                return SaturatingAdd(
+                    SaturatingAdd(
+                        diagnostics.SimpleDdgiAtlasBytes,
+                        diagnostics.SimpleDdgiTransportIrradianceAtlasBytes),
+                    diagnostics.SimpleDdgiTransportSourceCacheBytes);
+            }
 
             ulong atlasBytes = SaturatingAdd(
                 diagnostics.DdgiCurrentIrradianceAtlasBytes,
@@ -1562,6 +1607,15 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "gi.ddgi.active", diagnostics.GlobalIlluminationDdgiActive);
             AddSetting(settings, "gi.simpleDdgi.requested", diagnostics.SimpleDdgiRequested);
             AddSetting(settings, "gi.simpleDdgi.active", diagnostics.SimpleDdgiActive);
+            AddSetting(settings, "gi.simpleDdgi.transportV2.active", diagnostics.SimpleDdgiTransportV2Active);
+            AddSetting(settings, "gi.simpleDdgi.automaticProbeDensity.active", diagnostics.SimpleDdgiAutomaticProbeDensityActive);
+            AddSetting(settings, "gi.simpleDdgi.transport.relaxation", diagnostics.SimpleDdgiTransportSolverRelaxation);
+            AddSetting(settings, "gi.simpleDdgi.transport.albedoClamp", diagnostics.SimpleDdgiTransportAlbedoClamp);
+            AddSetting(settings, "gi.simpleDdgi.transport.residualThreshold", diagnostics.SimpleDdgiTransportResidualThreshold);
+            AddSetting(settings, "gi.simpleDdgi.transport.maximumSolverGenerations", diagnostics.SimpleDdgiTransportMaximumSolverGenerations);
+            AddSetting(settings, "gi.simpleDdgi.transport.sourceRefreshFrames", diagnostics.SimpleDdgiTransportSourceRefreshFrames);
+            AddSetting(settings, "gi.simpleDdgi.transport.globalConvergenceElapsedFrames", diagnostics.SimpleDdgiTransportGlobalConvergenceElapsedFrames);
+            AddSetting(settings, "gi.simpleDdgi.transport.calibrationChangeCount", diagnostics.SimpleDdgiTransportCalibrationChangeCount);
             AddSetting(settings, "gi.rayQuery.requested", diagnostics.GlobalIlluminationRayQueryRequested);
             AddSetting(settings, "gi.rayQuery.supported", diagnostics.GlobalIlluminationRayQuerySupported);
             AddSetting(settings, "gi.rayQuery.active", diagnostics.GlobalIlluminationRayQueryActive);

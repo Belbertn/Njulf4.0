@@ -94,6 +94,10 @@ namespace Njulf.Rendering.Pipeline
             }
 
             base.Execute(cmd, frameIndex, sceneData);
+            // V2 blend wrote its private Jacobi target. Publish only after the
+            // entire blend dispatch completed, before the optional sampled-image
+            // mirror sees the canonical receiver-visible atlas.
+            VolumeManager.PublishTransportAtlasAfterBlend(cmd);
             // The sampled atlas is deliberately graphics-queue only until its
             // images are declared render-graph resources with queue ownership
             // transfers.  Keep the canonical SSBO blend as the producer, then
@@ -105,7 +109,67 @@ namespace Njulf.Rendering.Pipeline
             // rolling GI CPU P95 includes every sampled-atlas upload command.
             sceneData.CpuSimpleDdgiRecordMicroseconds = checked(
                 sceneData.CpuSimpleDdgiRecordMicroseconds + sampledAtlasSynchronizationMicroseconds);
+            // Capture the final transaction state, not the pre-transport
+            // relocation snapshot. This includes the just-written residual,
+            // cleared fresh flag, and any V2 cache-repair request emitted by
+            // transport, so scheduling and diagnostics observe the same
+            // generation receivers can consume.
+            VolumeManager.RecordProbeStateReadback(cmd, frameIndex);
             VolumeManager.MarkBlendExecuted();
+        }
+    }
+
+    /// <summary>
+    /// Resolves one explicit recursive DDGI transport iteration from cached
+    /// source rays and the last published irradiance field.  It deliberately has
+    /// no ray-query dependency: direct/sky/emissive source work remains in the
+    /// trace producer and is reused until a source generation changes.
+    /// </summary>
+    public sealed unsafe class SimpleDdgiTransportPass : SimpleDdgiComputePass
+    {
+        public SimpleDdgiTransportPass(
+            VulkanContext context,
+            SwapchainManager swapchain,
+            BindlessHeap bindlessHeap,
+            RenderSettings settings,
+            SimpleDdgiVolumeManager volumeManager,
+            FarFieldClipmapManager farFieldClipmapManager)
+            : base("SimpleDdgiTransportPass", "ddgi_simple_transport.comp.spv", context, swapchain, bindlessHeap, settings, volumeManager, farFieldClipmapManager, null, requiresRayQuery: false)
+        {
+        }
+
+        protected override uint CalculateGroupCount(SceneRenderingData sceneData)
+        {
+            ulong rayCount = checked((ulong)Math.Max(0, VolumeManager.ProbesToUpdate) * (ulong)Math.Max(1, VolumeManager.RaysPerProbe));
+            return checked((uint)Math.Max(1UL, (rayCount + 63UL) / 64UL));
+        }
+
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
+        {
+            // V1 has no standalone transport pass. Do not abort its valid
+            // trace/relocate/blend transaction when the compatibility path is
+            // intentionally selected.
+            if (!VolumeManager.TransportV2Active)
+                return false;
+            if (!base.ShouldExecute(frameIndex, sceneData) || !VolumeManager.CanScheduleTransportTransaction)
+            {
+                VolumeManager.AbortUpdateTransaction();
+                return false;
+            }
+
+            return true;
+        }
+
+        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        {
+            if (!VolumeManager.CanExecuteTransportTransaction)
+            {
+                VolumeManager.AbortUpdateTransaction();
+                return;
+            }
+
+            base.Execute(cmd, frameIndex, sceneData);
+            VolumeManager.MarkTransportExecuted();
         }
     }
 
@@ -149,7 +213,6 @@ namespace Njulf.Rendering.Pipeline
             }
 
             base.Execute(cmd, frameIndex, sceneData);
-            VolumeManager.RecordProbeStateReadback(cmd, frameIndex);
             VolumeManager.MarkRelocateClassifyExecuted();
         }
 
@@ -352,7 +415,13 @@ namespace Njulf.Rendering.Pipeline
                     : checked((uint)Math.Clamp(gi.DdgiMaterialTextureMaxCascade, 0, GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount - 1)),
                 ProbeStateBufferIndex = BindlessIndex.SimpleDdgiProbeStateBuffer,
                 ProbeUpdateQueueBufferIndex = BindlessIndex.SimpleDdgiProbeUpdateQueueBuffer,
-                RelocationClassificationBufferIndex = BindlessIndex.SimpleDdgiRelocationClassificationBuffer
+                RelocationClassificationBufferIndex = BindlessIndex.SimpleDdgiRelocationClassificationBuffer,
+                TransportSourceCacheBufferIndex = BindlessIndex.SimpleDdgiTransportSourceCacheBuffer,
+                TransportReadIrradianceAtlasBufferIndex = BindlessIndex.SimpleDdgiIrradianceAtlasBuffer,
+                TransportWriteIrradianceAtlasBufferIndex = gi.SimpleDdgiTransportV2Enabled
+                    ? checked((uint)BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer)
+                    : checked((uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),
+                TransportGeneration = VolumeManager.TransportGeneration
             };
         }
 

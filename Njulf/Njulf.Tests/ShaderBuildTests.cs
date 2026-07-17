@@ -50,6 +50,7 @@ public sealed class ShaderBuildTests
         "ddgi_blend.comp",
         "ddgi_relocate_classify.comp",
         "ddgi_simple_trace.comp",
+        "ddgi_simple_transport.comp",
         "ddgi_simple_blend.comp",
         "farfield_voxelize.comp",
         "farfield_jumpflood.comp",

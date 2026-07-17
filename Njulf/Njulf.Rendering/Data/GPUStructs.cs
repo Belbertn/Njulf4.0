@@ -1213,7 +1213,10 @@ namespace Njulf.Rendering.Data
         public uint GroupCountZ;
     }
 
-    // 176 bytes. Fixed-grid DDGI params, mirrored by ddgi_simple_shared.glsl.
+    // 208 bytes. Fixed-grid DDGI params, mirrored by ddgi_simple_shared.glsl.
+    // The final two vectors are the V2 transport contract.  They deliberately
+    // live in the params header instead of pass-local state so every shader that
+    // samples DDGI can identify the published (receiver-visible) atlas.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiParams
     {
@@ -1232,6 +1235,12 @@ namespace Njulf.Rendering.Data
         // fraction of it as an additional cap, preventing coarse rings from
         // looking through thin walls. ZW reserved for ABI-compatible expansion.
         public Vector4 BiasLimitsAndPadding;
+        // X/Y/Z/W = published irradiance atlas, private transport target,
+        // persistent source-cache bindless indices, transport generation.
+        public Vector4 TransportAndAtlasIndices;
+        // X = Jacobi relaxation, Y = diffuse-albedo clamp, Z = convergence
+        // residual threshold, W = maximum solver generations per source sample.
+        public Vector4 TransportControls;
     }
 
     // 96 bytes. Appended after GPUSimpleDdgiParams in the simple DDGI params buffer.
@@ -1254,6 +1263,19 @@ namespace Njulf.Rendering.Data
         public Vector4 DirectionHitFlags;
     }
 
+    // 32 bytes. Persistent source transport cache.  A cache entry represents one
+    // physical probe slot and one deterministic ray direction, so direct/sky/
+    // emissive source tracing can be reused across multiple bounce iterations.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiTransportRayCache
+    {
+        public Vector4 SourceRadianceDistance;
+        public uint PackedDirection;
+        public uint PackedNormal;
+        public uint PackedAlbedo;
+        public uint GenerationAndFlags;
+    }
+
     // 32 bytes. Simple DDGI per-probe state: relocation.xyz/active, then flags/age/classification/debug.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiProbeState
@@ -1273,8 +1295,12 @@ namespace Njulf.Rendering.Data
         public uint VolumeIndex;
         public uint Flags;
         public uint Reserved0;
-        public uint Reserved1;
-        public uint Reserved2;
+        // Full source sequence cardinality used by V2 cache lookup. It remains
+        // valid when Flags carries a smaller maintenance-ray count.
+        public uint SourceRayCount;
+        // CPU completion metadata for the lighting generation that produced the
+        // source cache. Shaders intentionally do not depend on this value.
+        public uint SourceLightingGeneration;
         public uint Reserved3;
         public uint Reserved4;
     }
@@ -1354,6 +1380,10 @@ namespace Njulf.Rendering.Data
         public uint ProbeStateBufferIndex;
         public uint ProbeUpdateQueueBufferIndex;
         public uint RelocationClassificationBufferIndex;
+        public uint TransportSourceCacheBufferIndex;
+        public uint TransportReadIrradianceAtlasBufferIndex;
+        public uint TransportWriteIrradianceAtlasBufferIndex;
+        public uint TransportGeneration;
         public uint Padding0;
     }
 

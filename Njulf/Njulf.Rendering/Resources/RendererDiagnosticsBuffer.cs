@@ -33,7 +33,12 @@ namespace Njulf.Rendering.Resources
         public const int SimpleDdgiVolumePrimaryGatherCounterBase = DdgiInvestigationCounterBase + DdgiInvestigationFixedCounterCount;
         public const int SimpleDdgiVolumeSampledGatherCounterBase = SimpleDdgiVolumePrimaryGatherCounterBase + SimpleDdgiVolumeGatherCounterCount;
         public const int DdgiInvestigationCounterCount = DdgiInvestigationFixedCounterCount + SimpleDdgiVolumeGatherCounterCount * 2;
-        public const int CounterCount = MeshletCounterCount + DdgiForwardEstimateCounterCount + DdgiTraceEnergyCounterCount + DdgiTraceEarlyOutCounterCount + DdgiBlendEnergyCounterCount + DdgiTraceRingMismatchSampleCount + FarFieldCounterCount + DdgiInvestigationCounterCount;
+        // Appended rather than inserted so existing capture counter locations
+        // remain stable. V2 uses this sampled family to make source/cache/bounce
+        // transport directly observable without production atomic traffic.
+        public const int SimpleDdgiTransportCounterBase = DdgiInvestigationCounterBase + DdgiInvestigationCounterCount;
+        public const int SimpleDdgiTransportCounterCount = 6;
+        public const int CounterCount = MeshletCounterCount + DdgiForwardEstimateCounterCount + DdgiTraceEnergyCounterCount + DdgiTraceEarlyOutCounterCount + DdgiBlendEnergyCounterCount + DdgiTraceRingMismatchSampleCount + FarFieldCounterCount + DdgiInvestigationCounterCount + SimpleDdgiTransportCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const ulong CounterBufferSize = CounterCount * sizeof(uint);
@@ -110,6 +115,7 @@ namespace Njulf.Rendering.Resources
             uint traceEarlyOutResolveClipmapCellCount = counters[DdgiTraceEarlyOutCounterBase + 4];
             uint traceEarlyOutResolveClipmapRingCount = counters[DdgiTraceEarlyOutCounterBase + 5];
             uint blendEnergySampleCount = counters[DdgiBlendEnergyCounterBase + 0];
+            uint simpleDdgiTransportSampleCount = counters[SimpleDdgiTransportCounterBase + 0];
             uint traceRingMismatchSampleValid = counters[DdgiTraceRingMismatchSampleBase + 0];
             uint traceRingMismatchCorrectedCount = counters[DdgiTraceRingMismatchSampleBase + 19];
             uint ddgiInvestigationSampleCount = counters[DdgiInvestigationCounterBase + 0];
@@ -205,6 +211,7 @@ namespace Njulf.Rendering.Resources
                 traceEarlyOutResolveClipmapCellCount > 0 ||
                 traceEarlyOutResolveClipmapRingCount > 0 ||
                 blendEnergySampleCount > 0 ||
+                simpleDdgiTransportSampleCount > 0 ||
                 traceRingMismatchSampleValid > 0 ||
                 traceRingMismatchCorrectedCount > 0)
             {
@@ -215,8 +222,11 @@ namespace Njulf.Rendering.Resources
                 float invClipmapInfoPrimaryOkCount = clipmapInfoPrimaryOkCount > 0 ? 1.0f / clipmapInfoPrimaryOkCount : 0.0f;
                 float invTraceEnergySampleCount = traceEnergySampleCount > 0 ? 1.0f / traceEnergySampleCount : 0.0f;
                 float invBlendEnergySampleCount = blendEnergySampleCount > 0 ? 1.0f / blendEnergySampleCount : 0.0f;
+                float invSimpleDdgiTransportSampleCount = simpleDdgiTransportSampleCount > 0
+                    ? 1.0f / simpleDdgiTransportSampleCount
+                    : 0.0f;
                 _lastCompletedDdgiForwardEstimateCounters[frameIndex] = new DdgiForwardEstimateCounters(
-                    ReadbackValid: sampleCount > 0 || clipmapInfoPrimaryAttemptCount > 0 || traceEnergySampleCount > 0 || traceEarlyOutDisabledCount > 0 || traceEarlyOutBeyondRequestCount > 0 || traceEarlyOutResolveBoundsCount > 0 || traceEarlyOutResolveProbeRangeCount > 0 || traceEarlyOutResolveClipmapCellCount > 0 || traceEarlyOutResolveClipmapRingCount > 0 || blendEnergySampleCount > 0 || traceRingMismatchSampleValid > 0 || traceRingMismatchCorrectedCount > 0 ? 1 : 0,
+                    ReadbackValid: sampleCount > 0 || clipmapInfoPrimaryAttemptCount > 0 || traceEnergySampleCount > 0 || traceEarlyOutDisabledCount > 0 || traceEarlyOutBeyondRequestCount > 0 || traceEarlyOutResolveBoundsCount > 0 || traceEarlyOutResolveProbeRangeCount > 0 || traceEarlyOutResolveClipmapCellCount > 0 || traceEarlyOutResolveClipmapRingCount > 0 || blendEnergySampleCount > 0 || simpleDdgiTransportSampleCount > 0 || traceRingMismatchSampleValid > 0 || traceRingMismatchCorrectedCount > 0 ? 1 : 0,
                     SpatialCoverageAverage: counters[DdgiForwardEstimateCounterBase + 0] / DdgiForwardEstimateWeightScale * invSampleCount,
                     SupportCoverageAverage: counters[DdgiForwardEstimateCounterBase + 1] / DdgiForwardEstimateWeightScale * invSampleCount,
                     DataConfidenceAverage: counters[DdgiForwardEstimateCounterBase + 2] / DdgiForwardEstimateWeightScale * invSampleCount,
@@ -306,7 +316,13 @@ namespace Njulf.Rendering.Resources
                     BlendEnergyLowConfidenceCount: counters[DdgiBlendEnergyCounterBase + 3],
                     BlendEnergyNonzeroIrradianceCount: counters[DdgiBlendEnergyCounterBase + 4],
                     BlendEnergyNonFiniteIrradianceCount: counters[DdgiBlendEnergyCounterBase + 5],
-                    BlendEnergyFireflySuppressedCount: counters[DdgiBlendEnergyCounterBase + 6]);
+                    BlendEnergyFireflySuppressedCount: counters[DdgiBlendEnergyCounterBase + 6],
+                    SimpleDdgiTransportEnergySampleCount: simpleDdgiTransportSampleCount,
+                    SimpleDdgiTransportSourceCacheHitCount: counters[SimpleDdgiTransportCounterBase + 1],
+                    SimpleDdgiTransportSourceCacheMissCount: counters[SimpleDdgiTransportCounterBase + 2],
+                    SimpleDdgiTransportBounceLuminanceAverage: counters[SimpleDdgiTransportCounterBase + 3] / DdgiForwardEstimateLuminanceScale * invSimpleDdgiTransportSampleCount,
+                    SimpleDdgiTransportSourceLuminanceAverage: counters[SimpleDdgiTransportCounterBase + 4] / DdgiForwardEstimateLuminanceScale * invSimpleDdgiTransportSampleCount,
+                    SimpleDdgiTransportTotalLuminanceAverage: counters[SimpleDdgiTransportCounterBase + 5] / DdgiForwardEstimateLuminanceScale * invSimpleDdgiTransportSampleCount);
             }
             else
             {

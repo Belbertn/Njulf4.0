@@ -37,6 +37,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
         "FarFieldClipmapBakePass",
         "SimpleDdgiTracePass",
         "SimpleDdgiRelocateClassifyPass",
+        "SimpleDdgiTransportPass",
         "SimpleDdgiBlendPass",
         "DdgiSchedulePass",
         "DdgiTracePass",
@@ -107,6 +108,8 @@ public sealed class ProductionRenderPipelineDeclarationTests
         [
             RenderGraphResourceId.SimpleDdgiParameters,
             RenderGraphResourceId.SimpleDdgiIrradianceAtlas,
+            RenderGraphResourceId.SimpleDdgiTransportAtlas,
+            RenderGraphResourceId.SimpleDdgiTransportSourceCache,
             RenderGraphResourceId.SimpleDdgiVisibilityAtlas,
             RenderGraphResourceId.SimpleDdgiRayScratch,
             RenderGraphResourceId.SimpleDdgiProbeState,
@@ -132,7 +135,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(graph.PassNames, Is.EqualTo(declaration.PassOrder));
             Assert.DoesNotThrow(() => declaration.ValidatePassOrder(graph.PassNames));
             Assert.DoesNotThrow(graph.ValidateResourceDeclarations);
-            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(77));
+            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(79));
             foreach (RenderGraphResourceId resource in explicitDdgiResources)
             {
                 Assert.That(
@@ -268,7 +271,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(graph.PassNames, Is.EqualTo(declaration.GetPassOrder(includeSsgi: false)));
             Assert.DoesNotThrow(() => declaration.ValidatePassOrder(graph.PassNames, includeSsgi: false));
             Assert.DoesNotThrow(graph.ValidateResourceDeclarations);
-            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(65));
+            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(67));
             foreach (string passName in ssgiOnlyPasses)
                 Assert.That(graph.PassNames, Does.Not.Contain(passName), passName);
             foreach (RenderGraphResourceId resource in ssgiOnlyResources)
@@ -307,7 +310,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(diagnostics.AsyncComputeCandidatePassCount, Is.EqualTo(19));
+            Assert.That(diagnostics.AsyncComputeCandidatePassCount, Is.EqualTo(20));
             Assert.That(diagnostics.AsyncComputeEnabledPassCount, Is.EqualTo(0));
             Assert.That(
                 diagnostics.Passes.Where(pass => pass.AsyncComputeCandidate).Select(pass => pass.Name),
@@ -318,6 +321,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
                     "FarFieldClipmapBakePass",
                     "SimpleDdgiTracePass",
                     "SimpleDdgiRelocateClassifyPass",
+                    "SimpleDdgiTransportPass",
                     "SimpleDdgiBlendPass",
                     "DdgiSchedulePass",
                     "DdgiTracePass",
@@ -481,6 +485,9 @@ public sealed class ProductionRenderPipelineDeclarationTests
         RenderGraphResourceUsage[] simpleTrace = declaration.PassResourceDeclarations
             .Single(pass => pass.PassName == "SimpleDdgiTracePass")
             .Usages;
+        RenderGraphResourceUsage[] simpleTransport = declaration.PassResourceDeclarations
+            .Single(pass => pass.PassName == "SimpleDdgiTransportPass")
+            .Usages;
         RenderGraphResourceUsage[] particleSimulation = declaration.PassResourceDeclarations
             .Single(pass => pass.PassName == "GpuParticleSimulatePass")
             .Usages;
@@ -500,6 +507,9 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(simpleTrace.Select(usage => usage.Resource), Does.Contain(RenderGraphResourceId.MaterialTextures));
             Assert.That(simpleTrace.Select(usage => usage.Resource), Does.Contain(RenderGraphResourceId.EnvironmentData));
             Assert.That(simpleTrace.Select(usage => usage.Resource), Does.Contain(RenderGraphResourceId.RendererDiagnosticsBuffer));
+            Assert.That(simpleTransport.Select(usage => usage.Resource), Does.Contain(RenderGraphResourceId.SimpleDdgiTransportSourceCache));
+            Assert.That(simpleTransport.Select(usage => usage.Resource), Does.Contain(RenderGraphResourceId.SimpleDdgiIrradianceAtlas));
+            Assert.That(simpleTransport.Select(usage => usage.Resource), Does.Contain(RenderGraphResourceId.SimpleDdgiRayScratch));
             Assert.That(particleSimulation.Select(usage => usage.Resource), Does.Contain(RenderGraphResourceId.ParticleBuffers));
             Assert.That(particleSimulation.Select(usage => usage.Resource), Does.Contain(RenderGraphResourceId.GpuParticleEmitterData));
             Assert.That(particleSort.Select(usage => usage.Resource), Does.Contain(RenderGraphResourceId.GpuParticleCounterReadback));
@@ -531,7 +541,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
                     "AmbientOcclusionBlurPass", "HiZBuildPass",
                     "SsgiTracePass", "SsgiTemporalPass", "SsgiDenoisePass",
                     "FarFieldClipmapBakePass",
-                    "SimpleDdgiTracePass", "SimpleDdgiRelocateClassifyPass", "SimpleDdgiBlendPass",
+                    "SimpleDdgiTracePass", "SimpleDdgiRelocateClassifyPass", "SimpleDdgiTransportPass", "SimpleDdgiBlendPass",
                     "DdgiSchedulePass", "DdgiTracePass", "DdgiBlendPass", "DdgiRelocateClassifyPass", "DdgiPublishPass",
                     "FogPass", "BloomPass",
                     "GpuParticleResetPass", "GpuParticleSimulatePass", "GpuParticleSortPass"
@@ -650,6 +660,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
             "FarFieldClipmapBakePass" or
             "SimpleDdgiTracePass" or
             "SimpleDdgiRelocateClassifyPass" or
+            "SimpleDdgiTransportPass" or
             "SimpleDdgiBlendPass" or
             "DdgiSchedulePass" or
             "DdgiTracePass" or

@@ -1,0 +1,144 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
+#include "ddgi_simple_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform SimpleDdgiPushBlock
+{
+    uint ParamsBufferIndex;
+    uint IrradianceAtlasBufferIndex;
+    uint VisibilityAtlasBufferIndex;
+    uint RayResultScratchBufferIndex;
+    uint CurrentFrameIndex;
+    uint LightCount;
+    uint DirectionalLightCount;
+    uint LocalLightCount;
+    uint MaxShadedLights;
+    uint EmissiveSourceCount;
+    uint FarFieldParamsBufferIndex;
+    uint FarFieldVoxelBufferIndex;
+    uint FarFieldInstanceBufferIndex;
+    uint Flags;
+    uint MaterialTextureMaxCascade;
+    uint ProbeStateBufferIndex;
+    uint ProbeUpdateQueueBufferIndex;
+    uint RelocationClassificationBufferIndex;
+    uint TransportSourceCacheBufferIndex;
+    uint TransportReadIrradianceAtlasBufferIndex;
+    uint TransportWriteIrradianceAtlasBufferIndex;
+    uint TransportGeneration;
+    uint Padding0;
+} pc;
+
+void WriteSimpleTransportRayResult(uint rayResultIndex, vec3 radiance, float distance, vec3 direction, float hitKind)
+{
+    uint baseWord = rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS;
+    WriteStorageVec4(pc.RayResultScratchBufferIndex, baseWord, vec4(clamp(radiance, vec3(0.0), vec3(65504.0)), max(distance, 0.0)));
+    WriteStorageVec4(pc.RayResultScratchBufferIndex, baseWord + 4u, vec4(direction, hitKind));
+}
+
+void main()
+{
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    uint globalRay = gl_GlobalInvocationID.x;
+    uint totalRays = params.probesToUpdate * params.raysPerProbe;
+    if (globalRay >= totalRays || params.probeCount == 0u ||
+        (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) == 0u)
+    {
+        return;
+    }
+
+    uint queueOffset = globalRay / params.raysPerProbe;
+    uint rayIndex = globalRay - queueOffset * params.raysPerProbe;
+    SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, queueOffset);
+    uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
+    if (rayIndex >= activeRayCount || update.probeIndex >= params.probeCount)
+        return;
+
+    SimpleDdgiVolume volume;
+    uint localProbeIndex;
+    if (!ResolveSimpleDdgiProbeVolume(update.probeIndex, params, volume, localProbeIndex))
+        return;
+    SimpleDdgiProbeState probeState = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, update.probeIndex);
+    if (!SimpleDdgiUpdateMatchesProbeGeneration(update, probeState))
+        return;
+
+    uint sourceRayCount = SimpleDdgiUpdateSourceRayCount(update, params);
+    uint sourceRayOrdinal = min(
+        rayIndex * sourceRayCount / max(activeRayCount, 1u),
+        sourceRayCount - 1u);
+    uint directionRayIndex = sourceRayOrdinal * params.raysPerProbe / sourceRayCount;
+    SimpleDdgiTransportRayCache source;
+    if (!ReadSimpleDdgiTransportRayCache(
+            pc.TransportSourceCacheBufferIndex,
+            update.probeIndex,
+            directionRayIndex,
+            params,
+            SimpleDdgiProbeGeneration(probeState),
+            source))
+    {
+        // A stale/corrupt cache cannot inject old energy. Preserve the source
+        // scratch result (or zero if trace was skipped), then atomically request
+        // a full source refresh through the next probe-state readback.
+        MarkSimpleDdgiProbeSourceCacheInvalid(pc.ProbeStateBufferIndex, update.probeIndex);
+        uint scratchBase = globalRay * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS;
+        vec4 sourceRadianceDistance = ReadStorageVec4(pc.RayResultScratchBufferIndex, scratchBase);
+        vec4 sourceDirectionHit = ReadStorageVec4(pc.RayResultScratchBufferIndex, scratchBase + 4u);
+        RecordSimpleDdgiTransportEnergyDiagnostics(
+            params,
+            pc.CurrentFrameIndex,
+            update.probeIndex,
+            directionRayIndex,
+            false,
+            sourceRadianceDistance.rgb,
+            vec3(0.0),
+            sourceRadianceDistance.rgb);
+        WriteSimpleTransportRayResult(
+            globalRay,
+            sourceRadianceDistance.rgb,
+            sourceRadianceDistance.w,
+            sourceDirectionHit.xyz,
+            sourceDirectionHit.w);
+        return;
+    }
+
+    float hitKind = SimpleDdgiTransportRayCacheHitKind(source);
+    vec3 totalRadiance = source.sourceRadiance;
+    vec3 bounceRadiance = vec3(0.0);
+    if (hitKind >= 0.5)
+    {
+        vec3 probePosition = SimpleDdgiProbeLogicalPosition(volume, localProbeIndex) + probeState.relocation;
+        vec3 normal = length(source.normal) > 0.00001 ? normalize(source.normal) : vec3(0.0, 1.0, 0.0);
+        vec3 albedo = min(clamp(source.albedo, vec3(0.0), vec3(1.0)), vec3(params.transportAlbedoClamp));
+        vec3 hitPosition = probePosition + source.direction * source.distance;
+        vec3 bouncedIrradiance = SampleSimpleDdgiUnifiedIrradiance(
+            hitPosition + normal * max(0.03, volume.spacing * 0.02),
+            normal,
+            -source.direction,
+            true);
+        bounceRadiance = bouncedIrradiance * albedo / SIMPLE_DDGI_PI;
+        totalRadiance += bounceRadiance;
+    }
+
+    RecordSimpleDdgiTransportEnergyDiagnostics(
+        params,
+        pc.CurrentFrameIndex,
+        update.probeIndex,
+        directionRayIndex,
+        true,
+        source.sourceRadiance,
+        bounceRadiance,
+        totalRadiance);
+
+    WriteSimpleTransportRayResult(
+        globalRay,
+        totalRadiance,
+        source.distance,
+        source.direction,
+        hitKind);
+}

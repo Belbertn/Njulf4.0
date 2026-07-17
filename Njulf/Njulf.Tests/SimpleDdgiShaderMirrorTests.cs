@@ -457,7 +457,7 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("float thicknessCap = max(0.002, p.architecturalThickness * 0.25);"));
                 Assert.That(shared, Does.Contain("float totalBiasCap = min(p.maximumWorldBias, thicknessCap);"));
                 Assert.That(shared, Does.Contain("float viewCap = min(max(totalBiasCap - normalBias, 0.0), max(0.0, spacing * 0.35));"));
-                Assert.That(shared, Does.Contain("const uint SIMPLE_DDGI_HEADER_WORDS = 44u;"));
+                Assert.That(shared, Does.Contain("const uint SIMPLE_DDGI_HEADER_WORDS = 52u;"));
             });
         }
 
@@ -852,6 +852,7 @@ namespace Njulf.Tests
         {
             string shared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
             string trace = ReadRepoText("Njulf.Shaders", "ddgi_simple_trace.comp");
+            string transport = ReadRepoText("Njulf.Shaders", "ddgi_simple_transport.comp");
             string blend = ReadRepoText("Njulf.Shaders", "ddgi_simple_blend.comp");
             string relocate = ReadRepoText("Njulf.Shaders", "ddgi_simple_relocate_classify.comp");
             string hitShading = ReadRepoText("Njulf.Shaders", "ddgi_hit_shading.glsl");
@@ -896,6 +897,8 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Not.Contain("SIMPLE_DDGI_FLAG_ROUGH_SPECULAR_ENABLED"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_FLAG_ADAPTIVE_HYSTERESIS"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_FLAG_LIGHTING_CHANGE_ACTIVE"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_FLAG_TRANSPORT_V2"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_UPDATE_SOURCE_REFRESH"));
                 Assert.That(shared, Does.Contain("vec4 SimpleDdgiPerProbeRayRotation(uint probeIndex, vec4 frameRotation)"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_VISIBILITY_SELECTION_FLOOR = 0.05"));
                 Assert.That(shared, Does.Contain("float visibilitySelectionWeight = max("));
@@ -915,6 +918,7 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("(coord + volume.physicalOffset) % max(volume.gridCount, uvec3(1u))"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_MAX_RAYS_PER_PROBE = 256u"));
                 Assert.That(shared, Does.Contain("uint SimpleDdgiUpdateRayCount(SimpleDdgiProbeUpdate update, SimpleDdgiParams p)"));
+                Assert.That(shared, Does.Contain("uint SimpleDdgiUpdateSourceRayCount(SimpleDdgiProbeUpdate update, SimpleDdgiParams p)"));
                 Assert.That(shared, Does.Contain("state.luminanceChangeEma = uintBitsToFloat"));
                 Assert.That(shared, Does.Contain("SimpleDdgiParams p, float volumeSpacing)"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_MAX_GATHER_VOLUME_SAMPLES = 3u"));
@@ -953,7 +957,18 @@ namespace Njulf.Tests
                 Assert.That(trace, Does.Contain("SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, updateProbeOffset);"));
                 Assert.That(trace, Does.Contain("uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);"));
                 Assert.That(trace, Does.Contain("if (rayIndex >= activeRayCount)"));
-                Assert.That(trace, Does.Contain("rayIndex * params.raysPerProbe / activeRayCount"));
+                Assert.That(trace, Does.Contain("uint sourceRayCount = SimpleDdgiUpdateSourceRayCount(update, params);"));
+                Assert.That(trace, Does.Contain("uint sourceRayOrdinal = min("));
+                Assert.That(trace, Does.Contain("uint directionRayIndex = sourceRayOrdinal * params.raysPerProbe / sourceRayCount;"));
+                Assert.That(transport, Does.Contain("vec3 bounceRadiance = bouncedIrradiance * albedo / SIMPLE_DDGI_PI;"));
+                Assert.That(transport, Does.Contain("ReadSimpleDdgiTransportRayCache("));
+                Assert.That(transport, Does.Contain("SampleSimpleDdgiUnifiedIrradiance("));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID"));
+                Assert.That(shared, Does.Contain("void MarkSimpleDdgiProbeSourceCacheInvalid("));
+                Assert.That(shared, Does.Contain("void ClearSimpleDdgiProbeSourceCacheInvalid("));
+                Assert.That(trace, Does.Contain("MarkSimpleDdgiProbeSourceCacheInvalid(pc.ProbeStateBufferIndex, probeIndex);"));
+                Assert.That(trace, Does.Contain("ClearSimpleDdgiProbeSourceCacheInvalid(pc.ProbeStateBufferIndex, probeIndex);"));
+                Assert.That(transport, Does.Contain("MarkSimpleDdgiProbeSourceCacheInvalid(pc.ProbeStateBufferIndex, update.probeIndex);"));
                 Assert.That(trace, Does.Contain("vec4 rayRotation = SimpleDdgiPerProbeRayRotation(probeIndex, params.rayRotation);"));
                 Assert.That(trace, Does.Contain("SimpleDdgiFibonacciDirection(directionRayIndex, params.raysPerProbe, rayRotation)"));
                 Assert.That(trace, Does.Contain("if (!SimpleDdgiUpdateMatchesProbeGeneration(update, probeState))"));
@@ -966,6 +981,8 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("max(environment.SkyIntensity, 0.0)"));
                 Assert.That(forward, Does.Contain("diffuseIbl = diffuseWeight * (albedo / PI) * irradiance * environment.DiffuseIntensity;"));
                 Assert.That(simpleManager, Does.Contain("_settings.Environment.Enabled ? _settings.Environment.SkyIntensity : 0.0f"));
+                Assert.That(simpleManager, Does.Contain("_transportSourceCacheRayCapacity != sourceCacheRayCapacity"));
+                Assert.That(simpleManager, Does.Contain("ProbeStateSourceCacheInvalidFlag"));
                 Assert.That(trace, Does.Contain("float nearTlasMaxDistance = farFieldEnabled"));
                 Assert.That(trace, Does.Contain("SIMPLE_DDGI_TRACE_FLAG_COMPLETE_RAY_SCENE"));
                 Assert.That(trace, Does.Contain("farFieldEnabled && !completeRayScene"));

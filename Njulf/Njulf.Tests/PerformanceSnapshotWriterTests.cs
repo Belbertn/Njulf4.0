@@ -58,6 +58,16 @@ public sealed class PerformanceSnapshotWriterTests
             GlobalIlluminationSsgiActive = 0,
             GlobalIlluminationDdgiActive = 1,
             SimpleDdgiActive = 1,
+            SimpleDdgiTransportV2Active = 1,
+            SimpleDdgiAutomaticProbeDensityActive = 1,
+            SimpleDdgiTransportPublishedProbeCount = 37,
+            SimpleDdgiTransportPublishRegionCount = 5,
+            SimpleDdgiTransportSourceCacheInvalidationCount = 1_024,
+            SimpleDdgiSourceLightingGeneration = 12,
+            SimpleDdgiTransportGeneration = 37,
+            SimpleDdgiTransportGlobalConvergencePending = 1,
+            SimpleDdgiTransportGlobalConvergenceElapsedFrames = 23,
+            SimpleDdgiTransportCalibrationChangeCount = 4,
             SimpleDdgiStructuredGatherEnabled = 1,
             SimpleDdgiReducedBlendEnabled = 1,
             SimpleDdgiSampledAtlasRequested = 1,
@@ -373,6 +383,15 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"SimpleDdgiFullRayProbeUpdateCount\": 5"));
             Assert.That(json, Does.Contain("\"SimpleDdgiMaintenanceRayProbeUpdateCount\": 9"));
             Assert.That(json, Does.Contain("\"SimpleDdgiAdaptiveRaySavedRaysPerFrame\": 864"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiTransportV2Active\": true"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiTransportPublishedProbeCount\": 37"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiTransportPublishRegionCount\": 5"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiTransportSourceCacheInvalidationCount\": 1024"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiSourceLightingGeneration\": 12"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiTransportGeneration\": 37"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiTransportGlobalConvergencePending\": true"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiTransportGlobalConvergenceElapsedFrames\": 23"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiTransportCalibrationChangeCount\": 4"));
             Assert.That(json, Does.Contain("\"SimpleDdgiSampledAtlasRequested\": true"));
             Assert.That(json, Does.Contain("\"SimpleDdgiSampledAtlasActive\": true"));
             Assert.That(json, Does.Contain("\"SimpleDdgiSampledAtlasGroupCount\": 2"));

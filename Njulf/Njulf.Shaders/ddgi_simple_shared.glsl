@@ -9,6 +9,13 @@
 #define SIMPLE_DDGI_FORWARD_TILE_CANDIDATES 0
 #endif
 
+// The optional sampled-image mirror is graphics-queue owned. Compute transport
+// must read the canonical SSBO field so it never consumes a stale mirror or
+// requires an image queue-ownership transfer in the DDGI transaction.
+#ifndef SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS
+#define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 0
+#endif
+
 const float SIMPLE_DDGI_PI = 3.14159265359;
 const uint SIMPLE_DDGI_FLAG_ENABLED = 1u << 0;
 const uint SIMPLE_DDGI_FLAG_FAR_FIELD_ENABLED = 1u << 1;
@@ -28,6 +35,9 @@ const uint SIMPLE_DDGI_FLAG_DETAILED_DIAGNOSTICS_ENABLED = 1u << 9;
 // The CPU knows when a real lighting edit is propagating.  Adaptive history must
 // not mistake ordinary low-sample Monte-Carlo variation for that edit.
 const uint SIMPLE_DDGI_FLAG_LIGHTING_CHANGE_ACTIVE = 1u << 10;
+// V2 separates traced source transport from cached recursive solve. The
+// canonical published irradiance atlas remains the sole receiver-visible field.
+const uint SIMPLE_DDGI_FLAG_TRANSPORT_V2 = 1u << 11;
 // A normalized [0, 1] second-volume early-out threshold is packed into the
 // otherwise-unused high flag bits. This preserves the fixed params header ABI.
 const uint SIMPLE_DDGI_SECOND_VOLUME_OWNERSHIP_THRESHOLD_SHIFT = 12u;
@@ -36,7 +46,7 @@ const uint SIMPLE_DDGI_IRRADIANCE_TEXELS = 8u;
 const uint SIMPLE_DDGI_VISIBILITY_TEXELS = 16u;
 const uint SIMPLE_DDGI_MAX_RAYS_PER_PROBE = 256u;
 const uint SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS = 8u;
-const uint SIMPLE_DDGI_HEADER_WORDS = 44u;
+const uint SIMPLE_DDGI_HEADER_WORDS = 52u;
 const uint SIMPLE_DDGI_VOLUME_STRIDE_WORDS = 24u;
 const uint SIMPLE_DDGI_MAX_VOLUME_COUNT = 16u;
 // The hot path samples one authoritative volume and at most one fallback. A
@@ -100,11 +110,17 @@ const uint SIMPLE_DDGI_PROBE_FLAG_INACTIVE = 1u << 2;
 // later full update traces from the committed position and republishes both
 // atlases as one spatially coherent transaction.
 const uint SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING = 1u << 3;
+// A cache-validity failure is recoverable, but it must not be allowed to turn
+// into a long-lived partial source field. Trace/transport atomically mark this
+// bit and the CPU readback invalidates the physical slot for one full source
+// refresh on the following transaction.
+const uint SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID = 1u << 4;
 const uint SIMPLE_DDGI_UPDATE_MATERIAL_TEXTURE_CASCADE_SHIFT = 3u;
 const uint SIMPLE_DDGI_UPDATE_MATERIAL_TEXTURE_CASCADE_MASK = 0x7u << SIMPLE_DDGI_UPDATE_MATERIAL_TEXTURE_CASCADE_SHIFT;
 const uint SIMPLE_DDGI_UPDATE_MAX_SHADED_LIGHTS_SHIFT = 6u;
 const uint SIMPLE_DDGI_UPDATE_MAX_SHADED_LIGHTS_MASK = 0x3fu << SIMPLE_DDGI_UPDATE_MAX_SHADED_LIGHTS_SHIFT;
 const uint SIMPLE_DDGI_UPDATE_MAINTENANCE = 1u << 12;
+const uint SIMPLE_DDGI_UPDATE_SOURCE_REFRESH = 1u << 13;
 // The remaining state-flag bits carry a non-zero physical-slot generation.  An
 // update recorded for an old toroidal mapping must never mutate the slot after it
 // has been re-exposed for a new world cell.
@@ -154,6 +170,14 @@ struct SimpleDdgiParams
     float secondVolumeOwnershipEarlyOutThreshold;
     float maximumWorldBias;
     float architecturalThickness;
+    uint publishedIrradianceAtlasBufferIndex;
+    uint transportTargetIrradianceAtlasBufferIndex;
+    uint transportSourceCacheBufferIndex;
+    uint transportGeneration;
+    float transportSolverRelaxation;
+    float transportAlbedoClamp;
+    float transportResidualThreshold;
+    uint transportMaximumSolverGenerations;
 };
 
 bool SimpleDdgiDetailedDiagnosticsEnabled(SimpleDdgiParams params)
@@ -280,6 +304,43 @@ void RecordSimpleDdgiBlendEnergyDiagnostics(
         AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_BLEND_ENERGY_NONZERO_IRRADIANCE_COUNTER, 1u);
 }
 
+// V2 traces source radiance and solves the reflected component in a separate
+// pass. Keep those energy terms distinct in captures: otherwise a correct
+// cache-reuse solve looks like a source-only trace with zero bounce.
+void RecordSimpleDdgiTransportEnergyDiagnostics(
+    SimpleDdgiParams params,
+    uint diagnosticFrame,
+    uint probeIndex,
+    uint directionRayIndex,
+    bool sourceCacheHit,
+    vec3 sourceRadiance,
+    vec3 bounceRadiance,
+    vec3 totalRadiance)
+{
+    if (!SimpleDdgiTraceEnergyDiagnosticRay(params, probeIndex, directionRayIndex))
+        return;
+
+    AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_TRANSPORT_SAMPLE_COUNT_COUNTER, 1u);
+    AddRendererDiagnostic(
+        diagnosticFrame,
+        sourceCacheHit
+            ? SIMPLE_DDGI_TRANSPORT_SOURCE_CACHE_HIT_COUNTER
+            : SIMPLE_DDGI_TRANSPORT_SOURCE_CACHE_MISS_COUNTER,
+        1u);
+    AddRendererDiagnostic(
+        diagnosticFrame,
+        SIMPLE_DDGI_TRANSPORT_BOUNCE_LUMINANCE_COUNTER,
+        PackSimpleDdgiEnergyLuminance(SimpleDdgiEnergyLuminance(bounceRadiance)));
+    AddRendererDiagnostic(
+        diagnosticFrame,
+        SIMPLE_DDGI_TRANSPORT_SOURCE_LUMINANCE_COUNTER,
+        PackSimpleDdgiEnergyLuminance(SimpleDdgiEnergyLuminance(sourceRadiance)));
+    AddRendererDiagnostic(
+        diagnosticFrame,
+        SIMPLE_DDGI_TRANSPORT_TOTAL_LUMINANCE_COUNTER,
+        PackSimpleDdgiEnergyLuminance(SimpleDdgiEnergyLuminance(totalRadiance)));
+}
+
 #ifndef SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT
 #define SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT 1u
 #endif
@@ -341,6 +402,10 @@ struct SimpleDdgiProbeUpdate
     uint volumeIndex;
     uint flags;
     uint expectedGeneration;
+    // The full source sequence cardinality for this physical probe. The queue's
+    // active ray count can be a smaller maintenance subset, but cache lookup must
+    // select within this original sequence to reuse the exact traced directions.
+    uint sourceRayCount;
 };
 
 uint SimpleDdgiProbeStateBase(uint probeIndex)
@@ -380,6 +445,7 @@ SimpleDdgiProbeUpdate ReadSimpleDdgiProbeUpdate(uint bufferIndex, uint queueOffs
     update.volumeIndex = ReadStorageWord(bufferIndex, baseWord + 1u);
     update.flags = ReadStorageWord(bufferIndex, baseWord + 2u);
     update.expectedGeneration = ReadStorageWord(bufferIndex, baseWord + 3u);
+    update.sourceRayCount = ReadStorageWord(bufferIndex, baseWord + 4u);
     return update;
 }
 
@@ -394,6 +460,25 @@ bool SimpleDdgiUpdateMatchesProbeGeneration(SimpleDdgiProbeUpdate update, Simple
     return expectedGeneration != 0u && expectedGeneration == SimpleDdgiProbeGeneration(state);
 }
 
+void MarkSimpleDdgiProbeSourceCacheInvalid(uint bufferIndex, uint probeIndex)
+{
+    // Several rays of the same probe can discover the failed cache entry at
+    // once. Use an atomic OR rather than a read/modify/write of the state
+    // record so this recovery request cannot race relocation/classification.
+    atomicOr(
+        BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+            SimpleDdgiProbeStateBase(probeIndex) + 4u],
+        SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID);
+}
+
+void ClearSimpleDdgiProbeSourceCacheInvalid(uint bufferIndex, uint probeIndex)
+{
+    atomicAnd(
+        BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+            SimpleDdgiProbeStateBase(probeIndex) + 4u],
+        ~SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID);
+}
+
 uint SimpleDdgiUpdateAge(SimpleDdgiProbeUpdate update)
 {
     return max((update.expectedGeneration & SIMPLE_DDGI_UPDATE_AGE_MASK) >> SIMPLE_DDGI_UPDATE_AGE_SHIFT, 1u);
@@ -404,10 +489,24 @@ bool SimpleDdgiUpdateIsMaintenance(SimpleDdgiProbeUpdate update)
     return (update.flags & SIMPLE_DDGI_UPDATE_MAINTENANCE) != 0u;
 }
 
+bool SimpleDdgiUpdateRequiresSourceRefresh(SimpleDdgiProbeUpdate update)
+{
+    return (update.flags & SIMPLE_DDGI_UPDATE_SOURCE_REFRESH) != 0u;
+}
+
 uint SimpleDdgiUpdateRayCount(SimpleDdgiProbeUpdate update, SimpleDdgiParams p)
 {
     uint packed = (update.flags & SIMPLE_DDGI_UPDATE_RAY_COUNT_MASK) >> SIMPLE_DDGI_UPDATE_RAY_COUNT_SHIFT;
     return clamp(packed == 0u ? p.raysPerProbe : packed, 1u, min(p.raysPerProbe, SIMPLE_DDGI_MAX_RAYS_PER_PROBE));
+}
+
+uint SimpleDdgiUpdateSourceRayCount(SimpleDdgiProbeUpdate update, SimpleDdgiParams p)
+{
+    uint fallback = SimpleDdgiUpdateRayCount(update, p);
+    return clamp(
+        update.sourceRayCount == 0u ? fallback : update.sourceRayCount,
+        1u,
+        min(p.raysPerProbe, SIMPLE_DDGI_MAX_RAYS_PER_PROBE));
 }
 
 int SimpleDdgiUpdateMaterialTextureMaxCascade(SimpleDdgiProbeUpdate update)
@@ -436,6 +535,8 @@ SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
     vec4 bias = ReadStorageVec4(bufferIndex, 32u);
     vec4 reserved = ReadStorageVec4(bufferIndex, 36u);
     vec4 biasLimits = ReadStorageVec4(bufferIndex, 40u);
+    vec4 transportIndices = ReadStorageVec4(bufferIndex, 44u);
+    vec4 transportControls = ReadStorageVec4(bufferIndex, 48u);
     p.origin = originAndSpacing.xyz;
     p.spacing = max(originAndSpacing.w, 0.001);
     p.gridCount = uvec3(max(grid.xyz, vec3(1.0)));
@@ -470,6 +571,14 @@ SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
         SIMPLE_DDGI_SECOND_VOLUME_OWNERSHIP_THRESHOLD_SHIFT) / 255.0;
     p.maximumWorldBias = clamp(biasLimits.x, 0.004, 1.0);
     p.architecturalThickness = clamp(biasLimits.y, 0.008, 4.0);
+    p.publishedIrradianceAtlasBufferIndex = floatBitsToUint(transportIndices.x);
+    p.transportTargetIrradianceAtlasBufferIndex = floatBitsToUint(transportIndices.y);
+    p.transportSourceCacheBufferIndex = floatBitsToUint(transportIndices.z);
+    p.transportGeneration = floatBitsToUint(transportIndices.w);
+    p.transportSolverRelaxation = clamp(transportControls.x, 0.05, 1.0);
+    p.transportAlbedoClamp = clamp(transportControls.y, 0.50, 0.99);
+    p.transportResidualThreshold = clamp(transportControls.z, 0.001, 1.0);
+    p.transportMaximumSolverGenerations = clamp(uint(max(transportControls.w, 1.0)), 1u, 64u);
     return p;
 }
 
@@ -690,6 +799,123 @@ uint SimpleDdgiAtlasWord(uint probeIndex, uint texelIndex, uint texelsPerProbe)
     return (probeIndex * texelsPerProbe * texelsPerProbe + texelIndex) * 2u;
 }
 
+// Persistent V2 source cache: one entry per physical probe slot and
+// deterministic full-sequence ray direction.  `directionRayIndex`, rather than
+// the queue-local maintenance ray index, is the key so a low-rate maintenance
+// subset reuses exactly the source ray that was originally traced.
+const uint SIMPLE_DDGI_TRANSPORT_RAY_CACHE_STRIDE_WORDS = 8u;
+const uint SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG = 1u << 24u;
+const uint SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG = 1u << 25u;
+const uint SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG = 1u << 26u;
+
+struct SimpleDdgiTransportRayCache
+{
+    vec3 sourceRadiance;
+    float distance;
+    vec3 direction;
+    vec3 normal;
+    vec3 albedo;
+    uint generationAndFlags;
+};
+
+uint SimpleDdgiTransportRayCacheBase(uint probeIndex, uint directionRayIndex, SimpleDdgiParams p)
+{
+    return (probeIndex * p.raysPerProbe + directionRayIndex) *
+        SIMPLE_DDGI_TRANSPORT_RAY_CACHE_STRIDE_WORDS;
+}
+
+uint PackSimpleDdgiTransportOctDirection(vec3 direction)
+{
+    vec2 oct = SimpleDdgiOctEncode(normalize(direction)) * 2.0 - 1.0;
+    return packSnorm2x16(clamp(oct, vec2(-1.0), vec2(1.0)));
+}
+
+vec3 UnpackSimpleDdgiTransportOctDirection(uint packed)
+{
+    vec2 oct = unpackSnorm2x16(packed) * 0.5 + 0.5;
+    return SimpleDdgiOctDecode(clamp(oct, vec2(0.0), vec2(1.0)));
+}
+
+void WriteSimpleDdgiTransportRayCache(
+    uint bufferIndex,
+    uint probeIndex,
+    uint directionRayIndex,
+    SimpleDdgiParams p,
+    vec3 sourceRadiance,
+    float distance,
+    vec3 direction,
+    vec3 normal,
+    vec3 albedo,
+    float hitKind,
+    uint probeGeneration)
+{
+    uint baseWord = SimpleDdgiTransportRayCacheBase(probeIndex, directionRayIndex, p);
+    WriteStorageVec4(
+        bufferIndex,
+        baseWord,
+        vec4(clamp(sourceRadiance, vec3(0.0), vec3(65504.0)), max(distance, 0.0)));
+    WriteStorageWord(bufferIndex, baseWord + 4u, PackSimpleDdgiTransportOctDirection(direction));
+    WriteStorageWord(bufferIndex, baseWord + 5u, PackSimpleDdgiTransportOctDirection(normal));
+    WriteStorageWord(bufferIndex, baseWord + 6u, packUnorm4x8(vec4(clamp(albedo, vec3(0.0), vec3(1.0)), 1.0)));
+    uint flags = SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG |
+        (hitKind >= 0.5 ? SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG : 0u) |
+        (hitKind > 1.5 ? SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG : 0u);
+    WriteStorageWord(
+        bufferIndex,
+        baseWord + 7u,
+        (probeGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK) | flags);
+}
+
+bool ReadSimpleDdgiTransportRayCache(
+    uint bufferIndex,
+    uint probeIndex,
+    uint directionRayIndex,
+    SimpleDdgiParams p,
+    uint expectedProbeGeneration,
+    out SimpleDdgiTransportRayCache cache)
+{
+    cache.sourceRadiance = vec3(0.0);
+    cache.distance = 0.0;
+    cache.direction = vec3(0.0, 1.0, 0.0);
+    cache.normal = vec3(0.0, 1.0, 0.0);
+    cache.albedo = vec3(0.0);
+    cache.generationAndFlags = 0u;
+    if (bufferIndex == 0u || directionRayIndex >= p.raysPerProbe)
+        return false;
+
+    uint baseWord = SimpleDdgiTransportRayCacheBase(probeIndex, directionRayIndex, p);
+    uint generationAndFlags = ReadStorageWord(bufferIndex, baseWord + 7u);
+    if ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG) == 0u ||
+        (generationAndFlags & SIMPLE_DDGI_UPDATE_GENERATION_MASK) !=
+            (expectedProbeGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK))
+    {
+        return false;
+    }
+
+    vec4 sourceRadianceDistance = ReadStorageVec4(bufferIndex, baseWord);
+    cache.sourceRadiance = max(sourceRadianceDistance.rgb, vec3(0.0));
+    cache.distance = max(sourceRadianceDistance.w, 0.0);
+    cache.direction = UnpackSimpleDdgiTransportOctDirection(ReadStorageWord(bufferIndex, baseWord + 4u));
+    cache.normal = UnpackSimpleDdgiTransportOctDirection(ReadStorageWord(bufferIndex, baseWord + 5u));
+    cache.albedo = unpackUnorm4x8(ReadStorageWord(bufferIndex, baseWord + 6u)).rgb;
+    cache.generationAndFlags = generationAndFlags;
+    return true;
+}
+
+bool SimpleDdgiTransportRayCacheIsHit(SimpleDdgiTransportRayCache cache)
+{
+    return (cache.generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG) != 0u;
+}
+
+float SimpleDdgiTransportRayCacheHitKind(SimpleDdgiTransportRayCache cache)
+{
+    if (!SimpleDdgiTransportRayCacheIsHit(cache))
+        return 0.0;
+    return (cache.generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG) != 0u
+        ? 2.0
+        : 1.0;
+}
+
 vec4 ReadSimpleDdgiAtlasTexel(uint bufferIndex, uint probeIndex, uint texelIndex, uint texelsPerProbe)
 {
     uint word = SimpleDdgiAtlasWord(probeIndex, texelIndex, texelsPerProbe);
@@ -746,7 +972,8 @@ uint SimpleDdgiMirrorOctTexelIndex(ivec2 coord, uint texelsPerProbe)
 
 bool SimpleDdgiCanSampleAtlasImage(SimpleDdgiParams p, uint bufferIndex, uint probeIndex)
 {
-    if (p.sampledAtlasEnabled == 0u ||
+    if (SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS != 0 ||
+        p.sampledAtlasEnabled == 0u ||
         p.sampledAtlasLayersPerTexture == 0u ||
         p.sampledAtlasTextureGroupCount == 0u ||
         (bufferIndex != uint(SIMPLE_DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX) &&
@@ -1128,7 +1355,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
         vec3 toSurface = biasedWorldPos - probePos;
         float distanceToProbe = length(toSurface);
         vec3 probeToSurface = distanceToProbe > 0.00001 ? toSurface / distanceToProbe : safeNormal;
-        vec4 irradiance = SampleSimpleDdgiAtlasBilinear(uint(SIMPLE_DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), probeIndex, safeNormal, p.irradianceTexels, p);
+        vec4 irradiance = SampleSimpleDdgiAtlasBilinear(p.publishedIrradianceAtlasBufferIndex, probeIndex, safeNormal, p.irradianceTexels, p);
         vec4 moments = SampleSimpleDdgiAtlasBilinear(uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), probeIndex, probeToSurface, p.visibilityTexels, p);
         if (!SimpleDdgiProbeSupportsGather(state, irradiance, moments))
             continue;

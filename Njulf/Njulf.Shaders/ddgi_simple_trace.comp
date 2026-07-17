@@ -4,6 +4,7 @@
 #extension GL_EXT_ray_query : require
 
 #include "common.glsl"
+#define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
 #include "ddgi_simple_shared.glsl"
 #include "farfield_clipmap.glsl"
 
@@ -31,14 +32,22 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint ProbeStateBufferIndex;
     uint ProbeUpdateQueueBufferIndex;
     uint RelocationClassificationBufferIndex;
+    uint TransportSourceCacheBufferIndex;
+    uint TransportReadIrradianceAtlasBufferIndex;
+    uint TransportWriteIrradianceAtlasBufferIndex;
+    uint TransportGeneration;
     uint Padding0;
 } pc;
 
 const float PI = SIMPLE_DDGI_PI;
-const uint DDGI_AUTHORED_VOLUME_CASCADE = 0xffffffffu;
 const uint DDGI_MATERIAL_TEXTURE_DISABLED_CASCADE = 4u;
-const float DDGI_PROBE_TRACE_EPSILON = 0.02;
+// ddgi_hit_shading.glsl is shared with the legacy DDGI path, where this
+// sentinel lives in ddgi_update_shared.glsl.  The simple-DDGI path owns its
+// volume convention, so provide the equivalent sentinel locally before
+// including the shared material policy.
+const uint DDGI_AUTHORED_VOLUME_CASCADE = SIMPLE_DDGI_AUTHORED_VOLUME_CASCADE;
 const float DDGI_DIRECTIONAL_SHADOW_RAY_DISTANCE = 256.0;
+const float DDGI_PROBE_TRACE_EPSILON = 0.02;
 // High and Ultra publish a TLAS only when the complete resolved ray scene fits.
 // Keep that exact representation authoritative across the entire probe ray;
 // the far-field cache remains a bounded streaming substitute for lower tiers.
@@ -47,9 +56,9 @@ const uint SIMPLE_DDGI_TRACE_FLAG_ALPHA_MASK_TRANSPORT_ENABLED = 1u << 7;
 
 #define DDGI_HIT_USE_SELECTED_LIGHTS 0
 #define DDGI_HIT_ENABLE_ENVIRONMENT_WRAPPER 0
-// These private values are written once per queued probe update below.  Keeping
-// the shared hit-shading policy behind macros avoids cloning the material and
-// direct-light logic while allowing the scheduler to cap far-ring work.
+// These private values are written once per queued probe update below. Keeping
+// the shared hit-shading policy behind macros avoids cloning material/direct
+// logic while allowing the scheduler to cap far-ring work.
 uint simpleDdgiCurrentMaxShadedLights;
 uint simpleDdgiCurrentMaterialTextureMaxCascade;
 uint simpleDdgiCurrentVolumeCascade;
@@ -68,7 +77,7 @@ void WriteSimpleRayResult(uint rayResultIndex, vec3 radiance, float distance, ve
 }
 
 // All calls below are in main(), where params is the authoritative uploaded
-// simple-DDGI state.  Remapping the counter helper here keeps disabled captures
+// simple-DDGI state. Remapping the counter helper here keeps disabled captures
 // free of the otherwise high-contention per-ray atomic operations.
 #define AddRendererDiagnostic(frameIndex, counterIndex, value) AddSimpleDdgiDiagnostic(params, frameIndex, counterIndex, value)
 
@@ -98,6 +107,7 @@ void main()
     SimpleDdgiProbeState probeState = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
     if (!SimpleDdgiUpdateMatchesProbeGeneration(update, probeState))
         return;
+
     uint volumeCascade = SimpleDdgiVolumeQualityCascade(volume);
     simpleDdgiCurrentVolumeCascade = volumeCascade;
     int materialTextureMaxCascade = SimpleDdgiUpdateMaterialTextureMaxCascade(update);
@@ -106,16 +116,68 @@ void main()
         : uint(materialTextureMaxCascade);
     simpleDdgiCurrentMaxShadedLights = SimpleDdgiUpdateMaxShadedLights(update, pc.MaxShadedLights);
     vec3 probePosition = SimpleDdgiProbeLogicalPosition(volume, localProbeIndex) + probeState.relocation;
-    // Maintenance rays are a stratified subset of the full sequence.  This keeps
+    // Maintenance rays are a stratified subset of the full sequence. This keeps
     // the estimator's directional support stable when the scheduler changes tier.
-    uint directionRayIndex = activeRayCount < params.raysPerProbe
-        ? rayIndex * params.raysPerProbe / activeRayCount
-        : rayIndex;
+    uint sourceRayCount = SimpleDdgiUpdateSourceRayCount(update, params);
+    uint sourceRayOrdinal = min(
+        rayIndex * sourceRayCount / max(activeRayCount, 1u),
+        sourceRayCount - 1u);
+    // Cache keys remain indices in the global Fibonacci sequence. Map through
+    // the per-probe source sequence so a 24-ray far ring stays uniformly
+    // distributed across the 64/128-ray shared sequence and maintenance picks
+    // an exact subset of those cached directions.
+    uint directionRayIndex = sourceRayOrdinal * params.raysPerProbe / sourceRayCount;
     vec4 rayRotation = SimpleDdgiPerProbeRayRotation(probeIndex, params.rayRotation);
     vec3 direction = SimpleDdgiFibonacciDirection(directionRayIndex, params.raysPerProbe, rayRotation);
+    bool transportV2 = (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u;
+    bool sourceRefresh = SimpleDdgiUpdateRequiresSourceRefresh(update);
+    bool relocationRetryPending =
+        (probeState.flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u;
+
+    // A full source refresh is the authoritative repair boundary. Clear any
+    // older recovery request before tracing its complete sequence; transport
+    // will set it again if the just-written cache still cannot be consumed.
+    if (transportV2 && sourceRefresh && rayIndex == 0u)
+        ClearSimpleDdgiProbeSourceCacheInvalid(pc.ProbeStateBufferIndex, probeIndex);
+
+    // Cached V2 source data includes the original deterministic direction, hit
+    // distance, normal, and albedo. A solver-only update therefore does no ray
+    // query or shadow work yet still gets an exact source hit point for bounce.
+    // A relocation-pending probe is the one exception: the GPU committed a new
+    // origin after the prior rays were traced, while CPU readback can lag by a
+    // frame. Force fresh source work from that authoritative new origin so a
+    // stale cache can never be published at the relocated location.
+    if (transportV2 && !sourceRefresh && !relocationRetryPending)
+    {
+        SimpleDdgiTransportRayCache cachedSource;
+        if (ReadSimpleDdgiTransportRayCache(
+                pc.TransportSourceCacheBufferIndex,
+                probeIndex,
+                directionRayIndex,
+                params,
+                SimpleDdgiProbeGeneration(probeState),
+                cachedSource))
+        {
+            WriteSimpleRayResult(
+                globalRay,
+                cachedSource.sourceRadiance,
+                cachedSource.distance,
+                cachedSource.direction,
+                SimpleDdgiTransportRayCacheHitKind(cachedSource));
+            return;
+        }
+
+        // The CPU normally schedules solver-only work only after a complete
+        // source refresh. If an individual entry is nevertheless absent (for
+        // example after a live allocation transition), trace this ray now for
+        // a safe frame and request a full source-cache repair through the
+        // bounded probe-state readback path.
+        MarkSimpleDdgiProbeSourceCacheInvalid(pc.ProbeStateBufferIndex, probeIndex);
+    }
+
     float maxDistance = max(volume.spacing * float(max(max(volume.gridCount.x, volume.gridCount.y), volume.gridCount.z)), volume.spacing);
     // A valid probe owns its complete low-frequency field, including environment
-    // misses.  Forward composition evaluates diffuse IBL only for probe ownership
+    // misses. Forward composition evaluates diffuse IBL only for probe ownership
     // gaps, so sky energy is represented exactly once.
     vec3 radiance = SampleDdgiEnvironmentMissRadianceWithFallback(direction, params.environmentRadiance);
     vec3 traceDirectDiffuse = vec3(0.0);
@@ -123,12 +185,14 @@ void main()
     vec3 traceEmissiveDiffuse = vec3(0.0);
     vec3 traceBounceDiffuse = vec3(0.0);
     vec3 traceSkyDiffuse = radiance;
+    vec3 cacheNormal = vec3(0.0, 1.0, 0.0);
+    vec3 cacheAlbedo = vec3(0.0);
     float hitDistance = maxDistance;
     float hitKind = 0.0;
     bool farFieldOnlyRing = volume.spacing >= 15.999;
     bool farFieldEnabled = (pc.Flags & SIMPLE_DDGI_FLAG_FAR_FIELD_ENABLED) != 0u;
     bool completeRayScene = (pc.Flags & SIMPLE_DDGI_TRACE_FLAG_COMPLETE_RAY_SCENE) != 0u;
-    // A detailed near segment is authoritative.  The coarse far field begins only
+    // A detailed near segment is authoritative. The coarse far field begins only
     // after it, so a coarse voxel can never suppress closer TLAS geometry.
     float nearTlasMaxDistance = farFieldEnabled && !completeRayScene
         ? min(maxDistance, max(params.farFieldStartDistance, volume.spacing))
@@ -174,13 +238,17 @@ void main()
                 surfaceAlbedo,
                 surfaceEmissive))
             {
-                float bounceOwnership;
-                vec3 bounce = SampleSimpleDdgiUnifiedIrradiance(
-                    hitPosition + surfaceNormal * max(0.03, volume.spacing * 0.02),
-                    surfaceNormal,
-                    -direction,
-                    true,
-                    bounceOwnership) * surfaceAlbedo / SIMPLE_DDGI_PI;
+                vec3 bounce = vec3(0.0);
+                float bounceOwnership = 0.0;
+                if (!transportV2)
+                {
+                    bounce = SampleSimpleDdgiUnifiedIrradiance(
+                        hitPosition + surfaceNormal * max(0.03, volume.spacing * 0.02),
+                        surfaceNormal,
+                        -direction,
+                        true,
+                        bounceOwnership) * surfaceAlbedo / SIMPLE_DDGI_PI;
+                }
                 vec3 directNoShadowDiffuse;
                 vec3 directDiffuse = EvaluateDirectDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo, directNoShadowDiffuse);
                 vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
@@ -191,6 +259,8 @@ void main()
                 traceEmissiveDiffuse = emissiveDiffuse;
                 traceBounceDiffuse = bounce;
                 traceSkyDiffuse = vec3(0.0);
+                cacheNormal = surfaceNormal;
+                cacheAlbedo = surfaceAlbedo;
                 if (dot(max(directDiffuse, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) > 0.0001)
                     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_DIRECT_LIGHT_HIT_COUNTER, 1u);
                 if (dot(max(surfaceEmissive + emissiveProxyDiffuse, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) > 0.0001)
@@ -215,13 +285,17 @@ void main()
             vec3 hitPosition = probePosition + direction * hitDistance;
             vec3 directNoShadowDiffuse;
             vec3 safeFarNormal = normalize(farNormal);
-            float bounceOwnership;
-            vec3 bounce = SampleSimpleDdgiUnifiedIrradiance(
-                hitPosition + safeFarNormal * max(0.03, volume.spacing * 0.02),
-                safeFarNormal,
-                -direction,
-                true,
-                bounceOwnership) * farAlbedo / SIMPLE_DDGI_PI;
+            vec3 bounce = vec3(0.0);
+            float bounceOwnership = 0.0;
+            if (!transportV2)
+            {
+                bounce = SampleSimpleDdgiUnifiedIrradiance(
+                    hitPosition + safeFarNormal * max(0.03, volume.spacing * 0.02),
+                    safeFarNormal,
+                    -direction,
+                    true,
+                    bounceOwnership) * farAlbedo / SIMPLE_DDGI_PI;
+            }
             vec3 directDiffuse = EvaluateDirectDiffuseRadianceAtHit(
                 hitPosition,
                 safeFarNormal,
@@ -237,6 +311,8 @@ void main()
             traceEmissiveDiffuse = emissiveProxyDiffuse;
             traceBounceDiffuse = bounce;
             traceSkyDiffuse = vec3(0.0);
+            cacheNormal = safeFarNormal;
+            cacheAlbedo = farAlbedo;
             hitKind = dot(direction, safeFarNormal) > 0.0 ? 2.0 : 1.0;
         }
         else if (farStepExhausted)
@@ -270,6 +346,10 @@ void main()
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_MISS_COUNTER, 1u);
     }
 
+    // In V2 these counters describe the traced source term, while transport
+    // counters in the CPU diagnostic snapshot identify how much of the queue
+    // reused that source for recursive solves. V1 retains the historical
+    // source-plus-bounce trace accounting.
     RecordSimpleDdgiTraceEnergyDiagnostics(
         params,
         pc.CurrentFrameIndex,
@@ -283,6 +363,21 @@ void main()
         traceSkyDiffuse,
         hitKind >= 0.5);
 
+    if (transportV2)
+    {
+        WriteSimpleDdgiTransportRayCache(
+            pc.TransportSourceCacheBufferIndex,
+            probeIndex,
+            directionRayIndex,
+            params,
+            radiance,
+            hitDistance,
+            direction,
+            cacheNormal,
+            cacheAlbedo,
+            hitKind,
+            SimpleDdgiProbeGeneration(probeState));
+    }
     WriteSimpleRayResult(globalRay, radiance, hitDistance, direction, hitKind);
 }
 

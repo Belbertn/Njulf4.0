@@ -101,6 +101,7 @@ namespace Njulf.Rendering.Resources
         private static readonly ulong VolumeStride = (ulong)Marshal.SizeOf<GPUSimpleDdgiVolume>();
         private static readonly ulong ParamsBufferSize = ParamsSize + VolumeStride * GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount;
         private static readonly ulong RayResultStride = (ulong)Marshal.SizeOf<GPUSimpleDdgiRayResult>();
+        private static readonly ulong TransportRayCacheStride = (ulong)Marshal.SizeOf<GPUSimpleDdgiTransportRayCache>();
         private static readonly ulong ProbeStateStride = (ulong)Marshal.SizeOf<GPUSimpleDdgiProbeState>();
         private static readonly ulong ProbeUpdateStride = (ulong)Marshal.SizeOf<GPUSimpleDdgiProbeUpdate>();
         private static readonly ulong RelocationClassificationStride = (ulong)Marshal.SizeOf<GPUSimpleDdgiRelocationClassification>();
@@ -109,7 +110,19 @@ namespace Njulf.Rendering.Resources
         private const uint ProbeStateScrollExposedFlag = 1u << 1;
         private const uint ProbeStateInactiveFlag = 1u << 2;
         private const uint ProbeStateRelocationPendingFlag = 1u << 3;
+        // Set by the V2 trace/transport shaders when a solver-only lookup finds
+        // a missing cache entry. The completed readback turns it into a normal
+        // physical-slot invalidation and full source refresh.
+        private const uint ProbeStateSourceCacheInvalidFlag = 1u << 4;
+        // Kept separate from scene light/emissive/geometry bits so a capture
+        // can distinguish an authored lighting edit from a live transport
+        // calibration change that deliberately restarted convergence.
+        private const uint TransportCalibrationDirtyReasonFlag = 1u << 3;
         private const uint ProbeUpdateMaintenanceFlag = 1u << 12;
+        // V2 source refreshes are explicit queue work. Solver-only reuse entries
+        // retain their cached source radiance and therefore consume no primary
+        // ray budget while still advancing the recursive transport field.
+        private const uint ProbeUpdateSourceRefreshFlag = 1u << 13;
         // Packed into the simple-DDGI flag word so this artist-facing gather
         // quality control does not grow the hot params header or shift volumes.
         private const int SecondVolumeOwnershipEarlyOutThresholdShift = 12;
@@ -206,6 +219,18 @@ namespace Njulf.Rendering.Resources
         private byte[] _probeStableUpdateCounts = Array.Empty<byte>();
         private float[] _probeLuminanceChangeEma = Array.Empty<float>();
         private uint[] _probeAges = Array.Empty<uint>();
+        // Source-cache lifetime follows the physical probe slot.  A lighting
+        // generation changes globally; geometry/scroll invalidation clears only
+        // the affected slot, preserving static source work elsewhere.
+        private uint[] _probeSourceLightingGenerations = Array.Empty<uint>();
+        private uint[] _probeLastSourceRefreshFrames = Array.Empty<uint>();
+        // The cache is keyed by the global maximum ray sequence, while each ring
+        // traces a differently sized stratified source sequence.  Retain that
+        // source count per physical probe so later maintenance work selects a
+        // true subset of the traced directions rather than falling through to an
+        // accidental primary trace at a different sequence index.
+        private ushort[] _probeSourceRayCounts = Array.Empty<ushort>();
+        private byte[] _probeTransportGenerationCounts = Array.Empty<byte>();
         // 0 = no outstanding regional-dirty latency sample, 1 = awaiting the
         // first completed blend, 2 = awaiting stable readback convergence.
         private byte[] _probeDirtyLatencyStates = Array.Empty<byte>();
@@ -233,6 +258,8 @@ namespace Njulf.Rendering.Resources
 
         private BufferHandle _paramsBuffer;
         private BufferHandle _irradianceAtlasBuffer;
+        private BufferHandle _transportIrradianceAtlasBuffer;
+        private BufferHandle _transportSourceCacheBuffer;
         private BufferHandle _visibilityAtlasBuffer;
         private BufferHandle _rayResultScratchBuffer;
         private BufferHandle _probeStateBuffer;
@@ -251,6 +278,13 @@ namespace Njulf.Rendering.Resources
         private readonly uint[] _probeStateReadbackUpdateMarkerSerials = new uint[RenderingConstants.FramesInFlight];
         private uint _nextProbeStateReadbackUpdateMarkerSerial;
         private ulong _irradianceAtlasBytes;
+        private ulong _transportIrradianceAtlasBytes;
+        private ulong _transportSourceCacheBytes;
+        // Cache addressing uses params.raysPerProbe in the shader. Retain the
+        // capacity used to populate the current entries so a live quality-tier
+        // change that shrinks the allocation (and therefore does not force a
+        // buffer reallocation) cannot reinterpret old probe-stride addresses.
+        private int _transportSourceCacheRayCapacity;
         private ulong _visibilityAtlasBytes;
         private ulong _rayScratchBytes;
         private ulong _probeStateBytes;
@@ -314,9 +348,35 @@ namespace Njulf.Rendering.Resources
         private int _lightingDirtyBoostedCapacity;
         private bool _hasLightingSignature;
         private ulong _lastLightingSignature;
+        // Source and solver controls have different invalidation domains. A
+        // trace-quality change must rebuild cached source radiance, while a
+        // transport-only calibration can retain those expensive ray results and
+        // simply restart the bounded Jacobi solve from the published field.
+        private bool _hasTransportCalibrationSignatures;
+        private ulong _lastTransportSourceCalibrationSignature;
+        private ulong _lastTransportSolverCalibrationSignature;
         private uint _activeDirtyReasonFlags;
         private uint _regionalDirtyReasonFlags;
         private ulong _scheduledPrimaryRayCount;
+        private ulong _scheduledTransportRayCount;
+        private ulong _scheduledSourceRayCount;
+        private int _sourceRefreshProbeCount;
+        private int _sourceCacheReuseProbeCount;
+        private int _transportPublishedProbeCount;
+        private int _transportPublishRegionCount;
+        private ulong _sourceCacheInvalidationCount;
+        private uint _sourceLightingGeneration = 1u;
+        private uint _transportGeneration;
+        // A local residual alone cannot prove that multi-bounce transport has
+        // reached a probe whose neighbors are still warming. Global source
+        // changes therefore enter a bounded field-wide solve phase: every
+        // physical probe receives the configured minimum number of Jacobi
+        // iterations before any local residual is allowed to retire it.
+        private bool _transportGlobalConvergencePending = true;
+        private uint _transportGlobalConvergenceSourceGeneration = 1u;
+        private uint _transportGlobalConvergenceStartFrame;
+        private ulong _transportCalibrationChangeCount;
+        private bool _transportV2WasActive;
         private int _effectiveMaxShadedLights;
         private ulong _adaptiveRaySavedPrimaryRayCount;
         private int _rayBudgetRejectedProbeCount;
@@ -343,6 +403,7 @@ namespace Njulf.Rendering.Resources
         private bool _updateTransactionPending;
         private bool _traceTransactionExecuted;
         private bool _relocateClassifyTransactionExecuted;
+        private bool _transportTransactionExecuted;
         private uint _updateTransactionSerial;
         private ulong _frameSerial;
         private SimpleDdgiLayoutReport? _lastLayoutReport;
@@ -352,6 +413,11 @@ namespace Njulf.Rendering.Resources
         private SimpleDdgiLayoutReport? _cachedLayoutReport;
         private HashSet<int>? _cachedAcceptedSourceOrdinals;
         private ulong _cachedLayoutFingerprint;
+        // Publication coalesces contiguous physical probe ranges before issuing
+        // copies.  Both retained arrays make this render-thread path allocation
+        // free even at the largest accepted queue size.
+        private readonly int[] _transportPublishProbeIndices = new int[GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount];
+        private readonly BufferCopy[] _transportPublishCopies = new BufferCopy[GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount];
         private bool _disposed;
 
         public SimpleDdgiVolumeManager(VulkanContext context, BufferManager bufferManager, RenderSettings settings)
@@ -381,6 +447,8 @@ namespace Njulf.Rendering.Resources
         public long LastSampledAtlasSynchronizationMicroseconds => _lastSampledAtlasSynchronizationMicroseconds;
         public ulong BufferBytes => ParamsBufferSize +
             _irradianceAtlasBytes +
+            _transportIrradianceAtlasBytes +
+            _transportSourceCacheBytes +
             _visibilityAtlasBytes +
             _rayScratchBytes +
             _probeStateBytes +
@@ -388,6 +456,10 @@ namespace Njulf.Rendering.Resources
             _relocationClassificationBytes +
             _probeStateReadbackBufferBytes;
         public ulong IrradianceAtlasBytes => _irradianceAtlasBytes;
+        /// <summary>Private V2 Jacobi target; never sampled by receivers.</summary>
+        public ulong TransportIrradianceAtlasBytes => _transportIrradianceAtlasBytes;
+        /// <summary>Persistent V2 direct/sky/emissive source cache allocation.</summary>
+        public ulong TransportSourceCacheBytes => _transportSourceCacheBytes;
         public ulong VisibilityAtlasBytes => _visibilityAtlasBytes;
         /// <summary>Canonical SSBO atlas allocation only.</summary>
         public ulong AtlasBufferBytes => _irradianceAtlasBytes + _visibilityAtlasBytes;
@@ -416,6 +488,8 @@ namespace Njulf.Rendering.Resources
         // and therefore cannot safely stand in for a queue-family transfer target.
         public BufferHandle ParamsBuffer => _paramsBuffer;
         public BufferHandle IrradianceAtlasBuffer => _irradianceAtlasBuffer;
+        public BufferHandle TransportIrradianceAtlasBuffer => _transportIrradianceAtlasBuffer;
+        public BufferHandle TransportSourceCacheBuffer => _transportSourceCacheBuffer;
         public BufferHandle VisibilityAtlasBuffer => _visibilityAtlasBuffer;
         public BufferHandle RayResultScratchBuffer => _rayResultScratchBuffer;
         public BufferHandle ProbeStateBuffer => _probeStateBuffer;
@@ -452,6 +526,82 @@ namespace Njulf.Rendering.Resources
         public int LightingDirtyBoostedCapacity => _lightingDirtyBoostedCapacity;
         public uint DirtyReasonFlags => (_lightingDirtyFrames > 0 ? _activeDirtyReasonFlags : 0u) | _regionalDirtyReasonFlags;
         public ulong ScheduledPrimaryRayCount => _scheduledPrimaryRayCount;
+        /// <summary>All scheduled rays whose cached source is evaluated by V2 transport.</summary>
+        public ulong ScheduledTransportRayCount => _scheduledTransportRayCount;
+        /// <summary>Scheduled rays that actually entered the primary ray-query source path.</summary>
+        public ulong ScheduledSourceRayCount => _scheduledSourceRayCount;
+        public int SourceRefreshProbeCount => _sourceRefreshProbeCount;
+        public int SourceCacheReuseProbeCount => _sourceCacheReuseProbeCount;
+        public int TransportPublishedProbeCount => _transportPublishedProbeCount;
+        public int TransportPublishRegionCount => _transportPublishRegionCount;
+        public ulong SourceCacheInvalidationCount => _sourceCacheInvalidationCount;
+        public uint SourceLightingGeneration => _sourceLightingGeneration;
+        public uint TransportGeneration => _transportGeneration;
+        public bool TransportV2Active => _settings.GlobalIllumination.SimpleDdgiTransportV2Enabled;
+        /// <summary>
+        /// True while a global source or layout change is still receiving its
+        /// bounded field-wide multi-bounce solve. This distinguishes legitimate
+        /// warmup from an unexpectedly dim, already-converged field in captures.
+        /// </summary>
+        public bool TransportGlobalConvergencePending =>
+            TransportV2Active && _transportGlobalConvergencePending;
+        /// <summary>
+        /// Number of internal DDGI frames spent in the current field-wide
+        /// source/transport warmup. Zero means the local residual policy is
+        /// active, not that the field was never solved.
+        /// </summary>
+        public int TransportGlobalConvergenceElapsedFrames
+        {
+            get
+            {
+                if (!TransportGlobalConvergencePending)
+                    return 0;
+
+                uint elapsed = unchecked(_frameIndex - _transportGlobalConvergenceStartFrame);
+                return elapsed > int.MaxValue ? int.MaxValue : (int)elapsed;
+            }
+        }
+
+        /// <summary>
+        /// Monotonic count of live V2 source/solver calibration changes that
+        /// restarted convergence. This is intentionally separate from physical
+        /// cache invalidation count, which is measured in affected probe slots.
+        /// </summary>
+        public ulong TransportCalibrationChangeCount => _transportCalibrationChangeCount;
+
+        /// <summary>
+        /// Snapshot of V2 source/solver state for diagnostics. The scan is over
+        /// bounded CPU metadata only; it neither reads GPU memory nor changes
+        /// scheduling state.
+        /// </summary>
+        public void GetTransportProgress(
+            out int sourceReadyProbeCount,
+            out int sourceStaleProbeCount,
+            out int convergedProbeCount,
+            out int pendingSolverProbeCount)
+        {
+            sourceReadyProbeCount = 0;
+            sourceStaleProbeCount = 0;
+            convergedProbeCount = 0;
+            pendingSolverProbeCount = 0;
+            if (!TransportV2Active)
+                return;
+
+            for (int probeIndex = 0; probeIndex < _probeCount; probeIndex++)
+            {
+                if (NeedsSourceRefresh(probeIndex))
+                {
+                    sourceStaleProbeCount++;
+                    continue;
+                }
+
+                sourceReadyProbeCount++;
+                if (IsTransportConverged(probeIndex))
+                    convergedProbeCount++;
+                else
+                    pendingSolverProbeCount++;
+            }
+        }
         public int EffectiveMaxShadedLights => _effectiveMaxShadedLights;
         public ulong AdaptiveRaySavedPrimaryRayCount => _adaptiveRaySavedPrimaryRayCount;
         public int RayBudgetRejectedProbeCount => _rayBudgetRejectedProbeCount;
@@ -686,13 +836,17 @@ namespace Njulf.Rendering.Resources
         public bool HasPendingUpdateTransaction => _updateTransactionPending;
         public bool CanExecuteTraceTransaction => _updateTransactionPending && !_traceTransactionExecuted;
         public bool CanExecuteRelocateClassifyTransaction => _updateTransactionPending && _traceTransactionExecuted && !_relocateClassifyTransactionExecuted;
-        public bool CanExecuteBlendTransaction => _updateTransactionPending && _traceTransactionExecuted && _relocateClassifyTransactionExecuted;
+        public bool CanExecuteTransportTransaction => TransportV2Active &&
+            _updateTransactionPending && _traceTransactionExecuted && _relocateClassifyTransactionExecuted && !_transportTransactionExecuted;
+        public bool CanExecuteBlendTransaction => _updateTransactionPending && _traceTransactionExecuted &&
+            _relocateClassifyTransactionExecuted && (!TransportV2Active || _transportTransactionExecuted);
         // Async planning asks all pass predicates before any command has been
         // recorded.  These predicates deliberately describe a transaction that is
         // safe to schedule, while CanExecute* above remains the stricter guard at
         // recording time.  This keeps the three passes together in a split queue
         // plan without permitting a consumer to read an older scratch result.
         public bool CanScheduleRelocateClassifyTransaction => _updateTransactionPending && !_relocateClassifyTransactionExecuted;
+        public bool CanScheduleTransportTransaction => TransportV2Active && _updateTransactionPending && !_transportTransactionExecuted;
         public bool CanScheduleBlendTransaction => _updateTransactionPending;
         public uint UpdateTransactionSerial => _updateTransactionSerial;
 
@@ -924,6 +1078,8 @@ namespace Njulf.Rendering.Resources
                 GPUSimpleDdgiProbeUpdate update = _updateQueueScratch[queueOffset];
                 if (update.VolumeIndex != (uint)volumeIndex)
                     continue;
+                if (TransportV2Active && (update.Flags & ProbeUpdateSourceRefreshFlag) == 0u)
+                    continue;
                 rayCount += Math.Max(1u, (update.Flags >> 16) & 0xffffu);
             }
 
@@ -938,6 +1094,8 @@ namespace Njulf.Rendering.Resources
             _registeredBindlessHeap = bindlessHeap;
             bindlessHeap.RegisterStorageBuffer(BindlessIndex.SimpleDdgiParamsBuffer, _bufferManager.GetBuffer(_paramsBuffer), 0, Math.Max(MinBufferSize, ParamsBufferSize));
             RegisterIfValid(BindlessIndex.SimpleDdgiIrradianceAtlasBuffer, _irradianceAtlasBuffer, _irradianceAtlasBytes);
+            RegisterIfValid(BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer, _transportIrradianceAtlasBuffer, _transportIrradianceAtlasBytes);
+            RegisterIfValid(BindlessIndex.SimpleDdgiTransportSourceCacheBuffer, _transportSourceCacheBuffer, _transportSourceCacheBytes);
             RegisterIfValid(BindlessIndex.SimpleDdgiVisibilityAtlasBuffer, _visibilityAtlasBuffer, _visibilityAtlasBytes);
             RegisterIfValid(BindlessIndex.SimpleDdgiRayResultScratchBuffer, _rayResultScratchBuffer, _rayScratchBytes);
             RegisterIfValid(BindlessIndex.SimpleDdgiProbeStateBuffer, _probeStateBuffer, _probeStateBytes);
@@ -992,12 +1150,15 @@ namespace Njulf.Rendering.Resources
             ReadCompletedProbeStateReadback(frameIndex);
             bool hasRegionalDirtyWork = gi.SimpleDdgiRegionalInvalidationEnabled && dirtyRegions is { Count: > 0 };
             bool requiresGlobalInvalidation = RequiresGlobalInvalidation(dirtyRegions);
-            UpdateLightingDirtyState(gi, lightingSignature, dirtyReasonFlags, suppressSignatureBoost: hasRegionalDirtyWork && !requiresGlobalInvalidation);
-
             // The dispatch allocation uses the largest selected ring profile;
             // each queue item packs its own active ray count so mid/far rings do
             // not perform near-ring work.
             _raysPerProbe = ResolveMaximumRingFullRays(gi);
+            bool sourceCacheCapacityWillChange =
+                _transportSourceCacheRayCapacity != Math.Max(1, _raysPerProbe);
+            UpdateLightingDirtyState(gi, lightingSignature, dirtyReasonFlags, suppressSignatureBoost: hasRegionalDirtyWork && !requiresGlobalInvalidation);
+            UpdateTransportV2ActivationState(sourceCacheCapacityWillChange);
+            UpdateTransportCalibrationState(gi, sourceCacheCapacityWillChange);
             if (_recenteredThisFrame)
             {
                 _totalRecenterCount++;
@@ -1017,6 +1178,7 @@ namespace Njulf.Rendering.Resources
             MarkFreshForNewOrScrolledProbes();
             if (hasRegionalDirtyWork)
                 MarkRegionalDirtyProbes(dirtyRegions!);
+            UpdateTransportGlobalConvergenceState();
             int visibleFreshRecoveryBudget = RefreshProbeSchedulingImportance();
 
             int updateBudget = ResolveFeedbackLimitedUpdateBudget(
@@ -1049,7 +1211,12 @@ namespace Njulf.Rendering.Resources
             // Fresh probes already force zero history in the blend shader. Do not
             // discard history for every other probe just because an atlas update
             // introduced a smaller set of fresh slots.
-            float hysteresis = gi.SimpleDdgiHysteresis;
+            // V2 treats the atlas as an explicit Jacobi field rather than a
+            // slowly decaying temporal-history buffer.  The blend shader derives
+            // its retention from this relaxation; V1 retains the legacy value.
+            float hysteresis = gi.SimpleDdgiTransportV2Enabled
+                ? 1.0f - gi.SimpleDdgiTransportSolverRelaxation
+                : gi.SimpleDdgiHysteresis;
             GPUSimpleDdgiVolume firstVolume = _volumeCount > 0 ? _volumeScratch[0] : default;
             _lastParams = new GPUSimpleDdgiParams
             {
@@ -1089,7 +1256,21 @@ namespace Njulf.Rendering.Resources
                     gi.SimpleDdgiMaximumWorldBiasMeters,
                     gi.SimpleDdgiArchitecturalThicknessMeters,
                     0.0f,
-                    0.0f)
+                    0.0f),
+                TransportAndAtlasIndices = new Vector4(
+                    BitConverter.UInt32BitsToSingle((uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),
+                    BitConverter.UInt32BitsToSingle(gi.SimpleDdgiTransportV2Enabled
+                        ? (uint)BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer
+                        : (uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),
+                    BitConverter.UInt32BitsToSingle(gi.SimpleDdgiTransportV2Enabled
+                        ? (uint)BindlessIndex.SimpleDdgiTransportSourceCacheBuffer
+                        : 0u),
+                    BitConverter.UInt32BitsToSingle(_transportGeneration)),
+                TransportControls = new Vector4(
+                    gi.SimpleDdgiTransportSolverRelaxation,
+                    gi.SimpleDdgiTransportAlbedoClamp,
+                    gi.SimpleDdgiTransportResidualThreshold,
+                    gi.SimpleDdgiTransportMaximumSolverGenerations)
             };
 
             UploadParams(stagingRing, commandBuffer);
@@ -1169,6 +1350,13 @@ namespace Njulf.Rendering.Resources
             Array.Clear(_probeSchedulingFlags);
             Array.Clear(_probeDirtyReasons);
             Array.Clear(_probeVisibilityImportance);
+            Array.Clear(_probeSourceLightingGenerations);
+            Array.Clear(_probeLastSourceRefreshFrames);
+            Array.Clear(_probeSourceRayCounts);
+            Array.Clear(_probeTransportGenerationCounts);
+            _hasTransportCalibrationSignatures = false;
+            _transportV2WasActive = false;
+            BeginTransportGlobalConvergence();
             _dirtyLatencyOutstandingEventCount = 0;
             _lastParams = CreateDisabledParams(settings);
             UploadParams(stagingRing, commandBuffer);
@@ -1187,7 +1375,8 @@ namespace Njulf.Rendering.Resources
                 uint completedFrame = unchecked(_frameIndex - 1u);
                 for (int i = 0; i < _probesToUpdate; i++)
                 {
-                    int probeIndex = checked((int)_updateQueueScratch[i].ProbeIndex);
+                    GPUSimpleDdgiProbeUpdate update = _updateQueueScratch[i];
+                    int probeIndex = checked((int)update.ProbeIndex);
                     if ((uint)probeIndex < (uint)_probeFresh.Length)
                     {
                         _probeFresh[probeIndex] = 0;
@@ -1196,6 +1385,41 @@ namespace Njulf.Rendering.Resources
                         if ((uint)probeIndex < (uint)_probeDirtyReasons.Length)
                             _probeDirtyReasons[probeIndex] = 0;
                         _probeAges[probeIndex] = 0;
+                        if (TransportV2Active)
+                        {
+                            bool sourceRefresh = (update.Flags & ProbeUpdateSourceRefreshFlag) != 0u;
+                            if (sourceRefresh)
+                            {
+                                _probeSourceLightingGenerations[probeIndex] = update.SourceLightingGeneration == 0u
+                                    ? _sourceLightingGeneration
+                                    : update.SourceLightingGeneration;
+                                _probeLastSourceRefreshFrames[probeIndex] = completedFrame;
+                                uint packedRayCount = (update.Flags >> 16) & 0xffffu;
+                                int recordedSourceRayCount = update.SourceRayCount == 0u
+                                    ? checked((int)Math.Max(packedRayCount, 1u))
+                                    : checked((int)update.SourceRayCount);
+                                _probeSourceRayCounts[probeIndex] = checked((ushort)Math.Clamp(
+                                    recordedSourceRayCount,
+                                    1,
+                                    GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe));
+                                _probeTransportGenerationCounts[probeIndex] = 1;
+                                // Convergence evidence belongs to the prior
+                                // source field. Reset it when direct/sky/
+                                // emissive input changes so a previously quiet
+                                // probe cannot be declared solved solely from
+                                // stale readback residuals.
+                                if ((uint)probeIndex < (uint)_probeStableUpdateCounts.Length)
+                                    _probeStableUpdateCounts[probeIndex] = 0;
+                                if ((uint)probeIndex < (uint)_probeLuminanceChangeEma.Length)
+                                    _probeLuminanceChangeEma[probeIndex] = 0.0f;
+                            }
+                            else if ((uint)probeIndex < (uint)_probeTransportGenerationCounts.Length)
+                            {
+                                _probeTransportGenerationCounts[probeIndex] = (byte)Math.Min(
+                                    byte.MaxValue,
+                                    _probeTransportGenerationCounts[probeIndex] + 1);
+                            }
+                        }
                         RecordDirtyFirstCompletedUpdate(probeIndex, completedFrame);
                     }
                 }
@@ -1206,6 +1430,7 @@ namespace Njulf.Rendering.Resources
             _updateTransactionPending = false;
             _traceTransactionExecuted = false;
             _relocateClassifyTransactionExecuted = false;
+            _transportTransactionExecuted = false;
         }
 
         /// <summary>
@@ -1236,6 +1461,139 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        /// <summary>
+        /// Publishes the completed V2 Jacobi target into the canonical atlas.
+        /// The blend pass reads only the previously published canonical field and
+        /// writes only the private target; this range copy is the sole visibility
+        /// boundary for receiver sampling.  Incomplete transport work therefore
+        /// cannot leak into a rendered frame.
+        /// </summary>
+        public unsafe void PublishTransportAtlasAfterBlend(CommandBuffer commandBuffer)
+        {
+            _transportPublishedProbeCount = 0;
+            _transportPublishRegionCount = 0;
+            if (!TransportV2Active || _probesToUpdate <= 0 ||
+                !_transportIrradianceAtlasBuffer.IsValid || !_irradianceAtlasBuffer.IsValid ||
+                commandBuffer.Handle == 0)
+            {
+                return;
+            }
+
+            int selectedCount = 0;
+            for (int queueOffset = 0; queueOffset < _probesToUpdate; queueOffset++)
+            {
+                int probeIndex = checked((int)_updateQueueScratch[queueOffset].ProbeIndex);
+                if ((uint)probeIndex >= (uint)_probeCount)
+                    continue;
+                _transportPublishProbeIndices[selectedCount++] = probeIndex;
+            }
+
+            if (selectedCount == 0)
+                return;
+
+            Array.Sort(_transportPublishProbeIndices, 0, selectedCount);
+            ulong probeBytes = checked((ulong)IrradianceTexelsPerProbe * IrradianceTexelsPerProbe * AtlasTexelStride);
+            int copyCount = 0;
+            int uniqueCount = 0;
+            int runStart = _transportPublishProbeIndices[0];
+            int previous = runStart;
+            uniqueCount = 1;
+            for (int index = 1; index < selectedCount; index++)
+            {
+                int probeIndex = _transportPublishProbeIndices[index];
+                if (probeIndex == previous)
+                    continue;
+
+                uniqueCount++;
+                if (probeIndex == previous + 1)
+                {
+                    previous = probeIndex;
+                    continue;
+                }
+
+                _transportPublishCopies[copyCount++] = CreateTransportPublishCopy(runStart, previous, probeBytes);
+                runStart = previous = probeIndex;
+            }
+            _transportPublishCopies[copyCount++] = CreateTransportPublishCopy(runStart, previous, probeBytes);
+
+            Silk.NET.Vulkan.Buffer target = _bufferManager.GetBuffer(_transportIrradianceAtlasBuffer);
+            Silk.NET.Vulkan.Buffer canonical = _bufferManager.GetBuffer(_irradianceAtlasBuffer);
+            ulong targetBytes = Math.Min(_transportIrradianceAtlasBytes, _irradianceAtlasBytes);
+            BufferMemoryBarrier2* before = stackalloc BufferMemoryBarrier2[2];
+            before[0] = BarrierBuilder.BufferBarrier(
+                target,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferReadBit,
+                0,
+                targetBytes);
+            before[1] = BarrierBuilder.BufferBarrier(
+                canonical,
+                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                0,
+                _irradianceAtlasBytes);
+            var beforeDependency = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                BufferMemoryBarrierCount = 2,
+                PBufferMemoryBarriers = before
+            };
+            _context.Api.CmdPipelineBarrier2(commandBuffer, &beforeDependency);
+
+            fixed (BufferCopy* copies = _transportPublishCopies)
+                _context.Api.CmdCopyBuffer(commandBuffer, target, canonical, checked((uint)copyCount), copies);
+
+            BufferMemoryBarrier2* after = stackalloc BufferMemoryBarrier2[2];
+            after[0] = BarrierBuilder.BufferBarrier(
+                canonical,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                // A sampled-atlas mirror may immediately issue a transfer read
+                // after this publication. Include that consumer here as well as
+                // the normal compute/fragment field readers; otherwise its
+                // generic compute-write -> transfer barrier would not cover this
+                // preceding transfer write.
+                PipelineStageFlags2.TransferBit | PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+                AccessFlags2.TransferReadBit | AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                0,
+                _irradianceAtlasBytes);
+            after[1] = BarrierBuilder.BufferBarrier(
+                target,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferReadBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                0,
+                targetBytes);
+            var afterDependency = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                BufferMemoryBarrierCount = 2,
+                PBufferMemoryBarriers = after
+            };
+            _context.Api.CmdPipelineBarrier2(commandBuffer, &afterDependency);
+
+            _transportPublishedProbeCount = uniqueCount;
+            _transportPublishRegionCount = copyCount;
+            _transportGeneration = AdvanceSourceLightingGeneration(_transportGeneration);
+        }
+
+        private static BufferCopy CreateTransportPublishCopy(int firstProbe, int lastProbe, ulong probeBytes)
+        {
+            ulong offset = checked((ulong)Math.Max(firstProbe, 0) * probeBytes);
+            ulong probeCount = checked((ulong)Math.Max(lastProbe - firstProbe + 1, 0));
+            return new BufferCopy
+            {
+                SrcOffset = offset,
+                DstOffset = offset,
+                Size = checked(probeCount * probeBytes)
+            };
+        }
+
         public void MarkTraceExecuted()
         {
             if (CanExecuteTraceTransaction)
@@ -1248,11 +1606,18 @@ namespace Njulf.Rendering.Resources
                 _relocateClassifyTransactionExecuted = true;
         }
 
+        public void MarkTransportExecuted()
+        {
+            if (CanExecuteTransportTransaction)
+                _transportTransactionExecuted = true;
+        }
+
         public void AbortUpdateTransaction()
         {
             _updateTransactionPending = false;
             _traceTransactionExecuted = false;
             _relocateClassifyTransactionExecuted = false;
+            _transportTransactionExecuted = false;
         }
 
         private void BeginUpdateTransaction(bool hasWork)
@@ -1263,6 +1628,7 @@ namespace Njulf.Rendering.Resources
             _updateTransactionPending = hasWork;
             _traceTransactionExecuted = false;
             _relocateClassifyTransactionExecuted = false;
+            _transportTransactionExecuted = false;
         }
 
         private void ResetFrameCounters()
@@ -1290,6 +1656,12 @@ namespace Njulf.Rendering.Resources
             _lightingDirtyBoostedCapacity = 0;
             _regionalDirtyReasonFlags = 0u;
             _scheduledPrimaryRayCount = 0;
+            _scheduledTransportRayCount = 0;
+            _scheduledSourceRayCount = 0;
+            _sourceRefreshProbeCount = 0;
+            _sourceCacheReuseProbeCount = 0;
+            _transportPublishedProbeCount = 0;
+            _transportPublishRegionCount = 0;
             _effectiveMaxShadedLights = 0;
             _adaptiveRaySavedPrimaryRayCount = 0;
             _rayBudgetRejectedProbeCount = 0;
@@ -1331,6 +1703,10 @@ namespace Njulf.Rendering.Resources
             byte[] previousStableUpdateCounts = _probeStableUpdateCounts;
             float[] previousLuminanceChangeEma = _probeLuminanceChangeEma;
             uint[] previousAges = _probeAges;
+            uint[] previousSourceLightingGenerations = _probeSourceLightingGenerations;
+            uint[] previousSourceRefreshFrames = _probeLastSourceRefreshFrames;
+            ushort[] previousSourceRayCounts = _probeSourceRayCounts;
+            byte[] previousTransportGenerationCounts = _probeTransportGenerationCounts;
             uint[] previousGenerations = _probeGenerations;
             Vector3[] previousRelocations = _probeRelocations;
             float[] previousActiveWeights = _probeActiveWeights;
@@ -1351,6 +1727,10 @@ namespace Njulf.Rendering.Resources
             _probeStableUpdateCounts = new byte[Math.Max(0, probeCount)];
             _probeLuminanceChangeEma = new float[Math.Max(0, probeCount)];
             _probeAges = new uint[Math.Max(0, probeCount)];
+            _probeSourceLightingGenerations = new uint[Math.Max(0, probeCount)];
+            _probeLastSourceRefreshFrames = new uint[Math.Max(0, probeCount)];
+            _probeSourceRayCounts = new ushort[Math.Max(0, probeCount)];
+            _probeTransportGenerationCounts = new byte[Math.Max(0, probeCount)];
             _probeDirtyLatencyStates = new byte[Math.Max(0, probeCount)];
             _probeDirtyLatencyStartFrames = new uint[Math.Max(0, probeCount)];
             int copyCount = Math.Min(probeCount, previousFresh.Length);
@@ -1362,6 +1742,10 @@ namespace Njulf.Rendering.Resources
             Array.Copy(previousStableUpdateCounts, _probeStableUpdateCounts, Math.Min(copyCount, previousStableUpdateCounts.Length));
             Array.Copy(previousLuminanceChangeEma, _probeLuminanceChangeEma, Math.Min(copyCount, previousLuminanceChangeEma.Length));
             Array.Copy(previousAges, _probeAges, copyCount);
+            Array.Copy(previousSourceLightingGenerations, _probeSourceLightingGenerations, Math.Min(copyCount, previousSourceLightingGenerations.Length));
+            Array.Copy(previousSourceRefreshFrames, _probeLastSourceRefreshFrames, Math.Min(copyCount, previousSourceRefreshFrames.Length));
+            Array.Copy(previousSourceRayCounts, _probeSourceRayCounts, Math.Min(copyCount, previousSourceRayCounts.Length));
+            Array.Copy(previousTransportGenerationCounts, _probeTransportGenerationCounts, Math.Min(copyCount, previousTransportGenerationCounts.Length));
             Array.Copy(previousGenerations, _probeGenerations, Math.Min(copyCount, previousGenerations.Length));
             Array.Copy(previousRelocations, _probeRelocations, Math.Min(copyCount, previousRelocations.Length));
             Array.Copy(previousActiveWeights, _probeActiveWeights, Math.Min(copyCount, previousActiveWeights.Length));
@@ -1426,6 +1810,7 @@ namespace Njulf.Rendering.Resources
         private void AdvanceVolumeTableGenerationAndDropPendingReadbacks()
         {
             _volumeTableGeneration++;
+            BeginTransportGlobalConvergence();
             for (int i = 0; i < _probeStateReadbackRecorded.Length; i++)
                 _probeStateReadbackRecorded[i] = false;
             Array.Clear(_probeDirtyLatencyStates);
@@ -1447,6 +1832,8 @@ namespace Njulf.Rendering.Resources
             if (!_hasLightingSignature)
             {
                 _lastLightingSignature = lightingSignature;
+                _sourceLightingGeneration = 1u;
+                BeginTransportGlobalConvergence();
                 _activeDirtyReasonFlags = 0u;
                 _hasLightingSignature = true;
                 return;
@@ -1455,6 +1842,13 @@ namespace Njulf.Rendering.Resources
             if (lightingSignature != _lastLightingSignature)
             {
                 _lastLightingSignature = lightingSignature;
+                _sourceLightingGeneration = AdvanceSourceLightingGeneration(_sourceLightingGeneration);
+                BeginTransportGlobalConvergence();
+                // The physical cache remains allocated, but every slot must trace
+                // its source once under the new light/environment signature.
+                _sourceCacheInvalidationCount = SaturatingAdd(
+                    _sourceCacheInvalidationCount,
+                    (ulong)Math.Max(_probeCount, 0));
                 _lightingDirtyFrames = !suppressSignatureBoost && settings.SimpleDdgiLightingDirtyBoostEnabled
                     ? settings.SimpleDdgiLightingDirtyFrameCount
                     : 0;
@@ -1466,6 +1860,140 @@ namespace Njulf.Rendering.Resources
                 if (_lightingDirtyFrames == 0)
                     _activeDirtyReasonFlags = 0u;
             }
+        }
+
+        private void UpdateTransportV2ActivationState(bool sourceCacheCapacityWillChange)
+        {
+            bool transportV2Active = TransportV2Active;
+            if (transportV2Active && !_transportV2WasActive)
+            {
+                // V1 never maintains V2 cache contents. Require a full source
+                // rebuild when V2 is enabled at runtime rather than trusting an
+                // old allocation whose direct-light contract may have changed.
+                InvalidateTransportSourceCacheMetadata(
+                    recordInvalidation: !sourceCacheCapacityWillChange);
+            }
+            else if (!transportV2Active && _transportV2WasActive)
+            {
+                // Preserve the pending marker so a later re-enable performs a
+                // bounded global solve even if no lighting signature changed.
+                BeginTransportGlobalConvergence();
+            }
+
+            _transportV2WasActive = transportV2Active;
+        }
+
+        private void UpdateTransportCalibrationState(
+            GlobalIlluminationSettings settings,
+            bool sourceCacheCapacityWillChange)
+        {
+            if (!TransportV2Active)
+            {
+                // A V1 interval never maintains cache/solver equivalence. Make
+                // the next V2 activation establish a new baseline after its
+                // explicit cache invalidation rather than comparing stale knobs.
+                _hasTransportCalibrationSignatures = false;
+                return;
+            }
+
+            ulong sourceSignature = CalculateTransportSourceCalibrationFingerprint(settings);
+            ulong solverSignature = CalculateTransportSolverCalibrationFingerprint(settings);
+            if (!_hasTransportCalibrationSignatures)
+            {
+                _lastTransportSourceCalibrationSignature = sourceSignature;
+                _lastTransportSolverCalibrationSignature = solverSignature;
+                _hasTransportCalibrationSignatures = true;
+                return;
+            }
+
+            bool sourceChanged = sourceSignature != _lastTransportSourceCalibrationSignature;
+            bool solverChanged = solverSignature != _lastTransportSolverCalibrationSignature;
+            _lastTransportSourceCalibrationSignature = sourceSignature;
+            _lastTransportSolverCalibrationSignature = solverSignature;
+            if (!sourceChanged && !solverChanged)
+                return;
+
+            if (sourceChanged)
+            {
+                // Cached source terms are not interchangeable across a changed
+                // ray/material/light-selection contract. Advance the source
+                // generation as well as clearing CPU cache metadata so no
+                // solver-only update can read the prior estimator.
+                _sourceLightingGeneration = AdvanceSourceLightingGeneration(_sourceLightingGeneration);
+                InvalidateTransportSourceCacheMetadata(
+                    recordInvalidation: !sourceCacheCapacityWillChange);
+            }
+            else
+            {
+                // Relaxation, albedo limiting, and convergence policy do not
+                // invalidate direct/sky/emissive source work. Preserve it and
+                // restart only the recursive field, which makes live transport
+                // calibration responsive without paying a full ray retrace.
+                ResetTransportSolverConvergenceMetadata();
+            }
+
+            BeginTransportCalibrationBoost(settings);
+            _transportCalibrationChangeCount = SaturatingAdd(
+                _transportCalibrationChangeCount,
+                1UL);
+        }
+
+        private void ResetTransportSolverConvergenceMetadata()
+        {
+            if (_probeTransportGenerationCounts.Length > 0)
+                Array.Clear(_probeTransportGenerationCounts);
+            if (_probeStableUpdateCounts.Length > 0)
+                Array.Clear(_probeStableUpdateCounts);
+            if (_probeLuminanceChangeEma.Length > 0)
+                Array.Clear(_probeLuminanceChangeEma);
+            BeginTransportGlobalConvergence();
+        }
+
+        private void BeginTransportCalibrationBoost(GlobalIlluminationSettings settings)
+        {
+            if (!settings.SimpleDdgiLightingDirtyBoostEnabled || _probeCount <= 0)
+                return;
+
+            _lightingDirtyFrames = Math.Max(
+                _lightingDirtyFrames,
+                settings.SimpleDdgiLightingDirtyFrameCount);
+            _activeDirtyReasonFlags |= TransportCalibrationDirtyReasonFlag;
+        }
+
+        private void BeginTransportGlobalConvergence()
+        {
+            _transportGlobalConvergencePending = true;
+            _transportGlobalConvergenceSourceGeneration = _sourceLightingGeneration;
+            _transportGlobalConvergenceStartFrame = _frameIndex;
+        }
+
+        private void UpdateTransportGlobalConvergenceState()
+        {
+            if (!TransportV2Active)
+                return;
+
+            if (_transportGlobalConvergenceSourceGeneration != _sourceLightingGeneration)
+                BeginTransportGlobalConvergence();
+            if (!_transportGlobalConvergencePending || _probeCount <= 0)
+                return;
+
+            int minimumSolverGenerations = Math.Max(
+                1,
+                _settings.GlobalIllumination.SimpleDdgiTransportMaximumSolverGenerations);
+            for (int probeIndex = 0; probeIndex < _probeCount; probeIndex++)
+            {
+                if (NeedsSourceRefresh(probeIndex) ||
+                    (uint)probeIndex >= (uint)_probeTransportGenerationCounts.Length ||
+                    _probeTransportGenerationCounts[probeIndex] < minimumSolverGenerations)
+                {
+                    return;
+                }
+            }
+
+            // All source terms are current and every physical probe has
+            // contributed the requested number of Jacobi generations. Local
+            // residual/stability criteria can now retire quiet probes safely.
+            _transportGlobalConvergencePending = false;
         }
 
         private static bool RequiresGlobalInvalidation(IReadOnlyList<DdgiDirtyRegion>? dirtyRegions)
@@ -2098,10 +2626,70 @@ namespace Njulf.Rendering.Resources
             bool dirty = _lightingDirtyFrames > 0 ||
                 ((uint)probeIndex < (uint)_probeSchedulingFlags.Length &&
                     (_probeSchedulingFlags[probeIndex] & ProbeSchedulingRegionalDirtyFlag) != 0);
+            // A converged cached source field does not need perpetual solver
+            // maintenance. It returns to the queue immediately for a source
+            // refresh, a physical invalidation, visible retry, or a meaningful
+            // residual increase from readback.
+            if (TransportV2Active && !NeedsSourceRefresh(probeIndex) &&
+                IsTransportConverged(probeIndex) && !dirty)
+            {
+                return false;
+            }
             bool retry = IsEligibleForVisibleRetry(probeIndex);
             int ringIndex = ResolveVolumeQuality(volumeIndex).RingIndex;
             workClass = ResolveSchedulerWorkClass(freshOrExposed, visible, dirty, retry, ringIndex);
             return true;
+        }
+
+        private bool NeedsSourceRefresh(int probeIndex)
+        {
+            if (!TransportV2Active)
+                return true;
+            if ((uint)probeIndex >= (uint)_probeSourceLightingGenerations.Length ||
+                (uint)probeIndex >= (uint)_probeLastSourceRefreshFrames.Length ||
+                (uint)probeIndex >= (uint)_probeSourceRayCounts.Length ||
+                (uint)probeIndex >= (uint)_probeFresh.Length)
+            {
+                return true;
+            }
+
+            if (_probeFresh[probeIndex] != 0 ||
+                _probeSourceLightingGenerations[probeIndex] != _sourceLightingGeneration ||
+                _probeSourceRayCounts[probeIndex] == 0)
+            {
+                return true;
+            }
+
+            uint elapsed = unchecked(_frameIndex - _probeLastSourceRefreshFrames[probeIndex]);
+            bool periodicRefreshDue = elapsed >= (uint)Math.Max(
+                1,
+                _settings.GlobalIllumination.SimpleDdgiTransportSourceRefreshFrames);
+            // A field-wide warmup owns a coherent source generation until every
+            // physical slot has received the requested minimum bounce work. If
+            // early probes refreshed again on a short cadence, their generation
+            // count would continually reset before a large/low-budget field had
+            // a chance to converge. Explicit source invalidation above still
+            // wins immediately; only routine resampling is deferred.
+            return periodicRefreshDue && !TransportGlobalConvergencePending;
+        }
+
+        private bool IsTransportConverged(int probeIndex)
+        {
+            if (TransportGlobalConvergencePending)
+                return false;
+
+            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+            if ((uint)probeIndex >= (uint)_probeTransportGenerationCounts.Length ||
+                (uint)probeIndex >= (uint)_probeStableUpdateCounts.Length ||
+                (uint)probeIndex >= (uint)_probeLuminanceChangeEma.Length)
+            {
+                return false;
+            }
+
+            return _probeTransportGenerationCounts[probeIndex] >=
+                    gi.SimpleDdgiTransportMaximumSolverGenerations &&
+                _probeStableUpdateCounts[probeIndex] >= gi.SimpleDdgiStableMaintenanceUpdateCount &&
+                _probeLuminanceChangeEma[probeIndex] <= gi.SimpleDdgiTransportResidualThreshold;
         }
 
         internal static SimpleDdgiSchedulerWorkClass ResolveSchedulerWorkClass(
@@ -2374,6 +2962,9 @@ namespace Njulf.Rendering.Resources
             return int.MaxValue - left < right ? int.MaxValue : left + right;
         }
 
+        private static ulong SaturatingAdd(ulong left, ulong right) =>
+            ulong.MaxValue - left < right ? ulong.MaxValue : left + right;
+
         private static long ElapsedMicroseconds(long startTimestamp) =>
             (long)((Stopwatch.GetTimestamp() - startTimestamp) * 1_000_000.0 / Stopwatch.Frequency);
 
@@ -2520,15 +3111,24 @@ namespace Njulf.Rendering.Resources
 
             int volumeIndex = Math.Max(0, ResolveVolumeIndexForProbe(probeIndex));
             uint effectiveFlags = flags | (_probeFresh[probeIndex] != 0 ? ProbeStateFreshFlag : 0u);
+            bool sourceRefresh = NeedsSourceRefresh(probeIndex);
+            if (sourceRefresh)
+                effectiveFlags |= ProbeUpdateSourceRefreshFlag;
             SimpleDdgiRingQuality quality = ResolveVolumeQuality(volumeIndex);
             int requestedRays = ResolveUpdateRayCount(probeIndex, quality, effectiveFlags);
+            int sourceRayCount = sourceRefresh
+                ? requestedRays
+                : ((uint)probeIndex < (uint)_probeSourceRayCounts.Length && _probeSourceRayCounts[probeIndex] > 0
+                    ? _probeSourceRayCounts[probeIndex]
+                    : requestedRays);
             int primaryRayBudget = Math.Max(0, _settings.GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget);
-            if ((ulong)requestedRays > (ulong)primaryRayBudget ||
-                _scheduledPrimaryRayCount > (ulong)primaryRayBudget - (ulong)requestedRays)
+            ulong primaryRayCost = sourceRefresh ? (ulong)requestedRays : 0UL;
+            if (primaryRayCost > (ulong)primaryRayBudget ||
+                _scheduledPrimaryRayCount > (ulong)primaryRayBudget - primaryRayCost)
             {
                 if (_rayBudgetRejectedProbeCount < int.MaxValue)
                     _rayBudgetRejectedProbeCount++;
-                ulong rejectedRays = (ulong)requestedRays;
+                ulong rejectedRays = primaryRayCost;
                 _rayBudgetRejectedPrimaryRayCount = ulong.MaxValue - _rayBudgetRejectedPrimaryRayCount < rejectedRays
                     ? ulong.MaxValue
                     : _rayBudgetRejectedPrimaryRayCount + rejectedRays;
@@ -2543,8 +3143,10 @@ namespace Njulf.Rendering.Resources
             {
                 ProbeIndex = checked((uint)probeIndex),
                 VolumeIndex = checked((uint)volumeIndex),
-                Flags = PackUpdateFlags(probeIndex, volumeIndex, effectiveFlags),
-                Reserved0 = PackProbeUpdateMetadata(_probeGenerations[probeIndex], _probeAges[probeIndex])
+                Flags = PackUpdateFlags(probeIndex, volumeIndex, effectiveFlags, requestedRays, sourceRefresh),
+                Reserved0 = PackProbeUpdateMetadata(_probeGenerations[probeIndex], _probeAges[probeIndex]),
+                SourceRayCount = checked((uint)Math.Clamp(sourceRayCount, 1, GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe)),
+                SourceLightingGeneration = sourceRefresh ? _sourceLightingGeneration : 0u
             };
             _queuedWorkClassScratch[queueOffset] = (byte)workClass;
             int scheduledClassIndex = (int)workClass;
@@ -2555,10 +3157,14 @@ namespace Njulf.Rendering.Resources
             return true;
         }
 
-        private uint PackUpdateFlags(int probeIndex, int volumeIndex, uint flags)
+        private uint PackUpdateFlags(
+            int probeIndex,
+            int volumeIndex,
+            uint flags,
+            int rayCount,
+            bool sourceRefresh)
         {
             SimpleDdgiRingQuality quality = ResolveVolumeQuality(volumeIndex);
-            int rayCount = ResolveUpdateRayCount(probeIndex, quality, flags);
             uint packedMaterialCascade = checked((uint)Math.Clamp(quality.MaterialTextureMaxCascade + 1, 0, 7));
             // Zero is the queue's "unset" sentinel. Bias the stored value so a
             // zeroed entry falls back to the pass default instead of disabling all
@@ -2569,8 +3175,21 @@ namespace Njulf.Rendering.Resources
             _effectiveMaxShadedLights = Math.Max(
                 _effectiveMaxShadedLights,
                 Math.Clamp(quality.MaxShadedLights, 0, 62));
-            _scheduledPrimaryRayCount += (ulong)rayCount;
-            _ringScheduledPrimaryRayCounts[quality.RingIndex] += (ulong)rayCount;
+            _scheduledTransportRayCount = SaturatingAdd(_scheduledTransportRayCount, (ulong)rayCount);
+            if (sourceRefresh)
+            {
+                _scheduledPrimaryRayCount = SaturatingAdd(_scheduledPrimaryRayCount, (ulong)rayCount);
+                _scheduledSourceRayCount = SaturatingAdd(_scheduledSourceRayCount, (ulong)rayCount);
+                _ringScheduledPrimaryRayCounts[quality.RingIndex] = SaturatingAdd(
+                    _ringScheduledPrimaryRayCounts[quality.RingIndex],
+                    (ulong)rayCount);
+                if (_sourceRefreshProbeCount < int.MaxValue)
+                    _sourceRefreshProbeCount++;
+            }
+            else if (_sourceCacheReuseProbeCount < int.MaxValue)
+            {
+                _sourceCacheReuseProbeCount++;
+            }
             if (rayCount >= quality.FullRays)
             {
                 _fullRayProbeUpdateCount++;
@@ -2600,9 +3219,17 @@ namespace Njulf.Rendering.Resources
         private int ResolveUpdateRayCount(int probeIndex, SimpleDdgiRingQuality quality, uint flags)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+            // A field-wide source/layout change needs coherent low-frequency
+            // transport, not a handful of maintenance directions that can make
+            // a dark probe look locally stable before its bright neighbors have
+            // propagated. Cached V2 solves have no primary ray-query cost, so
+            // spend full ring directions for this bounded warmup phase.
+            if (TransportGlobalConvergencePending)
+                return quality.FullRays;
             if (!gi.SimpleDdgiAdaptiveRaysEnabled ||
                 _lightingDirtyFrames > 0 ||
                 (flags & ProbeStateFreshFlag) != 0 ||
+                (flags & ProbeUpdateSourceRefreshFlag) != 0 ||
                 _probeStateReadbackValid == 0 ||
                 (uint)probeIndex >= (uint)_probeStableUpdateCounts.Length)
             {
@@ -2651,6 +3278,16 @@ namespace Njulf.Rendering.Resources
                     _probeStableUpdateCounts[probeIndex] = 0;
                 if ((uint)probeIndex < (uint)_probeLuminanceChangeEma.Length)
                     _probeLuminanceChangeEma[probeIndex] = 0.0f;
+                if ((uint)probeIndex < (uint)_probeSourceLightingGenerations.Length)
+                    _probeSourceLightingGenerations[probeIndex] = 0u;
+                if ((uint)probeIndex < (uint)_probeLastSourceRefreshFrames.Length)
+                    _probeLastSourceRefreshFrames[probeIndex] = 0u;
+                if ((uint)probeIndex < (uint)_probeSourceRayCounts.Length)
+                    _probeSourceRayCounts[probeIndex] = 0;
+                if ((uint)probeIndex < (uint)_probeTransportGenerationCounts.Length)
+                    _probeTransportGenerationCounts[probeIndex] = 0;
+                if (_sourceCacheInvalidationCount < ulong.MaxValue)
+                    _sourceCacheInvalidationCount++;
                 ClearProbeDirtyLatency(probeIndex);
                 if ((uint)probeIndex < (uint)_probeSchedulingFlags.Length)
                     _probeSchedulingFlags[probeIndex] = 0;
@@ -2679,6 +3316,35 @@ namespace Njulf.Rendering.Resources
                 _recenterRefreshProbeCount++;
             if (dirty && shouldAdvanceGeneration)
                 _dirtyRefreshProbeCount++;
+        }
+
+        private void MarkProbeSourceCacheStale(int probeIndex)
+        {
+            if ((uint)probeIndex >= (uint)_probeCount)
+                return;
+
+            // Source-cache validity is independent of the physical-slot
+            // generation. Preserve relocation, classification, and canonical
+            // irradiance while forcing the next queue entry through its complete
+            // traced source sequence.
+            if ((uint)probeIndex < (uint)_probeSourceLightingGenerations.Length)
+                _probeSourceLightingGenerations[probeIndex] = 0u;
+            if ((uint)probeIndex < (uint)_probeLastSourceRefreshFrames.Length)
+                _probeLastSourceRefreshFrames[probeIndex] = 0u;
+            if ((uint)probeIndex < (uint)_probeSourceRayCounts.Length)
+                _probeSourceRayCounts[probeIndex] = 0;
+            if ((uint)probeIndex < (uint)_probeTransportGenerationCounts.Length)
+                _probeTransportGenerationCounts[probeIndex] = 0;
+            if ((uint)probeIndex < (uint)_probeStableUpdateCounts.Length)
+                _probeStableUpdateCounts[probeIndex] = 0;
+            if ((uint)probeIndex < (uint)_probeLuminanceChangeEma.Length)
+                _probeLuminanceChangeEma[probeIndex] = 0.0f;
+            // A per-slot cache repair is exceptional (normally a live resource
+            // transition or corruption guard). Treat it as a new transport
+            // boundary so neighboring bounce paths cannot remain retired while
+            // this source term is rebuilt.
+            BeginTransportGlobalConvergence();
+            _sourceCacheInvalidationCount = SaturatingAdd(_sourceCacheInvalidationCount, 1UL);
         }
 
         internal static bool ShouldAdvanceProbeGenerationForInvalidation(
@@ -2809,17 +3475,24 @@ namespace Njulf.Rendering.Resources
             Array.Clear(_volumeScratch);
             Array.Clear(_volumePurposes);
             Array.Clear(_volumePriorities);
+            // V2 deliberately has no authored-volume dependency.  Its bounded
+            // camera clipmaps are the whole field, with density concentrated in
+            // the near/mid rings.  Retain the authored path only for the explicit
+            // V1 fallback so existing captures can still be replayed.
             bool anyAuthored = false;
-            int authoredOrdinal = 0;
-            foreach (SimpleDdgiAuthoredVolume authored in gi.SimpleDdgiAuthoredVolumes)
+            if (!gi.SimpleDdgiTransportV2Enabled)
             {
-                if (authoredOrdinal >= GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount)
-                    break;
-                authoredOrdinal++;
-                if (!TryCreateAuthoredVolume(authored, authoredOrdinal, out VolumeCandidate candidate))
-                    continue;
-                anyAuthored = true;
-                _volumeCandidates.Add(candidate);
+                int authoredOrdinal = 0;
+                foreach (SimpleDdgiAuthoredVolume authored in gi.SimpleDdgiAuthoredVolumes)
+                {
+                    if (authoredOrdinal >= GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount)
+                        break;
+                    authoredOrdinal++;
+                    if (!TryCreateAuthoredVolume(authored, authoredOrdinal, out VolumeCandidate candidate))
+                        continue;
+                    anyAuthored = true;
+                    _volumeCandidates.Add(candidate);
+                }
             }
 
             int ringCount = gi.SimpleDdgiRingCount;
@@ -2882,7 +3555,9 @@ namespace Njulf.Rendering.Resources
                     layoutRequests,
                     SimpleDdgiLayoutBudget.Resolve(gi),
                     gi.SimpleDdgiSampledAtlasEnabled,
-                    gi.SimpleDdgiLayoutAdmissionMode);
+                    gi.SimpleDdgiLayoutAdmissionMode,
+                    transportV2Enabled: true,
+                    transportRayCapacity: ResolveMaximumRingFullRays(gi));
                 _cachedAcceptedSourceOrdinals = _cachedLayoutReport.WasDegraded
                     ? new HashSet<int>(_cachedLayoutReport.AcceptedSourceOrdinals)
                     : null;
@@ -2961,6 +3636,8 @@ namespace Njulf.Rendering.Resources
             hash = AddLayoutFingerprintValue(hash, (ulong)settings.DdgiQualityTier, prime);
             hash = AddLayoutFingerprintValue(hash, settings.DdgiAtlasMemoryBudgetBytes, prime);
             hash = AddLayoutFingerprintValue(hash, settings.SimpleDdgiSampledAtlasEnabled ? 1UL : 0UL, prime);
+            hash = AddLayoutFingerprintValue(hash, settings.SimpleDdgiTransportV2Enabled ? 1UL : 0UL, prime);
+            hash = AddLayoutFingerprintValue(hash, (ulong)ResolveMaximumRingFullRays(settings), prime);
             hash = AddLayoutFingerprintValue(hash, (ulong)settings.SimpleDdgiLayoutAdmissionMode, prime);
             hash = AddLayoutFingerprintValue(hash, (ulong)candidates.Count, prime);
             for (int i = 0; i < candidates.Count; i++)
@@ -2987,6 +3664,113 @@ namespace Njulf.Rendering.Resources
             }
 
             return hash;
+        }
+
+        /// <summary>
+        /// Hashes only controls that alter the radiometric source estimator
+        /// retained in the V2 cache. Layout changes are handled independently by
+        /// the volume-table generation, and lighting/environment changes arrive
+        /// through the renderer's scene signature.
+        /// </summary>
+        private static ulong CalculateTransportSourceCalibrationFingerprint(
+            GlobalIlluminationSettings settings)
+        {
+            const ulong offset = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            ulong hash = offset;
+
+            hash = AddLayoutFingerprintValue(hash, (ulong)settings.DdgiQualityTier, prime);
+            hash = AddLayoutFingerprintValue(hash, settings.DdgiAlphaMaskedTransportEnabled ? 1UL : 0UL, prime);
+            hash = AddLayoutFingerprintValue(hash, (ulong)(uint)settings.DdgiMaxShadedLights, prime);
+            hash = AddLayoutFingerprintValue(hash, (ulong)(uint)(settings.DdgiMaterialTextureMaxCascade + 1), prime);
+            hash = AddLayoutFingerprintValue(hash, settings.FarFieldSunShadowEnabled ? 1UL : 0UL, prime);
+            hash = AddLayoutFingerprintValue(hash, settings.FarFieldSkyVisibilityEnabled ? 1UL : 0UL, prime);
+
+            hash = AddTransportRingSourceCalibrationValues(
+                hash,
+                settings.SimpleDdgiNearFullRaysPerProbe,
+                settings.SimpleDdgiNearMaterialTextureMaxCascade,
+                settings.SimpleDdgiNearMaxShadedLights,
+                prime);
+            hash = AddTransportRingSourceCalibrationValues(
+                hash,
+                settings.SimpleDdgiMidFullRaysPerProbe,
+                settings.SimpleDdgiMidMaterialTextureMaxCascade,
+                settings.SimpleDdgiMidMaxShadedLights,
+                prime);
+            return AddTransportRingSourceCalibrationValues(
+                hash,
+                settings.SimpleDdgiFarFullRaysPerProbe,
+                settings.SimpleDdgiFarMaterialTextureMaxCascade,
+                settings.SimpleDdgiFarMaxShadedLights,
+                prime);
+        }
+
+        private static ulong AddTransportRingSourceCalibrationValues(
+            ulong hash,
+            int fullRays,
+            int materialTextureMaxCascade,
+            int maxShadedLights,
+            ulong prime)
+        {
+            hash = AddLayoutFingerprintValue(hash, (ulong)(uint)fullRays, prime);
+            hash = AddLayoutFingerprintValue(hash, (ulong)(uint)(materialTextureMaxCascade + 1), prime);
+            return AddLayoutFingerprintValue(hash, (ulong)(uint)maxShadedLights, prime);
+        }
+
+        /// <summary>
+        /// Hashes knobs that change the V2 fixed-point operator or its retirement
+        /// policy but leave direct/sky/emissive source rays valid. Keeping this
+        /// separate from the source hash is what makes an albedo/relaxation
+        /// adjustment cheap enough for production live tuning.
+        /// </summary>
+        private static ulong CalculateTransportSolverCalibrationFingerprint(
+            GlobalIlluminationSettings settings)
+        {
+            const ulong offset = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            ulong hash = offset;
+
+            hash = AddLayoutFingerprintValue(
+                hash,
+                unchecked((uint)BitConverter.SingleToInt32Bits(settings.SimpleDdgiTransportSolverRelaxation)),
+                prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                unchecked((uint)BitConverter.SingleToInt32Bits(settings.SimpleDdgiTransportAlbedoClamp)),
+                prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                unchecked((uint)BitConverter.SingleToInt32Bits(settings.SimpleDdgiTransportResidualThreshold)),
+                prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                (ulong)(uint)settings.SimpleDdgiTransportMaximumSolverGenerations,
+                prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                (ulong)(uint)settings.SimpleDdgiStableMaintenanceUpdateCount,
+                prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                unchecked((uint)BitConverter.SingleToInt32Bits(settings.SimpleDdgiStableMaintenanceEmaThreshold)),
+                prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                settings.SimpleDdgiReducedBlendEnabled ? 1UL : 0UL,
+                prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                settings.SimpleDdgiAdaptiveHysteresisEnabled ? 1UL : 0UL,
+                prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                unchecked((uint)BitConverter.SingleToInt32Bits(settings.SimpleDdgiHysteresisChangeThreshold)),
+                prime);
+            return AddLayoutFingerprintValue(
+                hash,
+                unchecked((uint)BitConverter.SingleToInt32Bits(settings.SimpleDdgiHysteresisStepThreshold)),
+                prime);
         }
 
         private static ulong AddLayoutFingerprintValue(ulong hash, ulong value, ulong prime) =>
@@ -3173,8 +3957,23 @@ namespace Njulf.Rendering.Resources
             if (ringIndex < 0)
                 throw new ArgumentOutOfRangeException(nameof(ringIndex));
 
-            return settings.SimpleDdgiRingBaseSpacing *
+            float spacing = settings.SimpleDdgiRingBaseSpacing *
                 MathF.Pow(settings.SimpleDdgiRingSpacingMultiplier, ringIndex);
+            if (!settings.SimpleDdgiTransportV2Enabled || !settings.SimpleDdgiAutomaticProbeDensityEnabled)
+                return spacing;
+
+            // Keep the fixed probe count and all far-field coverage guarantees,
+            // but spend the close rings on real architectural resolution rather
+            // than asking scenes for handcrafted volumes. The mid ring eases back
+            // toward its nominal spacing and the far ring retains full coverage.
+            float nearDensity = settings.SimpleDdgiAutomaticProbeDensityScale;
+            float ringDensity = ringIndex switch
+            {
+                0 => nearDensity,
+                1 => MathF.Sqrt(nearDensity),
+                _ => 1.0f
+            };
+            return Math.Max(0.25f, spacing * ringDensity);
         }
 
         private VolumeCandidate CreateLegacyVolume(GlobalIlluminationSettings gi, BoundingBox sceneBounds, Vector3 cameraPosition)
@@ -3389,6 +4188,39 @@ namespace Njulf.Rendering.Resources
             bool preserveAtlasContents = CanPreserveAtlasContentsOnGrowth();
             EnsureBuffer(ref _irradianceAtlasBuffer, ref _irradianceAtlasBytes, irradianceBytes, "Simple DDGI Irradiance Atlas", invalidateAtlas: true, commandBuffer: commandBuffer, preserveContents: preserveAtlasContents);
             EnsureBuffer(ref _visibilityAtlasBuffer, ref _visibilityAtlasBytes, visibilityBytes, "Simple DDGI Visibility Atlas", invalidateAtlas: true, commandBuffer: commandBuffer, preserveContents: preserveAtlasContents);
+            // Keep these allocations concrete even when V1 is selected so the
+            // static render-graph declaration remains valid during a live V1/V2
+            // toggle. V1 never dispatches the transport pass or touches them.
+            ulong transportAtlasBytes = checked(Math.Max(
+                MinBufferSize,
+                (ulong)Math.Max(1, probeCount) * IrradianceTexelsPerProbe * IrradianceTexelsPerProbe * AtlasTexelStride));
+            int sourceCacheRayCapacity = Math.Max(1, raysPerProbe);
+            bool sourceCacheRayCapacityChanged =
+                _transportSourceCacheRayCapacity != sourceCacheRayCapacity;
+            ulong sourceCacheBytes = checked(Math.Max(
+                MinBufferSize,
+                (ulong)Math.Max(1, probeCount) * (ulong)sourceCacheRayCapacity * TransportRayCacheStride));
+            EnsureBuffer(
+                ref _transportIrradianceAtlasBuffer,
+                ref _transportIrradianceAtlasBytes,
+                transportAtlasBytes,
+                "Simple DDGI Transport Irradiance Target",
+                invalidateAtlas: false,
+                commandBuffer: commandBuffer,
+                preserveContents: false);
+            bool sourceCacheReallocated = EnsureBuffer(
+                ref _transportSourceCacheBuffer,
+                ref _transportSourceCacheBytes,
+                sourceCacheBytes,
+                "Simple DDGI Transport Source Cache",
+                invalidateAtlas: false,
+                commandBuffer: commandBuffer,
+                preserveContents: false);
+            if (sourceCacheReallocated || sourceCacheRayCapacityChanged)
+            {
+                InvalidateTransportSourceCacheMetadata();
+            }
+            _transportSourceCacheRayCapacity = sourceCacheRayCapacity;
             EnsureBuffer(ref _rayResultScratchBuffer, ref _rayScratchBytes, rayBytes, "Simple DDGI Ray Scratch", invalidateAtlas: false, commandBuffer: commandBuffer, preserveContents: false);
             if (EnsureBuffer(ref _probeStateBuffer, ref _probeStateBytes, probeStateBytes, "Simple DDGI Probe State", invalidateAtlas: false, commandBuffer: commandBuffer, preserveContents: false))
                 _probeStateUploadRequired = true;
@@ -3638,10 +4470,12 @@ namespace Njulf.Rendering.Resources
                 return;
 
             _atlasClearedThisFrame = true;
-            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[2];
+            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[4];
             uint barrierCount = 0;
             FillBufferAndAddBarrier(_irradianceAtlasBuffer, _irradianceAtlasBytes, barriers, ref barrierCount, commandBuffer);
+            FillBufferAndAddBarrier(_transportIrradianceAtlasBuffer, _transportIrradianceAtlasBytes, barriers, ref barrierCount, commandBuffer);
             FillBufferAndAddBarrier(_visibilityAtlasBuffer, _visibilityAtlasBytes, barriers, ref barrierCount, commandBuffer);
+            FillBufferAndAddBarrier(_transportSourceCacheBuffer, _transportSourceCacheBytes, barriers, ref barrierCount, commandBuffer);
             if (barrierCount > 0)
             {
                 var dependencyInfo = new DependencyInfo
@@ -3655,6 +4489,7 @@ namespace Njulf.Rendering.Resources
 
             _atlasClearRequired = false;
             _atlasFresh = true;
+            InvalidateTransportSourceCacheMetadata();
             _sampledAtlas?.MarkFullSyncRequired();
             TriggerAtlasRecoveryBoost();
         }
@@ -3667,6 +4502,25 @@ namespace Njulf.Rendering.Resources
 
             _lightingDirtyFrames = Math.Max(_lightingDirtyFrames, gi.SimpleDdgiLightingDirtyFrameCount);
             _activeDirtyReasonFlags |= 1u << 2;
+        }
+
+        private void InvalidateTransportSourceCacheMetadata(bool recordInvalidation = true)
+        {
+            if (_probeSourceLightingGenerations.Length > 0)
+                Array.Clear(_probeSourceLightingGenerations);
+            if (_probeLastSourceRefreshFrames.Length > 0)
+                Array.Clear(_probeLastSourceRefreshFrames);
+            if (_probeSourceRayCounts.Length > 0)
+                Array.Clear(_probeSourceRayCounts);
+            if (_probeTransportGenerationCounts.Length > 0)
+                Array.Clear(_probeTransportGenerationCounts);
+            BeginTransportGlobalConvergence();
+            if (recordInvalidation)
+            {
+                _sourceCacheInvalidationCount = SaturatingAdd(
+                    _sourceCacheInvalidationCount,
+                    (ulong)Math.Max(_probeCount, 0));
+            }
         }
 
         private unsafe void FillBufferAndAddBarrier(BufferHandle handle, ulong size, BufferMemoryBarrier2* barriers, ref uint barrierCount, CommandBuffer commandBuffer)
@@ -3956,6 +4810,12 @@ namespace Njulf.Rendering.Resources
             return next == 0u ? 1u : next;
         }
 
+        private static uint AdvanceSourceLightingGeneration(uint generation)
+        {
+            uint next = generation + 1u;
+            return next == 0u ? 1u : next;
+        }
+
         private static uint PackProbeStateFlags(uint flags, uint generation) =>
             (flags & ~((uint)ProbeStateGenerationValueMask << ProbeStateGenerationShift)) |
             (NormalizeProbeGeneration(generation) << ProbeStateGenerationShift);
@@ -4035,7 +4895,17 @@ namespace Njulf.Rendering.Resources
                     settings.SimpleDdgiMaximumWorldBiasMeters,
                     settings.SimpleDdgiArchitecturalThicknessMeters,
                     0.0f,
-                    0.0f)
+                    0.0f),
+                TransportAndAtlasIndices = new Vector4(
+                    BitConverter.UInt32BitsToSingle((uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),
+                    BitConverter.UInt32BitsToSingle((uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),
+                    0.0f,
+                    BitConverter.UInt32BitsToSingle(_transportGeneration)),
+                TransportControls = new Vector4(
+                    settings.SimpleDdgiTransportSolverRelaxation,
+                    settings.SimpleDdgiTransportAlbedoClamp,
+                    settings.SimpleDdgiTransportResidualThreshold,
+                    settings.SimpleDdgiTransportMaximumSolverGenerations)
             };
         }
 
@@ -4058,6 +4928,8 @@ namespace Njulf.Rendering.Resources
                 flags |= 1u << 5;
             if (_lightingDirtyFrames > 0)
                 flags |= 1u << 10;
+            if (settings.SimpleDdgiTransportV2Enabled)
+                flags |= 1u << 11;
             if (farFieldCoverageAvailable && settings.FarFieldSkyVisibilityEnabled)
                 flags |= 1u << 6;
             if (farFieldCoverageAvailable && settings.FarFieldSunShadowEnabled)
@@ -4279,6 +5151,8 @@ namespace Njulf.Rendering.Resources
                 bool materiallyRelocated = relocationDelta > ResolveProbeSpacing(probeIndex) * 0.05f;
                 bool relocationRetracePending =
                     (state.Flags & ProbeStateRelocationPendingFlag) != 0u;
+                bool sourceCacheInvalid =
+                    (state.Flags & ProbeStateSourceCacheInvalidFlag) != 0u;
 
                 // A relocation pass can commit a new probe origin only after the
                 // trace for that transaction has already run. Mirror the GPU's
@@ -4292,6 +5166,7 @@ namespace Njulf.Rendering.Resources
 
                 if (inactive ||
                     relocationRetracePending ||
+                    sourceCacheInvalid ||
                     materiallyRelocated ||
                     luminanceChangeEma > _settings.GlobalIllumination.SimpleDdgiStableMaintenanceEmaThreshold)
                 {
@@ -4303,6 +5178,15 @@ namespace Njulf.Rendering.Resources
                 }
                 if (completedThisReadback)
                     RecordDirtyConvergenceIfStable(probeIndex, _frameIndex);
+                if (completedThisReadback && sourceCacheInvalid)
+                {
+                    // The GPU kept this transaction safe by falling back to
+                    // source tracing, but a partial solver queue is not a valid
+                    // long-term source cache. Requeue a complete source refresh
+                    // without discarding a valid physical relocation or published
+                    // irradiance generation.
+                    MarkProbeSourceCacheStale(probeIndex);
+                }
                 if (inactive)
                     inactiveCount++;
                 else
@@ -4420,6 +5304,10 @@ namespace Njulf.Rendering.Resources
                 _bufferManager.DestroyBuffer(_paramsBuffer);
             if (_irradianceAtlasBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_irradianceAtlasBuffer);
+            if (_transportIrradianceAtlasBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_transportIrradianceAtlasBuffer);
+            if (_transportSourceCacheBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_transportSourceCacheBuffer);
             if (_visibilityAtlasBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_visibilityAtlasBuffer);
             if (_rayResultScratchBuffer.IsValid)

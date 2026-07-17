@@ -46,6 +46,7 @@ namespace Njulf.Rendering.Data
         ulong SimpleRaysPerFrame,
         ulong SimpleAtlasBytes,
         long SimpleGpuTraceMicroseconds,
+        long SimpleGpuTransportMicroseconds,
         long SimpleGpuBlendMicroseconds)
     {
         public static DdgiRuntimeSnapshot Empty { get; } = new(
@@ -80,6 +81,7 @@ namespace Njulf.Rendering.Data
             SimpleRaysPerFrame: 0UL,
             SimpleAtlasBytes: 0UL,
             SimpleGpuTraceMicroseconds: 0,
+            SimpleGpuTransportMicroseconds: 0,
             SimpleGpuBlendMicroseconds: 0);
 
     }
@@ -175,7 +177,13 @@ namespace Njulf.Rendering.Data
         uint BlendEnergyLowConfidenceCount,
         uint BlendEnergyNonzeroIrradianceCount,
         uint BlendEnergyNonFiniteIrradianceCount,
-        uint BlendEnergyFireflySuppressedCount)
+        uint BlendEnergyFireflySuppressedCount,
+        uint SimpleDdgiTransportEnergySampleCount,
+        uint SimpleDdgiTransportSourceCacheHitCount,
+        uint SimpleDdgiTransportSourceCacheMissCount,
+        float SimpleDdgiTransportBounceLuminanceAverage,
+        float SimpleDdgiTransportSourceLuminanceAverage,
+        float SimpleDdgiTransportTotalLuminanceAverage)
     {
         public static DdgiForwardEstimateCounters Empty { get; } = default;
 

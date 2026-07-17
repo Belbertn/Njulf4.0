@@ -42,6 +42,8 @@ namespace Njulf.Rendering.Pipeline
         FarFieldPageTable,
         SimpleDdgiParameters,
         SimpleDdgiIrradianceAtlas,
+        SimpleDdgiTransportAtlas,
+        SimpleDdgiTransportSourceCache,
         SimpleDdgiVisibilityAtlas,
         SimpleDdgiRayScratch,
         SimpleDdgiProbeState,
