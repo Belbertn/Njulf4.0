@@ -589,6 +589,17 @@ namespace Njulf.Rendering.Resources
 
             for (int probeIndex = 0; probeIndex < _probeCount; probeIndex++)
             {
+                // Inactive probes contribute no receiver-visible interpolation
+                // mass. They retain the bounded classification retry path, but
+                // an embedded/relocating tail must not hold every active probe in
+                // field-wide full-ray warmup indefinitely.
+                if (!ShouldParticipateInTransportConvergence(
+                        (uint)probeIndex < (uint)_probeInactive.Length &&
+                        _probeInactive[probeIndex] != 0))
+                {
+                    continue;
+                }
+
                 if (NeedsSourceRefresh(probeIndex))
                 {
                     sourceStaleProbeCount++;
@@ -1229,8 +1240,8 @@ namespace Njulf.Rendering.Resources
                 AtlasTexelsAndRayCount = new Vector4(IrradianceTexelsPerProbe, VisibilityTexelsPerProbe, _raysPerProbe, gi.FarFieldClipmapResolution),
                 HysteresisFrameAndFlags = new Vector4(
                     hysteresis,
-                    BitConverter.UInt32BitsToSingle(_frameIndex),
-                    BitConverter.UInt32BitsToSingle(BuildFlags(
+                    PackHeaderWord(_frameIndex),
+                    PackHeaderWord(BuildFlags(
                         gi,
                         enabled,
                         structuredGatherAvailable,
@@ -1258,14 +1269,14 @@ namespace Njulf.Rendering.Resources
                     0.0f,
                     0.0f),
                 TransportAndAtlasIndices = new Vector4(
-                    BitConverter.UInt32BitsToSingle((uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),
-                    BitConverter.UInt32BitsToSingle(gi.SimpleDdgiTransportV2Enabled
+                    PackHeaderWord((uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),
+                    PackHeaderWord(gi.SimpleDdgiTransportV2Enabled
                         ? (uint)BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer
                         : (uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),
-                    BitConverter.UInt32BitsToSingle(gi.SimpleDdgiTransportV2Enabled
+                    PackHeaderWord(gi.SimpleDdgiTransportV2Enabled
                         ? (uint)BindlessIndex.SimpleDdgiTransportSourceCacheBuffer
                         : 0u),
-                    BitConverter.UInt32BitsToSingle(_transportGeneration)),
+                    PackHeaderWord(_transportGeneration)),
                 TransportControls = new Vector4(
                     gi.SimpleDdgiTransportSolverRelaxation,
                     gi.SimpleDdgiTransportAlbedoClamp,
@@ -1980,20 +1991,69 @@ namespace Njulf.Rendering.Resources
             int minimumSolverGenerations = Math.Max(
                 1,
                 _settings.GlobalIllumination.SimpleDdgiTransportMaximumSolverGenerations);
+            int participatingProbeCount = 0;
+            int sourceRepairProbeCount = 0;
+            int pendingSolverProbeCount = 0;
             for (int probeIndex = 0; probeIndex < _probeCount; probeIndex++)
             {
-                if (NeedsSourceRefresh(probeIndex) ||
-                    (uint)probeIndex >= (uint)_probeTransportGenerationCounts.Length ||
-                    _probeTransportGenerationCounts[probeIndex] < minimumSolverGenerations)
+                bool inactive = (uint)probeIndex < (uint)_probeInactive.Length &&
+                    _probeInactive[probeIndex] != 0;
+                if (!ShouldParticipateInTransportConvergence(inactive))
+                    continue;
+
+                participatingProbeCount++;
+                if (NeedsSourceRefresh(probeIndex))
                 {
-                    return;
+                    sourceRepairProbeCount++;
+                    continue;
                 }
+
+                int completedSolverGenerations = (uint)probeIndex < (uint)_probeTransportGenerationCounts.Length
+                    ? _probeTransportGenerationCounts[probeIndex]
+                    : 0;
+                if (completedSolverGenerations < minimumSolverGenerations)
+                    pendingSolverProbeCount++;
             }
 
-            // All source terms are current and every physical probe has
-            // contributed the requested number of Jacobi generations. Local
-            // residual/stability criteria can now retire quiet probes safely.
+            if (!CanCompleteTransportGlobalConvergence(
+                    participatingProbeCount,
+                    sourceRepairProbeCount,
+                    pendingSolverProbeCount))
+            {
+                return;
+            }
+
+            // All receiver-participating source terms are current and have
+            // contributed the requested number of Jacobi generations, apart from
+            // a bounded local source-repair tail. Inactive probes remain on their
+            // reactivation cadence and source-repair probes stay queued, while
+            // local residual/stability criteria can now retire quiet active probes.
             _transportGlobalConvergencePending = false;
+        }
+
+        internal static bool ShouldParticipateInTransportConvergence(bool inactive) =>
+            !inactive;
+
+        internal static int ResolveTransportGlobalConvergenceSourceRepairAllowance(
+            int participatingProbeCount)
+        {
+            // A field with fewer than 1,000 active probes must be completely
+            // source-ready. Larger clipmaps may leave at most 0.1% (and never
+            // more than 32 slots) on the local repair path. This prevents a
+            // handful of continuously relocating probes from pinning the other
+            // 99.9% in expensive full-ray warmup without hiding a broad outage.
+            return Math.Min(32, Math.Max(0, participatingProbeCount) / 1_000);
+        }
+
+        internal static bool CanCompleteTransportGlobalConvergence(
+            int participatingProbeCount,
+            int sourceRepairProbeCount,
+            int pendingSolverProbeCount)
+        {
+            int participants = Math.Max(0, participatingProbeCount);
+            int sourceRepair = Math.Clamp(sourceRepairProbeCount, 0, participants);
+            return Math.Max(0, pendingSolverProbeCount) == 0 &&
+                sourceRepair <= ResolveTransportGlobalConvergenceSourceRepairAllowance(participants);
         }
 
         private static bool RequiresGlobalInvalidation(IReadOnlyList<DdgiDirtyRegion>? dirtyRegions)
@@ -4882,8 +4942,8 @@ namespace Njulf.Rendering.Resources
                 AtlasTexelsAndRayCount = new Vector4(IrradianceTexelsPerProbe, VisibilityTexelsPerProbe, Math.Max(settings.SimpleDdgiRaysPerProbe, 1), settings.FarFieldClipmapResolution),
                 HysteresisFrameAndFlags = new Vector4(
                     0.0f,
-                    BitConverter.UInt32BitsToSingle(_frameIndex),
-                    BitConverter.UInt32BitsToSingle(0u),
+                    PackHeaderWord(_frameIndex),
+                    PackHeaderWord(0u),
                     settings.FarFieldStartDistance),
                 EnvironmentRadianceAndIntensity = Vector4.Zero,
                 ProbeUpdateRange = Vector4.Zero,
@@ -4897,10 +4957,10 @@ namespace Njulf.Rendering.Resources
                     0.0f,
                     0.0f),
                 TransportAndAtlasIndices = new Vector4(
-                    BitConverter.UInt32BitsToSingle((uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),
-                    BitConverter.UInt32BitsToSingle((uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),
+                    PackHeaderWord((uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),
+                    PackHeaderWord((uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),
                     0.0f,
-                    BitConverter.UInt32BitsToSingle(_transportGeneration)),
+                    PackHeaderWord(_transportGeneration)),
                 TransportControls = new Vector4(
                     settings.SimpleDdgiTransportSolverRelaxation,
                     settings.SimpleDdgiTransportAlbedoClamp,
@@ -4908,6 +4968,8 @@ namespace Njulf.Rendering.Resources
                     settings.SimpleDdgiTransportMaximumSolverGenerations)
             };
         }
+
+        internal static float PackHeaderWord(uint value) => BitConverter.UInt32BitsToSingle(value);
 
         private uint BuildFlags(
             GlobalIlluminationSettings settings,

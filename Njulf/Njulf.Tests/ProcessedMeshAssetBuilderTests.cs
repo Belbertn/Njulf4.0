@@ -35,20 +35,18 @@ public sealed class ProcessedMeshAssetBuilderTests
         });
 
         ProcessedSubMeshAsset first = asset.SubMeshes[0];
+        AssertThreeLodRangesPartitionMeshlets(first);
         Assert.Multiple(() =>
         {
             Assert.That(first.DrawRanges, Has.Count.EqualTo(1));
             Assert.That(first.DrawRanges[0].MaterialSlot, Is.EqualTo(0));
             Assert.That(first.DrawRanges[0].IndexCount, Is.EqualTo(3));
-            Assert.That(first.LodRanges, Has.Count.EqualTo(1));
-            Assert.That(first.LodRanges[0].Level, Is.EqualTo(0));
-            Assert.That(first.LodRanges[0].MeshletCount, Is.EqualTo(first.Meshlets.Length));
-            Assert.That(first.MeshletTriangles, Has.Length.EqualTo(first.Indices.Length));
+            Assert.That(first.MeshletTriangles, Has.Length.EqualTo(first.Indices.Length * first.LodRanges.Count));
         });
     }
 
     [Test]
-    public void Build_ProducesSameMeshletCountsAsAssetRuntimeMeshletBuilder()
+    public void Build_LodZeroMatchesAssetRuntimeMeshletBuilder()
     {
         ModelMesh mesh = CreateTwoSubMeshModel();
         var meshletBuilder = new MeshletBuilder();
@@ -67,8 +65,20 @@ public sealed class ProcessedMeshAssetBuilderTests
                 subMesh.TexCoords,
                 subMesh.Name);
 
-            Assert.That(asset.SubMeshes[i].Meshlets, Has.Length.EqualTo(runtimeMeshlets.Meshlets.Length));
-            Assert.That(asset.SubMeshes[i].MeshletTriangles, Has.Length.EqualTo(runtimeMeshlets.MeshletTriangles.Length));
+            ProcessedSubMeshAsset processed = asset.SubMeshes[i];
+            ProcessedMeshLodRange lodZero = processed.LodRanges[0];
+            Assert.Multiple(() =>
+            {
+                Assert.That(lodZero.Level, Is.EqualTo(0));
+                Assert.That(lodZero.FirstMeshlet, Is.EqualTo(0));
+                Assert.That(lodZero.MeshletCount, Is.EqualTo(runtimeMeshlets.Meshlets.Length));
+                Assert.That(
+                    processed.MeshletVertices.Take(runtimeMeshlets.MeshletVertices.Length),
+                    Is.EqualTo(runtimeMeshlets.MeshletVertices));
+                Assert.That(
+                    processed.MeshletTriangles.Take(runtimeMeshlets.MeshletTriangles.Length),
+                    Is.EqualTo(runtimeMeshlets.MeshletTriangles));
+            });
         }
     }
 
@@ -88,8 +98,10 @@ public sealed class ProcessedMeshAssetBuilderTests
             Assert.That(asset.TotalTriangleCount, Is.EqualTo(imported.SubMeshes.Sum(subMesh => subMesh.Indices.Length / 3)));
             Assert.That(asset.TotalMeshletCount, Is.EqualTo(asset.SubMeshes.Sum(subMesh => subMesh.Meshlets.Length)));
             Assert.That(asset.SubMeshes.Select(subMesh => subMesh.MaterialSlot), Is.EquivalentTo(imported.SubMeshes.Select(subMesh => subMesh.MaterialIndex)));
-            Assert.That(asset.SubMeshes, Has.All.Matches<ProcessedSubMeshAsset>(subMesh => subMesh.LodRanges.Count == 1));
         });
+
+        foreach (ProcessedSubMeshAsset subMesh in asset.SubMeshes)
+            AssertThreeLodRangesPartitionMeshlets(subMesh);
     }
 
     [Test]
@@ -116,6 +128,25 @@ public sealed class ProcessedMeshAssetBuilderTests
         mesh.SubMeshes.Add(CreateTriangleSubMesh("left", 0, 0f, includeColor: true));
         mesh.SubMeshes.Add(CreateTriangleSubMesh("right", 1, 2f, includeColor: false));
         return mesh;
+    }
+
+    private static void AssertThreeLodRangesPartitionMeshlets(ProcessedSubMeshAsset subMesh)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(subMesh.LodRanges, Has.Count.EqualTo(3), subMesh.Name);
+            Assert.That(subMesh.LodRanges.Select(range => range.Level), Is.EqualTo(new[] { 0, 1, 2 }), subMesh.Name);
+
+            int nextFirstMeshlet = 0;
+            foreach (ProcessedMeshLodRange range in subMesh.LodRanges)
+            {
+                Assert.That(range.FirstMeshlet, Is.EqualTo(nextFirstMeshlet), $"{subMesh.Name} LOD{range.Level} start");
+                Assert.That(range.MeshletCount, Is.GreaterThan(0), $"{subMesh.Name} LOD{range.Level} count");
+                nextFirstMeshlet += range.MeshletCount;
+            }
+
+            Assert.That(nextFirstMeshlet, Is.EqualTo(subMesh.Meshlets.Length), subMesh.Name);
+        });
     }
 
     private static ModelSubMesh CreateTriangleSubMesh(string name, int materialIndex, float xOffset, bool includeColor)

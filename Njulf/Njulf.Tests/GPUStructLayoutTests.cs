@@ -163,7 +163,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUForwardPushConstants>(), Is.EqualTo(256));
                 Assert.That(Marshal.SizeOf<GPUMotionVectorPushConstants>(), Is.EqualTo(160));
                 Assert.That(Marshal.SizeOf<GPULightCullPushConstants>(), Is.EqualTo(208));
-                Assert.That(Marshal.SizeOf<GPUShadowData>(), Is.EqualTo(304));
+                Assert.That(Marshal.SizeOf<GPUShadowData>(), Is.EqualTo(320));
                 Assert.That(Marshal.SizeOf<GPUSpotShadow>(), Is.EqualTo(112));
                 Assert.That(Marshal.SizeOf<GPUPointShadow>(), Is.EqualTo(432));
                 Assert.That(Marshal.SizeOf<GPULocalLightShadowIndex>(), Is.EqualTo(16));
@@ -242,6 +242,8 @@ namespace Njulf.Tests
                 Assert.That(GPUForwardPushConstants.PackDiagnosticFlags(true) & 1u, Is.EqualTo(1u));
                 Assert.That(GPUForwardPushConstants.PackDiagnosticFlags(false, true) & 2u, Is.EqualTo(2u));
                 Assert.That(GPUForwardPushConstants.PackDiagnosticFlags(true, true), Is.EqualTo(3u));
+                Assert.That(GPUForwardPushConstants.PackDiagnosticFlags(false, false, true) & 4u, Is.EqualTo(4u));
+                Assert.That(GPUForwardPushConstants.PackDiagnosticFlags(true, true, true), Is.EqualTo(7u));
             });
         }
 
@@ -630,6 +632,7 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUShadowData>(nameof(GPUShadowData.CascadeSplits), "OFFSET_GPU_SHADOW_DATA_CASCADE_SPLITS");
                 AssertFieldOffset<GPUShadowData>(nameof(GPUShadowData.Settings), "OFFSET_GPU_SHADOW_DATA_SETTINGS");
                 AssertFieldOffset<GPUShadowData>(nameof(GPUShadowData.Indices), "OFFSET_GPU_SHADOW_DATA_INDICES");
+                AssertFieldOffset<GPUShadowData>(nameof(GPUShadowData.CascadeTransitionData), "OFFSET_GPU_SHADOW_DATA_CASCADE_TRANSITION_DATA");
 
                 AssertFieldOffset<GPUSpotShadow>(nameof(GPUSpotShadow.LightViewProjection), "OFFSET_GPU_SPOT_SHADOW_LIGHT_VIEW_PROJECTION");
                 AssertFieldOffset<GPUSpotShadow>(nameof(GPUSpotShadow.AtlasScaleOffset), "OFFSET_GPU_SPOT_SHADOW_ATLAS_SCALE_OFFSET");
@@ -716,6 +719,9 @@ namespace Njulf.Tests
                 Assert.That(ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_DYNAMIC_SHADOW_BASE"), Is.EqualTo(dynamicBase));
                 Assert.That(ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_STRIDE"), Is.EqualTo(stride));
                 Assert.That(ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_EMITTED_OFFSET"), Is.EqualTo(emittedOffset));
+                Assert.That(
+                    ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_LOD_FALLBACK"),
+                    Is.EqualTo(FieldWordOffset<GPUSceneSubmissionCounters>(nameof(GPUSceneSubmissionCounters.DirectionalShadowLodFallbackCount))));
 
                 Assert.That(ReadShaderUIntConstant("shadow_depth.task", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_STATIC_SHADOW_BASE"), Is.EqualTo(staticBase));
                 Assert.That(ReadShaderUIntConstant("shadow_depth.task", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_DYNAMIC_SHADOW_BASE"), Is.EqualTo(dynamicBase));

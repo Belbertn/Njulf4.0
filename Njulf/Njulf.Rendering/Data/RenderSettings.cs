@@ -37,6 +37,7 @@ namespace Njulf.Rendering.Data
         private uint _directionalShadowMapSize = 2048;
         private int _directionalCascadeCount = 2;
         private float _maxShadowDistance = 80f;
+        private float _directionalCascadeBlendFraction = 0.12f;
         private float _normalBias = 0.03f;
         private float _slopeScaledDepthBias = 1.5f;
         private float _constantDepthBias = 0.0005f;
@@ -75,6 +76,17 @@ namespace Njulf.Rendering.Data
         {
             get => _maxShadowDistance;
             set => _maxShadowDistance = Clamp(value, 1f, 1000f);
+        }
+
+        /// <summary>
+        /// Fraction of the smaller neighbouring cascade span used to overlap and cross-fade
+        /// directional-shadow cascades.  The overlap keeps both receiver projections valid at
+        /// a split, rather than treating the boundary as a hard ownership change.
+        /// </summary>
+        public float DirectionalCascadeBlendFraction
+        {
+            get => _directionalCascadeBlendFraction;
+            set => _directionalCascadeBlendFraction = Clamp(value, 0.02f, 0.30f);
         }
 
         public float NormalBias
@@ -813,7 +825,10 @@ namespace Njulf.Rendering.Data
         public bool GpuShadowCompactionEnabled { get; set; } = true;
 
         /// <summary>
-        /// Additional LOD levels selected for GPU-compacted directional-shadow draws.
+        /// Additional requested LOD levels for GPU-compacted directional-shadow draws.
+        /// The current command stream is indexed by LOD0 meshlets, so directional shadows
+        /// conservatively retain LOD0 whenever a lower LOD lacks a topology-safe mapping.
+        /// The requested lower-LOD count remains visible in directional-shadow diagnostics.
         /// </summary>
         public int GpuShadowLodBias
         {
@@ -1708,6 +1723,8 @@ namespace Njulf.Rendering.Data
         public bool DdgiExhaustiveGatherFallbackEnabled { get; set; } = true;
         // Compatibility setting only; the runtime always uses the production radiance/irradiance convention.
         public bool DdgiRawAtlasRadianceConventionEnabled { get; set; } = true;
+        // Retained for settings-file compatibility. Production Forward+ is a strict
+        // depth-prepass consumer and intentionally ignores this legacy override.
         public bool DdgiAllowForwardWithoutDepthPrePass { get; set; } = true;
         public bool DdgiDebugForceProbeActive { get; set; }
         public bool DdgiThinWallPolicyEnabled { get; set; } = true;

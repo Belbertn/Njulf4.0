@@ -52,6 +52,9 @@ public sealed class DirectionalShadowDataBuilderTests
             Assert.That(data.Indices.W, Is.EqualTo(2f));
             Assert.That(data.Settings.X, Is.EqualTo(0.65f));
             Assert.That(data.Settings.Z, Is.EqualTo(1024f));
+            Assert.That(data.CascadeTransitionData.X, Is.EqualTo(settings.DirectionalCascadeBlendFraction));
+            Assert.That(data.CascadeTransitionData.Y, Is.EqualTo(camera.NearPlane));
+            Assert.That(data.CascadeTransitionData.Z, Is.EqualTo(settings.MaxShadowDistance));
         });
     }
 
@@ -79,6 +82,7 @@ public sealed class DirectionalShadowDataBuilderTests
             DirectionalShadowMapSize = 300,
             DirectionalCascadeCount = 99,
             MaxShadowDistance = -1f,
+            DirectionalCascadeBlendFraction = 2f,
             NormalBias = 2f,
             SlopeScaledDepthBias = 99f,
             ConstantDepthBias = 1f,
@@ -90,6 +94,7 @@ public sealed class DirectionalShadowDataBuilderTests
             Assert.That(settings.DirectionalShadowMapSize, Is.EqualTo(512));
             Assert.That(settings.DirectionalCascadeCount, Is.EqualTo(ShadowSettings.MaxDirectionalCascades));
             Assert.That(settings.MaxShadowDistance, Is.EqualTo(1f));
+            Assert.That(settings.DirectionalCascadeBlendFraction, Is.EqualTo(0.30f));
             Assert.That(settings.NormalBias, Is.EqualTo(1f));
             Assert.That(settings.SlopeScaledDepthBias, Is.EqualTo(16f));
             Assert.That(settings.ConstantDepthBias, Is.EqualTo(0.1f));

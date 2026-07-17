@@ -69,6 +69,7 @@ These live directly on `VulkanRenderer`, not inside `RenderSettings`.
 | `DirectionalShadowMapSize` | Directional shadow map resolution. |
 | `DirectionalCascadeCount` | Number of directional cascades. |
 | `MaxShadowDistance` | Maximum directional shadow distance. |
+| `DirectionalCascadeBlendFraction` | Fraction of the smaller neighbouring cascade span used to overlap and smoothly hand off directional shadow cascades. Default `0.12`; clamped to `[0.02, 0.30]`. |
 | `NormalBias` | Directional normal bias. |
 | `SlopeScaledDepthBias` | Directional slope-scaled depth bias. |
 | `ConstantDepthBias` | Directional constant depth bias. |
@@ -573,7 +574,7 @@ Foliage debug views:
 | `GpuLod1DistanceRatio` | Distance-to-bounding-radius threshold for LOD0 → LOD1. Defaults to `4.0`; clamped to `[1, 64]`. |
 | `GpuLod2DistanceRatio` | Distance-to-bounding-radius threshold for LOD1 → LOD2. Defaults to `10.0`; clamped to `[GpuLod1DistanceRatio, 128]`. |
 | `GpuShadowCompactionEnabled` | Enables GPU shadow compaction. |
-| `GpuShadowLodBias` | Additional LOD levels selected for GPU-compacted directional-shadow draws. Defaults to `1`; clamped to `[0, 2]`. |
+| `GpuShadowLodBias` | Additional requested LOD levels for GPU-compacted directional-shadow draws. The current per-meshlet stream preserves LOD0 whenever a lower-LOD mapping cannot be proven coverage-safe; those conservative fallbacks are reported in directional-shadow diagnostics. Defaults to `1`; clamped to `[0, 2]`. |
 | `ValidationCompareCpuGpuLists` | Compares CPU/GPU lists for validation. |
 
 Meshes without authored LOD1/LOD2 meshlet ranges safely remain on their available base range; changing these thresholds never fabricates simplified geometry. Set the ratios to `12.0` and `32.0` to reproduce the prior threshold behavior.

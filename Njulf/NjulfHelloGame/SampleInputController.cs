@@ -2130,6 +2130,7 @@ internal sealed class SampleInputController
             $"gpuDepthOverflow={diagnostics.SceneSubmissionGpuDepthOverflowCount}, " +
             $"gpuDirShadow={diagnostics.SceneSubmissionGpuCompactedDirectionalShadowMeshletCount}/{diagnostics.SceneSubmissionGpuDirectionalShadowCandidateCount}, " +
             $"gpuDirShadowOverflow={diagnostics.SceneSubmissionGpuDirectionalShadowOverflowCount}, " +
+            $"gpuDirShadowLod0Fallback={diagnostics.SceneSubmissionGpuDirectionalShadowLodFallbackCount}, " +
             $"gpuDirShadowCascades='{diagnostics.SceneSubmissionGpuDirectionalShadowCascadeSummary}', " +
             $"localShadowGpuJustified={diagnostics.SceneSubmissionLocalShadowGpuCompactionJustified}, " +
             $"localShadowTests={diagnostics.SceneSubmissionSpotShadowMeshletLightTests}/{diagnostics.SceneSubmissionPointShadowMeshletFaceTests}, " +

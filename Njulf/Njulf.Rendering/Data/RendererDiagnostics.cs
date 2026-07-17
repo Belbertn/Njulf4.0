@@ -580,7 +580,9 @@ namespace Njulf.Rendering.Data
         public int SceneSubmissionGpuDirectionalShadowCandidateCount { get; init; }
         public int SceneSubmissionGpuCompactedDirectionalShadowMeshletCount { get; init; }
         public int SceneSubmissionGpuDirectionalShadowOverflowCount { get; init; }
+        public int SceneSubmissionGpuDirectionalShadowLodFallbackCount { get; init; }
         public string SceneSubmissionGpuDirectionalShadowCascadeSummary { get; init; } = string.Empty;
+        public DirectionalShadowRuntimeDiagnostics DirectionalShadowRuntime { get; init; } = DirectionalShadowRuntimeDiagnostics.Empty;
         public int SceneSubmissionLocalShadowGpuCompactionJustified { get; init; }
         public int SceneSubmissionSpotShadowGpuCompactionJustified { get; init; }
         public int SceneSubmissionPointShadowGpuCompactionJustified { get; init; }

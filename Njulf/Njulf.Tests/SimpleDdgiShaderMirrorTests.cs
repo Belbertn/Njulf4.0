@@ -838,7 +838,7 @@ namespace Njulf.Tests
                     "if (_controlHeaderInitialized && !_wasSimpleDdgiEnabled)"));
                 Assert.That(simpleManager, Does.Contain("DisableCore(_settings.GlobalIllumination"));
                 Assert.That(simpleManager, Does.Contain("_wasSimpleDdgiEnabled = false;"));
-                Assert.That(simpleManager, Does.Contain("BitConverter.UInt32BitsToSingle(0u)"));
+                Assert.That(simpleManager, Does.Contain("PackHeaderWord(0u)"));
                 Assert.That(legacyManager, Does.Contain(
                     "if (_controlHeaderInitialized && !_wasDdgiEnabled)"));
                 Assert.That(legacyManager, Does.Contain(
@@ -960,7 +960,8 @@ namespace Njulf.Tests
                 Assert.That(trace, Does.Contain("uint sourceRayCount = SimpleDdgiUpdateSourceRayCount(update, params);"));
                 Assert.That(trace, Does.Contain("uint sourceRayOrdinal = min("));
                 Assert.That(trace, Does.Contain("uint directionRayIndex = sourceRayOrdinal * params.raysPerProbe / sourceRayCount;"));
-                Assert.That(transport, Does.Contain("vec3 bounceRadiance = bouncedIrradiance * albedo / SIMPLE_DDGI_PI;"));
+                Assert.That(transport, Does.Contain("vec3 bounceRadiance = vec3(0.0);"));
+                Assert.That(transport, Does.Contain("bounceRadiance = bouncedIrradiance * albedo / SIMPLE_DDGI_PI;"));
                 Assert.That(transport, Does.Contain("ReadSimpleDdgiTransportRayCache("));
                 Assert.That(transport, Does.Contain("SampleSimpleDdgiUnifiedIrradiance("));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID"));
@@ -1100,7 +1101,7 @@ namespace Njulf.Tests
                 Assert.That(simplePasses, Does.Contain("sceneData.CpuSimpleDdgiRecordMicroseconds"));
                 Assert.That(simpleManager, Does.Contain("SynchronizeSampledAtlasIfRequired(commandBuffer);"));
                 Assert.That(simpleManager, Does.Contain("GpuBufferUploader.UploadRunsToBuffer("));
-                Assert.That(simpleManager, Does.Contain("BitConverter.UInt32BitsToSingle(_frameIndex)"));
+                Assert.That(simpleManager, Does.Contain("PackHeaderWord(_frameIndex)"));
                 Assert.That(simpleManager, Does.Contain("Math.Clamp(quality.MaxShadedLights, 0, 62) + 1"));
                 Assert.That(simpleManager, Does.Contain("public void SynchronizeSampledAtlasesAfterBlend(CommandBuffer commandBuffer)"));
                 Assert.That(simpleManager, Does.Contain("LastSampledAtlasSynchronizationMicroseconds"));

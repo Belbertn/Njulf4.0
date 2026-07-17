@@ -132,41 +132,24 @@ namespace Njulf.Tests
             });
         }
 
-        [Test]
-        public void ShouldApplyGlobalIllumination_AllowsDdgiWithoutDepthPrePassWhenConfigured()
+        [TestCase(true)]
+        [TestCase(false)]
+        public void ShouldApplyGlobalIllumination_RequiresDepthPrePassRegardlessOfLegacyOverride(
+            bool legacyOverride)
         {
             var settings = new GlobalIlluminationSettings
             {
                 Enabled = true,
                 Mode = GlobalIlluminationMode.Ddgi,
                 UseDdgi = true,
-                DdgiAllowForwardWithoutDepthPrePass = true
-            };
-            var sceneData = CreateGiScene(depthPrePassEnabled: false, ddgiProbeCount: 16);
-
-            Assert.Multiple(() =>
-            {
-                Assert.That(ForwardPlusPass.ShouldApplyDdgi(sceneData, settings), Is.True);
-                Assert.That(ForwardPlusPass.ShouldApplySsgi(sceneData, settings), Is.False);
-                Assert.That(ForwardPlusPass.ShouldApplyGlobalIllumination(sceneData, settings), Is.True);
-            });
-        }
-
-        [Test]
-        public void ShouldApplyGlobalIllumination_BlocksDdgiWithoutDepthPrePassWhenConfigured()
-        {
-            var settings = new GlobalIlluminationSettings
-            {
-                Enabled = true,
-                Mode = GlobalIlluminationMode.Ddgi,
-                UseDdgi = true,
-                DdgiAllowForwardWithoutDepthPrePass = false
+                DdgiAllowForwardWithoutDepthPrePass = legacyOverride
             };
             var sceneData = CreateGiScene(depthPrePassEnabled: false, ddgiProbeCount: 16);
 
             Assert.Multiple(() =>
             {
                 Assert.That(ForwardPlusPass.ShouldApplyDdgi(sceneData, settings), Is.False);
+                Assert.That(ForwardPlusPass.ShouldApplySsgi(sceneData, settings), Is.False);
                 Assert.That(ForwardPlusPass.ShouldApplyGlobalIllumination(sceneData, settings), Is.False);
             });
         }
@@ -196,10 +179,9 @@ namespace Njulf.Tests
             {
                 Enabled = true,
                 Mode = GlobalIlluminationMode.Ddgi,
-                UseDdgi = true,
-                DdgiAllowForwardWithoutDepthPrePass = true
+                UseDdgi = true
             };
-            var sceneData = CreateGiScene(depthPrePassEnabled: false, ddgiProbeCount: 16);
+            var sceneData = CreateGiScene(depthPrePassEnabled: true, ddgiProbeCount: 16);
             sceneData.AnimationDebugView = AnimationDebugView.SkinnedObjects;
 
             Assert.That(ForwardPlusPass.ShouldApplyGlobalIllumination(sceneData, settings), Is.False);

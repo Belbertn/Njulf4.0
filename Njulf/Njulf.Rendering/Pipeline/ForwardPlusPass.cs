@@ -385,7 +385,8 @@ namespace Njulf.Rendering.Pipeline
                     screenSpaceGlobalIlluminationEnabled: false),
                 DiagnosticFlags = Data.GPUForwardPushConstants.PackDiagnosticFlags(
                     ShouldCollectDdgiForwardEstimateCounters(sceneData),
-                    ShouldCollectDdgiClipmapCoverageCounters(sceneData))
+                    ShouldCollectDdgiClipmapCoverageCounters(sceneData),
+                    ShouldCollectDirectionalShadowReceiverCounters(sceneData))
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -541,7 +542,8 @@ namespace Njulf.Rendering.Pipeline
                     screenSpaceGlobalIlluminationEnabled: false),
                 DiagnosticFlags = Data.GPUForwardPushConstants.PackDiagnosticFlags(
                     ShouldCollectDdgiForwardEstimateCounters(sceneData),
-                    ShouldCollectDdgiClipmapCoverageCounters(sceneData))
+                    ShouldCollectDdgiClipmapCoverageCounters(sceneData),
+                    ShouldCollectDirectionalShadowReceiverCounters(sceneData))
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -609,6 +611,15 @@ namespace Njulf.Rendering.Pipeline
                  IsDdgiGatherDebugView(gi.DebugView));
         }
 
+        private bool ShouldCollectDirectionalShadowReceiverCounters(Data.SceneRenderingData sceneData)
+        {
+            // Reuse the existing capture/debug gate rather than paying atomics in normal
+            // gameplay. The shader additionally samples only one pixel per 16x16 tile.
+            return sceneData.DirectionalShadowPassEnabled &&
+                (_settings.Diagnostics.DdgiForwardEstimateCountersEnabled ||
+                 _settings.Shadows.DebugView != ShadowDebugView.None);
+        }
+
         private static bool IsDdgiGatherDebugView(GlobalIlluminationDebugView view)
         {
             return view is GlobalIlluminationDebugView.DdgiGatherLocalVolume
@@ -647,7 +658,7 @@ namespace Njulf.Rendering.Pipeline
         {
             return (gi.EffectiveUseDdgi || gi.EffectiveUseSimpleDdgi) &&
                    sceneData.DdgiProbeCount > 0 &&
-                   (sceneData.DepthPrePassEnabled || gi.DdgiAllowForwardWithoutDepthPrePass);
+                   sceneData.DepthPrePassEnabled;
         }
 
         private void ResetGlobalIlluminationHistoryIfInputsChanged()

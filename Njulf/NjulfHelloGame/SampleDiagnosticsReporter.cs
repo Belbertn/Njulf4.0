@@ -282,6 +282,19 @@ internal sealed class SampleDiagnosticsReporter
             $"pcf={diagnostics.DirectionalShadowPcfRadius}/{diagnostics.SpotShadowPcfRadius}/{diagnostics.PointShadowPcfRadius}, " +
             $"forwardReceivers={diagnostics.ForwardShadowReceiverMeshletCount}, debug={diagnostics.ShadowDebugView}, " +
             $"normalBias={diagnostics.ShadowNormalBias:F4}, slopeBias={diagnostics.ShadowSlopeScaledDepthBias:F2}.");
+        DirectionalShadowRuntimeDiagnostics directionalShadow = diagnostics.DirectionalShadowRuntime;
+        DirectionalShadowReceiverCounters shadowReceivers = directionalShadow.ReceiverCounters;
+        Console.WriteLine(
+            $"Frame diagnostics directional-shadow transport: range={directionalShadow.EffectiveNearDistance:F2}-{directionalShadow.EffectiveFarDistance:F2}, " +
+            $"splits={string.Join('/', directionalShadow.CascadeSplits)}, blend={directionalShadow.CascadeBlendFraction:F3}, " +
+            $"staticCache={directionalShadow.StaticCacheActiveMask}/{directionalShadow.StaticCacheValidMask}/" +
+            $"{directionalShadow.StaticCacheRefreshMask}/{directionalShadow.StaticCacheReuseMask}, " +
+            $"lod0Fallback={directionalShadow.ConservativeLodFallbackCount}, receiverReadback={shadowReceivers.ReadbackValid}, " +
+            $"selected={string.Join('/', shadowReceivers.PrimarySelectionCounts)}, " +
+            $"projectionReject={string.Join('/', shadowReceivers.ProjectionRejectedCounts)}, " +
+            $"uvDepthReject={string.Join('/', shadowReceivers.UvDepthRejectedCounts)}, " +
+            $"fallback={string.Join('/', shadowReceivers.FallbackCounts)}, " +
+            $"blended={string.Join('/', shadowReceivers.TransitionBlendCounts)}, unresolved={shadowReceivers.UnresolvedCount}.");
         Console.WriteLine(
             $"Frame diagnostics local shadows: spotEnabled={diagnostics.SpotShadowsEnabled}, spotCandidates={diagnostics.SpotShadowCandidateCount}, " +
             $"spotSelected={diagnostics.SpotShadowSelectedCount}, spotRejected={diagnostics.SpotShadowRejectedByBudgetCount}, " +

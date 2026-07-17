@@ -258,10 +258,20 @@ bool DdgiClipmapCoverageCountersEnabled()
     return (pc.Push.DiagnosticFlags & 2u) != 0u;
 }
 
+bool DirectionalShadowReceiverCountersEnabled()
+{
+    return (pc.Push.DiagnosticFlags & 4u) != 0u;
+}
+
 bool DdgiSparseDiagnosticPixel()
 {
     uvec2 pixel = uvec2(max(gl_FragCoord.xy, vec2(0.0)));
     return (pixel.x & 15u) == 0u && (pixel.y & 15u) == 0u;
+}
+
+bool DirectionalShadowReceiverDiagnosticPixel()
+{
+    return DirectionalShadowReceiverCountersEnabled() && DdgiSparseDiagnosticPixel();
 }
 
 bool DdgiForwardEstimateDiagnosticPixel()
@@ -2121,13 +2131,191 @@ float CameraForwardDistance(vec3 worldPosition)
     return max(dot(worldPosition - pc.Push.CameraPosition, cameraForward), 0.0);
 }
 
-float SampleShadowCascade(uint textureIndex, vec2 uv, float receiverDepth, float bias)
+const uint DIRECTIONAL_SHADOW_SAMPLE_REJECT_NONE = 0u;
+const uint DIRECTIONAL_SHADOW_SAMPLE_REJECT_PROJECTION = 1u;
+const uint DIRECTIONAL_SHADOW_SAMPLE_REJECT_UV_DEPTH = 2u;
+
+float SampleDirectionalShadowTexel(
+    uint textureIndex,
+    ivec2 texel,
+    ivec2 maxTexel,
+    float receiverDepth,
+    float bias)
 {
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || receiverDepth < 0.0 || receiverDepth > 1.0)
+    float sampledDepth = texelFetch(
+        BindlessTextures[nonuniformEXT(int(textureIndex))],
+        clamp(texel, ivec2(0), maxTexel),
+        0).r;
+    return receiverDepth >= sampledDepth - bias ? 1.0 : 0.0;
+}
+
+float SampleDirectionalShadowTap(
+    uint textureIndex,
+    vec2 uv,
+    float receiverDepth,
+    float bias,
+    float mapSize)
+{
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)
         return 1.0;
 
-    float sampledDepth = texture(BindlessTextures[nonuniformEXT(int(textureIndex))], uv).r;
-    return receiverDepth >= sampledDepth - bias ? 1.0 : 0.0;
+    // A regular linear depth sample interpolates the caster depths before the
+    // comparison. On sloped Sponza geometry that turns a single shadow edge into
+    // several false depth contours. Fetch and compare the four texels first, then
+    // bilinearly filter visibility (the ordering used by comparison-sampler PCF).
+    float safeMapSize = max(mapSize, 1.0);
+    vec2 texelPosition = uv * safeMapSize - vec2(0.5);
+    ivec2 baseTexel = ivec2(floor(texelPosition));
+    ivec2 maxTexel = ivec2(max(int(safeMapSize) - 1, 0));
+    vec2 weights = fract(texelPosition);
+    float lower = mix(
+        SampleDirectionalShadowTexel(textureIndex, baseTexel, maxTexel, receiverDepth, bias),
+        SampleDirectionalShadowTexel(textureIndex, baseTexel + ivec2(1, 0), maxTexel, receiverDepth, bias),
+        weights.x);
+    float upper = mix(
+        SampleDirectionalShadowTexel(textureIndex, baseTexel + ivec2(0, 1), maxTexel, receiverDepth, bias),
+        SampleDirectionalShadowTexel(textureIndex, baseTexel + ivec2(1, 1), maxTexel, receiverDepth, bias),
+        weights.x);
+    return mix(lower, upper, weights.y);
+}
+
+float SampleDirectionalShadowPcf(
+    uint textureIndex,
+    vec2 uv,
+    float receiverDepth,
+    float bias,
+    float mapSize,
+    int radius)
+{
+    float safeMapSize = max(mapSize, 1.0);
+    vec2 texelPosition = uv * safeMapSize - vec2(0.5);
+    ivec2 baseTexel = ivec2(floor(texelPosition));
+    ivec2 maxTexel = ivec2(max(int(safeMapSize) - 1, 0));
+    vec2 weights = fract(texelPosition);
+    int safeRadius = clamp(radius, 1, 3);
+    float lit = 0.0;
+
+    // Adjacent bilinear PCF taps share their inner texels. Accumulating the
+    // unique (2r + 2)^2 grid preserves the same filter while avoiding four
+    // independent fetches for every tap.
+    for (int y = -safeRadius; y <= safeRadius + 1; y++)
+    {
+        float weightY = y == -safeRadius
+            ? 1.0 - weights.y
+            : (y == safeRadius + 1 ? weights.y : 1.0);
+        for (int x = -safeRadius; x <= safeRadius + 1; x++)
+        {
+            float weightX = x == -safeRadius
+                ? 1.0 - weights.x
+                : (x == safeRadius + 1 ? weights.x : 1.0);
+            lit += SampleDirectionalShadowTexel(
+                textureIndex,
+                baseTexel + ivec2(x, y),
+                maxTexel,
+                receiverDepth,
+                bias) * weightX * weightY;
+        }
+    }
+
+    float filterWidth = float(safeRadius * 2 + 1);
+    return lit / (filterWidth * filterWidth);
+}
+
+bool TrySampleDirectionalShadowCascade(
+    uint cascade,
+    vec3 biasedWorldPosition,
+    float mapSize,
+    int radius,
+    out float shadow,
+    out uint rejection)
+{
+    shadow = 1.0;
+    rejection = DIRECTIONAL_SHADOW_SAMPLE_REJECT_NONE;
+
+    vec4 lightClip = MulRowMajor(vec4(biasedWorldPosition, 1.0), ReadShadowMatrix(cascade));
+    if (abs(lightClip.w) <= 0.00001 || any(isnan(lightClip)) || any(isinf(lightClip)))
+    {
+        rejection = DIRECTIONAL_SHADOW_SAMPLE_REJECT_PROJECTION;
+        return false;
+    }
+
+    vec3 shadowCoord = lightClip.xyz / lightClip.w;
+    if (any(isnan(shadowCoord)) || any(isinf(shadowCoord)))
+    {
+        rejection = DIRECTIONAL_SHADOW_SAMPLE_REJECT_PROJECTION;
+        return false;
+    }
+
+    vec2 uv = shadowCoord.xy * 0.5 + vec2(0.5);
+    float receiverDepth = shadowCoord.z;
+    if (uv.x < 0.0 || uv.x > 1.0 ||
+        uv.y < 0.0 || uv.y > 1.0 ||
+        receiverDepth < 0.0 || receiverDepth > 1.0)
+    {
+        rejection = DIRECTIONAL_SHADOW_SAMPLE_REJECT_UV_DEPTH;
+        return false;
+    }
+
+    uint textureIndex = uint(DIRECTIONAL_SHADOW_TEXTURE_BASE) + cascade;
+    if (radius <= 0)
+    {
+        shadow = SampleDirectionalShadowTap(textureIndex, uv, receiverDepth, 0.0005, mapSize);
+        return true;
+    }
+
+    shadow = SampleDirectionalShadowPcf(
+        textureIndex,
+        uv,
+        receiverDepth,
+        0.0005,
+        mapSize,
+        radius);
+    return true;
+}
+
+bool FindDirectionalShadowTransition(
+    float cameraDistance,
+    vec4 splits,
+    vec4 transitionData,
+    uint cascadeCount,
+    out uint lowerCascade,
+    out uint upperCascade,
+    out float blendWeight)
+{
+    lowerCascade = 0u;
+    upperCascade = 0u;
+    blendWeight = 0.0;
+    if (cascadeCount < 2u)
+        return false;
+
+    float transitionFraction = clamp(transitionData.x, 0.02, 0.30);
+    for (uint boundaryIndex = 0u; boundaryIndex + 1u < cascadeCount; boundaryIndex++)
+    {
+        float boundary = splits[int(boundaryIndex)];
+        float previousBoundary = boundaryIndex == 0u
+            ? transitionData.y
+            : splits[int(boundaryIndex - 1u)];
+        float nextBoundary = boundaryIndex + 2u >= cascadeCount
+            ? transitionData.z
+            : splits[int(boundaryIndex + 1u)];
+        float previousSpan = max(0.001, boundary - previousBoundary);
+        float nextSpan = max(0.001, nextBoundary - boundary);
+        float transitionWidth = min(previousSpan, nextSpan) * transitionFraction;
+        if (transitionWidth > 0.0 &&
+            cameraDistance >= boundary - transitionWidth &&
+            cameraDistance <= boundary + transitionWidth)
+        {
+            lowerCascade = boundaryIndex;
+            upperCascade = boundaryIndex + 1u;
+            blendWeight = smoothstep(
+                boundary - transitionWidth,
+                boundary + transitionWidth,
+                cameraDistance);
+            return true;
+        }
+    }
+
+    return false;
 }
 
 float EstimateFarFieldSunShadow(vec3 worldPosition, vec3 normal, vec3 lightDirection)
@@ -2175,43 +2363,169 @@ float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal
     vec4 shadowSettings = ReadShadowSettings();
     uint cascadeCount = clamp(uint(round(shadowIndices.y)), 1u, uint(MAX_DIRECTIONAL_SHADOW_TEXTURES));
     vec4 splits = ReadShadowCascadeSplits();
+    vec4 transitionData = ReadShadowCascadeTransitionData();
     float cameraDistance = CameraForwardDistance(worldPosition);
     selectedCascade = SelectShadowCascade(cameraDistance, splits, cascadeCount);
 
     vec3 biasedPosition = worldPosition + normal * shadowSettings.y;
-    vec4 lightClip = MulRowMajor(vec4(biasedPosition, 1.0), ReadShadowMatrix(selectedCascade));
-    vec3 shadowCoord = lightClip.xyz / max(lightClip.w, 0.00001);
-    vec2 uv = shadowCoord.xy * 0.5 + vec2(0.5);
-    float receiverDepth = shadowCoord.z;
-
     float mapSize = max(shadowSettings.z, 1.0);
     int radius = int(clamp(round(shadowSettings.w), 0.0, 3.0));
-    vec2 texelSize = vec2(1.0 / mapSize);
-    uint textureIndex = uint(DIRECTIONAL_SHADOW_TEXTURE_BASE) + selectedCascade;
-    float shadow = 1.0;
-    if (radius <= 0)
+    bool diagnosticPixel = DirectionalShadowReceiverDiagnosticPixel();
+    if (diagnosticPixel)
     {
-        shadow = SampleShadowCascade(textureIndex, uv, receiverDepth, 0.0005);
-        if (selectedCascade + 1u >= cascadeCount && cameraDistance > splits[int(selectedCascade)])
-        {
-            GPULight light = ReadLight(lightIndex);
-            shadow *= EstimateFarFieldSunShadow(worldPosition, normal, normalize(-light.Direction));
-        }
-        return mix(1.0, shadow, clamp(shadowSettings.x, 0.0, 1.0));
+        AddRendererDiagnostic(
+            pc.Push.CurrentFrameIndex,
+            DIRECTIONAL_SHADOW_RECEIVER_PRIMARY_SELECTION_COUNTER_BASE + selectedCascade,
+            1u);
     }
 
-    float lit = 0.0;
-    float taps = 0.0;
-    for (int y = -radius; y <= radius; y++)
+    float primaryShadow = 1.0;
+    uint primaryRejection = DIRECTIONAL_SHADOW_SAMPLE_REJECT_NONE;
+    bool primaryValid = TrySampleDirectionalShadowCascade(
+        selectedCascade,
+        biasedPosition,
+        mapSize,
+        radius,
+        primaryShadow,
+        primaryRejection);
+    if (diagnosticPixel)
     {
-        for (int x = -radius; x <= radius; x++)
+        if (primaryRejection == DIRECTIONAL_SHADOW_SAMPLE_REJECT_PROJECTION)
         {
-            lit += SampleShadowCascade(textureIndex, uv + vec2(x, y) * texelSize, receiverDepth, 0.0005);
-            taps += 1.0;
+            AddRendererDiagnostic(
+                pc.Push.CurrentFrameIndex,
+                DIRECTIONAL_SHADOW_RECEIVER_PROJECTION_REJECT_COUNTER_BASE + selectedCascade,
+                1u);
+        }
+        else if (primaryRejection == DIRECTIONAL_SHADOW_SAMPLE_REJECT_UV_DEPTH)
+        {
+            AddRendererDiagnostic(
+                pc.Push.CurrentFrameIndex,
+                DIRECTIONAL_SHADOW_RECEIVER_UV_DEPTH_REJECT_COUNTER_BASE + selectedCascade,
+                1u);
         }
     }
 
-    shadow = taps > 0.0 ? lit / taps : 1.0;
+    float shadow = primaryShadow;
+    bool resolved = primaryValid;
+    uint lowerCascade;
+    uint upperCascade;
+    float transitionBlend;
+    if (FindDirectionalShadowTransition(
+            cameraDistance,
+            splits,
+            transitionData,
+            cascadeCount,
+            lowerCascade,
+            upperCascade,
+            transitionBlend))
+    {
+        float lowerShadow = 1.0;
+        float upperShadow = 1.0;
+        uint ignoredRejection = DIRECTIONAL_SHADOW_SAMPLE_REJECT_NONE;
+        bool lowerValid = lowerCascade == selectedCascade
+            ? primaryValid
+            : TrySampleDirectionalShadowCascade(
+                lowerCascade,
+                biasedPosition,
+                mapSize,
+                radius,
+                lowerShadow,
+                ignoredRejection);
+        if (lowerCascade == selectedCascade)
+            lowerShadow = primaryShadow;
+
+        bool upperValid = upperCascade == selectedCascade
+            ? primaryValid
+            : TrySampleDirectionalShadowCascade(
+                upperCascade,
+                biasedPosition,
+                mapSize,
+                radius,
+                upperShadow,
+                ignoredRejection);
+        if (upperCascade == selectedCascade)
+            upperShadow = primaryShadow;
+
+        if (lowerValid && upperValid)
+        {
+            shadow = mix(lowerShadow, upperShadow, transitionBlend);
+            resolved = true;
+            if (diagnosticPixel)
+            {
+                AddRendererDiagnostic(
+                    pc.Push.CurrentFrameIndex,
+                    DIRECTIONAL_SHADOW_RECEIVER_TRANSITION_BLEND_COUNTER_BASE + lowerCascade,
+                    1u);
+            }
+        }
+        else if (lowerValid || upperValid)
+        {
+            shadow = lowerValid ? lowerShadow : upperShadow;
+            resolved = true;
+            if (!primaryValid && diagnosticPixel)
+            {
+                AddRendererDiagnostic(
+                    pc.Push.CurrentFrameIndex,
+                    DIRECTIONAL_SHADOW_RECEIVER_FALLBACK_COUNTER_BASE + selectedCascade,
+                    1u);
+            }
+        }
+    }
+
+    if (!resolved)
+    {
+        for (uint offset = 1u; offset < cascadeCount && !resolved; offset++)
+        {
+            if (selectedCascade >= offset)
+            {
+                uint fallbackCascade = selectedCascade - offset;
+                uint ignoredRejection = DIRECTIONAL_SHADOW_SAMPLE_REJECT_NONE;
+                resolved = TrySampleDirectionalShadowCascade(
+                    fallbackCascade,
+                    biasedPosition,
+                    mapSize,
+                    radius,
+                    shadow,
+                    ignoredRejection);
+            }
+
+            if (!resolved && selectedCascade + offset < cascadeCount)
+            {
+                uint fallbackCascade = selectedCascade + offset;
+                uint ignoredRejection = DIRECTIONAL_SHADOW_SAMPLE_REJECT_NONE;
+                resolved = TrySampleDirectionalShadowCascade(
+                    fallbackCascade,
+                    biasedPosition,
+                    mapSize,
+                    radius,
+                    shadow,
+                    ignoredRejection);
+            }
+        }
+
+        if (diagnosticPixel)
+        {
+            if (resolved)
+            {
+                AddRendererDiagnostic(
+                    pc.Push.CurrentFrameIndex,
+                    DIRECTIONAL_SHADOW_RECEIVER_FALLBACK_COUNTER_BASE + selectedCascade,
+                    1u);
+            }
+            else
+            {
+                AddRendererDiagnostic(
+                    pc.Push.CurrentFrameIndex,
+                    DIRECTIONAL_SHADOW_RECEIVER_UNRESOLVED_COUNTER,
+                    1u);
+            }
+        }
+    }
+
+    if (!resolved)
+        shadow = 1.0;
+
     if (selectedCascade + 1u >= cascadeCount && cameraDistance > splits[int(selectedCascade)])
     {
         GPULight light = ReadLight(lightIndex);

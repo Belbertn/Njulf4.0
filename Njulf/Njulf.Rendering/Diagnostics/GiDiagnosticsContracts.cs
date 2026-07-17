@@ -1684,6 +1684,8 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "lighting.directionalShadows", diagnostics.DirectionalShadowsEnabled);
             AddSetting(settings, "lighting.directionalShadowMapSize", diagnostics.DirectionalShadowMapSize);
             AddSetting(settings, "lighting.directionalShadowCascades", diagnostics.DirectionalShadowCascadeCount);
+            AddSetting(settings, "lighting.directionalShadowMaxDistance", diagnostics.DirectionalShadowRuntime.ConfiguredMaxDistance);
+            AddSetting(settings, "lighting.directionalShadowCascadeBlendFraction", diagnostics.DirectionalShadowRuntime.CascadeBlendFraction);
             AddSetting(settings, "lighting.shadowNormalBias", diagnostics.ShadowNormalBias);
             AddSetting(settings, "lighting.shadowSlopeBias", diagnostics.ShadowSlopeScaledDepthBias);
             AddSetting(settings, "lighting.directionalShadowPcfRadius", diagnostics.DirectionalShadowPcfRadius);

@@ -132,14 +132,17 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
-    public void ForwardPass_ClearsDepthWhenDepthPrepassIsDisabled()
+    public void ForwardPass_ConsumesDepthPrepassReadOnly()
     {
         string source = ReadRepoText("Njulf.Rendering", "Pipeline", "ForwardPlusPass.cs");
 
         Assert.Multiple(() =>
         {
-            Assert.That(source, Does.Contain("sceneData.DepthPrePassEnabled ? ImageLayout.DepthStencilReadOnlyOptimal : ImageLayout.DepthStencilAttachmentOptimal"));
-            Assert.That(source, Does.Contain("sceneData.DepthPrePassEnabled ? AttachmentLoadOp.Load : AttachmentLoadOp.Clear"));
+            Assert.That(source, Does.Contain("_renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);"));
+            Assert.That(source, Does.Contain("ImageLayout.DepthStencilReadOnlyOptimal,"));
+            Assert.That(source, Does.Contain("AttachmentLoadOp.Load,"));
+            Assert.That(source, Does.Not.Contain("sceneData.DepthPrePassEnabled ? ImageLayout.DepthStencilReadOnlyOptimal"));
+            Assert.That(source, Does.Not.Contain("sceneData.DepthPrePassEnabled ? AttachmentLoadOp.Load"));
         });
     }
 
@@ -164,7 +167,8 @@ public sealed class ShaderBuildTests
             Assert.That(source, Does.Contain("internal static bool ShouldApplyGlobalIllumination("));
             Assert.That(source, Does.Contain("return ShouldApplyDdgi(sceneData, gi) || ShouldApplySsgi(sceneData, gi);"));
             Assert.That(source, Does.Contain("return gi.EffectiveUseSsgi && sceneData.DepthPrePassEnabled;"));
-            Assert.That(source, Does.Contain("(sceneData.DepthPrePassEnabled || gi.DdgiAllowForwardWithoutDepthPrePass)"));
+            Assert.That(source, Does.Contain("sceneData.DdgiProbeCount > 0 &&").And.Contain("sceneData.DepthPrePassEnabled;"));
+            Assert.That(source, Does.Not.Contain("gi.DdgiAllowForwardWithoutDepthPrePass"));
         });
     }
 
@@ -1002,6 +1006,7 @@ public sealed class ShaderBuildTests
         string schedulePass = ReadRepoText("Njulf.Rendering", "Pipeline", "DdgiSchedulePass.cs");
         string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
         string pass = ReadRepoText("Njulf.Rendering", "Pipeline", "DdgiPipelinePasses.cs");
+        string publishBarrier = ExtractFunction(pass, "private void InsertPublishBarrier(");
         string manager = ReadRepoText("Njulf.Rendering", "Resources", "DdgiProbeVolumeManager.cs");
         string scheduler = ReadRepoText("Njulf.Rendering", "Resources", "DdgiProbeUpdateScheduler.cs");
         string pipelineDeclaration = ReadRepoText("Njulf.Rendering", "Pipeline", "ProductionRenderPipelineDeclaration.cs");
@@ -1192,8 +1197,12 @@ public sealed class ShaderBuildTests
             Assert.That(pass, Does.Contain("public sealed unsafe class DdgiBlendPass"));
             Assert.That(pass, Does.Contain("public sealed unsafe class DdgiRelocateClassifyPass"));
             Assert.That(pass, Does.Contain("public sealed unsafe class DdgiPublishPass"));
-            Assert.That(pass, Does.Contain("DstStageMask = PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit"));
-            Assert.That(pass, Does.Contain("DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderSampledReadBit"));
+            Assert.That(publishBarrier, Does.Contain("SrcStageMask = PipelineStageFlags2.ComputeShaderBit"));
+            Assert.That(publishBarrier, Does.Contain("SrcAccessMask = AccessFlags2.ShaderStorageWriteBit"));
+            Assert.That(publishBarrier, Does.Contain("DstStageMask = PipelineStageFlags2.ComputeShaderBit"));
+            Assert.That(publishBarrier, Does.Contain("DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit"));
+            Assert.That(publishBarrier, Does.Not.Contain("PipelineStageFlags2.FragmentShaderBit"));
+            Assert.That(publishBarrier, Does.Not.Contain("AccessFlags2.ShaderSampledReadBit"));
             Assert.That(manager, Does.Contain("BindlessIndex.DdgiRayResultScratchBuffer"));
             Assert.That(manager, Does.Contain("HasGpuSchedulerTraceIndirectDispatchBuffer"));
             Assert.That(manager, Does.Contain("CmdDispatchIndirect(commandBuffer, indirectBuffer, 0)"));
@@ -1864,11 +1873,31 @@ public sealed class ShaderBuildTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(shader, Does.Contain("shadow = SampleShadowCascade(textureIndex, uv, receiverDepth, 0.0005);"));
+            Assert.That(shader, Does.Contain("if (radius <= 0)"));
+            Assert.That(shader, Does.Contain("shadow = SampleDirectionalShadowTap(textureIndex, uv, receiverDepth, 0.0005, mapSize);"));
             Assert.That(shader, Does.Contain("return mix(1.0, shadow, clamp(shadowSettings.x, 0.0, 1.0));"));
             Assert.That(shader, Does.Contain("float sampledDepth = texture(BindlessTextures[nonuniformEXT(SPOT_SHADOW_ATLAS_TEXTURE_INDEX)], atlasUv).r;"));
             Assert.That(shader, Does.Contain("radius > 0 && PointShadowFaceEdgeDistance(faceUv) <= seamWidth"));
             Assert.That(shader, Does.Contain("shadow.BiasStrengthTexelSize.z <= 0.0"));
+        });
+    }
+
+    [Test]
+    public void DirectionalShadows_CompareBeforeFilteringAndUseReverseZRasterBias()
+    {
+        string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string shadowPass = ReadRepoText("Njulf.Rendering", "Pipeline", "DirectionalShadowPass.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shader, Does.Contain("float sampledDepth = texelFetch("));
+            Assert.That(shader, Does.Contain("return receiverDepth >= sampledDepth - bias ? 1.0 : 0.0;"));
+            Assert.That(shader, Does.Contain("SampleDirectionalShadowPcf("));
+            Assert.That(shader, Does.Contain("return mix(lower, upper, weights.y);"));
+            Assert.That(shader, Does.Not.Contain("textureGather("));
+            Assert.That(shader, Does.Not.Contain("float sampledDepth = texture(BindlessTextures[nonuniformEXT(int(textureIndex))], uv).r;"));
+            Assert.That(shadowPass, Does.Contain("-_settings.ConstantDepthBias"));
+            Assert.That(shadowPass, Does.Contain("-_settings.SlopeScaledDepthBias"));
         });
     }
 
@@ -1957,7 +1986,7 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
-    public void StaticMeshStorage_UsesOneVertexRepresentationAndDoesNotFabricateLods()
+    public void StaticMeshStorage_UsesSharedRendererLodsAndOneVertexRepresentation()
     {
         string meshManager = ReadRepoText("Njulf.Rendering", "Resources", "MeshManager.cs");
         string buildMeshletLods = ExtractFunction(meshManager, "private void BuildMeshletLods(");
@@ -1976,10 +2005,14 @@ public sealed class ShaderBuildTests
         {
             Assert.That(meshManager, Does.Not.Contain("InitialVertexBufferSize"));
             Assert.That(meshManager, Does.Not.Contain("UploadSpan(pending.Vertices"));
-            Assert.That(buildMeshletLods.Split("GenerateMeshlets(", StringSplitOptions.None).Length - 1, Is.EqualTo(1));
-            Assert.That(buildMeshletLods, Does.Contain("meshInfo.MeshletLod1Count = 0;"));
-            Assert.That(buildMeshletLods, Does.Contain("meshInfo.MeshletLod2Count = 0;"));
-            Assert.That(buildMeshletLods, Does.Contain("meshInfo.MeshletLodGeneratedCount = meshInfo.MeshletCount;"));
+            Assert.That(buildMeshletLods, Does.Contain("var builder = new RendererMeshletLodBuilder();"));
+            Assert.That(buildMeshletLods, Does.Contain("ProcessedMeshLodRange lod0 = built.Ranges[0];"));
+            Assert.That(buildMeshletLods, Does.Contain("ProcessedMeshLodRange lod1 = built.Ranges[1];"));
+            Assert.That(buildMeshletLods, Does.Contain("ProcessedMeshLodRange lod2 = built.Ranges[2];"));
+            Assert.That(buildMeshletLods, Does.Contain("meshInfo.MeshletLod1Count = CheckedCount(lod1.MeshletCount);"));
+            Assert.That(buildMeshletLods, Does.Contain("meshInfo.MeshletLod2Count = CheckedCount(lod2.MeshletCount);"));
+            Assert.That(buildMeshletLods, Does.Contain("meshInfo.MeshletLodGeneratedCount = CheckedCount(built.Meshlets.Length);"));
+            Assert.That(buildMeshletLods, Does.Not.Contain("GenerateMeshlets("));
             Assert.That(common, Does.Contain("return ReadSplitVertex(vertexIndex);"));
             Assert.That(skinning, Does.Contain("GPUVertex source = ReadSplitVertex(dispatch.SourceVertexOffset + localVertexIndex);"));
             Assert.That(baseOnlyLodGuard, Is.GreaterThanOrEqualTo(0));
@@ -2008,7 +2041,14 @@ public sealed class ShaderBuildTests
             Assert.That(sceneCompaction, Does.Contain(
                 "bool ApplyGpuLodSelection(inout GPUMeshletDrawCommand command, out uint effectiveLod, uint lodBias)"));
             Assert.That(sceneCompaction, Does.Contain("ApplyGpuLodSelection(command, effectiveLod, 0u)"));
-            Assert.That(sceneCompaction, Does.Contain("ApplyGpuLodSelection(command, effectiveLod, pc.Push.GpuShadowLodBias)"));
+            Assert.That(sceneCompaction, Does.Contain(
+                "bool ApplyConservativeDirectionalShadowLodSelection("));
+            Assert.That(sceneCompaction, Does.Contain(
+                "ApplyConservativeDirectionalShadowLodSelection(command, effectiveLod, pc.Push.GpuShadowLodBias)"));
+            Assert.That(sceneCompaction, Does.Not.Contain(
+                "ApplyGpuLodSelection(command, effectiveLod, pc.Push.GpuShadowLodBias)"));
+            Assert.That(sceneCompaction, Does.Contain(
+                "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_LOD_FALLBACK"));
             Assert.That(compactionPass, Does.Contain("GpuLod1DistanceRatio = gpuLod1DistanceRatio"));
             Assert.That(compactionPass, Does.Contain("GpuLod2DistanceRatio = gpuLod2DistanceRatio"));
             Assert.That(compactionPass, Does.Contain("GpuShadowLodBias = checked((uint)Math.Clamp"));

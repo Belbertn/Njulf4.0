@@ -38,7 +38,13 @@ namespace Njulf.Rendering.Resources
         // transport directly observable without production atomic traffic.
         public const int SimpleDdgiTransportCounterBase = DdgiInvestigationCounterBase + DdgiInvestigationCounterCount;
         public const int SimpleDdgiTransportCounterCount = 6;
-        public const int CounterCount = MeshletCounterCount + DdgiForwardEstimateCounterCount + DdgiTraceEnergyCounterCount + DdgiTraceEarlyOutCounterCount + DdgiBlendEnergyCounterCount + DdgiTraceRingMismatchSampleCount + FarFieldCounterCount + DdgiInvestigationCounterCount + SimpleDdgiTransportCounterCount;
+        // Keep shadow receiver telemetry appended so all pre-existing capture offsets
+        // stay stable. Each cascade family is sparsely sampled in forward.frag.
+        public const int DirectionalShadowReceiverCounterBase = SimpleDdgiTransportCounterBase + SimpleDdgiTransportCounterCount;
+        public const int DirectionalShadowReceiverCascadeCount = ShadowSettings.MaxDirectionalCascades;
+        public const int DirectionalShadowReceiverCounterFamilyCount = 5;
+        public const int DirectionalShadowReceiverCounterCount = DirectionalShadowReceiverCascadeCount * DirectionalShadowReceiverCounterFamilyCount + 1;
+        public const int CounterCount = DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const ulong CounterBufferSize = CounterCount * sizeof(uint);
@@ -49,6 +55,7 @@ namespace Njulf.Rendering.Resources
         private readonly GpuMeshletCounters[] _lastCompletedCounters = new GpuMeshletCounters[FramesInFlight];
         private readonly DdgiForwardEstimateCounters[] _lastCompletedDdgiForwardEstimateCounters = new DdgiForwardEstimateCounters[FramesInFlight];
         private readonly DdgiInvestigationCounters[] _lastCompletedDdgiInvestigationCounters = new DdgiInvestigationCounters[FramesInFlight];
+        private readonly DirectionalShadowReceiverCounters[] _lastCompletedDirectionalShadowReceiverCounters = new DirectionalShadowReceiverCounters[FramesInFlight];
         private bool _disposed;
 
         public RendererDiagnosticsBuffer(VulkanContext context, BufferManager bufferManager)
@@ -58,6 +65,7 @@ namespace Njulf.Rendering.Resources
 
             for (int i = 0; i < FramesInFlight; i++)
             {
+                _lastCompletedDirectionalShadowReceiverCounters[i] = DirectionalShadowReceiverCounters.Empty;
                 _buffers[i] = _bufferManager.CreateBuffer(
                     CounterBufferSize,
                     BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
@@ -96,6 +104,47 @@ namespace Njulf.Rendering.Resources
                 checked((int)counters[6]),
                 checked((int)counters[7]),
                 checked((int)counters[8]));
+
+            bool directionalShadowReceiverCountersValid = false;
+            for (int i = 0; i < DirectionalShadowReceiverCounterCount; i++)
+            {
+                if (counters[DirectionalShadowReceiverCounterBase + i] != 0)
+                {
+                    directionalShadowReceiverCountersValid = true;
+                    break;
+                }
+            }
+
+            if (directionalShadowReceiverCountersValid)
+            {
+                uint[] primarySelectionCounts = new uint[DirectionalShadowReceiverCascadeCount];
+                uint[] projectionRejectedCounts = new uint[DirectionalShadowReceiverCascadeCount];
+                uint[] uvDepthRejectedCounts = new uint[DirectionalShadowReceiverCascadeCount];
+                uint[] fallbackCounts = new uint[DirectionalShadowReceiverCascadeCount];
+                uint[] transitionBlendCounts = new uint[DirectionalShadowReceiverCascadeCount];
+                for (int cascade = 0; cascade < DirectionalShadowReceiverCascadeCount; cascade++)
+                {
+                    primarySelectionCounts[cascade] = counters[DirectionalShadowReceiverCounterBase + cascade];
+                    projectionRejectedCounts[cascade] = counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount + cascade];
+                    uvDepthRejectedCounts[cascade] = counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount * 2 + cascade];
+                    fallbackCounts[cascade] = counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount * 3 + cascade];
+                    transitionBlendCounts[cascade] = counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount * 4 + cascade];
+                }
+
+                _lastCompletedDirectionalShadowReceiverCounters[frameIndex] = new DirectionalShadowReceiverCounters(
+                    ReadbackValid: 1,
+                    PrimarySelectionCounts: primarySelectionCounts,
+                    ProjectionRejectedCounts: projectionRejectedCounts,
+                    UvDepthRejectedCounts: uvDepthRejectedCounts,
+                    FallbackCounts: fallbackCounts,
+                    TransitionBlendCounts: transitionBlendCounts,
+                    UnresolvedCount: counters[DirectionalShadowReceiverCounterBase +
+                        DirectionalShadowReceiverCascadeCount * DirectionalShadowReceiverCounterFamilyCount]);
+            }
+            else
+            {
+                _lastCompletedDirectionalShadowReceiverCounters[frameIndex] = DirectionalShadowReceiverCounters.Empty;
+            }
 
             uint sampleCount = counters[DdgiForwardEstimateCounterBase + 9];
             uint visibilityMomentSampleCount = counters[DdgiForwardEstimateCounterBase + 15];
@@ -353,6 +402,12 @@ namespace Njulf.Rendering.Resources
         {
             ValidateFrameIndex(frameIndex);
             return _lastCompletedDdgiInvestigationCounters[frameIndex];
+        }
+
+        public DirectionalShadowReceiverCounters GetLastCompletedDirectionalShadowReceiverCounters(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _lastCompletedDirectionalShadowReceiverCounters[frameIndex];
         }
 
         private static int DecodeSignedCounter(uint value)

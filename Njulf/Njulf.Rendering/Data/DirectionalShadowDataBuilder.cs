@@ -34,17 +34,28 @@ namespace Njulf.Rendering.Data
 
             CoreMatrix4x4[] matrices = new CoreMatrix4x4[ShadowSettings.MaxDirectionalCascades];
             float[] splits = CalculateCascadeSplits(near, far, cascadeCount);
-            float cascadeNear = near;
+            float[] transitionWidths = CalculateCascadeTransitionWidths(
+                near,
+                far,
+                splits,
+                cascadeCount,
+                settings.DirectionalCascadeBlendFraction);
             for (int i = 0; i < cascadeCount; i++)
             {
+                float cascadeNear = i == 0 ? near : splits[i - 1];
+                float cascadeFar = splits[i];
+                if (i > 0)
+                    cascadeNear = MathF.Max(near, cascadeNear - transitionWidths[i - 1]);
+                if (i + 1 < cascadeCount)
+                    cascadeFar = MathF.Min(far, cascadeFar + transitionWidths[i]);
+
                 matrices[i] = BuildCascadeMatrix(
                     camera,
                     lightDir,
                     cascadeNear,
-                    splits[i],
+                    cascadeFar,
                     settings.DirectionalShadowMapSize,
                     settings.MaxShadowDistance);
-                cascadeNear = splits[i];
             }
 
             for (int i = cascadeCount; i < matrices.Length; i++)
@@ -66,7 +77,12 @@ namespace Njulf.Rendering.Data
                     settings.DirectionalShadowsEnabled ? 1f : 0f,
                     cascadeCount,
                     BindlessIndex.DirectionalShadowTextureBase,
-                    selectedLightIndex)
+                    selectedLightIndex),
+                CascadeTransitionData = new CoreVector4(
+                    settings.DirectionalCascadeBlendFraction,
+                    near,
+                    far,
+                    0f)
             };
         }
 
@@ -99,6 +115,30 @@ namespace Njulf.Rendering.Data
                 splits[i] = farPlane;
 
             return splits;
+        }
+
+        private static float[] CalculateCascadeTransitionWidths(
+            float nearPlane,
+            float farPlane,
+            float[] splits,
+            int cascadeCount,
+            float blendFraction)
+        {
+            var widths = new float[ShadowSettings.MaxDirectionalCascades];
+            float fraction = Math.Clamp(blendFraction, 0.02f, 0.30f);
+            for (int boundary = 0; boundary + 1 < cascadeCount; boundary++)
+            {
+                float previousBoundary = boundary == 0 ? nearPlane : splits[boundary - 1];
+                float boundaryDistance = splits[boundary];
+                float nextBoundary = boundary + 1 == cascadeCount - 1
+                    ? farPlane
+                    : splits[boundary + 1];
+                float previousSpan = MathF.Max(0.001f, boundaryDistance - previousBoundary);
+                float nextSpan = MathF.Max(0.001f, nextBoundary - boundaryDistance);
+                widths[boundary] = MathF.Min(previousSpan, nextSpan) * fraction;
+            }
+
+            return widths;
         }
 
         private static CoreMatrix4x4 BuildCascadeMatrix(

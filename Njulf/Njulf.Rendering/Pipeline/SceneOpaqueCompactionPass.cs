@@ -1219,6 +1219,12 @@ namespace Njulf.Rendering.Pipeline
         uint[] DirectionalDynamicShadowRejectedCounts,
         uint[] DirectionalDynamicShadowOverflowCounts)
     {
+        /// <summary>
+        /// Number of directional-shadow LOD requests retained at LOD0 because the
+        /// command stream has no topology-safe lower-LOD remapping.
+        /// </summary>
+        public uint DirectionalShadowLodFallbackCount { get; init; }
+
         public bool IsValid =>
             CandidateCount != 0 ||
             EmittedCount != 0 ||
@@ -1226,6 +1232,7 @@ namespace Njulf.Rendering.Pipeline
             OverflowCount != 0 ||
             HiZTestedCount != 0 ||
             HiZRejectedCount != 0 ||
+            DirectionalShadowLodFallbackCount != 0 ||
             SolidDepthCandidateCount != 0 ||
             SolidDepthEmittedCount != 0 ||
             SolidDepthOverflowCount != 0 ||
@@ -1234,9 +1241,11 @@ namespace Njulf.Rendering.Pipeline
             MaskedDepthOverflowCount != 0 ||
             HasAny(DirectionalStaticShadowCandidateCounts) ||
             HasAny(DirectionalStaticShadowEmittedCounts) ||
+            HasAny(DirectionalStaticShadowRejectedCounts) ||
             HasAny(DirectionalStaticShadowOverflowCounts) ||
             HasAny(DirectionalDynamicShadowCandidateCounts) ||
             HasAny(DirectionalDynamicShadowEmittedCounts) ||
+            HasAny(DirectionalDynamicShadowRejectedCounts) ||
             HasAny(DirectionalDynamicShadowOverflowCounts);
 
         public static SceneSubmissionCounterSnapshot Invalid { get; } = new(
@@ -1316,7 +1325,10 @@ namespace Njulf.Rendering.Pipeline
                     counters.DirectionalDynamicShadowCascade1OverflowCount,
                     counters.DirectionalDynamicShadowCascade2OverflowCount,
                     counters.DirectionalDynamicShadowCascade3OverflowCount
-                ]);
+                ])
+            {
+                DirectionalShadowLodFallbackCount = counters.DirectionalShadowLodFallbackCount
+            };
         }
 
         private static bool HasAny(uint[] values)

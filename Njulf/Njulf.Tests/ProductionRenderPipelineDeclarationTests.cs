@@ -595,10 +595,23 @@ public sealed class ProductionRenderPipelineDeclarationTests
         string[] geometryPasses = declaration.GetActivePasses(
             RenderFeatureIsolationMode.Geometry,
             TransparencyMode.SortedAlphaBlend).ToArray();
-        string[] expectedGeometryPasses = declaration.PassOrder
-            .Where(passName => RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, passName))
-            .Where(passName => passName is not "WeightedTransparentPass" and not "WeightedOitCompositePass")
-            .ToArray();
+        string[] expectedGeometryPasses =
+        [
+            "SceneOpaqueCompactionPass",
+            "DepthPrePass",
+            "MotionVectorPass",
+            "HiZBuildPass",
+            "ForwardVisibilityCompactionPass",
+            "SceneSurfacePass",
+            "TiledLightCullingPass",
+            "ForwardPlusPass",
+            "SkyboxPass",
+            "TransparentForwardPass",
+            "DebugDrawPass",
+            "ToneMapCompositePass",
+            "AntiAliasingPass",
+            "ImGuiRenderPass"
+        ];
 
         Assert.Multiple(() =>
         {
@@ -609,6 +622,11 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(geometryPasses, Does.Not.Contain("SsgiTemporalPass"));
             Assert.That(geometryPasses, Does.Not.Contain("SsgiDenoisePass"));
             Assert.That(geometryPasses, Does.Not.Contain("SsgiCompositePass"));
+            Assert.That(geometryPasses, Does.Not.Contain("FarFieldClipmapBakePass"));
+            Assert.That(geometryPasses, Does.Not.Contain("SimpleDdgiTracePass"));
+            Assert.That(geometryPasses, Does.Not.Contain("SimpleDdgiRelocateClassifyPass"));
+            Assert.That(geometryPasses, Does.Not.Contain("SimpleDdgiTransportPass"));
+            Assert.That(geometryPasses, Does.Not.Contain("SimpleDdgiBlendPass"));
             Assert.That(geometryPasses, Does.Not.Contain("DdgiSchedulePass"));
             Assert.That(geometryPasses, Does.Not.Contain("DdgiTracePass"));
             Assert.That(geometryPasses, Does.Not.Contain("DdgiBlendPass"));

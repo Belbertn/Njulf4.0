@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
 namespace Njulf.Tests;
@@ -14,8 +15,8 @@ public sealed class GlobalIlluminationDefaultsTests
         const uint frameIndex = 0xf1234567u;
         const uint flags = 0xc0debeefu;
 
-        float packedFrameIndex = BitConverter.UInt32BitsToSingle(frameIndex);
-        float packedFlags = BitConverter.UInt32BitsToSingle(flags);
+        float packedFrameIndex = SimpleDdgiVolumeManager.PackHeaderWord(frameIndex);
+        float packedFlags = SimpleDdgiVolumeManager.PackHeaderWord(flags);
 
         Assert.Multiple(() =>
         {

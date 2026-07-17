@@ -26,26 +26,51 @@ namespace Njulf.Tests
                 Assert.That(settings.Debug.CpuSnapshotsEnabled, Is.False);
                 Assert.That(settings.Diagnostics.GpuMeshletCountersEnabled, Is.False);
                 Assert.That(settings.Diagnostics.DdgiForwardEstimateCountersEnabled, Is.False);
+                Assert.That(settings.Debug.SelectedObjectIndex, Is.EqualTo(-1));
+                Assert.That(settings.Debug.MaxDebugLineSegments, Is.EqualTo(DebugDrawList.DefaultMaxLineSegments));
+            });
+        }
+
+        [Test]
+        public void RendererDiagnosticsBuffer_CounterFamiliesAreContiguousAndFullyCounted()
+        {
+            var families = new (string Name, int Start, int Count)[]
+            {
+                ("meshlet", 0, RendererDiagnosticsBuffer.MeshletCounterCount),
+                ("DDGI forward estimate", RendererDiagnosticsBuffer.DdgiForwardEstimateCounterBase, RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount),
+                ("DDGI trace energy", RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase, RendererDiagnosticsBuffer.DdgiTraceEnergyCounterCount),
+                ("DDGI trace early-out", RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterBase, RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterCount),
+                ("DDGI blend energy", RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase, RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount),
+                ("DDGI ring mismatch", RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleBase, RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleCount),
+                ("far field", RendererDiagnosticsBuffer.FarFieldCounterBase, RendererDiagnosticsBuffer.FarFieldCounterCount),
+                ("DDGI investigation", RendererDiagnosticsBuffer.DdgiInvestigationCounterBase, RendererDiagnosticsBuffer.DdgiInvestigationCounterCount),
+                ("simple DDGI transport", RendererDiagnosticsBuffer.SimpleDdgiTransportCounterBase, RendererDiagnosticsBuffer.SimpleDdgiTransportCounterCount),
+                ("directional shadow receiver", RendererDiagnosticsBuffer.DirectionalShadowReceiverCounterBase, RendererDiagnosticsBuffer.DirectionalShadowReceiverCounterCount)
+            };
+
+            Assert.Multiple(() =>
+            {
+                int nextExpectedStart = 0;
+                foreach ((string name, int start, int count) in families)
+                {
+                    Assert.That(start, Is.EqualTo(nextExpectedStart), $"{name} counter base");
+                    Assert.That(count, Is.GreaterThan(0), $"{name} counter count");
+                    nextExpectedStart += count;
+                }
+
                 Assert.That(RendererDiagnosticsBuffer.DdgiForwardEstimateLuminanceScale, Is.EqualTo(4096.0f));
                 Assert.That(RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount, Is.EqualTo(46));
                 Assert.That(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount, Is.EqualTo(7));
-                Assert.That(RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiForwardEstimateCounterBase + RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount));
-                Assert.That(RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase + RendererDiagnosticsBuffer.DdgiTraceEnergyCounterCount));
-                Assert.That(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterBase + RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterCount));
-                Assert.That(RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase + RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount));
-                Assert.That(RendererDiagnosticsBuffer.FarFieldCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleBase + RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleCount));
                 Assert.That(RendererDiagnosticsBuffer.FarFieldCounterCount, Is.EqualTo(10));
-                Assert.That(RendererDiagnosticsBuffer.DdgiInvestigationCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.FarFieldCounterBase + RendererDiagnosticsBuffer.FarFieldCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.DdgiInvestigationFixedCounterCount, Is.EqualTo(38));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeGatherCounterCount, Is.EqualTo(GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumePrimaryGatherCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiInvestigationCounterBase + RendererDiagnosticsBuffer.DdgiInvestigationFixedCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeSampledGatherCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.SimpleDdgiVolumePrimaryGatherCounterBase + RendererDiagnosticsBuffer.SimpleDdgiVolumeGatherCounterCount));
-                Assert.That(RendererDiagnosticsBuffer.DdgiInvestigationCounterCount, Is.EqualTo(70));
-                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiTransportCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiInvestigationCounterBase + RendererDiagnosticsBuffer.DdgiInvestigationCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiTransportCounterCount, Is.EqualTo(6));
-                Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(RendererDiagnosticsBuffer.MeshletCounterCount + RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount + RendererDiagnosticsBuffer.DdgiTraceEnergyCounterCount + RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterCount + RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount + RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleCount + RendererDiagnosticsBuffer.FarFieldCounterCount + RendererDiagnosticsBuffer.DdgiInvestigationCounterCount + RendererDiagnosticsBuffer.SimpleDdgiTransportCounterCount));
-                Assert.That(settings.Debug.SelectedObjectIndex, Is.EqualTo(-1));
-                Assert.That(settings.Debug.MaxDebugLineSegments, Is.EqualTo(DebugDrawList.DefaultMaxLineSegments));
+                Assert.That(RendererDiagnosticsBuffer.DirectionalShadowReceiverCascadeCount, Is.EqualTo(ShadowSettings.MaxDirectionalCascades));
+                Assert.That(RendererDiagnosticsBuffer.DirectionalShadowReceiverCounterFamilyCount, Is.EqualTo(5));
+                Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(nextExpectedStart));
+                Assert.That(RendererDiagnosticsBuffer.CounterBufferSize, Is.EqualTo((ulong)nextExpectedStart * sizeof(uint)));
             });
         }
 
@@ -269,7 +294,6 @@ namespace Njulf.Tests
         {
             var settings = new RenderSettings();
             string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
-            string reflectionProbeManager = ReadRepoText("Njulf.Rendering", "Resources", "ReflectionProbeManager.cs");
 
             Assert.Multiple(() =>
             {
@@ -291,8 +315,22 @@ namespace Njulf.Tests
                 Assert.That(renderer, Does.Contain("ScheduleReflectionProbeRecapturesFromGi(sceneData, ddgiActive, simpleDdgiActive);"));
                 Assert.That(renderer, Does.Contain("_reflectionProbeManager.RequestRecaptureAll(\"ddgi-ready\")"));
                 Assert.That(renderer, Does.Contain("_reflectionProbeManager.RequestRecaptureAll(\"simple-ddgi-dirty\")"));
-                Assert.That(reflectionProbeManager, Does.Contain("public void RequestRecaptureAll(string reason)"));
-                Assert.That(reflectionProbeManager, Does.Contain("DrainCaptureQueue();"));
+            });
+        }
+
+        [Test]
+        public void ReflectionProbeCaptureContract_RequiresExplicitRenderingBeforePublication()
+        {
+            string manager = ReadRepoText("Njulf.Rendering", "Resources", "ReflectionProbeManager.cs");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(manager, Does.Contain("public void RequestRecaptureAll(string reason)"));
+                Assert.That(manager, Does.Contain("public bool TryBeginCapture(out ReflectionProbeCapture capture)"));
+                Assert.That(manager, Does.Contain("public void PublishCapture(in ReflectionProbeCapture capture)"));
+                Assert.That(manager, Does.Contain("_capturedProbeIds.Add(capture.ProbeId);"));
+                Assert.That(manager.Split("_capturesCompletedThisFrame++", StringSplitOptions.None), Has.Length.EqualTo(2));
+                Assert.That(manager, Does.Not.Contain("DrainCaptureQueue"));
             });
         }
 

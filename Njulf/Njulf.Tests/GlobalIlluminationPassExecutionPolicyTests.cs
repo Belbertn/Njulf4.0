@@ -51,6 +51,8 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
     [TestCase(GlobalIlluminationDebugView.DdgiConfidenceBypass, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.FarFieldOccupancySlice, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.FarFieldTraceResult, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.FarFieldSkyVisibility, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.FarFieldSunShadow, true, false, false)]
     public void DebugViews_MapToExpectedExecutionPolicy(
         GlobalIlluminationDebugView view,
         bool expectedDdgiDebug,
@@ -66,6 +68,27 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
             Assert.That(GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(gi), Is.True);
             Assert.That(GlobalIlluminationPassExecutionPolicy.ShouldCompositeSsgi(gi), Is.EqualTo(expectedComposite));
         });
+    }
+
+    [Test]
+    public void DebugViewClassification_CoversEveryDefinedViewExactlyOnce()
+    {
+        var neutralViews = new HashSet<GlobalIlluminationDebugView>
+        {
+            GlobalIlluminationDebugView.None,
+            GlobalIlluminationDebugView.FinalIndirect,
+            GlobalIlluminationDebugView.RayQueryCost
+        };
+
+        foreach (GlobalIlluminationDebugView view in Enum.GetValues<GlobalIlluminationDebugView>())
+        {
+            int classificationCount =
+                (neutralViews.Contains(view) ? 1 : 0) +
+                (GlobalIlluminationPassExecutionPolicy.IsDdgiDebugView(view) ? 1 : 0) +
+                (GlobalIlluminationPassExecutionPolicy.IsSsgiDebugView(view) ? 1 : 0);
+
+            Assert.That(classificationCount, Is.EqualTo(1), view.ToString());
+        }
     }
 
     [Test]
@@ -138,6 +161,16 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
                 GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(
                     CreateEnabledSsgiSettings(GlobalIlluminationDebugView.FarFieldTraceResult),
                     121u),
+                Is.True);
+            Assert.That(
+                GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(
+                    CreateEnabledSsgiSettings(GlobalIlluminationDebugView.FarFieldSkyVisibility),
+                    122u),
+                Is.True);
+            Assert.That(
+                GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(
+                    CreateEnabledSsgiSettings(GlobalIlluminationDebugView.FarFieldSunShadow),
+                    123u),
                 Is.True);
         });
     }

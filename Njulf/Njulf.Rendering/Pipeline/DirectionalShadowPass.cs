@@ -28,6 +28,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly ShadowSettings _settings;
         private ulong _lastStaticCacheSignature;
         private bool _hasStaticCacheSignature;
+        private uint _staticCacheValidCascadeMask;
 
         public DirectionalShadowPass(
             VulkanContext context,
@@ -64,9 +65,21 @@ namespace Njulf.Rendering.Pipeline
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             if (!sceneData.DirectionalShadowPassEnabled || !_shadowResources.HasImage)
+            {
+                UpdateStaticCacheDiagnostics(sceneData, 0u, 0u, 0u);
                 return false;
+            }
 
-            return IsStaticCacheDirty(sceneData) ||
+            uint activeMask = GetStaticCacheActiveMask(sceneData);
+            bool staticDirty = IsStaticCacheDirty(sceneData);
+            uint reuseMask = !staticDirty &&
+                activeMask != 0u &&
+                (_staticCacheValidCascadeMask & activeMask) == activeMask
+                ? activeMask
+                : 0u;
+            UpdateStaticCacheDiagnostics(sceneData, activeMask, 0u, reuseMask);
+
+            return staticDirty ||
                    sceneData.DirectionalDynamicShadowMeshletCount > 0 ||
                    HasFoliageShadowWork(sceneData);
         }
@@ -76,15 +89,28 @@ namespace Njulf.Rendering.Pipeline
             if (!ShouldExecute(frameIndex, sceneData))
                 return;
 
+            uint activeMask = GetStaticCacheActiveMask(sceneData);
             bool staticDirty = IsStaticCacheDirty(sceneData);
-            if (staticDirty)
+            uint refreshMask = 0u;
+            uint reuseMask = 0u;
+            if (staticDirty && activeMask != 0u)
             {
-                RenderStaticCache(cmd, sceneData);
+                // Do not treat the previous contents as usable while a refresh is in
+                // progress. Every requested layer is cleared and rendered independently.
+                _staticCacheValidCascadeMask &= ~activeMask;
+                refreshMask = RenderStaticCache(cmd, sceneData);
+                _staticCacheValidCascadeMask |= refreshMask;
                 _lastStaticCacheSignature = CreateStaticCacheSignature(sceneData);
                 _hasStaticCacheSignature = true;
             }
+            else if (activeMask != 0u &&
+                     (_staticCacheValidCascadeMask & activeMask) == activeMask)
+            {
+                reuseMask = activeMask;
+            }
 
-            if (sceneData.DirectionalStaticShadowMeshletCount > 0)
+            if (activeMask != 0u &&
+                (_staticCacheValidCascadeMask & activeMask) == activeMask)
             {
                 CopyStaticCacheToWorking(cmd, sceneData);
             }
@@ -100,16 +126,18 @@ namespace Njulf.Rendering.Pipeline
                 RenderWorkingFoliage(cmd, sceneData);
 
             TransitionWorkingMap(cmd, ImageLayout.DepthStencilReadOnlyOptimal);
+            UpdateStaticCacheDiagnostics(sceneData, activeMask, refreshMask, reuseMask);
         }
 
-        private void RenderStaticCache(CommandBuffer cmd, SceneRenderingData sceneData)
+        private uint RenderStaticCache(CommandBuffer cmd, SceneRenderingData sceneData)
         {
             if (sceneData.DirectionalStaticShadowMeshletCount <= 0)
-                return;
+                return 0u;
 
             TransitionStaticMap(cmd, ImageLayout.DepthStencilAttachmentOptimal);
             BindShadowPipeline(cmd);
             int cascadeCount = Math.Min(sceneData.DirectionalShadowCascadeCount, _shadowResources.CascadeCount);
+            uint renderedMask = 0u;
             for (int cascade = 0; cascade < cascadeCount; cascade++)
             {
                 _context.BeginDebugLabel(cmd, StaticCascadeDebugLabels[cascade]);
@@ -124,12 +152,15 @@ namespace Njulf.Rendering.Pipeline
                         GetStaticShadowMeshletDrawBufferBaseIndex(sceneData, cascade),
                         AttachmentLoadOp.Clear,
                         GetStaticShadowIndirectDispatchOffset(sceneData, cascade));
+                    renderedMask |= 1u << cascade;
                 }
                 finally
                 {
                     _context.EndDebugLabel(cmd);
                 }
             }
+
+            return renderedMask;
         }
 
         private void RenderWorkingDynamic(CommandBuffer cmd, SceneRenderingData sceneData)
@@ -493,7 +524,7 @@ namespace Njulf.Rendering.Pipeline
 
             _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
             _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
-            _context.Api.CmdSetDepthBias(cmd, _settings.ConstantDepthBias, 0.0f, _settings.SlopeScaledDepthBias);
+            SetReverseDepthBias(cmd);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ShadowAlphaDepthPipeline);
 
             var storageSet = _bindlessHeap.StorageBufferSet;
@@ -521,13 +552,26 @@ namespace Njulf.Rendering.Pipeline
 
             _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
             _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
-            _context.Api.CmdSetDepthBias(cmd, _settings.ConstantDepthBias, 0.0f, _settings.SlopeScaledDepthBias);
+            SetReverseDepthBias(cmd);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
 
             var storageSet = _bindlessHeap.StorageBufferSet;
             var textureSet = _bindlessHeap.TextureSamplerSet;
             _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _foliagePipeline!.GraphicsLayout, 0, 1, &storageSet, 0, null);
             _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _foliagePipeline.GraphicsLayout, 1, 1, &textureSet, 0, null);
+        }
+
+        private void SetReverseDepthBias(CommandBuffer cmd)
+        {
+            // Directional shadow maps use reverse-Z (clear 0, GreaterOrEqual). Vulkan adds
+            // depth bias to the generated depth value, so a positive bias moves casters
+            // toward the light and makes detailed surfaces shadow themselves. Move the
+            // stored caster depth away from the light instead.
+            _context.Api.CmdSetDepthBias(
+                cmd,
+                -_settings.ConstantDepthBias,
+                0.0f,
+                -_settings.SlopeScaledDepthBias);
         }
 
         private bool HasFoliageShadowWork(SceneRenderingData sceneData)
@@ -645,13 +689,59 @@ namespace Njulf.Rendering.Pipeline
                 &copy);
         }
 
+        private uint GetStaticCacheActiveMask(SceneRenderingData sceneData)
+        {
+            if (sceneData.DirectionalStaticShadowMeshletCount <= 0)
+                return 0u;
+
+            int cascadeCount = Math.Min(
+                Math.Max(sceneData.DirectionalShadowCascadeCount, 0),
+                _shadowResources.CascadeCount);
+            return GetCascadeMask(cascadeCount);
+        }
+
+        private static uint GetCascadeMask(int cascadeCount)
+        {
+            cascadeCount = Math.Min(Math.Max(cascadeCount, 0), ShadowSettings.MaxDirectionalCascades);
+            return cascadeCount == 0 ? 0u : (1u << cascadeCount) - 1u;
+        }
+
+        private void UpdateStaticCacheDiagnostics(
+            SceneRenderingData sceneData,
+            uint activeMask,
+            uint refreshMask,
+            uint reuseMask)
+        {
+            uint validMask = _staticCacheValidCascadeMask & activeMask;
+            sceneData.DirectionalShadowStaticCacheActiveMask = unchecked((int)activeMask);
+            sceneData.DirectionalShadowStaticCacheValidMask = unchecked((int)validMask);
+            sceneData.DirectionalShadowStaticCacheRefreshMask = unchecked((int)refreshMask);
+            sceneData.DirectionalShadowStaticCacheReuseMask = unchecked((int)reuseMask);
+        }
+
         private bool IsStaticCacheDirty(SceneRenderingData sceneData)
         {
+            uint requiredMask = GetStaticCacheActiveMask(sceneData);
+            if (requiredMask == 0u)
+            {
+                // A frame with no static casters must still clear a previously
+                // composed working map. Otherwise the last static cache contents
+                // survive after the scene (or its submission classification)
+                // becomes dynamic-only.
+                bool hadValidStaticCache = _staticCacheValidCascadeMask != 0u;
+                _staticCacheValidCascadeMask = 0u;
+                return hadValidStaticCache;
+            }
+
             if (_shadowResources.StaticLayout == ImageLayout.Undefined ||
                 _shadowResources.Layout == ImageLayout.Undefined)
             {
+                _staticCacheValidCascadeMask = 0u;
                 return true;
             }
+
+            if ((_staticCacheValidCascadeMask & requiredMask) != requiredMask)
+                return true;
 
             ulong signature = CreateStaticCacheSignature(sceneData);
             return !_hasStaticCacheSignature || _lastStaticCacheSignature != signature;

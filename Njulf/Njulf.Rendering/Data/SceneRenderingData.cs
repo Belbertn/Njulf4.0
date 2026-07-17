@@ -419,6 +419,7 @@ namespace Njulf.Rendering.Data
         public int SceneSubmissionGpuDirectionalShadowCandidateCount { get; set; }
         public int SceneSubmissionGpuCompactedDirectionalShadowMeshletCount { get; set; }
         public int SceneSubmissionGpuDirectionalShadowOverflowCount { get; set; }
+        public int SceneSubmissionGpuDirectionalShadowLodFallbackCount { get; set; }
         public int SceneSubmissionGpuLod0EmittedCount { get; set; }
         public int SceneSubmissionGpuLod1EmittedCount { get; set; }
         public int SceneSubmissionGpuLod2EmittedCount { get; set; }
@@ -468,6 +469,8 @@ namespace Njulf.Rendering.Data
         public bool DirectionalShadowRecordSkipped { get; set; }
         public uint DirectionalShadowMapSize { get; set; }
         public int DirectionalShadowCascadeCount { get; set; }
+        public float DirectionalShadowMaxDistance { get; set; }
+        public float DirectionalShadowCascadeBlendFraction { get; set; }
         public int ShadowedDirectionalLightIndex { get; set; } = -1;
         public ShadowDebugView ShadowDebugView { get; set; } = ShadowDebugView.None;
         public float ShadowNormalBias { get; set; }
@@ -476,6 +479,12 @@ namespace Njulf.Rendering.Data
         public int SpotShadowPcfRadius { get; set; }
         public int PointShadowPcfRadius { get; set; }
         public int ForwardShadowReceiverMeshletCount { get; set; }
+        public int DirectionalShadowStaticCacheActiveMask { get; set; }
+        public int DirectionalShadowStaticCacheValidMask { get; set; }
+        public int DirectionalShadowStaticCacheRefreshMask { get; set; }
+        public int DirectionalShadowStaticCacheReuseMask { get; set; }
+        public int DirectionalShadowReceiverCountersReadbackValid { get; set; }
+        public int DirectionalShadowReceiverUnresolvedCount { get; set; }
         public GPUShadowData ShadowData { get; set; }
         public bool SpotShadowsEnabled { get; set; }
         public bool SpotShadowRecordSkipped { get; set; }
@@ -512,6 +521,11 @@ namespace Njulf.Rendering.Data
         public int[] PointShadowFaceMasks { get; set; } = [];
         public GPULocalLightShadowIndex[] LocalLightShadowIndices { get; set; } = [];
         public int[] DirectionalShadowMeshletCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] DirectionalShadowReceiverPrimarySelectionCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] DirectionalShadowReceiverProjectionRejectedCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] DirectionalShadowReceiverUvDepthRejectedCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] DirectionalShadowReceiverFallbackCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] DirectionalShadowReceiverTransitionBlendCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
         public int[] SceneSubmissionGpuDirectionalStaticShadowCandidateCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
         public int[] SceneSubmissionGpuDirectionalStaticShadowEmittedCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
         public int[] SceneSubmissionGpuDirectionalStaticShadowRejectedCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
@@ -1516,6 +1530,7 @@ namespace Njulf.Rendering.Data
             SceneSubmissionGpuDirectionalShadowCandidateCount = 0;
             SceneSubmissionGpuCompactedDirectionalShadowMeshletCount = 0;
             SceneSubmissionGpuDirectionalShadowOverflowCount = 0;
+            SceneSubmissionGpuDirectionalShadowLodFallbackCount = 0;
             SceneSubmissionGpuLod0EmittedCount = 0;
             SceneSubmissionGpuLod1EmittedCount = 0;
             SceneSubmissionGpuLod2EmittedCount = 0;
@@ -1584,6 +1599,8 @@ namespace Njulf.Rendering.Data
             DirectionalShadowRecordSkipped = false;
             DirectionalShadowMapSize = 0;
             DirectionalShadowCascadeCount = 0;
+            DirectionalShadowMaxDistance = 0;
+            DirectionalShadowCascadeBlendFraction = 0;
             ShadowedDirectionalLightIndex = -1;
             ShadowDebugView = ShadowDebugView.None;
             ShadowNormalBias = 0;
@@ -1592,6 +1609,12 @@ namespace Njulf.Rendering.Data
             SpotShadowPcfRadius = 0;
             PointShadowPcfRadius = 0;
             ForwardShadowReceiverMeshletCount = 0;
+            DirectionalShadowStaticCacheActiveMask = 0;
+            DirectionalShadowStaticCacheValidMask = 0;
+            DirectionalShadowStaticCacheRefreshMask = 0;
+            DirectionalShadowStaticCacheReuseMask = 0;
+            DirectionalShadowReceiverCountersReadbackValid = 0;
+            DirectionalShadowReceiverUnresolvedCount = 0;
             ShadowData = default;
             SpotShadowsEnabled = false;
             SpotShadowRecordSkipped = false;
@@ -1630,6 +1653,11 @@ namespace Njulf.Rendering.Data
             TiledLightHeaderBufferClearBytes = 0;
             TiledLightIndexBufferClearBytes = 0;
             Array.Clear(DirectionalShadowMeshletCounts, 0, DirectionalShadowMeshletCounts.Length);
+            Array.Clear(DirectionalShadowReceiverPrimarySelectionCounts, 0, DirectionalShadowReceiverPrimarySelectionCounts.Length);
+            Array.Clear(DirectionalShadowReceiverProjectionRejectedCounts, 0, DirectionalShadowReceiverProjectionRejectedCounts.Length);
+            Array.Clear(DirectionalShadowReceiverUvDepthRejectedCounts, 0, DirectionalShadowReceiverUvDepthRejectedCounts.Length);
+            Array.Clear(DirectionalShadowReceiverFallbackCounts, 0, DirectionalShadowReceiverFallbackCounts.Length);
+            Array.Clear(DirectionalShadowReceiverTransitionBlendCounts, 0, DirectionalShadowReceiverTransitionBlendCounts.Length);
             Array.Clear(SceneSubmissionGpuDirectionalStaticShadowCandidateCounts, 0, SceneSubmissionGpuDirectionalStaticShadowCandidateCounts.Length);
             Array.Clear(SceneSubmissionGpuDirectionalStaticShadowEmittedCounts, 0, SceneSubmissionGpuDirectionalStaticShadowEmittedCounts.Length);
             Array.Clear(SceneSubmissionGpuDirectionalStaticShadowRejectedCounts, 0, SceneSubmissionGpuDirectionalStaticShadowRejectedCounts.Length);

@@ -144,6 +144,41 @@ public sealed class SimpleDdgiVolumeManagerTests
             Is.EqualTo(expectedSkip));
     }
 
+    [TestCase(15_354, 8, 0, true)]
+    [TestCase(15_354, 15, 0, true)]
+    [TestCase(15_354, 16, 0, false)]
+    [TestCase(15_354, 8, 1, false)]
+    [TestCase(999, 1, 0, false)]
+    [TestCase(1_000, 1, 0, true)]
+    [TestCase(0, 0, 0, true)]
+    public void GlobalTransportConvergence_BoundedSourceRepairTailDoesNotBlockSolvedField(
+        int participatingProbeCount,
+        int sourceRepairProbeCount,
+        int pendingSolverProbeCount,
+        bool expectedComplete)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.CanCompleteTransportGlobalConvergence(
+                participatingProbeCount,
+                sourceRepairProbeCount,
+                pendingSolverProbeCount),
+            Is.EqualTo(expectedComplete));
+    }
+
+    [TestCase(999, 0)]
+    [TestCase(1_000, 1)]
+    [TestCase(15_354, 15)]
+    [TestCase(1_000_000, 32)]
+    public void GlobalTransportConvergence_SourceRepairAllowanceIsStrictAndBounded(
+        int participatingProbeCount,
+        int expectedAllowance)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveTransportGlobalConvergenceSourceRepairAllowance(
+                participatingProbeCount),
+            Is.EqualTo(expectedAllowance));
+    }
+
     [Test]
     public void SchedulerClassQuotas_ReserveDirtyRetryAndMaintenanceDuringContinuousExposure()
     {

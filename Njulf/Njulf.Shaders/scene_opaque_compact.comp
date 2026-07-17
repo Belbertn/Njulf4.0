@@ -49,6 +49,11 @@ const uint SCENE_SUBMISSION_COUNTER_SIMPLE_NORMAL_OPAQUE_OVERFLOW = 64u;
 const uint SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_APPEND = 65u;
 const uint SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_EMITTED = 66u;
 const uint SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_OVERFLOW = 67u;
+// Directional-shadow input commands address LOD0 meshlets.  A lower LOD has a
+// different meshlet topology, so it cannot be remapped per command without an
+// explicit correspondence table.  This counter records the conservative LOD0
+// retention used instead of dropping a caster.
+const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_LOD_FALLBACK = 68u;
 const uint SCENE_INDIRECT_DISPATCH_WORD_STRIDE = 4u;
 const uint SCENE_INDIRECT_DISPATCH_OPAQUE_SLOT = 0u;
 const uint SCENE_INDIRECT_DISPATCH_SIMPLE_OPAQUE_SLOT = 1u;
@@ -534,6 +539,51 @@ bool ApplyGpuLodSelection(inout GPUMeshletDrawCommand command, out uint effectiv
     return true;
 }
 
+bool ApplyConservativeDirectionalShadowLodSelection(
+    inout GPUMeshletDrawCommand command,
+    out uint effectiveLod,
+    uint lodBias)
+{
+    // The directional-shadow candidate stream is generated from LOD0 meshlet
+    // commands. A one-to-one remap into a lower-LOD range was previously used
+    // here, but lower LODs normally have fewer and differently grouped meshlets.
+    // That mapping silently discarded every source meshlet beyond the lower-LOD
+    // count, creating incomplete caster coverage and distance-dependent holes.
+    // Preserve the source LOD0 command until the renderer has a mesh-level
+    // remapping/deduplication path that can prove coverage equivalence.
+    effectiveLod = 0u;
+    if ((pc.Push.Flags & SCENE_OPAQUE_COMPACTION_FLAG_GPU_LOD_SELECTION) == 0u)
+        return true;
+
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
+    GPUObjectData objectData = ReadInstanceData(pc.Push.CurrentFrameIndex, command.InstanceId);
+    GPUMeshInfo meshInfo = ReadMeshInfo(uint(max(objectData.MeshIndex, 0)));
+    uint lod0LocalIndex = command.MeshletIndex >= meshInfo.MeshletOffset
+        ? command.MeshletIndex - meshInfo.MeshletOffset
+        : 0xffffffffu;
+    if (lod0LocalIndex >= meshInfo.MeshletCount ||
+        (meshInfo.MeshletLod1Count == 0u && meshInfo.MeshletLod2Count == 0u))
+    {
+        return true;
+    }
+
+    vec4 worldCenter = TransformRowMajorPoint(meshInfo.BoundingSphere.xyz, instanceBufferIndex, objectWordOffset);
+    float worldRadius = meshInfo.BoundingSphere.w * ReadInstanceMaxScale(instanceBufferIndex, objectWordOffset);
+    uint requestedLod = min(
+        SelectLodLevel(pc.Push.CameraPosition.xyz, worldCenter.xyz, worldRadius) + lodBias,
+        2u);
+    if (requestedLod > 0u)
+    {
+        atomicAdd(
+            BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
+                SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_LOD_FALLBACK],
+            1u);
+    }
+
+    return true;
+}
+
 void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
 {
     uint candidateCount = pc.Push.SimpleCandidateCount +
@@ -665,7 +715,7 @@ void ProcessDirectionalShadowCandidate(
         candidateIndex);
 
     uint effectiveLod = 0u;
-    if (!ApplyGpuLodSelection(command, effectiveLod, pc.Push.GpuShadowLodBias))
+    if (!ApplyConservativeDirectionalShadowLodSelection(command, effectiveLod, pc.Push.GpuShadowLodBias))
         return;
 
     uint cascadeCount = min(pc.Push.DirectionalShadowCascadeCount, SCENE_DIRECTIONAL_SHADOW_CASCADE_COUNT);

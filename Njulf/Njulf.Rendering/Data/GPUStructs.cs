@@ -649,7 +649,11 @@ namespace Njulf.Rendering.Data
         public uint FullOpaqueAppendCount;
         public uint FullOpaqueEmittedCount;
         public uint FullOpaqueOverflowCount;
-        public uint Padding0;
+        /// <summary>
+        /// Number of directional-shadow candidates retained at LOD0 because the requested
+        /// lower-LOD range cannot be mapped one-to-one without dropping caster coverage.
+        /// </summary>
+        public uint DirectionalShadowLodFallbackCount;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -819,6 +823,7 @@ namespace Njulf.Rendering.Data
         private const int GlobalIlluminationEnabledShift = 31;
         private const uint DdgiForwardEstimateCountersEnabledFlag = 1u << 0;
         private const uint DdgiClipmapCoverageCountersEnabledFlag = 1u << 1;
+        private const uint DirectionalShadowReceiverCountersEnabledFlag = 1u << 2;
 
         public Matrix4x4 ViewProjectionMatrix;
         public Matrix4x4 InverseViewMatrix;
@@ -859,10 +864,12 @@ namespace Njulf.Rendering.Data
 
         public static uint PackDiagnosticFlags(
             bool ddgiForwardEstimateCountersEnabled,
-            bool ddgiClipmapCoverageCountersEnabled = false)
+            bool ddgiClipmapCoverageCountersEnabled = false,
+            bool directionalShadowReceiverCountersEnabled = false)
         {
             return (ddgiForwardEstimateCountersEnabled ? DdgiForwardEstimateCountersEnabledFlag : 0u) |
-                   (ddgiClipmapCoverageCountersEnabled ? DdgiClipmapCoverageCountersEnabledFlag : 0u);
+                   (ddgiClipmapCoverageCountersEnabled ? DdgiClipmapCoverageCountersEnabledFlag : 0u) |
+                   (directionalShadowReceiverCountersEnabled ? DirectionalShadowReceiverCountersEnabledFlag : 0u);
         }
     }
 
@@ -913,6 +920,9 @@ namespace Njulf.Rendering.Data
         public Vector4 CascadeSplits;
         public Vector4 Settings;
         public Vector4 Indices;
+        // x = transition fraction, y = effective camera near, z = effective shadow far.
+        // Kept separate from Settings so the directional-shadow ABI remains explicit.
+        public Vector4 CascadeTransitionData;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

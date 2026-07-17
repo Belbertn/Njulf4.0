@@ -207,6 +207,7 @@ namespace Njulf.Rendering
         private GpuMeshletCounters _completedGpuCounters;
         private DdgiForwardEstimateCounters _completedDdgiForwardEstimateCounters;
         private DdgiInvestigationCounters _completedDdgiInvestigationCounters;
+        private DirectionalShadowReceiverCounters _completedDirectionalShadowReceiverCounters = DirectionalShadowReceiverCounters.Empty;
         private GpuParticleCounterSnapshot _completedGpuParticleCounters;
         private FoliageCounterSnapshot _completedFoliageCounters;
         private SceneSubmissionCounterSnapshot _completedSceneSubmissionCounters;
@@ -1055,6 +1056,7 @@ namespace Njulf.Rendering
             _completedGpuCounters = _diagnosticsBuffer.GetLastCompletedCounters(_currentFrame);
             _completedDdgiForwardEstimateCounters = _diagnosticsBuffer.GetLastCompletedDdgiForwardEstimateCounters(_currentFrame);
             _completedDdgiInvestigationCounters = _diagnosticsBuffer.GetLastCompletedDdgiInvestigationCounters(_currentFrame);
+            _completedDirectionalShadowReceiverCounters = _diagnosticsBuffer.GetLastCompletedDirectionalShadowReceiverCounters(_currentFrame);
             _completedGpuParticleCounters = _gpuParticleRuntimeManager.GetLastCompletedCounters(_currentFrame);
             _completedFoliageCounters = _foliageManager.GetLastCompletedCounters(_currentFrame);
             _completedSceneSubmissionCounters = _sceneOpaqueCompactionPass?.GetLastCompletedCounters(_currentFrame) ?? SceneSubmissionCounterSnapshot.Invalid;
@@ -1846,6 +1848,7 @@ namespace Njulf.Rendering
             ApplyCompletedSsgiCounters(sceneData, _completedGpuCounters);
             ApplyCompletedDdgiForwardEstimateCounters(sceneData, _completedDdgiForwardEstimateCounters);
             ApplyCompletedDdgiInvestigationCounters(sceneData, _completedDdgiInvestigationCounters);
+            ApplyCompletedDirectionalShadowReceiverCounters(sceneData, _completedDirectionalShadowReceiverCounters);
             if (particlesAllowed)
                 ApplyCompletedGpuParticleCounters(sceneData, _completedGpuParticleCounters);
             if (!isolateSkinnedAnimationDebug)
@@ -3208,6 +3211,8 @@ namespace Njulf.Rendering
                 _hasDirectionalShadowRecordSignature = false;
             sceneData.DirectionalShadowMapSize = shadowSettings.DirectionalShadowMapSize;
             sceneData.DirectionalShadowCascadeCount = shadowSettings.DirectionalCascadeCount;
+            sceneData.DirectionalShadowMaxDistance = shadowSettings.MaxShadowDistance;
+            sceneData.DirectionalShadowCascadeBlendFraction = shadowSettings.DirectionalCascadeBlendFraction;
             sceneData.ShadowedDirectionalLightIndex = enabled ? lightIndex : -1;
             sceneData.ShadowDebugView = shadowSettings.DebugView;
             sceneData.ShadowNormalBias = shadowSettings.NormalBias;
@@ -4853,7 +4858,9 @@ namespace Njulf.Rendering
                 SceneSubmissionGpuDirectionalShadowCandidateCount = sceneData.SceneSubmissionGpuDirectionalShadowCandidateCount,
                 SceneSubmissionGpuCompactedDirectionalShadowMeshletCount = sceneData.SceneSubmissionGpuCompactedDirectionalShadowMeshletCount,
                 SceneSubmissionGpuDirectionalShadowOverflowCount = sceneData.SceneSubmissionGpuDirectionalShadowOverflowCount,
+                SceneSubmissionGpuDirectionalShadowLodFallbackCount = sceneData.SceneSubmissionGpuDirectionalShadowLodFallbackCount,
                 SceneSubmissionGpuDirectionalShadowCascadeSummary = BuildDirectionalShadowCompactionSummary(sceneData),
+                DirectionalShadowRuntime = CreateDirectionalShadowRuntimeDiagnostics(sceneData),
                 SceneSubmissionLocalShadowGpuCompactionJustified =
                     spotShadowGpuCompactionJustified || pointShadowGpuCompactionJustified ? 1 : 0,
                 SceneSubmissionSpotShadowGpuCompactionJustified = spotShadowGpuCompactionJustified ? 1 : 0,
@@ -10159,6 +10166,44 @@ namespace Njulf.Rendering
             sceneData.DdgiBlackFrameMovementClass = DdgiCameraMovementClass.None;
         }
 
+        private static void ApplyCompletedDirectionalShadowReceiverCounters(
+            SceneRenderingData sceneData,
+            DirectionalShadowReceiverCounters counters)
+        {
+            sceneData.DirectionalShadowReceiverCountersReadbackValid = counters.ReadbackValid;
+            sceneData.DirectionalShadowReceiverUnresolvedCount = ClampUIntToInt(counters.UnresolvedCount);
+            if (counters.ReadbackValid == 0)
+            {
+                Array.Clear(
+                    sceneData.DirectionalShadowReceiverPrimarySelectionCounts,
+                    0,
+                    sceneData.DirectionalShadowReceiverPrimarySelectionCounts.Length);
+                Array.Clear(
+                    sceneData.DirectionalShadowReceiverProjectionRejectedCounts,
+                    0,
+                    sceneData.DirectionalShadowReceiverProjectionRejectedCounts.Length);
+                Array.Clear(
+                    sceneData.DirectionalShadowReceiverUvDepthRejectedCounts,
+                    0,
+                    sceneData.DirectionalShadowReceiverUvDepthRejectedCounts.Length);
+                Array.Clear(
+                    sceneData.DirectionalShadowReceiverFallbackCounts,
+                    0,
+                    sceneData.DirectionalShadowReceiverFallbackCounts.Length);
+                Array.Clear(
+                    sceneData.DirectionalShadowReceiverTransitionBlendCounts,
+                    0,
+                    sceneData.DirectionalShadowReceiverTransitionBlendCounts.Length);
+                return;
+            }
+
+            CopyCounterArray(counters.PrimarySelectionCounts, sceneData.DirectionalShadowReceiverPrimarySelectionCounts);
+            CopyCounterArray(counters.ProjectionRejectedCounts, sceneData.DirectionalShadowReceiverProjectionRejectedCounts);
+            CopyCounterArray(counters.UvDepthRejectedCounts, sceneData.DirectionalShadowReceiverUvDepthRejectedCounts);
+            CopyCounterArray(counters.FallbackCounts, sceneData.DirectionalShadowReceiverFallbackCounts);
+            CopyCounterArray(counters.TransitionBlendCounts, sceneData.DirectionalShadowReceiverTransitionBlendCounts);
+        }
+
         private static void ApplySimpleDdgiVolumeGatherCounters(
             SceneRenderingData sceneData,
             DdgiInvestigationCounters counters)
@@ -10264,6 +10309,8 @@ namespace Njulf.Rendering
                 sceneData.SceneSubmissionGpuLod1EmittedCount = ClampUIntToInt(counters.Lod1EmittedCount);
                 sceneData.SceneSubmissionGpuLod2EmittedCount = ClampUIntToInt(counters.Lod2EmittedCount);
                 sceneData.SceneSubmissionGpuMissingLodFallbackCount = ClampUIntToInt(counters.MissingLodFallbackCount);
+                sceneData.SceneSubmissionGpuDirectionalShadowLodFallbackCount =
+                    ClampUIntToInt(counters.DirectionalShadowLodFallbackCount);
                 sceneData.SceneSubmissionGpuDepthSolidCandidateCount = ClampUIntToInt(counters.SolidDepthCandidateCount);
                 sceneData.SceneSubmissionGpuDepthMaskedCandidateCount = ClampUIntToInt(counters.MaskedDepthCandidateCount);
                 sceneData.SceneSubmissionGpuCompactedSolidDepthMeshletCount = ClampUIntToInt(counters.SolidDepthEmittedCount);
@@ -10455,6 +10502,80 @@ namespace Njulf.Rendering
         {
             long product = (long)Math.Max(0, left) * Math.Max(0, right);
             return product > int.MaxValue ? int.MaxValue : (int)product;
+        }
+
+        private static DirectionalShadowRuntimeDiagnostics CreateDirectionalShadowRuntimeDiagnostics(
+            SceneRenderingData sceneData)
+        {
+            if (!sceneData.DirectionalShadowPassEnabled)
+                return DirectionalShadowRuntimeDiagnostics.Empty;
+
+            int cascadeCount = Math.Min(
+                Math.Max(0, sceneData.DirectionalShadowCascadeCount),
+                ShadowSettings.MaxDirectionalCascades);
+            float[] splits = new float[cascadeCount];
+            for (int cascade = 0; cascade < cascadeCount; cascade++)
+                splits[cascade] = GetDirectionalShadowSplit(sceneData.ShadowData, cascade);
+
+            DirectionalShadowReceiverCounters receiverCounters =
+                sceneData.DirectionalShadowReceiverCountersReadbackValid != 0
+                    ? new DirectionalShadowReceiverCounters(
+                        ReadbackValid: 1,
+                        PrimarySelectionCounts: CopyDiagnosticCountersAsUInt(sceneData.DirectionalShadowReceiverPrimarySelectionCounts),
+                        ProjectionRejectedCounts: CopyDiagnosticCountersAsUInt(sceneData.DirectionalShadowReceiverProjectionRejectedCounts),
+                        UvDepthRejectedCounts: CopyDiagnosticCountersAsUInt(sceneData.DirectionalShadowReceiverUvDepthRejectedCounts),
+                        FallbackCounts: CopyDiagnosticCountersAsUInt(sceneData.DirectionalShadowReceiverFallbackCounts),
+                        TransitionBlendCounts: CopyDiagnosticCountersAsUInt(sceneData.DirectionalShadowReceiverTransitionBlendCounts),
+                        UnresolvedCount: unchecked((uint)Math.Max(0, sceneData.DirectionalShadowReceiverUnresolvedCount)))
+                    : DirectionalShadowReceiverCounters.Empty;
+
+            return new DirectionalShadowRuntimeDiagnostics(
+                Enabled: 1,
+                ConfiguredMaxDistance: sceneData.DirectionalShadowMaxDistance,
+                EffectiveNearDistance: sceneData.ShadowData.CascadeTransitionData.Y,
+                EffectiveFarDistance: sceneData.ShadowData.CascadeTransitionData.Z,
+                CascadeBlendFraction: sceneData.ShadowData.CascadeTransitionData.X,
+                CascadeSplits: splits,
+                StaticCacheActiveMask: sceneData.DirectionalShadowStaticCacheActiveMask,
+                StaticCacheValidMask: sceneData.DirectionalShadowStaticCacheValidMask,
+                StaticCacheRefreshMask: sceneData.DirectionalShadowStaticCacheRefreshMask,
+                StaticCacheReuseMask: sceneData.DirectionalShadowStaticCacheReuseMask,
+                StaticCandidateCounts: CopyDiagnosticCounters(sceneData.SceneSubmissionGpuDirectionalStaticShadowCandidateCounts),
+                StaticEmittedCounts: CopyDiagnosticCounters(sceneData.SceneSubmissionGpuDirectionalStaticShadowEmittedCounts),
+                StaticRejectedCounts: CopyDiagnosticCounters(sceneData.SceneSubmissionGpuDirectionalStaticShadowRejectedCounts),
+                StaticOverflowCounts: CopyDiagnosticCounters(sceneData.SceneSubmissionGpuDirectionalStaticShadowOverflowCounts),
+                DynamicCandidateCounts: CopyDiagnosticCounters(sceneData.SceneSubmissionGpuDirectionalDynamicShadowCandidateCounts),
+                DynamicEmittedCounts: CopyDiagnosticCounters(sceneData.SceneSubmissionGpuDirectionalDynamicShadowEmittedCounts),
+                DynamicRejectedCounts: CopyDiagnosticCounters(sceneData.SceneSubmissionGpuDirectionalDynamicShadowRejectedCounts),
+                DynamicOverflowCounts: CopyDiagnosticCounters(sceneData.SceneSubmissionGpuDirectionalDynamicShadowOverflowCounts),
+                ConservativeLodFallbackCount: sceneData.SceneSubmissionGpuDirectionalShadowLodFallbackCount,
+                ReceiverCounters: receiverCounters);
+        }
+
+        private static float GetDirectionalShadowSplit(in GPUShadowData shadowData, int cascade)
+        {
+            return cascade switch
+            {
+                0 => shadowData.CascadeSplits.X,
+                1 => shadowData.CascadeSplits.Y,
+                2 => shadowData.CascadeSplits.Z,
+                _ => shadowData.CascadeSplits.W
+            };
+        }
+
+        private static int[] CopyDiagnosticCounters(int[] source)
+        {
+            var copy = new int[source.Length];
+            Array.Copy(source, copy, source.Length);
+            return copy;
+        }
+
+        private static uint[] CopyDiagnosticCountersAsUInt(int[] source)
+        {
+            var copy = new uint[source.Length];
+            for (int i = 0; i < source.Length; i++)
+                copy[i] = unchecked((uint)Math.Max(0, source[i]));
+            return copy;
         }
 
         private static string BuildDirectionalShadowCompactionSummary(SceneRenderingData sceneData)
