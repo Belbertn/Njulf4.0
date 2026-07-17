@@ -380,18 +380,16 @@ public static class SampleDdgiProductionGate
             return false;
 
         float rawDiffuseLuminance = Math.Max(diagnostics.DdgiForwardEstimateRawDiffuseLuminance, 0.0f);
-        float sampledIrradianceLuminance = Math.Max(diagnostics.DdgiForwardEstimateSampledIrradianceLuminance, 0.0f);
-        float blendIrradianceLuminance = Math.Max(diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage, 0.0f);
         float finalDiffuseLuminance = Math.Max(diagnostics.DdgiForwardEstimateFinalDiffuseLuminance, 0.0f);
 
-        bool atlasOrSampledEnergyHealthy = rawDiffuseLuminance >= MinimumPhase9HealthyRawDiffuseLuminance ||
-            sampledIrradianceLuminance >= MinimumPhase9HealthyRawDiffuseLuminance ||
-            blendIrradianceLuminance >= MinimumPhase9HealthyRawDiffuseLuminance;
-        if (!atlasOrSampledEnergyHealthy)
+        // Atlas and forward metrics average different populations. A bright global probe field can
+        // legitimately land on dark receivers, so absolute atlas/receiver luminance is not evidence
+        // of composition loss. Once raw receiver energy is measurable, final/raw is the invariant
+        // that diagnoses suppression between the raw DDGI term and the composed result.
+        if (rawDiffuseLuminance <= 0.000001f)
             return true;
 
-        return finalDiffuseLuminance >= MinimumPhase9HealthyFinalDiffuseLuminance &&
-            Ratio(finalDiffuseLuminance, Math.Max(rawDiffuseLuminance, MinimumPhase9HealthyRawDiffuseLuminance)) >= MinimumPhase9FinalToRawLuminanceRatio &&
+        return Ratio(finalDiffuseLuminance, rawDiffuseLuminance) >= MinimumPhase9FinalToRawLuminanceRatio &&
             diagnostics.DdgiAverageEffectiveContributionEstimate >= MinimumPhase10EffectiveWeightMean;
     }
 

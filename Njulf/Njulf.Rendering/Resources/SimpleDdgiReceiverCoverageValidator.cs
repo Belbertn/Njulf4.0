@@ -322,8 +322,10 @@ namespace Njulf.Rendering.Resources
             var volumes = new List<CoverageVolume>(ringCount);
             for (int ringIndex = 0; ringIndex < ringCount; ringIndex++)
             {
-                float spacing = settings.SimpleDdgiRingBaseSpacing * MathF.Pow(settings.SimpleDdgiRingSpacingMultiplier, ringIndex);
-                spacing = Math.Clamp(spacing, 0.25f, 8.0f);
+                // Use the runtime resolver verbatim. An oracle-only clamp used to
+                // model Sponza's far ring at 8 m while the renderer placed it at
+                // 11.25 m, invalidating its bounds and recenter predictions.
+                float spacing = SimpleDdgiVolumeManager.ResolveRingSpacing(settings, ringIndex);
                 (int countX, int countY, int countZ) = SimpleDdgiVolumeManager.ResolveRingGrid(settings, ringIndex);
                 Vector3 latticeSize = new(
                     Math.Max(countX - 1, 0) * spacing,

@@ -1291,11 +1291,14 @@ internal sealed class SampleInputController
             _renderer.Settings.Animation.Enabled,
             _renderer.Settings.FeatureIsolation,
             _renderer.Settings.Debug.AllowGpuTiming,
+            _renderer.Settings.Diagnostics.DdgiForwardEstimateCountersEnabled,
             previousCaptureScenario);
         _renderer.Settings.Particles.Enabled = false;
         _renderer.Settings.Animation.Enabled = false;
         _renderer.Settings.FeatureIsolation = RenderFeatureIsolationMode.FullFrame;
         _renderer.Settings.Debug.AllowGpuTiming = captureMode == SampleSponzaGiCaptureMode.ProductionTiming;
+        _renderer.Settings.Diagnostics.DdgiForwardEstimateCountersEnabled =
+            SampleSponzaGiCaptureContract.UsesDetailedInvestigationCounters(captureMode);
         _renderer.CaptureScenario = contract.Scenario.ToString();
         for (int i = 0; i < _particleEffects.Count; i++)
             _particleEffects[i].Restart(contract.RandomSeed + (uint)(i * 101));
@@ -1469,8 +1472,13 @@ internal sealed class SampleInputController
         return _sponzaGiCaptureArtifacts.Any(artifact =>
             string.Equals(artifact.Bookmark, bookmark, StringComparison.Ordinal) &&
             string.Equals(artifact.Output, output, StringComparison.Ordinal) &&
-            string.Equals(artifact.RelativePath, relativePath, StringComparison.Ordinal) &&
-            artifact.Kind is "renderer-screenshot-request" or "renderer-screenshot-observed" or "renderer-screenshot");
+            string.Equals(
+                artifact.RelativePath.Replace('\\', '/'),
+                relativePath.Replace('\\', '/'),
+                StringComparison.Ordinal) &&
+            (string.Equals(artifact.Kind, "renderer-screenshot-request", StringComparison.Ordinal) ||
+                string.Equals(artifact.Kind, "renderer-screenshot-observed", StringComparison.Ordinal) ||
+                string.Equals(artifact.Kind, "renderer-screenshot", StringComparison.Ordinal)));
     }
 
     private void AdvanceSponzaGiCaptureAfterRenderedFrame()
@@ -1488,7 +1496,9 @@ internal sealed class SampleInputController
         }
 
         SampleSponzaGiCaptureInstruction instruction = _sponzaGiCaptureSequence.CurrentInstruction;
-        if (instruction.Output != null && !CaptureSponzaGiOutput(instruction))
+        if (instruction.Output != null &&
+            instruction.CaptureWindowAfterRenderedFrame &&
+            !CaptureSponzaGiOutput(instruction))
             return;
 
         if (_sponzaGiCaptureSequence == null)
@@ -1520,8 +1530,11 @@ internal sealed class SampleInputController
         bool windowCaptured;
         try
         {
-            // The immediate client-area capture observes this exact rendered
-            // debug view before the sequence advances to the next output.
+            // Game invokes this callback before VulkanRenderer.EndFrame submits
+            // the current command buffer. The sequence therefore holds every
+            // endpoint output for three frames: one presents it, one spans the
+            // timestamp latency, and this final frame captures the identical
+            // already-presented state with settled telemetry.
             windowCaptured = _requestDiagnosticScreenshotCapture(imagePath);
         }
         catch (Exception ex)
@@ -1824,6 +1837,8 @@ internal sealed class SampleInputController
             _renderer.Settings.Animation.Enabled = state.AnimationEnabled;
             _renderer.Settings.FeatureIsolation = state.FeatureIsolation;
             _renderer.Settings.Debug.AllowGpuTiming = state.AllowGpuTiming;
+            _renderer.Settings.Diagnostics.DdgiForwardEstimateCountersEnabled =
+                state.DdgiForwardEstimateCountersEnabled;
             _renderer.CaptureScenario = state.CaptureScenario;
         }
 
@@ -3058,6 +3073,7 @@ internal sealed class SampleInputController
         bool AnimationEnabled,
         RenderFeatureIsolationMode FeatureIsolation,
         bool AllowGpuTiming,
+        bool DdgiForwardEstimateCountersEnabled,
         string CaptureScenario);
 
     private sealed record SponzaGiPendingRendererScreenshot(

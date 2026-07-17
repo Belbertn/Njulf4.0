@@ -146,7 +146,10 @@ void main()
         ? previousActive
         : mix(previousActive, targetActive, stateBlendAlpha);
 
-    vec3 targetRelocation = vec3(0.0);
+    // Relocation is persistent state. Absence of new backface evidence means
+    // "keep the committed free-space position", not "return to the logical
+    // position"; invalidation/scroll explicitly resets stale relocation.
+    vec3 targetRelocation = previous.relocation;
     float maximumActionableBackfaceDistance = volume.spacing *
         (SIMPLE_DDGI_RELOCATION_MAX_DISTANCE - SIMPLE_DDGI_RELOCATION_TARGET_DISTANCE);
     if (!maintenanceUpdate &&
@@ -177,10 +180,36 @@ void main()
     if (relocationLength > maxRelocation)
         blendedRelocation *= maxRelocation / max(relocationLength, 0.00001);
 
+    // Trace consumed previous.relocation, while forward gathering will consume
+    // blendedRelocation. Publishing this frame's rays after a material move would
+    // therefore attach transport sampled at the old origin to the new origin.
+    // Stage the committed position behind a pending flag and require a later
+    // full-ray update to validate it. Maintenance work is deliberately unable to
+    // retire the pending state even if it happens to run before CPU readback.
+    float relocationDelta = length(blendedRelocation - previous.relocation);
+    bool relocationChanged = relocationDelta > max(volume.spacing * 0.001, 0.0001);
+    bool relocationWasPending =
+        (previous.flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u;
+
     SimpleDdgiProbeState state;
     state.relocation = blendedRelocation;
     state.activeWeight = activeWeight;
-    state.flags = previous.flags & ~(SIMPLE_DDGI_PROBE_FLAG_FRESH | SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED);
+    state.flags = previous.flags & ~(
+        SIMPLE_DDGI_PROBE_FLAG_FRESH |
+        SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED |
+        SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING);
+    if (relocationChanged || (relocationWasPending && maintenanceUpdate))
+    {
+        state.flags |= SIMPLE_DDGI_PROBE_FLAG_FRESH |
+            SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING;
+    }
+    else if (relocationWasPending)
+    {
+        // The full retry was traced from the committed relocation. Keep FRESH
+        // through relocation so blend resets history, then let blend publish and
+        // clear it only after all atlas writes have completed.
+        state.flags |= SIMPLE_DDGI_PROBE_FLAG_FRESH;
+    }
     bool inactiveProbe = maintenanceUpdate
         ? previous.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE
         : activeWeight <= 0.05 && hardInvalidProbeScore >= 0.75;

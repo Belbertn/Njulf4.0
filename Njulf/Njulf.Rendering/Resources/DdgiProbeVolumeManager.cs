@@ -191,6 +191,7 @@ namespace Njulf.Rendering.Resources
         private bool _hasAuthoredLayoutSignature;
         private bool _hasLocalAllocationSignature;
         private bool _wasDdgiEnabled;
+        private bool _controlHeaderInitialized;
         private bool _disposed;
         private int _visibilityInitializationStartProbe;
         private int _visibilityInitializationProbeCount;
@@ -530,6 +531,20 @@ namespace Njulf.Rendering.Resources
                 commandBuffer);
         }
 
+        /// <summary>
+        /// Publishes the disabled legacy-DDGI control header once at startup and
+        /// whenever ownership moves away from the full implementation. The large
+        /// scheduler/atlas path remains dormant; this only prevents a stale enabled
+        /// bit from surviving a runtime backend switch.
+        /// </summary>
+        public void EnsureDisabled(StagingRing stagingRing, CommandBuffer commandBuffer)
+        {
+            if (_controlHeaderInitialized && !_wasDdgiEnabled)
+                return;
+
+            Upload(DdgiFrameLayout.Empty, stagingRing, commandBuffer);
+        }
+
         private void Upload(
             IReadOnlyList<GlobalIlluminationProbeVolume> authoredVolumes,
             IReadOnlyList<DdgiProbeVolumeRuntimeMetadata>? runtimeMetadata,
@@ -685,6 +700,7 @@ namespace Njulf.Rendering.Resources
                     PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
                     AccessFlags2.ShaderStorageReadBit));
             _wasDdgiEnabled = ddgiEnabled;
+            _controlHeaderInitialized = true;
             if (!ddgiEnabled)
             {
                 _hasResourceSignature = false;

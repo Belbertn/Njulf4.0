@@ -777,6 +777,8 @@ public sealed class ShaderBuildTests
     {
         string shader = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
         string hitShading = ReadRepoText("Njulf.Shaders", "ddgi_hit_shading.glsl");
+        string common = ReadRepoText("Njulf.Shaders", "common.glsl");
+        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
         string pass = ReadRepoText("Njulf.Rendering", "Pipeline", "DdgiPipelinePasses.cs");
 
         Assert.Multiple(() =>
@@ -798,6 +800,14 @@ public sealed class ShaderBuildTests
             Assert.That(hitShading, Does.Contain("bool TryReadSelectedDdgiDirectionalLight(out GPULight selectedLight)"));
             Assert.That(hitShading, Does.Contain("bool TryBuildSelectedDdgiLocalLightContribution("));
             Assert.That(hitShading, Does.Contain("vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit("));
+            Assert.That(common, Does.Contain("const uint GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS = 1u << 0;"));
+            Assert.That(common, Does.Contain("int ShadowFlags;"));
+            Assert.That(common, Does.Contain("float ShadowStrength;"));
+            Assert.That(common, Does.Contain("light.ShadowFlags = int(ReadStorageWord(uint(LIGHT_BUFFER_INDEX), baseWord + 13u));"));
+            Assert.That(common, Does.Contain("light.ShadowStrength = ReadStorageFloat(uint(LIGHT_BUFFER_INDEX), baseWord + 14u);"));
+            Assert.That(hitShading, Does.Contain("(uint(light.ShadowFlags) & GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS) == 0u"));
+            Assert.That(hitShading, Does.Contain("float visibility = mix(1.0, tracedVisibility, shadowStrength);"));
+            Assert.That(forward, Does.Contain("return mix(1.0, shadow, clamp(shadowSettings.x, 0.0, 1.0));"));
             Assert.That(hitShading, Does.Contain("#define DDGI_HIT_MAX_SHADED_LIGHTS pc.MaxShadedLights"));
             Assert.That(hitShading, Does.Contain("uint selectedLightCapacity = min(DDGI_HIT_MAX_SHADED_LIGHTS, DDGI_MAX_SELECTED_HIT_LIGHTS);"));
             Assert.That(hitShading, Does.Contain("attenuation *= max(pc.SelectedLocalLightEnergyScale, 0.0);"));
@@ -1851,7 +1861,7 @@ public sealed class ShaderBuildTests
         Assert.Multiple(() =>
         {
             Assert.That(shader, Does.Contain("shadow = SampleShadowCascade(textureIndex, uv, receiverDepth, 0.0005);"));
-            Assert.That(shader, Does.Contain("return shadow;"));
+            Assert.That(shader, Does.Contain("return mix(1.0, shadow, clamp(shadowSettings.x, 0.0, 1.0));"));
             Assert.That(shader, Does.Contain("float sampledDepth = texture(BindlessTextures[nonuniformEXT(SPOT_SHADOW_ATLAS_TEXTURE_INDEX)], atlasUv).r;"));
             Assert.That(shader, Does.Contain("radius > 0 && PointShadowFaceEdgeDistance(faceUv) <= seamWidth"));
             Assert.That(shader, Does.Contain("shadow.BiasStrengthTexelSize.z <= 0.0"));

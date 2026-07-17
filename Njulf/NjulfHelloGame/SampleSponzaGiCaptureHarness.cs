@@ -71,7 +71,8 @@ public sealed record SampleSponzaGiCaptureInstruction(
     int StageFrameCount,
     SampleSponzaGiCameraBookmark Camera,
     SampleSponzaGiCaptureOutput? Output,
-    string BookmarkName);
+    string BookmarkName,
+    bool CaptureWindowAfterRenderedFrame);
 
 /// <summary>
 /// Stable artifact metadata written next to a runtime capture. Paths are
@@ -136,7 +137,7 @@ public sealed record SampleSponzaGiVisualMetricGate(
 /// </summary>
 public sealed class SampleSponzaGiCaptureContract
 {
-    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v3";
+    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v4";
     public const string VisualMetricGateSchemaVersion = "realtime-gi-closure-sponza-visual-metrics/v1";
     public const string CoverageOracleSchemaVersion = "realtime-gi-closure-sponza-coverage-oracle/v1";
     public const int LockedWidth = 1600;
@@ -144,6 +145,9 @@ public sealed class SampleSponzaGiCaptureContract
     public const int FixedFramesPerSecond = 60;
     public const int WarmupFrameCount = 360;
     public const int VerticalTraversalDurationSeconds = 16;
+    // One frame presents the requested state, one spans the two-frame GPU timing
+    // latency, and the final frame captures the held state with settled telemetry.
+    public const int FramesPerEndpointOutput = 3;
     public const uint FixedRandomSeed = 0x2026_0715u;
 
     private static readonly JsonSerializerOptions ContractJsonOptions = new()
@@ -178,9 +182,16 @@ public sealed class SampleSponzaGiCaptureContract
     public int TotalCaptureFrameCount => checked(
         WarmupFrames +
         VerticalTraversalFrameCount +
-        Outputs.Count * 2);
+        Outputs.Count * 2 * FramesPerEndpointOutput);
 
     public static SampleSponzaGiCaptureContract Default => DefaultContract;
+
+    public static bool UsesDetailedInvestigationCounters(SampleSponzaGiCaptureMode captureMode) => captureMode switch
+    {
+        SampleSponzaGiCaptureMode.ProductionTiming => false,
+        SampleSponzaGiCaptureMode.DetailedDiagnostics => true,
+        _ => throw new ArgumentOutOfRangeException(nameof(captureMode))
+    };
 
     public SampleSponzaGiCaptureContract(
         string schemaVersion,
@@ -910,6 +921,7 @@ public sealed class SampleSponzaGiCaptureContract
         Append(builder, VerticalPathDurationSeconds);
         Append(builder, "coverage-oracle-full-fixed-trajectory");
         Append(builder, VerticalTraversalFrameCount);
+        Append(builder, FramesPerEndpointOutput);
         Append(builder, VisualMetricGateSchemaVersion);
         foreach (SampleSponzaGiVisualMetricRule metric in CreateRequiredVisualMetrics())
         {
@@ -1251,7 +1263,8 @@ public sealed class SampleSponzaGiCaptureSequence
                     _contract.WarmupFrames,
                     _contract.LowBookmark,
                     null,
-                    _contract.LowBookmark.Name),
+                    _contract.LowBookmark.Name,
+                    false),
                 SampleSponzaGiCaptureStage.CaptureLowBookmark => CaptureBookmarkInstruction(_contract.LowBookmark),
                 SampleSponzaGiCaptureStage.VerticalTraversal => new SampleSponzaGiCaptureInstruction(
                     _stage,
@@ -1259,7 +1272,8 @@ public sealed class SampleSponzaGiCaptureSequence
                     _contract.VerticalTraversalFrameCount,
                     _contract.SampleVerticalTraversalFrame(_stageFrameIndex),
                     null,
-                    "SponzaPlazaUpperFacadeVerticalTraversal"),
+                    "SponzaPlazaUpperFacadeVerticalTraversal",
+                    false),
                 SampleSponzaGiCaptureStage.CaptureHighBookmark => CaptureBookmarkInstruction(_contract.HighBookmark),
                 _ => new SampleSponzaGiCaptureInstruction(
                     SampleSponzaGiCaptureStage.Complete,
@@ -1267,7 +1281,8 @@ public sealed class SampleSponzaGiCaptureSequence
                     0,
                     _contract.HighBookmark,
                     null,
-                    _contract.HighBookmark.Name)
+                    _contract.HighBookmark.Name,
+                    false)
             };
         }
     }
@@ -1287,13 +1302,15 @@ public sealed class SampleSponzaGiCaptureSequence
             case SampleSponzaGiCaptureStage.Warmup when _stageFrameIndex >= _contract.WarmupFrames:
                 MoveTo(SampleSponzaGiCaptureStage.CaptureLowBookmark);
                 break;
-            case SampleSponzaGiCaptureStage.CaptureLowBookmark when _stageFrameIndex >= _contract.Outputs.Count:
+            case SampleSponzaGiCaptureStage.CaptureLowBookmark when
+                _stageFrameIndex >= _contract.Outputs.Count * SampleSponzaGiCaptureContract.FramesPerEndpointOutput:
                 MoveTo(SampleSponzaGiCaptureStage.VerticalTraversal);
                 break;
             case SampleSponzaGiCaptureStage.VerticalTraversal when _stageFrameIndex >= _contract.VerticalTraversalFrameCount:
                 MoveTo(SampleSponzaGiCaptureStage.CaptureHighBookmark);
                 break;
-            case SampleSponzaGiCaptureStage.CaptureHighBookmark when _stageFrameIndex >= _contract.Outputs.Count:
+            case SampleSponzaGiCaptureStage.CaptureHighBookmark when
+                _stageFrameIndex >= _contract.Outputs.Count * SampleSponzaGiCaptureContract.FramesPerEndpointOutput:
                 MoveTo(SampleSponzaGiCaptureStage.Complete);
                 return true;
         }
@@ -1303,13 +1320,18 @@ public sealed class SampleSponzaGiCaptureSequence
 
     private SampleSponzaGiCaptureInstruction CaptureBookmarkInstruction(SampleSponzaGiCameraBookmark bookmark)
     {
+        int outputIndex = _stageFrameIndex / SampleSponzaGiCaptureContract.FramesPerEndpointOutput;
+        bool captureWindowAfterRenderedFrame =
+            _stageFrameIndex % SampleSponzaGiCaptureContract.FramesPerEndpointOutput ==
+            SampleSponzaGiCaptureContract.FramesPerEndpointOutput - 1;
         return new SampleSponzaGiCaptureInstruction(
             _stage,
             _stageFrameIndex,
-            _contract.Outputs.Count,
+            checked(_contract.Outputs.Count * SampleSponzaGiCaptureContract.FramesPerEndpointOutput),
             bookmark,
-            _contract.Outputs[_stageFrameIndex],
-            bookmark.Name);
+            _contract.Outputs[outputIndex],
+            bookmark.Name,
+            captureWindowAfterRenderedFrame);
     }
 
     private void MoveTo(SampleSponzaGiCaptureStage stage)

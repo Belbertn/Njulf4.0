@@ -16,7 +16,8 @@ namespace Njulf.Rendering.Data
             ICamera camera,
             NumericsVector3 lightDirection,
             ShadowSettings settings,
-            int selectedLightIndex)
+            int selectedLightIndex,
+            float shadowStrength)
         {
             if (camera == null)
                 throw new ArgumentNullException(nameof(camera));
@@ -57,7 +58,7 @@ namespace Njulf.Rendering.Data
                 LightViewProjection3 = matrices[3],
                 CascadeSplits = new CoreVector4(splits[0], splits[1], splits[2], splits[3]),
                 Settings = new CoreVector4(
-                    1f,
+                    ResolveShadowStrength(shadowStrength),
                     settings.NormalBias,
                     settings.DirectionalShadowMapSize,
                     settings.PcfRadius),
@@ -67,6 +68,12 @@ namespace Njulf.Rendering.Data
                     BindlessIndex.DirectionalShadowTextureBase,
                     selectedLightIndex)
             };
+        }
+
+        private static float ResolveShadowStrength(float shadowStrength)
+        {
+            // Match local-shadow and packed-light handling for legacy Lights.
+            return Math.Clamp(shadowStrength <= 0f ? 1f : shadowStrength, 0f, 1f);
         }
 
         public static float[] CalculateCascadeSplits(float nearPlane, float farPlane, int cascadeCount)

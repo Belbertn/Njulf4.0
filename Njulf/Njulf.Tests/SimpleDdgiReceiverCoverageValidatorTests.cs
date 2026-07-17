@@ -48,6 +48,9 @@ public sealed class SimpleDdgiReceiverCoverageValidatorTests
                 sample.IsCovered && sample.IsWithinResolutionTarget && sample.PrimarySpacing <= 3.75f));
             Assert.That(report.Samples, Has.All.Matches<SimpleDdgiReceiverCoverageSample>(sample =>
                 sample.PrimaryVolume != null && sample.PrimaryVolume.StartsWith("ring-", StringComparison.Ordinal)));
+            Assert.That(
+                report.Layout.Volumes.Single(static volume => volume.Request.Id == "ring-2").Request.Spacing,
+                Is.EqualTo(11.25f).Within(0.0001f));
             Assert.That(report.ExpectedRingRecenterEvents, Is.GreaterThan(0));
         });
     }

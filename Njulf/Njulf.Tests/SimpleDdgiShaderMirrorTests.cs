@@ -258,7 +258,48 @@ namespace Njulf.Tests
                 Assert.That(MathF.Pow(nearRetention, 1.0f / 8.0f),
                     Is.EqualTo(MathF.Pow(farRetention, 1.0f / 32.0f)).Within(1.0e-6f));
                 Assert.That(farRetention, Is.LessThan(nearRetention));
-                Assert.That(maintenanceRetention, Is.EqualTo(0.97f).Within(1.0e-6f));
+                Assert.That(maintenanceRetention, Is.EqualTo(MathF.Pow(0.97f, 2.0f)).Within(1.0e-6f));
+                Assert.That(maintenanceRetention, Is.LessThan(0.97f));
+                Assert.That(maintenanceRetention, Is.GreaterThan(farRetention));
+            });
+        }
+
+        [Test]
+        public void RelocationPublication_WaitsForAFullTraceFromTheCommittedPosition()
+        {
+            var moved = ResolveRelocationPublication(
+                previousPending: false,
+                maintenance: false,
+                relocationDelta: 0.20f,
+                spacing: 1.0f);
+            var maintenanceRetry = ResolveRelocationPublication(
+                previousPending: true,
+                maintenance: true,
+                relocationDelta: 0.0f,
+                spacing: 1.0f);
+            var fullRetry = ResolveRelocationPublication(
+                previousPending: true,
+                maintenance: false,
+                relocationDelta: 0.0f,
+                spacing: 1.0f);
+            var unchanged = ResolveRelocationPublication(
+                previousPending: false,
+                maintenance: false,
+                relocationDelta: 0.0f,
+                spacing: 1.0f);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(moved.Pending, Is.True);
+                Assert.That(moved.PublishAtlas, Is.False);
+                Assert.That(maintenanceRetry.Pending, Is.True);
+                Assert.That(maintenanceRetry.PublishAtlas, Is.False);
+                Assert.That(fullRetry.Pending, Is.False);
+                Assert.That(fullRetry.PublishAtlas, Is.True);
+                Assert.That(fullRetry.ResetHistory, Is.True);
+                Assert.That(unchanged.Pending, Is.False);
+                Assert.That(unchanged.PublishAtlas, Is.True);
+                Assert.That(unchanged.ResetHistory, Is.False);
             });
         }
 
@@ -709,7 +750,7 @@ namespace Njulf.Tests
                 Assert.That(normalUpdate.Classification, Is.Zero);
                 Assert.That(normalUpdate.Relocation.X, Is.EqualTo(0.03f).Within(1.0e-5f));
                 Assert.That(freshUpdate.Relocation.X, Is.EqualTo(0.20f).Within(1.0e-5f));
-                Assert.That(decayed.Relocation.X, Is.EqualTo(0.19f).Within(1.0e-5f));
+                Assert.That(decayed.Relocation.X, Is.EqualTo(0.20f).Within(1.0e-5f));
                 Assert.That(allMiss.Active, Is.True);
                 Assert.That(allMiss.Classification, Is.EqualTo(0));
                 Assert.That(allMiss.MissRatio, Is.EqualTo(1.0f));
@@ -775,6 +816,34 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain(
                     "result.secondVolumeUsed = result.secondaryContributionWeight > 0.000001 ? 1.0 : 0.0;"));
                 Assert.That(shared, Does.Not.Contain("if (edgeWeight >= 0.999"));
+            });
+        }
+
+        [Test]
+        public void BackendModeSwitch_DisablesInactiveControlHeadersWithoutRunningInactiveUpdates()
+        {
+            string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
+            string simpleManager = ReadRepoText("Njulf.Rendering", "Resources", "SimpleDdgiVolumeManager.cs");
+            string legacyManager = ReadRepoText("Njulf.Rendering", "Resources", "DdgiProbeVolumeManager.cs");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(renderer, Does.Contain(
+                    "_ddgiProbeVolumeManager.EnsureDisabled(_stagingRing, _currentCommandBuffer);"));
+                Assert.That(renderer, Does.Contain(
+                    "_simpleDdgiVolumeManager?.EnsureDisabled(_stagingRing, _currentCommandBuffer);"));
+                Assert.That(renderer, Does.Contain("if (ddgiActive)"));
+                Assert.That(renderer, Does.Contain("if (simpleDdgiActive)"));
+                Assert.That(simpleManager, Does.Contain(
+                    "if (_controlHeaderInitialized && !_wasSimpleDdgiEnabled)"));
+                Assert.That(simpleManager, Does.Contain("DisableCore(_settings.GlobalIllumination"));
+                Assert.That(simpleManager, Does.Contain("_wasSimpleDdgiEnabled = false;"));
+                Assert.That(simpleManager, Does.Contain("BitConverter.UInt32BitsToSingle(0u)"));
+                Assert.That(legacyManager, Does.Contain(
+                    "if (_controlHeaderInitialized && !_wasDdgiEnabled)"));
+                Assert.That(legacyManager, Does.Contain(
+                    "Upload(DdgiFrameLayout.Empty, stagingRing, commandBuffer);"));
+                Assert.That(legacyManager, Does.Contain("_controlHeaderInitialized = true;"));
             });
         }
 
@@ -930,9 +999,11 @@ namespace Njulf.Tests
                 Assert.That(blend, Does.Not.Contain("SharedSimpleVisibilityWeight"));
                 Assert.That(blend, Does.Contain("bool reducedComplexityEnabled = (pc.Flags & SIMPLE_DDGI_BLEND_FLAG_REDUCED_COMPLEXITY) != 0u;"));
                 Assert.That(blend, Does.Contain("bool sharedRayCacheEnabled = (pc.Flags & SIMPLE_DDGI_BLEND_FLAG_SHARED_RAY_CACHE) != 0u || reducedComplexityEnabled;"));
-                Assert.That(blend, Does.Contain("float probeHysteresis = SimpleDdgiCadenceAdjustedHysteresis(params, update);"));
+                Assert.That(blend, Does.Contain(": SimpleDdgiCadenceAdjustedHysteresis(params, update);"));
                 Assert.That(blend, Does.Contain("bool maintenanceUpdate = SimpleDdgiUpdateIsMaintenance(update);"));
-                Assert.That(blend, Does.Contain("bool freshUpdate = (update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u;"));
+                Assert.That(blend, Does.Contain("(initialState.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u;"));
+                Assert.That(blend, Does.Contain("initialState.flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING"));
+                Assert.That(blend, Does.Contain("state.flags &= ~SIMPLE_DDGI_PROBE_FLAG_FRESH;"));
                 Assert.That(blend, Does.Contain("previous.z > 0.5 && !freshUpdate"));
                 Assert.That(blend, Does.Contain("SIMPLE_DDGI_BOOTSTRAP_VISIBILITY_MEAN_SPACING = 1.0"));
                 Assert.That(relocate, Does.Contain("SimpleDdgiProbeState previous = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);"));
@@ -945,8 +1016,16 @@ namespace Njulf.Tests
                 Assert.That(relocate, Does.Contain("float localBackfaceRatio = backfaceRatio * backfaceProximity;"));
                 Assert.That(relocate, Does.Contain("nearestBackfaceDistance <= maximumActionableBackfaceDistance"));
                 Assert.That(relocate, Does.Contain("targetRelocation = previous.relocation + nearestBackfaceDirection * targetDistance;"));
+                Assert.That(relocate, Does.Contain("vec3 targetRelocation = previous.relocation;"));
+                Assert.That(relocate, Does.Contain("bool relocationChanged = relocationDelta > max(volume.spacing * 0.001, 0.0001);"));
+                Assert.That(relocate, Does.Contain("relocationWasPending && maintenanceUpdate"));
+                Assert.That(relocate, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING"));
                 Assert.That(relocate, Does.Not.Contain("targetSurfaceDistance - nearestDistance"));
                 Assert.That(relocate, Does.Contain("WriteRelocationClassification(probeIndex, blendedRelocation"));
+                Assert.That(shared, Does.Contain("const uint SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING = 1u << 3;"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING |"));
+                Assert.That(simpleManager, Does.Contain("ProbeStateRelocationPendingFlag = 1u << 3"));
+                Assert.That(simpleManager, Does.Contain("_probeFresh[probeIndex] = 1;"));
                 Assert.That(shared, Does.Not.Contain("confidence chain").IgnoreCase);
                 Assert.That(shared, Does.Not.Contain("max(visibility, 0.03)"));
                 Assert.That(hitShading, Does.Contain("for (uint sourceIndex = 0u; sourceIndex < sourceCount; sourceIndex++)"));
@@ -1200,10 +1279,21 @@ namespace Njulf.Tests
 
         private static float SimpleDdgiCadenceAdjustedHysteresis(float baseHysteresis, int elapsedFrames, bool maintenance)
         {
-            if (maintenance)
-                return baseHysteresis;
-            float exponent = Math.Clamp(elapsedFrames / 8.0f, 1.0f, 8.0f);
+            float referenceCadence = maintenance ? 16.0f : 8.0f;
+            float exponent = Math.Clamp(elapsedFrames / referenceCadence, 1.0f, 8.0f);
             return MathF.Pow(baseHysteresis, exponent);
+        }
+
+        private static (bool Pending, bool PublishAtlas, bool ResetHistory) ResolveRelocationPublication(
+            bool previousPending,
+            bool maintenance,
+            float relocationDelta,
+            float spacing)
+        {
+            bool changed = relocationDelta > Math.Max(spacing * 0.001f, 0.0001f);
+            bool pending = changed || (previousPending && maintenance);
+            bool resetHistory = previousPending && !pending;
+            return (pending, !pending, resetHistory);
         }
 
         private static float CompositeSimpleDdgiOwnership(float innerOwnership, float outerOwnership, float innerEdgeWeight)
@@ -1346,7 +1436,7 @@ namespace Njulf.Tests
                 }
             }
 
-            Vector3 targetRelocation = Vector3.Zero;
+            Vector3 targetRelocation = previousRelocation;
             int rayCount = Math.Max(rays.Length, 1);
             float missRatio = missCount / (float)rayCount;
             float hitRatio = hitCount / (float)rayCount;

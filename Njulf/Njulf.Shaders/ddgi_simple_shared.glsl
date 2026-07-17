@@ -95,6 +95,11 @@ const uint SIMPLE_DDGI_RELOCATION_CLASSIFICATION_STRIDE_WORDS = 12u;
 const uint SIMPLE_DDGI_PROBE_FLAG_FRESH = 1u << 0;
 const uint SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED = 1u << 1;
 const uint SIMPLE_DDGI_PROBE_FLAG_INACTIVE = 1u << 2;
+// Relocation is committed after tracing, so the rays produced by that update
+// belong to the previous probe position. Keep the probe unavailable until a
+// later full update traces from the committed position and republishes both
+// atlases as one spatially coherent transaction.
+const uint SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING = 1u << 3;
 const uint SIMPLE_DDGI_UPDATE_MATERIAL_TEXTURE_CASCADE_SHIFT = 3u;
 const uint SIMPLE_DDGI_UPDATE_MATERIAL_TEXTURE_CASCADE_MASK = 0x7u << SIMPLE_DDGI_UPDATE_MATERIAL_TEXTURE_CASCADE_SHIFT;
 const uint SIMPLE_DDGI_UPDATE_MAX_SHADED_LIGHTS_SHIFT = 6u;
@@ -1076,6 +1081,7 @@ bool SimpleDdgiProbeSupportsGather(SimpleDdgiProbeState state, vec4 irradiance, 
 {
     uint invalidFlags = SIMPLE_DDGI_PROBE_FLAG_FRESH |
         SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED |
+        SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING |
         SIMPLE_DDGI_PROBE_FLAG_INACTIVE;
     return (state.flags & invalidFlags) == 0u &&
         state.classification != SIMPLE_DDGI_CLASSIFICATION_INACTIVE &&

@@ -28,8 +28,8 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(contract.WarmupFrames, Is.EqualTo(360));
             Assert.That(contract.VerticalPathDurationSeconds, Is.InRange(10, 20));
             Assert.That(contract.VerticalTraversalFrameCount, Is.EqualTo(960));
-            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v3"));
-            Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(1_346));
+            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v4"));
+            Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(1_398));
             Assert.That(contract.LowBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeLow"));
             Assert.That(contract.LowBookmark.Position.Y, Is.EqualTo(1.35f));
             Assert.That(contract.HighBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeHigh"));
@@ -120,7 +120,7 @@ public sealed class SampleSponzaGiCaptureHarnessTests
         while (!sequence.IsComplete)
         {
             SampleSponzaGiCaptureInstruction instruction = sequence.CurrentInstruction;
-            if (instruction.Output != null)
+            if (instruction.Output != null && instruction.CaptureWindowAfterRenderedFrame)
                 captured.Add((instruction.BookmarkName, instruction.Output.Name));
             sequence.AdvanceAfterRenderedFrame();
             frames++;
@@ -140,6 +140,63 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(captured.Skip(contract.Outputs.Count).Select(static capture => capture.Output),
                 Is.EqualTo(contract.Outputs.Select(static output => output.Name)));
             Assert.That(sequence.Stage, Is.EqualTo(SampleSponzaGiCaptureStage.Complete));
+        });
+    }
+
+    [Test]
+    public void Sequence_PresentsEveryEndpointOutputBeforeCapturingTheHeldState()
+    {
+        var sequence = new SampleSponzaGiCaptureSequence();
+        var endpointFrames = new List<SampleSponzaGiCaptureInstruction>();
+
+        while (!sequence.IsComplete)
+        {
+            SampleSponzaGiCaptureInstruction instruction = sequence.CurrentInstruction;
+            if (instruction.Output != null)
+                endpointFrames.Add(instruction);
+            sequence.AdvanceAfterRenderedFrame();
+        }
+
+        SampleSponzaGiCaptureContract contract = sequence.Contract;
+        Assert.That(endpointFrames, Has.Count.EqualTo(
+            contract.Outputs.Count * 2 * SampleSponzaGiCaptureContract.FramesPerEndpointOutput));
+        for (int i = 0; i < endpointFrames.Count; i += SampleSponzaGiCaptureContract.FramesPerEndpointOutput)
+        {
+            SampleSponzaGiCaptureInstruction presentation = endpointFrames[i];
+            SampleSponzaGiCaptureInstruction capture = endpointFrames[
+                i + SampleSponzaGiCaptureContract.FramesPerEndpointOutput - 1];
+            Assert.Multiple(() =>
+            {
+                Assert.That(presentation.Output, Is.EqualTo(capture.Output));
+                Assert.That(presentation.Camera, Is.EqualTo(capture.Camera));
+                Assert.That(presentation.BookmarkName, Is.EqualTo(capture.BookmarkName));
+                Assert.That(presentation.CaptureWindowAfterRenderedFrame, Is.False);
+                Assert.That(capture.CaptureWindowAfterRenderedFrame, Is.True);
+                Assert.That(capture.StageFrameIndex, Is.EqualTo(
+                    presentation.StageFrameIndex + SampleSponzaGiCaptureContract.FramesPerEndpointOutput - 1));
+                Assert.That(
+                    endpointFrames
+                        .Skip(i)
+                        .Take(SampleSponzaGiCaptureContract.FramesPerEndpointOutput - 1)
+                        .Select(static frame => frame.CaptureWindowAfterRenderedFrame),
+                    Is.All.False);
+            });
+        }
+    }
+
+    [Test]
+    public void CaptureMode_SeparatesProductionTimingFromDetailedInvestigationCounters()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SampleSponzaGiCaptureContract.UsesDetailedInvestigationCounters(
+                    SampleSponzaGiCaptureMode.ProductionTiming),
+                Is.False);
+            Assert.That(
+                SampleSponzaGiCaptureContract.UsesDetailedInvestigationCounters(
+                    SampleSponzaGiCaptureMode.DetailedDiagnostics),
+                Is.True);
         });
     }
 

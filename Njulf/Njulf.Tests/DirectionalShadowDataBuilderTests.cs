@@ -39,7 +39,8 @@ public sealed class DirectionalShadowDataBuilderTests
             camera,
             new NumericsVector3(0.2f, -1f, -0.3f),
             settings,
-            selectedLightIndex: 2);
+            selectedLightIndex: 2,
+            shadowStrength: 0.65f);
 
         Assert.Multiple(() =>
         {
@@ -49,8 +50,25 @@ public sealed class DirectionalShadowDataBuilderTests
             Assert.That(data.Indices.X, Is.EqualTo(1f));
             Assert.That(data.Indices.Y, Is.EqualTo(3f));
             Assert.That(data.Indices.W, Is.EqualTo(2f));
+            Assert.That(data.Settings.X, Is.EqualTo(0.65f));
             Assert.That(data.Settings.Z, Is.EqualTo(1024f));
         });
+    }
+
+    [TestCase(0f, 1f)]
+    [TestCase(-0.5f, 1f)]
+    [TestCase(0.35f, 0.35f)]
+    [TestCase(2f, 1f)]
+    public void Build_NormalizesDirectionalShadowStrength(float authoredStrength, float expectedStrength)
+    {
+        GPUShadowData data = DirectionalShadowDataBuilder.Build(
+            CreateCamera(),
+            new NumericsVector3(0.2f, -1f, -0.3f),
+            new ShadowSettings(),
+            selectedLightIndex: 0,
+            shadowStrength: authoredStrength);
+
+        Assert.That(data.Settings.X, Is.EqualTo(expectedStrength).Within(0.0001f));
     }
 
     [Test]

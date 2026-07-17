@@ -121,6 +121,29 @@ public sealed class SimpleDdgiVolumeManagerTests
             Is.EqualTo(expected));
     }
 
+    [TestCase(true, true, false, 0u, 8u, true)]
+    [TestCase(true, true, true, 0u, 8u, false)]
+    [TestCase(true, true, false, 8u, 8u, false)]
+    [TestCase(true, false, false, 0u, 8u, false)]
+    [TestCase(false, true, false, 0u, 8u, false)]
+    public void InactiveScheduling_DoesNotThrottleFreshRelocationRetries(
+        bool classificationSchedulingEnabled,
+        bool inactive,
+        bool freshOrRelocationPending,
+        uint age,
+        uint retryFrames,
+        bool expectedSkip)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ShouldSkipInactiveProbeForScheduling(
+                classificationSchedulingEnabled,
+                inactive,
+                freshOrRelocationPending,
+                age,
+                retryFrames),
+            Is.EqualTo(expectedSkip));
+    }
+
     [Test]
     public void SchedulerClassQuotas_ReserveDirtyRetryAndMaintenanceDuringContinuousExposure()
     {

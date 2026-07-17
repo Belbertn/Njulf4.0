@@ -3122,8 +3122,18 @@ namespace Njulf.Rendering
             enabled = shadowSettings.DirectionalShadowsEnabled && hasShadowLight && _directionalShadowResources.HasImage;
 
             GPUShadowData shadowData = enabled
-                ? DirectionalShadowDataBuilder.Build(camera, shadowLight.Direction, shadowSettings, lightIndex)
-                : DirectionalShadowDataBuilder.Build(camera, new System.Numerics.Vector3(0f, -1f, 0f), shadowSettings, -1);
+                ? DirectionalShadowDataBuilder.Build(
+                    camera,
+                    shadowLight.Direction,
+                    shadowSettings,
+                    lightIndex,
+                    shadowLight.ShadowStrength)
+                : DirectionalShadowDataBuilder.Build(
+                    camera,
+                    new System.Numerics.Vector3(0f, -1f, 0f),
+                    shadowSettings,
+                    -1,
+                    1f);
 
             if (!enabled)
             {
@@ -7727,6 +7737,13 @@ namespace Njulf.Rendering
                     _currentCommandBuffer,
                     ResolveDdgiGatherSupportReadiness());
             }
+            else
+            {
+                // Control headers are the only inactive-owner writes. They are
+                // required once at startup and on a backend transition so forward
+                // shading can never observe a stale legacy enabled bit.
+                _ddgiProbeVolumeManager.EnsureDisabled(_stagingRing, _currentCommandBuffer);
+            }
 
             // Build and upload the current emissive payload before calculating
             // the simple-DDGI dirty signature. This makes the revision consumed
@@ -7784,6 +7801,12 @@ namespace Njulf.Rendering
                     sceneData.ScreenHeight,
                     _stagingRing,
                     _currentCommandBuffer);
+            }
+            else
+            {
+                // As above, disable only the control header. The inactive simple
+                // scheduler, atlases, passes, and gather producer remain dormant.
+                _simpleDdgiVolumeManager?.EnsureDisabled(_stagingRing, _currentCommandBuffer);
             }
             bool ddgiCompareMode = Settings.GlobalIllumination.DdgiSchedulerMode == DdgiSchedulerMode.CpuGpuCompare;
             bool gpuSchedulerRequested = Settings.GlobalIllumination.DdgiSchedulerMode != DdgiSchedulerMode.CpuReference;

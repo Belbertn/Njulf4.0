@@ -108,6 +108,7 @@ namespace Njulf.Rendering.Resources
         private const uint ProbeStateFreshFlag = 1u << 0;
         private const uint ProbeStateScrollExposedFlag = 1u << 1;
         private const uint ProbeStateInactiveFlag = 1u << 2;
+        private const uint ProbeStateRelocationPendingFlag = 1u << 3;
         private const uint ProbeUpdateMaintenanceFlag = 1u << 12;
         // Packed into the simple-DDGI flag word so this artist-facing gather
         // quality control does not grow the hot params header or shift volumes.
@@ -268,6 +269,8 @@ namespace Njulf.Rendering.Resources
         private ulong _sampledAtlasFailureBudgetBytes;
         private long _lastSampledAtlasSynchronizationMicroseconds;
         private GPUSimpleDdgiParams _lastParams;
+        private bool _controlHeaderInitialized;
+        private bool _wasSimpleDdgiEnabled;
         private int _volumeCount;
         private int _probeCount;
         private int _probeCountX;
@@ -974,30 +977,7 @@ namespace Njulf.Rendering.Resources
             bool enabled = gi.EffectiveUseSimpleDdgi;
             if (!enabled)
             {
-                _volumeCount = 0;
-                _probeCount = 0;
-                _lastLayoutReport = null;
-                _probesToUpdate = 0;
-                _activeProbeCount = 0;
-                _probeStateReadbackValid = 0;
-                _hasGridOrigin = false;
-                Array.Fill(_ringHasOrigins, false);
-                _atlasClearRequired = true;
-                _atlasFresh = true;
-                AbortUpdateTransaction();
-                UpdateSampledAtlasCapacity(0);
-                Array.Clear(_volumeScratch);
-                Array.Clear(_volumePurposes);
-                Array.Clear(_volumePriorities);
-                Array.Clear(_probeDirtyLatencyStates);
-                Array.Clear(_probeDirtyLatencyStartFrames);
-                Array.Clear(_probeSchedulingFlags);
-                Array.Clear(_probeDirtyReasons);
-                Array.Clear(_probeVisibilityImportance);
-                _dirtyLatencyOutstandingEventCount = 0;
-                _lastParams = CreateDisabledParams(gi);
-                UploadParams(stagingRing, commandBuffer);
-                _frameIndex++;
+                DisableCore(gi, stagingRing, commandBuffer);
                 return;
             }
 
@@ -1113,6 +1093,8 @@ namespace Njulf.Rendering.Resources
             };
 
             UploadParams(stagingRing, commandBuffer);
+            _controlHeaderInitialized = true;
+            _wasSimpleDdgiEnabled = true;
             UploadProbeState(stagingRing, commandBuffer);
             UploadProbeUpdateQueue(stagingRing, commandBuffer);
             if (_atlasClearedThisFrame)
@@ -1133,6 +1115,66 @@ namespace Njulf.Rendering.Resources
             {
                 _lastUploadMicroseconds = ElapsedMicroseconds(uploadStart);
             }
+        }
+
+        /// <summary>
+        /// Publishes a disabled simple-DDGI params header once at startup and
+        /// whenever another GI implementation takes ownership. No probe layout,
+        /// scheduler, trace, blend, or gather work is performed.
+        /// </summary>
+        public void EnsureDisabled(StagingRing stagingRing, CommandBuffer commandBuffer)
+        {
+            if (stagingRing == null)
+                throw new ArgumentNullException(nameof(stagingRing));
+            if (commandBuffer.Handle == 0)
+                throw new ArgumentException("A valid command buffer is required.", nameof(commandBuffer));
+            if (_controlHeaderInitialized && !_wasSimpleDdgiEnabled)
+                return;
+
+            long uploadStart = Stopwatch.GetTimestamp();
+            try
+            {
+                BeginFrameResourceRetirement();
+                ResetFrameCounters();
+                DisableCore(_settings.GlobalIllumination, stagingRing, commandBuffer);
+            }
+            finally
+            {
+                _lastUploadMicroseconds = ElapsedMicroseconds(uploadStart);
+            }
+        }
+
+        private void DisableCore(
+            GlobalIlluminationSettings settings,
+            StagingRing stagingRing,
+            CommandBuffer commandBuffer)
+        {
+            _volumeCount = 0;
+            _probeCount = 0;
+            _lastLayoutReport = null;
+            _probesToUpdate = 0;
+            _activeProbeCount = 0;
+            _probeStateReadbackValid = 0;
+            _hasGridOrigin = false;
+            Array.Fill(_ringHasOrigins, false);
+            _atlasClearRequired = true;
+            _atlasFresh = true;
+            AbortUpdateTransaction();
+            UpdateSampledAtlasCapacity(0);
+            Array.Clear(_volumeScratch);
+            Array.Clear(_volumePurposes);
+            Array.Clear(_volumePriorities);
+            Array.Clear(_probeDirtyLatencyStates);
+            Array.Clear(_probeDirtyLatencyStartFrames);
+            Array.Clear(_probeSchedulingFlags);
+            Array.Clear(_probeDirtyReasons);
+            Array.Clear(_probeVisibilityImportance);
+            _dirtyLatencyOutstandingEventCount = 0;
+            _lastParams = CreateDisabledParams(settings);
+            UploadParams(stagingRing, commandBuffer);
+            _controlHeaderInitialized = true;
+            _wasSimpleDdgiEnabled = false;
+            _frameIndex++;
         }
 
         public void MarkBlendExecuted()
@@ -2126,12 +2168,31 @@ namespace Njulf.Rendering.Resources
 
         private bool ShouldSkipInactiveProbe(int probeIndex)
         {
-            return _settings.GlobalIllumination.SimpleDdgiClassificationSchedulingEnabled &&
-                (uint)probeIndex < (uint)_probeInactive.Length &&
-                _probeInactive[probeIndex] != 0 &&
-                // Re-probe promptly: classification is asynchronous and a long
-                // frozen interval can leave a moved or newly-lit probe stale.
-                _probeAges[probeIndex] < InactiveProbeRetryFrames;
+            bool inRange = (uint)probeIndex < (uint)_probeInactive.Length &&
+                (uint)probeIndex < (uint)_probeFresh.Length &&
+                (uint)probeIndex < (uint)_probeAges.Length;
+            return inRange && ShouldSkipInactiveProbeForScheduling(
+                _settings.GlobalIllumination.SimpleDdgiClassificationSchedulingEnabled,
+                _probeInactive[probeIndex] != 0,
+                _probeFresh[probeIndex] != 0,
+                _probeAges[probeIndex],
+                InactiveProbeRetryFrames);
+        }
+
+        internal static bool ShouldSkipInactiveProbeForScheduling(
+            bool classificationSchedulingEnabled,
+            bool inactive,
+            bool freshOrRelocationPending,
+            uint age,
+            uint retryFrames)
+        {
+            // A pending relocation is represented as fresh on the CPU after
+            // readback. It must bypass inactive throttling so the atlas can be
+            // republished from the committed probe position immediately.
+            return classificationSchedulingEnabled &&
+                inactive &&
+                !freshOrRelocationPending &&
+                age < retryFrames;
         }
 
         private void RecordInactiveProbeSkip(int probeIndex)
@@ -3028,7 +3089,7 @@ namespace Njulf.Rendering.Resources
 
         private VolumeCandidate CreateRingVolume(GlobalIlluminationSettings gi, BoundingBox sceneBounds, Vector3 cameraPosition, int ringIndex)
         {
-            float spacing = gi.SimpleDdgiRingBaseSpacing * MathF.Pow(gi.SimpleDdgiRingSpacingMultiplier, ringIndex);
+            float spacing = ResolveRingSpacing(gi, ringIndex);
             (int countX, int countY, int countZ) = ResolveRingGrid(gi, ringIndex);
             Vector3 latticeSize = LatticeSize(countX, countY, countZ, spacing);
             bool hadRingOrigin = _ringHasOrigins[ringIndex];
@@ -3103,6 +3164,17 @@ namespace Njulf.Rendering.Resources
                     settings.SimpleDdgiNearRingGridSizeY,
                     settings.SimpleDdgiNearRingGridSizeZ)
             };
+        }
+
+        internal static float ResolveRingSpacing(GlobalIlluminationSettings settings, int ringIndex)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+            if (ringIndex < 0)
+                throw new ArgumentOutOfRangeException(nameof(ringIndex));
+
+            return settings.SimpleDdgiRingBaseSpacing *
+                MathF.Pow(settings.SimpleDdgiRingSpacingMultiplier, ringIndex);
         }
 
         private VolumeCandidate CreateLegacyVolume(GlobalIlluminationSettings gi, BoundingBox sceneBounds, Vector3 cameraPosition)
@@ -4205,8 +4277,21 @@ namespace Njulf.Rendering.Resources
                     expectedGenerations[probeIndex] == NormalizeProbeGeneration(_probeGenerations[probeIndex]);
                 float relocationDelta = (previousRelocation - currentRelocation).Length();
                 bool materiallyRelocated = relocationDelta > ResolveProbeSpacing(probeIndex) * 0.05f;
+                bool relocationRetracePending =
+                    (state.Flags & ProbeStateRelocationPendingFlag) != 0u;
+
+                // A relocation pass can commit a new probe origin only after the
+                // trace for that transaction has already run. Mirror the GPU's
+                // pending bit into the CPU scheduler so the committed position is
+                // retraced with fresh/full-ray priority. Do not upload CPU state:
+                // the GPU record is already authoritative for this generation.
+                if (completedThisReadback &&
+                    relocationRetracePending &&
+                    (uint)probeIndex < (uint)_probeFresh.Length)
+                    _probeFresh[probeIndex] = 1;
 
                 if (inactive ||
+                    relocationRetracePending ||
                     materiallyRelocated ||
                     luminanceChangeEma > _settings.GlobalIllumination.SimpleDdgiStableMaintenanceEmaThreshold)
                 {

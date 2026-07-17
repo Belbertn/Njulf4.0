@@ -359,7 +359,12 @@ vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
     if (DdgiHitLuminance(noShadowDiffuse) <= 0.0001)
         return vec3(0.0);
 
-    float visibility = TraceLightVisibility(worldPosition, normal, lightDirection, visibilityDistance);
+    float shadowStrength = clamp(light.ShadowStrength, 0.0, 1.0);
+    if ((uint(light.ShadowFlags) & GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS) == 0u || shadowStrength <= 0.0)
+        return noShadowDiffuse;
+
+    float tracedVisibility = TraceLightVisibility(worldPosition, normal, lightDirection, visibilityDistance);
+    float visibility = mix(1.0, tracedVisibility, shadowStrength);
     return noShadowDiffuse * visibility;
 }
 

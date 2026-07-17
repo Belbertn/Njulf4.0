@@ -115,15 +115,16 @@ float SimpleDdgiCadenceAdjustedHysteresis(SimpleDdgiParams params, SimpleDdgiPro
         return 0.0;
 
     float baseHysteresis = clamp(params.hysteresis, 0.0, 1.0);
-    if (SimpleDdgiUpdateIsMaintenance(update))
-        return baseHysteresis;
-
-    // The near-ring cadence (roughly eight frames at production budgets) is the
-    // reference response. Full updates from sparse outer rings retain the same
-    // wall-clock convergence instead of applying one retention step every 30-60
-    // frames. Maintenance batches stay conservative because they use fewer rays.
+    // The near-ring full-update cadence (roughly eight frames at production
+    // budgets) is the reference response. Sparse updates retain comparable
+    // wall-clock convergence instead of applying one 0.97 retention step every
+    // 70-110 frames. Maintenance estimates use fewer rays, so give them a
+    // deliberately slower sixteen-frame reference rather than disabling cadence
+    // compensation entirely; the latter trapped recursive bounce near its first
+    // dark estimate for thousands of frames.
     float elapsedFrames = float(SimpleDdgiUpdateAge(update));
-    float cadenceExponent = clamp(elapsedFrames / 8.0, 1.0, 8.0);
+    float referenceCadence = SimpleDdgiUpdateIsMaintenance(update) ? 16.0 : 8.0;
+    float cadenceExponent = clamp(elapsedFrames / referenceCadence, 1.0, 8.0);
     return pow(baseHysteresis, cadenceExponent);
 }
 
@@ -380,11 +381,20 @@ void main()
     SimpleDdgiProbeState initialState = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
     if (!SimpleDdgiUpdateMatchesProbeGeneration(update, initialState))
         return;
+    // Relocation committed a position different from the origin used by this
+    // update's rays. Do not publish a spatially mismatched atlas. The pending
+    // state also keeps forward gather on its environment/coarser fallback until
+    // a full retry traces from the committed position.
+    if ((initialState.flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u)
+        return;
     uint local = gl_LocalInvocationID.x;
     uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
     bool maintenanceUpdate = SimpleDdgiUpdateIsMaintenance(update);
-    bool freshUpdate = (update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u;
-    float probeHysteresis = SimpleDdgiCadenceAdjustedHysteresis(params, update);
+    bool freshUpdate = (update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u ||
+        (initialState.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u;
+    float probeHysteresis = freshUpdate
+        ? 0.0
+        : SimpleDdgiCadenceAdjustedHysteresis(params, update);
     bool reducedComplexityEnabled = (pc.Flags & SIMPLE_DDGI_BLEND_FLAG_REDUCED_COMPLEXITY) != 0u;
     bool sharedRayCacheEnabled = (pc.Flags & SIMPLE_DDGI_BLEND_FLAG_SHARED_RAY_CACHE) != 0u || reducedComplexityEnabled;
     if (sharedRayCacheEnabled)
@@ -449,6 +459,8 @@ void main()
         if (SimpleDdgiUpdateMatchesProbeGeneration(update, state))
         {
             state.luminanceChangeEma = mix(max(state.luminanceChangeEma, 0.0), clamp(aggregateIrradianceDelta, 0.0, 8.0), 0.20);
+            if (freshUpdate)
+                state.flags &= ~SIMPLE_DDGI_PROBE_FLAG_FRESH;
             WriteSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex, state);
         }
     }

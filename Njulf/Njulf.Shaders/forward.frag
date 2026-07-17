@@ -2197,7 +2197,7 @@ float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal
             GPULight light = ReadLight(lightIndex);
             shadow *= EstimateFarFieldSunShadow(worldPosition, normal, normalize(-light.Direction));
         }
-        return shadow;
+        return mix(1.0, shadow, clamp(shadowSettings.x, 0.0, 1.0));
     }
 
     float lit = 0.0;
@@ -2218,7 +2218,7 @@ float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal
         shadow *= EstimateFarFieldSunShadow(worldPosition, normal, normalize(-light.Direction));
     }
 
-    return shadow;
+    return mix(1.0, shadow, clamp(shadowSettings.x, 0.0, 1.0));
 }
 
 float CompareReverseZDepth(float receiverDepth, float sampledDepth, float bias)

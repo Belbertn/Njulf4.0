@@ -391,6 +391,8 @@ namespace Njulf.Rendering.Data
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPULight
     {
+        public const int CastsShadowsFlag = 1 << 0;
+
         public Vector3 Position;
         public float Intensity;
         public Vector3 Color;
@@ -398,9 +400,9 @@ namespace Njulf.Rendering.Data
         public Vector3 Direction;
         public float SpotAngle;
         public int Type;
+        public int ShadowFlags;
+        public float ShadowStrength;
         public int Padding0;
-        public int Padding1;
-        public int Padding2;
     }
     
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

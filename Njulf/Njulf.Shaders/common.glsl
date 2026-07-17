@@ -233,6 +233,7 @@ const uint MESHLET_DRAW_FLAG_CAN_HIZ_TEST = 1u << 5;
 
 const uint FOLIAGE_PROTOTYPE_FLAG_CAST_SHADOWS = 1u << 0;
 const uint FOLIAGE_PROTOTYPE_FLAG_FAR_IMPOSTOR = 1u << 1;
+const uint GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS = 1u << 0;
 
 const uint HIZ_TEST_MODE_OFF = 0u;
 const uint HIZ_TEST_MODE_BOUNDS_4_TAP = 1u;
@@ -670,9 +671,9 @@ struct GPULight
     vec3 Direction;
     float SpotAngle;
     int Type;
+    int ShadowFlags;
+    float ShadowStrength;
     int Padding0;
-    int Padding1;
-    int Padding2;
 };
 
 struct GPUSceneData
@@ -3001,9 +3002,9 @@ GPULight ReadLight(uint lightIndex)
     light.Direction = ReadStorageVec3(uint(LIGHT_BUFFER_INDEX), baseWord + 8u);
     light.SpotAngle = ReadStorageFloat(uint(LIGHT_BUFFER_INDEX), baseWord + 11u);
     light.Type = int(ReadStorageWord(uint(LIGHT_BUFFER_INDEX), baseWord + 12u));
-    light.Padding0 = int(ReadStorageWord(uint(LIGHT_BUFFER_INDEX), baseWord + 13u));
-    light.Padding1 = int(ReadStorageWord(uint(LIGHT_BUFFER_INDEX), baseWord + 14u));
-    light.Padding2 = int(ReadStorageWord(uint(LIGHT_BUFFER_INDEX), baseWord + 15u));
+    light.ShadowFlags = int(ReadStorageWord(uint(LIGHT_BUFFER_INDEX), baseWord + 13u));
+    light.ShadowStrength = ReadStorageFloat(uint(LIGHT_BUFFER_INDEX), baseWord + 14u);
+    light.Padding0 = int(ReadStorageWord(uint(LIGHT_BUFFER_INDEX), baseWord + 15u));
     return light;
 }
 

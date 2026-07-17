@@ -505,8 +505,11 @@ namespace Njulf.Rendering.Resources
             }
         }
 
-        private static GPULight ToGpuLight(Light light)
+        internal static GPULight ToGpuLight(Light light)
         {
+            float shadowStrength = light.CastsShadows
+                ? ResolveShadowStrength(light.ShadowStrength)
+                : 0f;
             return new GPULight
             {
                 Position = new Njulf.Core.Math.Vector3(light.Position.X, light.Position.Y, light.Position.Z),
@@ -515,8 +518,17 @@ namespace Njulf.Rendering.Resources
                 Range = light.Range,
                 Direction = new Njulf.Core.Math.Vector3(light.Direction.X, light.Direction.Y, light.Direction.Z),
                 SpotAngle = light.SpotAngle,
-                Type = (int)light.Type
+                Type = (int)light.Type,
+                ShadowFlags = light.CastsShadows ? GPULight.CastsShadowsFlag : 0,
+                ShadowStrength = shadowStrength
             };
+        }
+
+        private static float ResolveShadowStrength(float shadowStrength)
+        {
+            // Preserve the renderer's established authoring convention: zero
+            // on a shadow-casting legacy Light means full-strength shadows.
+            return Math.Clamp(shadowStrength <= 0f ? 1f : shadowStrength, 0f, 1f);
         }
 
         /// <summary>Copies live lights with stable IDs. Intended for infrequent tooling/save paths.</summary>

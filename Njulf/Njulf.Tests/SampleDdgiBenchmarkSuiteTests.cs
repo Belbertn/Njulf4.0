@@ -803,6 +803,45 @@ public sealed class SampleDdgiBenchmarkSuiteTests
     }
 
     [Test]
+    public void ProductionGate_DoesNotMistakeDarkReceiversForFinalStageSuppression()
+    {
+        SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
+        {
+            ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationDdgiActive = 1,
+            GlobalIlluminationSsgiActive = 0,
+            GlobalIlluminationRayQueryActive = 1,
+            DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 1,
+            DdgiProbeVolumeCount = 4,
+            DdgiCascadeCount = 3,
+            DdgiProbesUpdated = 16,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 8160,
+            DdgiGatherFallbackTileCount = 0,
+            DdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL,
+            DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiForwardEstimateCountersReadbackValid = 1,
+            DdgiForwardEstimateRawDiffuseLuminance = 0.011f,
+            DdgiForwardEstimateSampledIrradianceLuminance = 0.163f,
+            DdgiForwardEstimateFinalDiffuseLuminance = 0.011f,
+            DdgiAverageEffectiveContributionEstimate = 1.0f,
+            DdgiBlendEnergyIrradianceLuminanceAverage = 0.50f,
+            ProductionPipelineDeclaredPasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            ProductionPipelineActivePasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            Graph = CreateGraph([.. DdgiSplitPasses, "ForwardPlusPass"], [])
+        });
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+        string[] failures = gate.Failures.Select(failure => failure.Name).ToArray();
+
+        Assert.That(failures, Does.Not.Contain("phase9-raw-atlas-to-final-energy"));
+    }
+
+    [Test]
     public void ProductionGate_FailsWhenPhase9FallbackDominatesVisibleOutput()
     {
         SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
