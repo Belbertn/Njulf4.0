@@ -105,6 +105,8 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(settings.AutoExposure.MinExposure, Is.EqualTo(0.5f));
             Assert.That(settings.AutoExposure.MaxExposure, Is.EqualTo(8.0f));
             Assert.That(settings.GlobalIllumination.DdgiAlphaMaskedTransportEnabled, Is.True);
+            Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(3));
+            Assert.That(settings.Shadows.MaxShadowDistance, Is.EqualTo(250.0f));
         });
 
         SampleSponzaGlobalIlluminationProfile.ApplyValidationOverlay(settings);

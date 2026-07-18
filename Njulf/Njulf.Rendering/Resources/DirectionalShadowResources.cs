@@ -55,6 +55,13 @@ namespace Njulf.Rendering.Resources
         public ImageLayout StaticLayout { get; set; } = ImageLayout.Undefined;
         public ImageLayout Layout { get; set; } = ImageLayout.Undefined;
         public BufferHandle ShadowDataBuffer => _shadowDataBuffer;
+        // Scene shadow compaction reads the matrices in compute before the
+        // raster and forward graphics consumers use the same buffer.
+        internal static PipelineStageFlags2 ShadowDataConsumerStages =>
+            PipelineStageFlags2.ComputeShaderBit |
+            PipelineStageFlags2.TaskShaderBitExt |
+            PipelineStageFlags2.MeshShaderBitExt |
+            PipelineStageFlags2.FragmentShaderBit;
         public ulong EstimatedImageBytes => _workingImage.Handle == 0
             ? 0
             : 2UL * ImageByteEstimator.EstimateBytes(
@@ -198,9 +205,7 @@ namespace Njulf.Rendering.Resources
                 _shadowDataBuffer,
                 shadowData,
                 barrierDescription: new UploadBarrierDescription(
-                    PipelineStageFlags2.TaskShaderBitExt |
-                    PipelineStageFlags2.MeshShaderBitExt |
-                    PipelineStageFlags2.FragmentShaderBit,
+                    ShadowDataConsumerStages,
                     AccessFlags2.ShaderStorageReadBit));
         }
 

@@ -338,6 +338,7 @@ public sealed class SampleSponzaGiCaptureContract
         if (!settings.Shadows.DirectionalShadowsEnabled ||
             settings.Shadows.DirectionalShadowMapSize != 2048 ||
             settings.Shadows.DirectionalCascadeCount != 3 ||
+            settings.Shadows.MaxShadowDistance != 250.0f ||
             settings.Shadows.PcfRadius != 1)
         {
             violations.Add("The canonical directional sun and shadow settings must be locked.");

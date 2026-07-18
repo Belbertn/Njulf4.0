@@ -2139,21 +2139,24 @@ float SampleDirectionalShadowTexel(
     uint textureIndex,
     ivec2 texel,
     ivec2 maxTexel,
-    float receiverDepth,
-    float bias)
+    float receiverDepth)
 {
     float sampledDepth = texelFetch(
         BindlessTextures[nonuniformEXT(int(textureIndex))],
         clamp(texel, ivec2(0), maxTexel),
         0).r;
-    return receiverDepth >= sampledDepth - bias ? 1.0 : 0.0;
+    // The shadow raster pass already applies reverse-Z constant/slope bias and
+    // the receiver position carries the authored world-space normal bias. A
+    // second normalized-depth bias scales with the full light-space depth span
+    // (0.0005 became about 0.25 m at Sponza's 250 m range) and erases valid
+    // architectural shadows.
+    return receiverDepth >= sampledDepth ? 1.0 : 0.0;
 }
 
 float SampleDirectionalShadowTap(
     uint textureIndex,
     vec2 uv,
     float receiverDepth,
-    float bias,
     float mapSize)
 {
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)
@@ -2169,12 +2172,12 @@ float SampleDirectionalShadowTap(
     ivec2 maxTexel = ivec2(max(int(safeMapSize) - 1, 0));
     vec2 weights = fract(texelPosition);
     float lower = mix(
-        SampleDirectionalShadowTexel(textureIndex, baseTexel, maxTexel, receiverDepth, bias),
-        SampleDirectionalShadowTexel(textureIndex, baseTexel + ivec2(1, 0), maxTexel, receiverDepth, bias),
+        SampleDirectionalShadowTexel(textureIndex, baseTexel, maxTexel, receiverDepth),
+        SampleDirectionalShadowTexel(textureIndex, baseTexel + ivec2(1, 0), maxTexel, receiverDepth),
         weights.x);
     float upper = mix(
-        SampleDirectionalShadowTexel(textureIndex, baseTexel + ivec2(0, 1), maxTexel, receiverDepth, bias),
-        SampleDirectionalShadowTexel(textureIndex, baseTexel + ivec2(1, 1), maxTexel, receiverDepth, bias),
+        SampleDirectionalShadowTexel(textureIndex, baseTexel + ivec2(0, 1), maxTexel, receiverDepth),
+        SampleDirectionalShadowTexel(textureIndex, baseTexel + ivec2(1, 1), maxTexel, receiverDepth),
         weights.x);
     return mix(lower, upper, weights.y);
 }
@@ -2183,7 +2186,6 @@ float SampleDirectionalShadowPcf(
     uint textureIndex,
     vec2 uv,
     float receiverDepth,
-    float bias,
     float mapSize,
     int radius)
 {
@@ -2212,8 +2214,7 @@ float SampleDirectionalShadowPcf(
                 textureIndex,
                 baseTexel + ivec2(x, y),
                 maxTexel,
-                receiverDepth,
-                bias) * weightX * weightY;
+                receiverDepth) * weightX * weightY;
         }
     }
 
@@ -2259,7 +2260,7 @@ bool TrySampleDirectionalShadowCascade(
     uint textureIndex = uint(DIRECTIONAL_SHADOW_TEXTURE_BASE) + cascade;
     if (radius <= 0)
     {
-        shadow = SampleDirectionalShadowTap(textureIndex, uv, receiverDepth, 0.0005, mapSize);
+        shadow = SampleDirectionalShadowTap(textureIndex, uv, receiverDepth, mapSize);
         return true;
     }
 
@@ -2267,7 +2268,6 @@ bool TrySampleDirectionalShadowCascade(
         textureIndex,
         uv,
         receiverDepth,
-        0.0005,
         mapSize,
         radius);
     return true;

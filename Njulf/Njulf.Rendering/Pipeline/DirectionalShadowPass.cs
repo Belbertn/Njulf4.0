@@ -100,7 +100,7 @@ namespace Njulf.Rendering.Pipeline
                 _staticCacheValidCascadeMask &= ~activeMask;
                 refreshMask = RenderStaticCache(cmd, sceneData);
                 _staticCacheValidCascadeMask |= refreshMask;
-                _lastStaticCacheSignature = CreateStaticCacheSignature(sceneData);
+                _lastStaticCacheSignature = CreateStaticCacheSignature(sceneData, _settings);
                 _hasStaticCacheSignature = true;
             }
             else if (activeMask != 0u &&
@@ -743,17 +743,28 @@ namespace Njulf.Rendering.Pipeline
             if ((_staticCacheValidCascadeMask & requiredMask) != requiredMask)
                 return true;
 
-            ulong signature = CreateStaticCacheSignature(sceneData);
+            ulong signature = CreateStaticCacheSignature(sceneData, _settings);
             return !_hasStaticCacheSignature || _lastStaticCacheSignature != signature;
         }
 
-        private static ulong CreateStaticCacheSignature(SceneRenderingData sceneData)
+        internal static ulong CreateStaticCacheSignature(SceneRenderingData sceneData, ShadowSettings settings)
         {
+            if (sceneData == null)
+                throw new ArgumentNullException(nameof(sceneData));
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+
             ulong hash = 14695981039346656037UL;
+            // The draw-command IDs do not include instance transforms or material
+            // payload revisions. SceneContentRevision closes that gap so a static
+            // caster edit cannot leave old depth cached until the camera moves.
+            hash = HashAdd(hash, sceneData.SceneContentRevision);
             hash = HashAdd(hash, sceneData.DirectionalStaticShadowMeshletCount);
             hash = HashAdd(hash, sceneData.DirectionalStaticShadowMeshletDrawSignature);
             hash = HashAdd(hash, sceneData.DirectionalShadowMapSize);
             hash = HashAdd(hash, sceneData.DirectionalShadowCascadeCount);
+            hash = HashAdd(hash, BitConverter.SingleToUInt32Bits(settings.ConstantDepthBias));
+            hash = HashAdd(hash, BitConverter.SingleToUInt32Bits(settings.SlopeScaledDepthBias));
             hash = HashAdd(hash, sceneData.SceneSubmissionGpuCompactionEnabled ? 1u : 0u);
             hash = HashAdd(hash, sceneData.SceneSubmissionGpuLodSelectionEnabled ? 1u : 0u);
             hash = HashAdd(hash, BitConverter.SingleToUInt32Bits(sceneData.SceneSubmissionGpuLod1DistanceRatio));
@@ -794,7 +805,7 @@ namespace Njulf.Rendering.Pipeline
             return HashAdd(hash, (uint)(value >> 32));
         }
 
-        private static void GetTransitionMasks(
+        internal static void GetTransitionMasks(
             ImageLayout oldLayout,
             ImageLayout newLayout,
             out PipelineStageFlags2 srcStage,
@@ -805,9 +816,14 @@ namespace Njulf.Rendering.Pipeline
             switch (oldLayout)
             {
                 case ImageLayout.DepthStencilAttachmentOptimal:
-                    srcStage = PipelineStageFlags2.LateFragmentTestsBit;
-                    srcAccess = AccessFlags2.DepthStencilAttachmentWriteBit;
-                break;
+                    // Depth tests and writes may occur in either the early or late
+                    // fragment-test stage. Include reads as well because loadOp=Load
+                    // and depth testing consume the attachment before a transition.
+                    srcStage = PipelineStageFlags2.EarlyFragmentTestsBit |
+                        PipelineStageFlags2.LateFragmentTestsBit;
+                    srcAccess = AccessFlags2.DepthStencilAttachmentReadBit |
+                        AccessFlags2.DepthStencilAttachmentWriteBit;
+                    break;
                 case ImageLayout.DepthStencilReadOnlyOptimal:
                     srcStage = PipelineStageFlags2.FragmentShaderBit;
                     srcAccess = AccessFlags2.ShaderSampledReadBit;
@@ -830,7 +846,11 @@ namespace Njulf.Rendering.Pipeline
             {
                 case ImageLayout.DepthStencilAttachmentOptimal:
                     dstStage = PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit;
-                    dstAccess = AccessFlags2.DepthStencilAttachmentWriteBit;
+                    // Static cache copies are composed with loadOp=Load before dynamic
+                    // casters are drawn, so the copied depth must be visible to both
+                    // attachment reads and writes.
+                    dstAccess = AccessFlags2.DepthStencilAttachmentReadBit |
+                        AccessFlags2.DepthStencilAttachmentWriteBit;
                     break;
                 case ImageLayout.DepthStencilReadOnlyOptimal:
                     dstStage = PipelineStageFlags2.FragmentShaderBit;

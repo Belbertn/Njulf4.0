@@ -1,7 +1,10 @@
 using System;
 using Njulf.Core.Camera;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Pipeline;
+using Njulf.Rendering.Resources;
 using NUnit.Framework;
+using Silk.NET.Vulkan;
 using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
 using CoreVector3 = Njulf.Core.Math.Vector3;
 using NumericsVector3 = System.Numerics.Vector3;
@@ -55,6 +58,86 @@ public sealed class DirectionalShadowDataBuilderTests
             Assert.That(data.CascadeTransitionData.X, Is.EqualTo(settings.DirectionalCascadeBlendFraction));
             Assert.That(data.CascadeTransitionData.Y, Is.EqualTo(camera.NearPlane));
             Assert.That(data.CascadeTransitionData.Z, Is.EqualTo(settings.MaxShadowDistance));
+        });
+    }
+
+    [Test]
+    public void ShadowDataUpload_SynchronizesComputeAndGraphicsConsumers()
+    {
+        const PipelineStageFlags2 expected =
+            PipelineStageFlags2.ComputeShaderBit |
+            PipelineStageFlags2.TaskShaderBitExt |
+            PipelineStageFlags2.MeshShaderBitExt |
+            PipelineStageFlags2.FragmentShaderBit;
+
+        Assert.That(DirectionalShadowResources.ShadowDataConsumerStages, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void ShadowDepthTransitions_SynchronizeEarlyAndLateAttachmentAccess()
+    {
+        DirectionalShadowPass.GetTransitionMasks(
+            ImageLayout.DepthStencilAttachmentOptimal,
+            ImageLayout.TransferSrcOptimal,
+            out PipelineStageFlags2 sourceStage,
+            out AccessFlags2 sourceAccess,
+            out _,
+            out _);
+        DirectionalShadowPass.GetTransitionMasks(
+            ImageLayout.TransferDstOptimal,
+            ImageLayout.DepthStencilAttachmentOptimal,
+            out _,
+            out _,
+            out PipelineStageFlags2 destinationStage,
+            out AccessFlags2 destinationAccess);
+
+        const PipelineStageFlags2 expectedStages =
+            PipelineStageFlags2.EarlyFragmentTestsBit |
+            PipelineStageFlags2.LateFragmentTestsBit;
+        const AccessFlags2 expectedAccess =
+            AccessFlags2.DepthStencilAttachmentReadBit |
+            AccessFlags2.DepthStencilAttachmentWriteBit;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sourceStage, Is.EqualTo(expectedStages));
+            Assert.That(sourceAccess, Is.EqualTo(expectedAccess));
+            Assert.That(destinationStage, Is.EqualTo(expectedStages));
+            Assert.That(destinationAccess, Is.EqualTo(expectedAccess));
+        });
+    }
+
+    [Test]
+    public void StaticShadowCacheSignature_TracksSceneContentAndRasterBias()
+    {
+        var sceneData = new SceneRenderingData
+        {
+            SceneContentRevision = 41,
+            DirectionalStaticShadowMeshletCount = 12,
+            DirectionalStaticShadowMeshletDrawSignature = 99,
+            DirectionalShadowMapSize = 2048,
+            DirectionalShadowCascadeCount = 3
+        };
+        var settings = new ShadowSettings
+        {
+            ConstantDepthBias = 0.0005f,
+            SlopeScaledDepthBias = 1.5f
+        };
+
+        ulong baseline = DirectionalShadowPass.CreateStaticCacheSignature(sceneData, settings);
+        sceneData.SceneContentRevision++;
+        ulong contentChanged = DirectionalShadowPass.CreateStaticCacheSignature(sceneData, settings);
+        sceneData.SceneContentRevision--;
+        settings.ConstantDepthBias = 0.001f;
+        ulong constantBiasChanged = DirectionalShadowPass.CreateStaticCacheSignature(sceneData, settings);
+        settings.ConstantDepthBias = 0.0005f;
+        settings.SlopeScaledDepthBias = 2.0f;
+        ulong slopeBiasChanged = DirectionalShadowPass.CreateStaticCacheSignature(sceneData, settings);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(contentChanged, Is.Not.EqualTo(baseline));
+            Assert.That(constantBiasChanged, Is.Not.EqualTo(baseline));
+            Assert.That(slopeBiasChanged, Is.Not.EqualTo(baseline));
         });
     }
 

@@ -1874,7 +1874,7 @@ public sealed class ShaderBuildTests
         Assert.Multiple(() =>
         {
             Assert.That(shader, Does.Contain("if (radius <= 0)"));
-            Assert.That(shader, Does.Contain("shadow = SampleDirectionalShadowTap(textureIndex, uv, receiverDepth, 0.0005, mapSize);"));
+            Assert.That(shader, Does.Contain("shadow = SampleDirectionalShadowTap(textureIndex, uv, receiverDepth, mapSize);"));
             Assert.That(shader, Does.Contain("return mix(1.0, shadow, clamp(shadowSettings.x, 0.0, 1.0));"));
             Assert.That(shader, Does.Contain("float sampledDepth = texture(BindlessTextures[nonuniformEXT(SPOT_SHADOW_ATLAS_TEXTURE_INDEX)], atlasUv).r;"));
             Assert.That(shader, Does.Contain("radius > 0 && PointShadowFaceEdgeDistance(faceUv) <= seamWidth"));
@@ -1891,7 +1891,7 @@ public sealed class ShaderBuildTests
         Assert.Multiple(() =>
         {
             Assert.That(shader, Does.Contain("float sampledDepth = texelFetch("));
-            Assert.That(shader, Does.Contain("return receiverDepth >= sampledDepth - bias ? 1.0 : 0.0;"));
+            Assert.That(shader, Does.Contain("return receiverDepth >= sampledDepth ? 1.0 : 0.0;"));
             Assert.That(shader, Does.Contain("SampleDirectionalShadowPcf("));
             Assert.That(shader, Does.Contain("return mix(lower, upper, weights.y);"));
             Assert.That(shader, Does.Not.Contain("textureGather("));
