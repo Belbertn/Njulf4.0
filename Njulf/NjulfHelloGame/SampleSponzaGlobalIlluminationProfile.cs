@@ -80,11 +80,9 @@ public static class SampleSponzaGlobalIlluminationProfile
         settings.Reflections.Enabled = true;
         settings.Shadows.DirectionalShadowMapSize = 2048;
         settings.Shadows.DirectionalCascadeCount = 3;
-        // Match the Sponza camera far plane. With the previous 120 m range the
-        // practical first split landed at ~20 m, visibly crossing the courtyard.
-        // Three cascades over 250 m move that handoff beyond the scene while
-        // avoiding the memory cost of a fourth cached layer.
-        settings.Shadows.MaxShadowDistance = 250.0f;
+        // Cover the full plaza while retaining the three-cascade split layout used
+        // by the directional-shadow boundary investigation.
+        settings.Shadows.MaxShadowDistance = 120.0f;
         settings.Shadows.PcfRadius = 1;
         settings.Shadows.SpotShadowsEnabled = false;
         settings.Shadows.MaxShadowedSpotLights = 0;

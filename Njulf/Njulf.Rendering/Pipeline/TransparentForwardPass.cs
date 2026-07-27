@@ -100,7 +100,10 @@ namespace Njulf.Rendering.Pipeline
                     ambientOcclusionForwardSamplingMode: (uint)AmbientOcclusionForwardSamplingMode.Disabled,
                     // Transparent lighting keeps environment IBL but deliberately
                     // avoids the high-cost DDGI gather per blended fragment.
-                    globalIlluminationEnabled: false)
+                    globalIlluminationEnabled: false),
+                DiagnosticFlags = GPUForwardPushConstants.PackDiagnosticFlags(
+                    ddgiForwardEstimateCountersEnabled: false,
+                    directionalShadowPreviewCascade: (uint)sceneData.DirectionalShadowPreviewCascade)
             };
 
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();

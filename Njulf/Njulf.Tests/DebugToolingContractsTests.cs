@@ -83,6 +83,8 @@ namespace Njulf.Tests
                 FeatureIsolation = RenderFeatureIsolationMode.Shadows
             };
             settings.Shadows.DebugView = ShadowDebugView.CascadeOverlay;
+            settings.Shadows.DirectionalShadowPreviewCascade = 3;
+            settings.Shadows.ForceStaticCascadeCacheRefresh = true;
             settings.Bloom.DebugView = BloomDebugView.ExtractMask;
             settings.Environment.DebugView = EnvironmentDebugView.SkyboxOnly;
             settings.Reflections.DebugView = ReflectionDebugView.ProbeInfluence;
@@ -105,6 +107,8 @@ namespace Njulf.Tests
                 Assert.That(settings.ShowRawHdrSceneColor, Is.False);
                 Assert.That(settings.FeatureIsolation, Is.EqualTo(RenderFeatureIsolationMode.FullFrame));
                 Assert.That(settings.Shadows.DebugView, Is.EqualTo(ShadowDebugView.None));
+                Assert.That(settings.Shadows.DirectionalShadowPreviewCascade, Is.Zero);
+                Assert.That(settings.Shadows.ForceStaticCascadeCacheRefresh, Is.False);
                 Assert.That(settings.Bloom.DebugView, Is.EqualTo(BloomDebugView.None));
                 Assert.That(settings.Environment.DebugView, Is.EqualTo(EnvironmentDebugView.None));
                 Assert.That(settings.Reflections.DebugView, Is.EqualTo(ReflectionDebugView.None));

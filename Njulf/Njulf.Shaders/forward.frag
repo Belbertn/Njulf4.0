@@ -218,6 +218,11 @@ uint ForwardDebugViewMode()
     return pc.Push.DebugAndAoFlags & 0xffu;
 }
 
+uint ForwardDirectionalShadowPreviewCascade()
+{
+    return (pc.Push.DiagnosticFlags >> 8u) & 0x03u;
+}
+
 uint ForwardAmbientOcclusionEnabled()
 {
     return (pc.Push.DebugAndAoFlags >> 8u) & 1u;
@@ -3757,7 +3762,10 @@ void main()
     if (debugViewMode == DEBUG_VIEW_SHADOW_MAP_PREVIEW)
     {
         vec2 previewUv = gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0));
-        float depth = texture(BindlessTextures[nonuniformEXT(DIRECTIONAL_SHADOW_TEXTURE_BASE)], previewUv).r;
+        uint cascadeCount = max(uint(ReadShadowIndices().y + 0.5), 1u);
+        uint previewCascade = min(ForwardDirectionalShadowPreviewCascade(), cascadeCount - 1u);
+        uint textureIndex = uint(DIRECTIONAL_SHADOW_TEXTURE_BASE) + previewCascade;
+        float depth = texture(BindlessTextures[nonuniformEXT(textureIndex)], previewUv).r;
         WriteForwardColor(vec4(vec3(depth), 1.0));
         return;
     }

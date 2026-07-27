@@ -36,6 +36,7 @@ namespace Njulf.Rendering.Data
 
         private uint _directionalShadowMapSize = 2048;
         private int _directionalCascadeCount = 2;
+        private int _directionalShadowPreviewCascade;
         private float _maxShadowDistance = 80f;
         private float _directionalCascadeBlendFraction = 0.12f;
         private float _normalBias = 0.03f;
@@ -70,6 +71,16 @@ namespace Njulf.Rendering.Data
         {
             get => _directionalCascadeCount;
             set => _directionalCascadeCount = value < 1 ? 1 : value > MaxDirectionalCascades ? MaxDirectionalCascades : value;
+        }
+
+        /// <summary>
+        /// Directional cascade displayed by <see cref="ShadowDebugView.ShadowMapPreview"/>.
+        /// The renderer also clamps this to the currently active cascade count.
+        /// </summary>
+        public int DirectionalShadowPreviewCascade
+        {
+            get => _directionalShadowPreviewCascade;
+            set => _directionalShadowPreviewCascade = Math.Clamp(value, 0, MaxDirectionalCascades - 1);
         }
 
         public float MaxShadowDistance
@@ -203,6 +214,12 @@ namespace Njulf.Rendering.Data
         }
 
         public ShadowDebugView DebugView { get; set; } = ShadowDebugView.None;
+
+        /// <summary>
+        /// Diagnostic override that refreshes every active directional static-shadow cascade
+        /// every frame. Leave disabled outside cache-lifecycle investigations.
+        /// </summary>
+        public bool ForceStaticCascadeCacheRefresh { get; set; }
 
         private static uint ClampPowerOfTwo(uint value, uint min, uint max)
         {
@@ -3568,6 +3585,7 @@ namespace Njulf.Rendering.Data
     {
         public bool GpuMeshletCountersEnabled { get; set; }
         public bool DdgiForwardEstimateCountersEnabled { get; set; }
+        public bool DirectionalShadowReceiverCountersEnabled { get; set; }
     }
 
     public sealed class HiZOcclusionSettings
@@ -3769,6 +3787,8 @@ namespace Njulf.Rendering.Data
             ShowRawHdrSceneColor = false;
             FeatureIsolation = RenderFeatureIsolationMode.FullFrame;
             Shadows.DebugView = ShadowDebugView.None;
+            Shadows.DirectionalShadowPreviewCascade = 0;
+            Shadows.ForceStaticCascadeCacheRefresh = false;
             Bloom.DebugView = BloomDebugView.None;
             Environment.DebugView = EnvironmentDebugView.None;
             Reflections.DebugView = ReflectionDebugView.None;

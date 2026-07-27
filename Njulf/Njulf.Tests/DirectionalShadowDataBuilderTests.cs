@@ -164,6 +164,7 @@ public sealed class DirectionalShadowDataBuilderTests
         {
             DirectionalShadowMapSize = 300,
             DirectionalCascadeCount = 99,
+            DirectionalShadowPreviewCascade = 99,
             MaxShadowDistance = -1f,
             DirectionalCascadeBlendFraction = 2f,
             NormalBias = 2f,
@@ -176,6 +177,7 @@ public sealed class DirectionalShadowDataBuilderTests
         {
             Assert.That(settings.DirectionalShadowMapSize, Is.EqualTo(512));
             Assert.That(settings.DirectionalCascadeCount, Is.EqualTo(ShadowSettings.MaxDirectionalCascades));
+            Assert.That(settings.DirectionalShadowPreviewCascade, Is.EqualTo(ShadowSettings.MaxDirectionalCascades - 1));
             Assert.That(settings.MaxShadowDistance, Is.EqualTo(1f));
             Assert.That(settings.DirectionalCascadeBlendFraction, Is.EqualTo(0.30f));
             Assert.That(settings.NormalBias, Is.EqualTo(1f));

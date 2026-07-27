@@ -244,6 +244,12 @@ namespace Njulf.Tests
                 Assert.That(GPUForwardPushConstants.PackDiagnosticFlags(true, true), Is.EqualTo(3u));
                 Assert.That(GPUForwardPushConstants.PackDiagnosticFlags(false, false, true) & 4u, Is.EqualTo(4u));
                 Assert.That(GPUForwardPushConstants.PackDiagnosticFlags(true, true, true), Is.EqualTo(7u));
+                Assert.That(
+                    (GPUForwardPushConstants.PackDiagnosticFlags(false, false, false, 3u) >> 8) & 0x03u,
+                    Is.EqualTo(3u));
+                Assert.That(
+                    (GPUForwardPushConstants.PackDiagnosticFlags(true, true, true, 5u) >> 8) & 0x03u,
+                    Is.EqualTo(1u));
             });
         }
 

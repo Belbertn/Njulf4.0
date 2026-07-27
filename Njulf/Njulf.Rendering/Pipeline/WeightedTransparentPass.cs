@@ -109,7 +109,10 @@ namespace Njulf.Rendering.Pipeline
                     ambientOcclusionForwardSamplingMode: (uint)AmbientOcclusionForwardSamplingMode.Disabled,
                     // Weighted OIT has the same per-fragment cost constraint as
                     // sorted alpha; use its environment fallback rather than DDGI.
-                    globalIlluminationEnabled: false)
+                    globalIlluminationEnabled: false),
+                DiagnosticFlags = GPUForwardPushConstants.PackDiagnosticFlags(
+                    ddgiForwardEstimateCountersEnabled: false,
+                    directionalShadowPreviewCascade: (uint)sceneData.DirectionalShadowPreviewCascade)
             };
 
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();

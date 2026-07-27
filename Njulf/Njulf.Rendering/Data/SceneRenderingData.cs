@@ -473,6 +473,7 @@ namespace Njulf.Rendering.Data
         public float DirectionalShadowCascadeBlendFraction { get; set; }
         public int ShadowedDirectionalLightIndex { get; set; } = -1;
         public ShadowDebugView ShadowDebugView { get; set; } = ShadowDebugView.None;
+        public int DirectionalShadowPreviewCascade { get; set; }
         public float ShadowNormalBias { get; set; }
         public float ShadowSlopeScaledDepthBias { get; set; }
         public int DirectionalShadowPcfRadius { get; set; }
@@ -1603,6 +1604,7 @@ namespace Njulf.Rendering.Data
             DirectionalShadowCascadeBlendFraction = 0;
             ShadowedDirectionalLightIndex = -1;
             ShadowDebugView = ShadowDebugView.None;
+            DirectionalShadowPreviewCascade = 0;
             ShadowNormalBias = 0;
             ShadowSlopeScaledDepthBias = 0;
             DirectionalShadowPcfRadius = 0;

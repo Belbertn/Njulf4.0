@@ -3215,6 +3215,10 @@ namespace Njulf.Rendering
             sceneData.DirectionalShadowCascadeBlendFraction = shadowSettings.DirectionalCascadeBlendFraction;
             sceneData.ShadowedDirectionalLightIndex = enabled ? lightIndex : -1;
             sceneData.ShadowDebugView = shadowSettings.DebugView;
+            sceneData.DirectionalShadowPreviewCascade = Math.Clamp(
+                shadowSettings.DirectionalShadowPreviewCascade,
+                0,
+                Math.Max(0, shadowSettings.DirectionalCascadeCount - 1));
             sceneData.ShadowNormalBias = shadowSettings.NormalBias;
             sceneData.ShadowSlopeScaledDepthBias = shadowSettings.SlopeScaledDepthBias;
             sceneData.DirectionalShadowPcfRadius = shadowSettings.PcfRadius;

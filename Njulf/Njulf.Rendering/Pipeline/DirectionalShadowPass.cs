@@ -733,6 +733,9 @@ namespace Njulf.Rendering.Pipeline
                 return hadValidStaticCache;
             }
 
+            if (_settings.ForceStaticCascadeCacheRefresh)
+                return true;
+
             if (_shadowResources.StaticLayout == ImageLayout.Undefined ||
                 _shadowResources.Layout == ImageLayout.Undefined)
             {

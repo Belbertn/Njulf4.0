@@ -1902,6 +1902,22 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
+    public void DirectionalShadowDiagnostics_CanForceRefreshAndPreviewEveryCascade()
+    {
+        string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string shadowPass = ReadRepoText("Njulf.Rendering", "Pipeline", "DirectionalShadowPass.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shadowPass, Does.Contain("if (_settings.ForceStaticCascadeCacheRefresh)"));
+            Assert.That(shader, Does.Contain("uint ForwardDirectionalShadowPreviewCascade()"));
+            Assert.That(shader, Does.Contain("uint previewCascade = min(ForwardDirectionalShadowPreviewCascade(), cascadeCount - 1u);"));
+            Assert.That(shader, Does.Contain("uint textureIndex = uint(DIRECTIONAL_SHADOW_TEXTURE_BASE) + previewCascade;"));
+            Assert.That(shader, Does.Contain("BindlessTextures[nonuniformEXT(textureIndex)]"));
+        });
+    }
+
+    [Test]
     public void LightCullShader_CullsAgainstTileFrustumAndVisibleDepthAndSkipsDirectionals()
     {
         string lightCull = ReadRepoText("Njulf.Shaders", "lightcull.comp");

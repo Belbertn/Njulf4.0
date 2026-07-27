@@ -386,7 +386,8 @@ namespace Njulf.Rendering.Pipeline
                 DiagnosticFlags = Data.GPUForwardPushConstants.PackDiagnosticFlags(
                     ShouldCollectDdgiForwardEstimateCounters(sceneData),
                     ShouldCollectDdgiClipmapCoverageCounters(sceneData),
-                    ShouldCollectDirectionalShadowReceiverCounters(sceneData))
+                    ShouldCollectDirectionalShadowReceiverCounters(sceneData),
+                    (uint)sceneData.DirectionalShadowPreviewCascade)
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -543,7 +544,8 @@ namespace Njulf.Rendering.Pipeline
                 DiagnosticFlags = Data.GPUForwardPushConstants.PackDiagnosticFlags(
                     ShouldCollectDdgiForwardEstimateCounters(sceneData),
                     ShouldCollectDdgiClipmapCoverageCounters(sceneData),
-                    ShouldCollectDirectionalShadowReceiverCounters(sceneData))
+                    ShouldCollectDirectionalShadowReceiverCounters(sceneData),
+                    (uint)sceneData.DirectionalShadowPreviewCascade)
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -616,7 +618,8 @@ namespace Njulf.Rendering.Pipeline
             // Reuse the existing capture/debug gate rather than paying atomics in normal
             // gameplay. The shader additionally samples only one pixel per 16x16 tile.
             return sceneData.DirectionalShadowPassEnabled &&
-                (_settings.Diagnostics.DdgiForwardEstimateCountersEnabled ||
+                (_settings.Diagnostics.DirectionalShadowReceiverCountersEnabled ||
+                 _settings.Diagnostics.DdgiForwardEstimateCountersEnabled ||
                  _settings.Shadows.DebugView != ShadowDebugView.None);
         }
 

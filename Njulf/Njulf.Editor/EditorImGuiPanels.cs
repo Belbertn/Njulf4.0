@@ -17,6 +17,7 @@ public sealed class EditorImGuiPanels
     private string? _lastError;
     private int _selectedDependency;
     private readonly GlobalIlluminationEditorPanel _globalIlluminationPanel = new();
+    private readonly ShadowEditorPanel _shadowPanel = new();
 
     public void Render(EditorController editor)
     {
@@ -28,6 +29,7 @@ public sealed class EditorImGuiPanels
         RenderHierarchy(editor);
         RenderInspector(editor);
         _globalIlluminationPanel.Render(editor);
+        _shadowPanel.Render(editor);
     }
 
     private void RenderMainMenu(EditorController editor)
