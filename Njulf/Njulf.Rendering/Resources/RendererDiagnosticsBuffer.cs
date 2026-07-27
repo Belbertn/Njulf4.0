@@ -42,8 +42,9 @@ namespace Njulf.Rendering.Resources
         // stay stable. Each cascade family is sparsely sampled in forward.frag.
         public const int DirectionalShadowReceiverCounterBase = SimpleDdgiTransportCounterBase + SimpleDdgiTransportCounterCount;
         public const int DirectionalShadowReceiverCascadeCount = ShadowSettings.MaxDirectionalCascades;
-        public const int DirectionalShadowReceiverCounterFamilyCount = 5;
+        public const int DirectionalShadowReceiverCounterFamilyCount = 16;
         public const int DirectionalShadowReceiverCounterCount = DirectionalShadowReceiverCascadeCount * DirectionalShadowReceiverCounterFamilyCount + 1;
+        public const float DirectionalShadowReceiverDepthQuantizationScale = 65535.0f;
         public const int CounterCount = DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
@@ -122,6 +123,17 @@ namespace Njulf.Rendering.Resources
                 uint[] uvDepthRejectedCounts = new uint[DirectionalShadowReceiverCascadeCount];
                 uint[] fallbackCounts = new uint[DirectionalShadowReceiverCascadeCount];
                 uint[] transitionBlendCounts = new uint[DirectionalShadowReceiverCascadeCount];
+                uint[] primaryResolvedCounts = new uint[DirectionalShadowReceiverCascadeCount];
+                uint[] clearDepthFootprintCounts = new uint[DirectionalShadowReceiverCascadeCount];
+                uint[] primaryFullyLitCounts = new uint[DirectionalShadowReceiverCascadeCount];
+                uint[] primaryPartiallyShadowedCounts = new uint[DirectionalShadowReceiverCascadeCount];
+                uint[] primaryFullyShadowedCounts = new uint[DirectionalShadowReceiverCascadeCount];
+                uint[] finalFullyLitCounts = new uint[DirectionalShadowReceiverCascadeCount];
+                uint[] finalPartiallyShadowedCounts = new uint[DirectionalShadowReceiverCascadeCount];
+                uint[] finalFullyShadowedCounts = new uint[DirectionalShadowReceiverCascadeCount];
+                float[] averageReceiverDepths = new float[DirectionalShadowReceiverCascadeCount];
+                float[] averageMinimumSampledDepths = new float[DirectionalShadowReceiverCascadeCount];
+                float[] averageMaximumSampledDepths = new float[DirectionalShadowReceiverCascadeCount];
                 for (int cascade = 0; cascade < DirectionalShadowReceiverCascadeCount; cascade++)
                 {
                     primarySelectionCounts[cascade] = counters[DirectionalShadowReceiverCounterBase + cascade];
@@ -129,6 +141,29 @@ namespace Njulf.Rendering.Resources
                     uvDepthRejectedCounts[cascade] = counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount * 2 + cascade];
                     fallbackCounts[cascade] = counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount * 3 + cascade];
                     transitionBlendCounts[cascade] = counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount * 4 + cascade];
+                    primaryResolvedCounts[cascade] = counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount * 5 + cascade];
+                    clearDepthFootprintCounts[cascade] = counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount * 6 + cascade];
+                    primaryFullyLitCounts[cascade] = counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount * 7 + cascade];
+                    primaryPartiallyShadowedCounts[cascade] = counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount * 8 + cascade];
+                    primaryFullyShadowedCounts[cascade] = counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount * 9 + cascade];
+                    finalFullyLitCounts[cascade] = counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount * 10 + cascade];
+                    finalPartiallyShadowedCounts[cascade] = counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount * 11 + cascade];
+                    finalFullyShadowedCounts[cascade] = counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount * 12 + cascade];
+                    uint resolvedCount = primaryResolvedCounts[cascade];
+                    if (resolvedCount > 0)
+                    {
+                        float inverseQuantizedCount =
+                            1.0f / (resolvedCount * DirectionalShadowReceiverDepthQuantizationScale);
+                        averageReceiverDepths[cascade] =
+                            counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount * 13 + cascade] *
+                            inverseQuantizedCount;
+                        averageMinimumSampledDepths[cascade] =
+                            counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount * 14 + cascade] *
+                            inverseQuantizedCount;
+                        averageMaximumSampledDepths[cascade] =
+                            counters[DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCascadeCount * 15 + cascade] *
+                            inverseQuantizedCount;
+                    }
                 }
 
                 _lastCompletedDirectionalShadowReceiverCounters[frameIndex] = new DirectionalShadowReceiverCounters(
@@ -138,6 +173,17 @@ namespace Njulf.Rendering.Resources
                     UvDepthRejectedCounts: uvDepthRejectedCounts,
                     FallbackCounts: fallbackCounts,
                     TransitionBlendCounts: transitionBlendCounts,
+                    PrimaryResolvedCounts: primaryResolvedCounts,
+                    ClearDepthFootprintCounts: clearDepthFootprintCounts,
+                    PrimaryFullyLitCounts: primaryFullyLitCounts,
+                    PrimaryPartiallyShadowedCounts: primaryPartiallyShadowedCounts,
+                    PrimaryFullyShadowedCounts: primaryFullyShadowedCounts,
+                    FinalFullyLitCounts: finalFullyLitCounts,
+                    FinalPartiallyShadowedCounts: finalPartiallyShadowedCounts,
+                    FinalFullyShadowedCounts: finalFullyShadowedCounts,
+                    AverageReceiverDepths: averageReceiverDepths,
+                    AverageMinimumSampledDepths: averageMinimumSampledDepths,
+                    AverageMaximumSampledDepths: averageMaximumSampledDepths,
                     UnresolvedCount: counters[DirectionalShadowReceiverCounterBase +
                         DirectionalShadowReceiverCascadeCount * DirectionalShadowReceiverCounterFamilyCount]);
             }

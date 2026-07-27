@@ -815,7 +815,7 @@ public sealed class ShaderBuildTests
             Assert.That(hitShading, Does.Contain("(uint(light.ShadowFlags) & GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS) == 0u"));
             Assert.That(hitShading, Does.Contain("return noShadowDiffuse * tracedVisibility;"));
             Assert.That(hitShading, Does.Not.Contain("mix(1.0, tracedVisibility, shadowStrength)"));
-            Assert.That(forward, Does.Contain("return mix(1.0, shadow, clamp(shadowSettings.x, 0.0, 1.0));"));
+            Assert.That(forward, Does.Contain("float finalShadow = mix(1.0, shadow, clamp(shadowSettings.x, 0.0, 1.0));"));
             Assert.That(hitShading, Does.Contain("#define DDGI_HIT_MAX_SHADED_LIGHTS pc.MaxShadedLights"));
             Assert.That(hitShading, Does.Contain("uint selectedLightCapacity = min(DDGI_HIT_MAX_SHADED_LIGHTS, DDGI_MAX_SELECTED_HIT_LIGHTS);"));
             Assert.That(hitShading, Does.Contain("attenuation *= max(pc.SelectedLocalLightEnergyScale, 0.0);"));
@@ -1875,7 +1875,8 @@ public sealed class ShaderBuildTests
         {
             Assert.That(shader, Does.Contain("if (radius <= 0)"));
             Assert.That(shader, Does.Contain("shadow = SampleDirectionalShadowTap(textureIndex, uv, receiverDepth, mapSize);"));
-            Assert.That(shader, Does.Contain("return mix(1.0, shadow, clamp(shadowSettings.x, 0.0, 1.0));"));
+            Assert.That(shader, Does.Contain("float finalShadow = mix(1.0, shadow, clamp(shadowSettings.x, 0.0, 1.0));"));
+            Assert.That(shader, Does.Contain("return finalShadow;"));
             Assert.That(shader, Does.Contain("float sampledDepth = texture(BindlessTextures[nonuniformEXT(SPOT_SHADOW_ATLAS_TEXTURE_INDEX)], atlasUv).r;"));
             Assert.That(shader, Does.Contain("radius > 0 && PointShadowFaceEdgeDistance(faceUv) <= seamWidth"));
             Assert.That(shader, Does.Contain("shadow.BiasStrengthTexelSize.z <= 0.0"));
@@ -1898,6 +1899,25 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Not.Contain("float sampledDepth = texture(BindlessTextures[nonuniformEXT(int(textureIndex))], uv).r;"));
             Assert.That(shadowPass, Does.Contain("-_settings.ConstantDepthBias"));
             Assert.That(shadowPass, Does.Contain("-_settings.SlopeScaledDepthBias"));
+        });
+    }
+
+    [Test]
+    public void DirectionalShadowDiagnostics_ReportDepthFootprintAndVisibilityOutcomes()
+    {
+        string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string common = ReadRepoText("Njulf.Shaders", "common.glsl");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shader, Does.Contain("InspectDirectionalShadowFootprint("));
+            Assert.That(shader, Does.Contain("primaryMaximumSampledDepth <= 0.000001"));
+            Assert.That(shader, Does.Contain("RecordDirectionalShadowVisibility("));
+            Assert.That(shader, Does.Contain("QuantizeDirectionalShadowDiagnosticDepth("));
+            Assert.That(common, Does.Contain("DIRECTIONAL_SHADOW_RECEIVER_CLEAR_DEPTH_FOOTPRINT_COUNTER_BASE"));
+            Assert.That(common, Does.Contain("DIRECTIONAL_SHADOW_RECEIVER_PRIMARY_FULLY_LIT_COUNTER_BASE"));
+            Assert.That(common, Does.Contain("DIRECTIONAL_SHADOW_RECEIVER_FINAL_FULLY_SHADOWED_COUNTER_BASE"));
+            Assert.That(common, Does.Contain("DIRECTIONAL_SHADOW_RECEIVER_MAX_SAMPLED_DEPTH_SUM_COUNTER_BASE"));
         });
     }
 

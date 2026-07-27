@@ -2140,16 +2140,25 @@ const uint DIRECTIONAL_SHADOW_SAMPLE_REJECT_NONE = 0u;
 const uint DIRECTIONAL_SHADOW_SAMPLE_REJECT_PROJECTION = 1u;
 const uint DIRECTIONAL_SHADOW_SAMPLE_REJECT_UV_DEPTH = 2u;
 
+float FetchDirectionalShadowDepth(
+    uint textureIndex,
+    ivec2 texel,
+    ivec2 maxTexel)
+{
+    float sampledDepth = texelFetch(
+        BindlessTextures[nonuniformEXT(int(textureIndex))],
+        clamp(texel, ivec2(0), maxTexel),
+        0).r;
+    return sampledDepth;
+}
+
 float SampleDirectionalShadowTexel(
     uint textureIndex,
     ivec2 texel,
     ivec2 maxTexel,
     float receiverDepth)
 {
-    float sampledDepth = texelFetch(
-        BindlessTextures[nonuniformEXT(int(textureIndex))],
-        clamp(texel, ivec2(0), maxTexel),
-        0).r;
+    float sampledDepth = FetchDirectionalShadowDepth(textureIndex, texel, maxTexel);
     // The shadow raster pass already applies reverse-Z constant/slope bias and
     // the receiver position carries the authored world-space normal bias. A
     // second normalized-depth bias scales with the full light-space depth span
@@ -2227,16 +2236,69 @@ float SampleDirectionalShadowPcf(
     return lit / (filterWidth * filterWidth);
 }
 
+void InspectDirectionalShadowFootprint(
+    uint textureIndex,
+    vec2 uv,
+    float mapSize,
+    int radius,
+    out float minimumSampledDepth,
+    out float maximumSampledDepth)
+{
+    float safeMapSize = max(mapSize, 1.0);
+    vec2 texelPosition = uv * safeMapSize - vec2(0.5);
+    ivec2 baseTexel = ivec2(floor(texelPosition));
+    ivec2 maxTexel = ivec2(max(int(safeMapSize) - 1, 0));
+    vec2 weights = fract(texelPosition);
+    int safeRadius = clamp(radius, 0, 3);
+    int minimumOffset = safeRadius == 0 ? 0 : -safeRadius;
+    int maximumOffset = safeRadius == 0 ? 1 : safeRadius + 1;
+    minimumSampledDepth = 1.0;
+    maximumSampledDepth = 0.0;
+
+    for (int y = minimumOffset; y <= maximumOffset; y++)
+    {
+        float weightY = safeRadius == 0
+            ? (y == 0 ? 1.0 - weights.y : weights.y)
+            : (y == -safeRadius
+                ? 1.0 - weights.y
+                : (y == safeRadius + 1 ? weights.y : 1.0));
+        for (int x = minimumOffset; x <= maximumOffset; x++)
+        {
+            float weightX = safeRadius == 0
+                ? (x == 0 ? 1.0 - weights.x : weights.x)
+                : (x == -safeRadius
+                    ? 1.0 - weights.x
+                    : (x == safeRadius + 1 ? weights.x : 1.0));
+            if (weightX * weightY <= 0.0)
+                continue;
+
+            float sampledDepth = FetchDirectionalShadowDepth(
+                textureIndex,
+                baseTexel + ivec2(x, y),
+                maxTexel);
+            minimumSampledDepth = min(minimumSampledDepth, sampledDepth);
+            maximumSampledDepth = max(maximumSampledDepth, sampledDepth);
+        }
+    }
+}
+
 bool TrySampleDirectionalShadowCascade(
     uint cascade,
     vec3 biasedWorldPosition,
     float mapSize,
     int radius,
+    bool collectDepthDiagnostics,
     out float shadow,
-    out uint rejection)
+    out uint rejection,
+    out float diagnosticReceiverDepth,
+    out float diagnosticMinimumSampledDepth,
+    out float diagnosticMaximumSampledDepth)
 {
     shadow = 1.0;
     rejection = DIRECTIONAL_SHADOW_SAMPLE_REJECT_NONE;
+    diagnosticReceiverDepth = 0.0;
+    diagnosticMinimumSampledDepth = 0.0;
+    diagnosticMaximumSampledDepth = 0.0;
 
     vec4 lightClip = MulRowMajor(vec4(biasedWorldPosition, 1.0), ReadShadowMatrix(cascade));
     if (abs(lightClip.w) <= 0.00001 || any(isnan(lightClip)) || any(isinf(lightClip)))
@@ -2263,6 +2325,18 @@ bool TrySampleDirectionalShadowCascade(
     }
 
     uint textureIndex = uint(DIRECTIONAL_SHADOW_TEXTURE_BASE) + cascade;
+    diagnosticReceiverDepth = receiverDepth;
+    if (collectDepthDiagnostics)
+    {
+        InspectDirectionalShadowFootprint(
+            textureIndex,
+            uv,
+            mapSize,
+            radius,
+            diagnosticMinimumSampledDepth,
+            diagnosticMaximumSampledDepth);
+    }
+
     if (radius <= 0)
     {
         shadow = SampleDirectionalShadowTap(textureIndex, uv, receiverDepth, mapSize);
@@ -2356,6 +2430,25 @@ float EstimateFarFieldSunShadow(vec3 worldPosition, vec3 normal, vec3 lightDirec
     return blocked ? 0.0 : 1.0;
 }
 
+uint QuantizeDirectionalShadowDiagnosticDepth(float depth)
+{
+    return uint(round(clamp(depth, 0.0, 1.0) *
+        DIRECTIONAL_SHADOW_RECEIVER_DEPTH_QUANTIZATION_SCALE));
+}
+
+void RecordDirectionalShadowVisibility(
+    uint cascade,
+    float visibility,
+    uint fullyLitCounterBase,
+    uint partialCounterBase,
+    uint fullyShadowedCounterBase)
+{
+    uint counter = visibility >= 0.999
+        ? fullyLitCounterBase
+        : (visibility <= 0.001 ? fullyShadowedCounterBase : partialCounterBase);
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, counter + cascade, 1u);
+}
+
 float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal, out uint selectedCascade)
 {
     selectedCascade = 0u;
@@ -2386,13 +2479,20 @@ float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal
 
     float primaryShadow = 1.0;
     uint primaryRejection = DIRECTIONAL_SHADOW_SAMPLE_REJECT_NONE;
+    float primaryReceiverDepth = 0.0;
+    float primaryMinimumSampledDepth = 0.0;
+    float primaryMaximumSampledDepth = 0.0;
     bool primaryValid = TrySampleDirectionalShadowCascade(
         selectedCascade,
         biasedPosition,
         mapSize,
         radius,
+        diagnosticPixel,
         primaryShadow,
-        primaryRejection);
+        primaryRejection,
+        primaryReceiverDepth,
+        primaryMinimumSampledDepth,
+        primaryMaximumSampledDepth);
     if (diagnosticPixel)
     {
         if (primaryRejection == DIRECTIONAL_SHADOW_SAMPLE_REJECT_PROJECTION)
@@ -2408,6 +2508,39 @@ float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal
                 pc.Push.CurrentFrameIndex,
                 DIRECTIONAL_SHADOW_RECEIVER_UV_DEPTH_REJECT_COUNTER_BASE + selectedCascade,
                 1u);
+        }
+        else if (primaryValid)
+        {
+            AddRendererDiagnostic(
+                pc.Push.CurrentFrameIndex,
+                DIRECTIONAL_SHADOW_RECEIVER_PRIMARY_RESOLVED_COUNTER_BASE + selectedCascade,
+                1u);
+            if (primaryMaximumSampledDepth <= 0.000001)
+            {
+                AddRendererDiagnostic(
+                    pc.Push.CurrentFrameIndex,
+                    DIRECTIONAL_SHADOW_RECEIVER_CLEAR_DEPTH_FOOTPRINT_COUNTER_BASE + selectedCascade,
+                    1u);
+            }
+
+            RecordDirectionalShadowVisibility(
+                selectedCascade,
+                primaryShadow,
+                DIRECTIONAL_SHADOW_RECEIVER_PRIMARY_FULLY_LIT_COUNTER_BASE,
+                DIRECTIONAL_SHADOW_RECEIVER_PRIMARY_PARTIAL_COUNTER_BASE,
+                DIRECTIONAL_SHADOW_RECEIVER_PRIMARY_FULLY_SHADOWED_COUNTER_BASE);
+            AddRendererDiagnostic(
+                pc.Push.CurrentFrameIndex,
+                DIRECTIONAL_SHADOW_RECEIVER_RECEIVER_DEPTH_SUM_COUNTER_BASE + selectedCascade,
+                QuantizeDirectionalShadowDiagnosticDepth(primaryReceiverDepth));
+            AddRendererDiagnostic(
+                pc.Push.CurrentFrameIndex,
+                DIRECTIONAL_SHADOW_RECEIVER_MIN_SAMPLED_DEPTH_SUM_COUNTER_BASE + selectedCascade,
+                QuantizeDirectionalShadowDiagnosticDepth(primaryMinimumSampledDepth));
+            AddRendererDiagnostic(
+                pc.Push.CurrentFrameIndex,
+                DIRECTIONAL_SHADOW_RECEIVER_MAX_SAMPLED_DEPTH_SUM_COUNTER_BASE + selectedCascade,
+                QuantizeDirectionalShadowDiagnosticDepth(primaryMaximumSampledDepth));
         }
     }
 
@@ -2428,6 +2561,9 @@ float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal
         float lowerShadow = 1.0;
         float upperShadow = 1.0;
         uint ignoredRejection = DIRECTIONAL_SHADOW_SAMPLE_REJECT_NONE;
+        float ignoredReceiverDepth = 0.0;
+        float ignoredMinimumSampledDepth = 0.0;
+        float ignoredMaximumSampledDepth = 0.0;
         bool lowerValid = lowerCascade == selectedCascade
             ? primaryValid
             : TrySampleDirectionalShadowCascade(
@@ -2435,8 +2571,12 @@ float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal
                 biasedPosition,
                 mapSize,
                 radius,
+                false,
                 lowerShadow,
-                ignoredRejection);
+                ignoredRejection,
+                ignoredReceiverDepth,
+                ignoredMinimumSampledDepth,
+                ignoredMaximumSampledDepth);
         if (lowerCascade == selectedCascade)
             lowerShadow = primaryShadow;
 
@@ -2447,8 +2587,12 @@ float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal
                 biasedPosition,
                 mapSize,
                 radius,
+                false,
                 upperShadow,
-                ignoredRejection);
+                ignoredRejection,
+                ignoredReceiverDepth,
+                ignoredMinimumSampledDepth,
+                ignoredMaximumSampledDepth);
         if (upperCascade == selectedCascade)
             upperShadow = primaryShadow;
 
@@ -2486,26 +2630,40 @@ float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal
             {
                 uint fallbackCascade = selectedCascade - offset;
                 uint ignoredRejection = DIRECTIONAL_SHADOW_SAMPLE_REJECT_NONE;
+                float ignoredReceiverDepth = 0.0;
+                float ignoredMinimumSampledDepth = 0.0;
+                float ignoredMaximumSampledDepth = 0.0;
                 resolved = TrySampleDirectionalShadowCascade(
                     fallbackCascade,
                     biasedPosition,
                     mapSize,
                     radius,
+                    false,
                     shadow,
-                    ignoredRejection);
+                    ignoredRejection,
+                    ignoredReceiverDepth,
+                    ignoredMinimumSampledDepth,
+                    ignoredMaximumSampledDepth);
             }
 
             if (!resolved && selectedCascade + offset < cascadeCount)
             {
                 uint fallbackCascade = selectedCascade + offset;
                 uint ignoredRejection = DIRECTIONAL_SHADOW_SAMPLE_REJECT_NONE;
+                float ignoredReceiverDepth = 0.0;
+                float ignoredMinimumSampledDepth = 0.0;
+                float ignoredMaximumSampledDepth = 0.0;
                 resolved = TrySampleDirectionalShadowCascade(
                     fallbackCascade,
                     biasedPosition,
                     mapSize,
                     radius,
+                    false,
                     shadow,
-                    ignoredRejection);
+                    ignoredRejection,
+                    ignoredReceiverDepth,
+                    ignoredMinimumSampledDepth,
+                    ignoredMaximumSampledDepth);
             }
         }
 
@@ -2537,7 +2695,18 @@ float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal
         shadow *= EstimateFarFieldSunShadow(worldPosition, normal, normalize(-light.Direction));
     }
 
-    return mix(1.0, shadow, clamp(shadowSettings.x, 0.0, 1.0));
+    float finalShadow = mix(1.0, shadow, clamp(shadowSettings.x, 0.0, 1.0));
+    if (diagnosticPixel)
+    {
+        RecordDirectionalShadowVisibility(
+            selectedCascade,
+            finalShadow,
+            DIRECTIONAL_SHADOW_RECEIVER_FINAL_FULLY_LIT_COUNTER_BASE,
+            DIRECTIONAL_SHADOW_RECEIVER_FINAL_PARTIAL_COUNTER_BASE,
+            DIRECTIONAL_SHADOW_RECEIVER_FINAL_FULLY_SHADOWED_COUNTER_BASE);
+    }
+
+    return finalShadow;
 }
 
 float CompareReverseZDepth(float receiverDepth, float sampledDepth, float bias)

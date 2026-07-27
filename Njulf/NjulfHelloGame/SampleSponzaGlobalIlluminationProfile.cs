@@ -58,6 +58,7 @@ public static class SampleSponzaGlobalIlluminationProfile
         settings.Shadows.PointPcfRadius = 1;
         settings.GlobalIllumination.SimpleDdgiLayoutAdmissionMode = SimpleDdgiLayoutAdmissionMode.Reject;
         settings.Diagnostics.DdgiForwardEstimateCountersEnabled = true;
+        settings.Diagnostics.DirectionalShadowReceiverCountersEnabled = true;
     }
 
     private static void ConfigureReferenceOutput(RenderSettings settings)

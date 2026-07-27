@@ -116,6 +116,7 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(settings.AutoExposure.Enabled, Is.False);
             Assert.That(settings.Exposure, Is.EqualTo(1.0f));
             Assert.That(settings.Environment.SkyIntensity, Is.EqualTo(1.0f));
+            Assert.That(settings.Diagnostics.DirectionalShadowReceiverCountersEnabled, Is.True);
         });
     }
 

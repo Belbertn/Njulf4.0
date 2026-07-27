@@ -296,6 +296,18 @@ internal sealed class SampleDiagnosticsReporter
             $"fallback={string.Join('/', shadowReceivers.FallbackCounts)}, " +
             $"blended={string.Join('/', shadowReceivers.TransitionBlendCounts)}, unresolved={shadowReceivers.UnresolvedCount}.");
         Console.WriteLine(
+            $"Frame diagnostics directional-shadow receiver values: resolved={string.Join('/', shadowReceivers.PrimaryResolvedCounts)}, " +
+            $"clearFootprint={string.Join('/', shadowReceivers.ClearDepthFootprintCounts)}, " +
+            $"primaryLit/Partial/Shadowed={string.Join('/', shadowReceivers.PrimaryFullyLitCounts)}:" +
+            $"{string.Join('/', shadowReceivers.PrimaryPartiallyShadowedCounts)}:" +
+            $"{string.Join('/', shadowReceivers.PrimaryFullyShadowedCounts)}, " +
+            $"finalLit/Partial/Shadowed={string.Join('/', shadowReceivers.FinalFullyLitCounts)}:" +
+            $"{string.Join('/', shadowReceivers.FinalPartiallyShadowedCounts)}:" +
+            $"{string.Join('/', shadowReceivers.FinalFullyShadowedCounts)}, " +
+            $"receiverDepthAvg={string.Join('/', shadowReceivers.AverageReceiverDepths)}, " +
+            $"sampledDepthMinAvg={string.Join('/', shadowReceivers.AverageMinimumSampledDepths)}, " +
+            $"sampledDepthMaxAvg={string.Join('/', shadowReceivers.AverageMaximumSampledDepths)}.");
+        Console.WriteLine(
             $"Frame diagnostics local shadows: spotEnabled={diagnostics.SpotShadowsEnabled}, spotCandidates={diagnostics.SpotShadowCandidateCount}, " +
             $"spotSelected={diagnostics.SpotShadowSelectedCount}, spotRejected={diagnostics.SpotShadowRejectedByBudgetCount}, " +
             $"atlas={diagnostics.SpotShadowAtlasSize} tile={diagnostics.SpotShadowTileSize}, atlasUsed={diagnostics.SpotShadowAtlasUsedTiles}/{diagnostics.SpotShadowAtlasCapacity}, " +

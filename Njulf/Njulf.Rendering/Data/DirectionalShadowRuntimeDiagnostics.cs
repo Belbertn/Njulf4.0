@@ -14,6 +14,17 @@ namespace Njulf.Rendering.Data
         uint[] UvDepthRejectedCounts,
         uint[] FallbackCounts,
         uint[] TransitionBlendCounts,
+        uint[] PrimaryResolvedCounts,
+        uint[] ClearDepthFootprintCounts,
+        uint[] PrimaryFullyLitCounts,
+        uint[] PrimaryPartiallyShadowedCounts,
+        uint[] PrimaryFullyShadowedCounts,
+        uint[] FinalFullyLitCounts,
+        uint[] FinalPartiallyShadowedCounts,
+        uint[] FinalFullyShadowedCounts,
+        float[] AverageReceiverDepths,
+        float[] AverageMinimumSampledDepths,
+        float[] AverageMaximumSampledDepths,
         uint UnresolvedCount)
     {
         public static DirectionalShadowReceiverCounters Empty { get; } = new(
@@ -23,6 +34,17 @@ namespace Njulf.Rendering.Data
             UvDepthRejectedCounts: Array.Empty<uint>(),
             FallbackCounts: Array.Empty<uint>(),
             TransitionBlendCounts: Array.Empty<uint>(),
+            PrimaryResolvedCounts: Array.Empty<uint>(),
+            ClearDepthFootprintCounts: Array.Empty<uint>(),
+            PrimaryFullyLitCounts: Array.Empty<uint>(),
+            PrimaryPartiallyShadowedCounts: Array.Empty<uint>(),
+            PrimaryFullyShadowedCounts: Array.Empty<uint>(),
+            FinalFullyLitCounts: Array.Empty<uint>(),
+            FinalPartiallyShadowedCounts: Array.Empty<uint>(),
+            FinalFullyShadowedCounts: Array.Empty<uint>(),
+            AverageReceiverDepths: Array.Empty<float>(),
+            AverageMinimumSampledDepths: Array.Empty<float>(),
+            AverageMaximumSampledDepths: Array.Empty<float>(),
             UnresolvedCount: 0);
     }
 

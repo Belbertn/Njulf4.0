@@ -68,7 +68,8 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeSampledGatherCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.SimpleDdgiVolumePrimaryGatherCounterBase + RendererDiagnosticsBuffer.SimpleDdgiVolumeGatherCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiTransportCounterCount, Is.EqualTo(6));
                 Assert.That(RendererDiagnosticsBuffer.DirectionalShadowReceiverCascadeCount, Is.EqualTo(ShadowSettings.MaxDirectionalCascades));
-                Assert.That(RendererDiagnosticsBuffer.DirectionalShadowReceiverCounterFamilyCount, Is.EqualTo(5));
+                Assert.That(RendererDiagnosticsBuffer.DirectionalShadowReceiverCounterFamilyCount, Is.EqualTo(16));
+                Assert.That(RendererDiagnosticsBuffer.DirectionalShadowReceiverDepthQuantizationScale, Is.EqualTo(65535.0f));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(nextExpectedStart));
                 Assert.That(RendererDiagnosticsBuffer.CounterBufferSize, Is.EqualTo((ulong)nextExpectedStart * sizeof(uint)));
             });

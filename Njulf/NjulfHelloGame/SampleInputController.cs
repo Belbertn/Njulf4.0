@@ -116,8 +116,12 @@ internal sealed class SampleInputController
     private static readonly Vector3 InteriorPosition = new(0f, 1.25f, 5.5f);
     private const float InteriorYaw = 0f;
     private const float InteriorPitch = -0.12f;
-    private static readonly Vector3 SponzaRightWallPosition = new(0f, 1.35f, 0f);
-    private const float SponzaRightWallYaw = -3.1415927f;
+    // Six metres away from the façade along the camera's backward axis exposes
+    // enough floor for the directional-shadow distance transition to be visible.
+    private static readonly Vector3 SponzaRightWallPosition = new(6f, 1.35f, 0f);
+    // Turn the right-wall scenario a quarter turn into the courtyard. Keep this
+    // aligned with the deterministic capture's low/high bookmarks.
+    private const float SponzaRightWallYaw = -MathF.PI * 0.5f;
     private const float SponzaRightWallPitch = -0.16f;
     private static readonly Vector3 ForestFoliagePosition = new(0f, 1.6f, 5.5f);
     private const float ForestFoliageYaw = 0f;

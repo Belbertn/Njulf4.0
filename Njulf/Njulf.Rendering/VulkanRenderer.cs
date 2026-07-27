@@ -10198,6 +10198,50 @@ namespace Njulf.Rendering
                     sceneData.DirectionalShadowReceiverTransitionBlendCounts,
                     0,
                     sceneData.DirectionalShadowReceiverTransitionBlendCounts.Length);
+                Array.Clear(
+                    sceneData.DirectionalShadowReceiverPrimaryResolvedCounts,
+                    0,
+                    sceneData.DirectionalShadowReceiverPrimaryResolvedCounts.Length);
+                Array.Clear(
+                    sceneData.DirectionalShadowReceiverClearDepthFootprintCounts,
+                    0,
+                    sceneData.DirectionalShadowReceiverClearDepthFootprintCounts.Length);
+                Array.Clear(
+                    sceneData.DirectionalShadowReceiverPrimaryFullyLitCounts,
+                    0,
+                    sceneData.DirectionalShadowReceiverPrimaryFullyLitCounts.Length);
+                Array.Clear(
+                    sceneData.DirectionalShadowReceiverPrimaryPartiallyShadowedCounts,
+                    0,
+                    sceneData.DirectionalShadowReceiverPrimaryPartiallyShadowedCounts.Length);
+                Array.Clear(
+                    sceneData.DirectionalShadowReceiverPrimaryFullyShadowedCounts,
+                    0,
+                    sceneData.DirectionalShadowReceiverPrimaryFullyShadowedCounts.Length);
+                Array.Clear(
+                    sceneData.DirectionalShadowReceiverFinalFullyLitCounts,
+                    0,
+                    sceneData.DirectionalShadowReceiverFinalFullyLitCounts.Length);
+                Array.Clear(
+                    sceneData.DirectionalShadowReceiverFinalPartiallyShadowedCounts,
+                    0,
+                    sceneData.DirectionalShadowReceiverFinalPartiallyShadowedCounts.Length);
+                Array.Clear(
+                    sceneData.DirectionalShadowReceiverFinalFullyShadowedCounts,
+                    0,
+                    sceneData.DirectionalShadowReceiverFinalFullyShadowedCounts.Length);
+                Array.Clear(
+                    sceneData.DirectionalShadowReceiverAverageDepths,
+                    0,
+                    sceneData.DirectionalShadowReceiverAverageDepths.Length);
+                Array.Clear(
+                    sceneData.DirectionalShadowReceiverAverageMinimumSampledDepths,
+                    0,
+                    sceneData.DirectionalShadowReceiverAverageMinimumSampledDepths.Length);
+                Array.Clear(
+                    sceneData.DirectionalShadowReceiverAverageMaximumSampledDepths,
+                    0,
+                    sceneData.DirectionalShadowReceiverAverageMaximumSampledDepths.Length);
                 return;
             }
 
@@ -10206,6 +10250,17 @@ namespace Njulf.Rendering
             CopyCounterArray(counters.UvDepthRejectedCounts, sceneData.DirectionalShadowReceiverUvDepthRejectedCounts);
             CopyCounterArray(counters.FallbackCounts, sceneData.DirectionalShadowReceiverFallbackCounts);
             CopyCounterArray(counters.TransitionBlendCounts, sceneData.DirectionalShadowReceiverTransitionBlendCounts);
+            CopyCounterArray(counters.PrimaryResolvedCounts, sceneData.DirectionalShadowReceiverPrimaryResolvedCounts);
+            CopyCounterArray(counters.ClearDepthFootprintCounts, sceneData.DirectionalShadowReceiverClearDepthFootprintCounts);
+            CopyCounterArray(counters.PrimaryFullyLitCounts, sceneData.DirectionalShadowReceiverPrimaryFullyLitCounts);
+            CopyCounterArray(counters.PrimaryPartiallyShadowedCounts, sceneData.DirectionalShadowReceiverPrimaryPartiallyShadowedCounts);
+            CopyCounterArray(counters.PrimaryFullyShadowedCounts, sceneData.DirectionalShadowReceiverPrimaryFullyShadowedCounts);
+            CopyCounterArray(counters.FinalFullyLitCounts, sceneData.DirectionalShadowReceiverFinalFullyLitCounts);
+            CopyCounterArray(counters.FinalPartiallyShadowedCounts, sceneData.DirectionalShadowReceiverFinalPartiallyShadowedCounts);
+            CopyCounterArray(counters.FinalFullyShadowedCounts, sceneData.DirectionalShadowReceiverFinalFullyShadowedCounts);
+            CopyFloatArray(counters.AverageReceiverDepths, sceneData.DirectionalShadowReceiverAverageDepths);
+            CopyFloatArray(counters.AverageMinimumSampledDepths, sceneData.DirectionalShadowReceiverAverageMinimumSampledDepths);
+            CopyFloatArray(counters.AverageMaximumSampledDepths, sceneData.DirectionalShadowReceiverAverageMaximumSampledDepths);
         }
 
         private static void ApplySimpleDdgiVolumeGatherCounters(
@@ -10381,6 +10436,15 @@ namespace Njulf.Rendering
                 destination[i] = 0;
         }
 
+        private static void CopyFloatArray(float[] source, float[] destination)
+        {
+            int count = Math.Min(source.Length, destination.Length);
+            for (int i = 0; i < count; i++)
+                destination[i] = source[i];
+            for (int i = count; i < destination.Length; i++)
+                destination[i] = 0.0f;
+        }
+
         private static ulong Sum(uint[] values)
         {
             ulong sum = 0;
@@ -10530,6 +10594,17 @@ namespace Njulf.Rendering
                         UvDepthRejectedCounts: CopyDiagnosticCountersAsUInt(sceneData.DirectionalShadowReceiverUvDepthRejectedCounts),
                         FallbackCounts: CopyDiagnosticCountersAsUInt(sceneData.DirectionalShadowReceiverFallbackCounts),
                         TransitionBlendCounts: CopyDiagnosticCountersAsUInt(sceneData.DirectionalShadowReceiverTransitionBlendCounts),
+                        PrimaryResolvedCounts: CopyDiagnosticCountersAsUInt(sceneData.DirectionalShadowReceiverPrimaryResolvedCounts),
+                        ClearDepthFootprintCounts: CopyDiagnosticCountersAsUInt(sceneData.DirectionalShadowReceiverClearDepthFootprintCounts),
+                        PrimaryFullyLitCounts: CopyDiagnosticCountersAsUInt(sceneData.DirectionalShadowReceiverPrimaryFullyLitCounts),
+                        PrimaryPartiallyShadowedCounts: CopyDiagnosticCountersAsUInt(sceneData.DirectionalShadowReceiverPrimaryPartiallyShadowedCounts),
+                        PrimaryFullyShadowedCounts: CopyDiagnosticCountersAsUInt(sceneData.DirectionalShadowReceiverPrimaryFullyShadowedCounts),
+                        FinalFullyLitCounts: CopyDiagnosticCountersAsUInt(sceneData.DirectionalShadowReceiverFinalFullyLitCounts),
+                        FinalPartiallyShadowedCounts: CopyDiagnosticCountersAsUInt(sceneData.DirectionalShadowReceiverFinalPartiallyShadowedCounts),
+                        FinalFullyShadowedCounts: CopyDiagnosticCountersAsUInt(sceneData.DirectionalShadowReceiverFinalFullyShadowedCounts),
+                        AverageReceiverDepths: CopyDiagnosticValues(sceneData.DirectionalShadowReceiverAverageDepths),
+                        AverageMinimumSampledDepths: CopyDiagnosticValues(sceneData.DirectionalShadowReceiverAverageMinimumSampledDepths),
+                        AverageMaximumSampledDepths: CopyDiagnosticValues(sceneData.DirectionalShadowReceiverAverageMaximumSampledDepths),
                         UnresolvedCount: unchecked((uint)Math.Max(0, sceneData.DirectionalShadowReceiverUnresolvedCount)))
                     : DirectionalShadowReceiverCounters.Empty;
 
@@ -10579,6 +10654,13 @@ namespace Njulf.Rendering
             var copy = new uint[source.Length];
             for (int i = 0; i < source.Length; i++)
                 copy[i] = unchecked((uint)Math.Max(0, source[i]));
+            return copy;
+        }
+
+        private static float[] CopyDiagnosticValues(float[] source)
+        {
+            var copy = new float[source.Length];
+            Array.Copy(source, copy, source.Length);
             return copy;
         }
 

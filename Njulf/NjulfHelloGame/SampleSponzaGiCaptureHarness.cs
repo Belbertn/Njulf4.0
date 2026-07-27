@@ -833,8 +833,9 @@ public sealed class SampleSponzaGiCaptureContract
             FixedRandomSeed,
             new SampleSponzaGiCameraBookmark(
                 "SponzaPlazaUpperFacadeLow",
-                new Vector3(0.0f, 1.35f, 0.0f),
-                -MathF.PI,
+                new Vector3(6.0f, 1.35f, 0.0f),
+                // Quarter-turn from the former wall-facing capture orientation.
+                -MathF.PI * 0.5f,
                 -0.16f,
                 fov,
                 0.05f,
@@ -845,8 +846,8 @@ public sealed class SampleSponzaGiCaptureContract
                 // metres between the supplied low/high captures. The source
                 // attachment lacks camera metadata, so this is the named,
                 // deterministic transform used by all subsequent captures.
-                new Vector3(0.0f, 10.35f, 0.0f),
-                -MathF.PI,
+                new Vector3(6.0f, 10.35f, 0.0f),
+                -MathF.PI * 0.5f,
                 -0.16f,
                 fov,
                 0.05f,
