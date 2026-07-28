@@ -182,6 +182,30 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
+    public void SponzaRightWallScenario_SelectsSponzaSceneWhenSceneIsUnspecified()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--performance-scenario", "gi-sponza-right-wall-stationary"
+        });
+
+        Assert.That(options.SceneKind, Is.EqualTo(SampleSceneKind.SponzaPlaza));
+    }
+
+    [Test]
+    public void SponzaRightWallScenario_RejectsExplicitConflictingScene()
+    {
+        Assert.That(
+            () => SampleSmokeOptionsParser.Parse(new[]
+            {
+                "--scene", "material-showcase",
+                "--performance-scenario", "gi-sponza-right-wall-stationary"
+            }),
+            Throws.ArgumentException.With.Message.Contains(
+                "requires the Sponza plaza scene"));
+    }
+
+    [Test]
     public void GlobalIlluminationValidation_CoversPhase9ScenarioAndSchedulerMatrix()
     {
         SamplePerformanceScenario[] scenarios =

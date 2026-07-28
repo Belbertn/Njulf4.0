@@ -13,6 +13,7 @@ using StbImageSharp;
 using GpuAllocator = Vma;
 using Vma;
 using Buffer = System.Buffer;
+using CoreVector4 = Njulf.Core.Math.Vector4;
 
 namespace Njulf.Rendering.Resources
 {
@@ -65,6 +66,7 @@ namespace Njulf.Rendering.Resources
             public uint OriginalWidth;
             public uint OriginalHeight;
             public bool IsCompressed;
+            public CoreVector4? LinearAverageColor;
         }
 
         private sealed class TextureInfo
@@ -707,6 +709,9 @@ namespace Njulf.Rendering.Resources
             lock (_lock)
                 _runtimeDecodedTextureCount++;
 
+            // The decoded source is already resident here. Capture its
+            // whole-image average once before downscaling or releasing it.
+            CoreVector4 linearAverageColor = TextureColorAverages.CalculateRgba8Linear(image.Data, srgb);
             Format format = srgb ? Format.R8G8B8A8Srgb : Format.R8G8B8A8Unorm;
             uint originalWidth = checked((uint)image.Width);
             uint originalHeight = checked((uint)image.Height);
@@ -761,6 +766,7 @@ namespace Njulf.Rendering.Resources
                     originalHeight,
                     wasDownscaled,
                     isCompressed: false,
+                    linearAverageColor,
                     CreateLoadedTextureDebugName(fullPath, source.DebugName, format));
                 if (resolvedHandle != handle)
                 {
@@ -952,6 +958,7 @@ namespace Njulf.Rendering.Resources
                     texture.Height,
                     wasDownscaled: false,
                     isCompressed: IsBlockCompressedFormat(texture.Format),
+                    linearAverageColor: null,
                     CreateLoadedTextureDebugName(fullPath, source.DebugName, texture.Format));
                 if (resolvedHandle != handle)
                 {
@@ -981,6 +988,7 @@ namespace Njulf.Rendering.Resources
             uint originalHeight,
             bool wasDownscaled,
             bool isCompressed,
+            CoreVector4? linearAverageColor,
             string imageDebugName)
         {
             lock (_lock)
@@ -1011,6 +1019,7 @@ namespace Njulf.Rendering.Resources
                 createdImage.OriginalHeight = originalHeight;
                 createdImage.WasDownscaled = wasDownscaled;
                 createdImage.IsCompressed = isCompressed;
+                createdImage.LinearAverageColor = linearAverageColor;
 
                 CopySourceMetadata(createdImage, createdTexture);
                 _context.SetDebugName(createdImage.Image.Handle, ObjectType.Image, imageDebugName);
@@ -1155,6 +1164,22 @@ namespace Njulf.Rendering.Resources
             {
                 TextureInfo textureInfo = GetTextureInfoLocked(handle);
                 return (textureInfo.View, textureInfo.Format, textureInfo.Extent);
+            }
+        }
+
+        public bool TryGetLinearAverageColor(TextureHandle handle, out CoreVector4 average)
+        {
+            lock (_lock)
+            {
+                if (!TryGetTextureInfoLocked(handle, out TextureInfo textureInfo) ||
+                    textureInfo.SharedImage?.LinearAverageColor is not CoreVector4 value)
+                {
+                    average = default;
+                    return false;
+                }
+
+                average = value;
+                return true;
             }
         }
 

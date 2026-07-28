@@ -559,7 +559,17 @@ namespace Njulf.Rendering.Resources
                 AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.IridescenceTextureIndex);
                 AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.IridescenceThicknessTextureIndex);
 
-                GPUMaterialData gpuMaterial = BuildGpuMaterialData(material, textureBindings.TextureIndices);
+                CoreVector4? runtimeBaseColorTextureAverageLinear = null;
+                if (material.DdgiBaseColorTextureAverageLinear is null &&
+                    _textureManager.TryGetLinearAverageColor(textureBindings.TextureHandles[0], out CoreVector4 runtimeAverage))
+                {
+                    runtimeBaseColorTextureAverageLinear = runtimeAverage;
+                }
+
+                GPUMaterialData gpuMaterial = BuildGpuMaterialData(
+                    material,
+                    textureBindings.TextureIndices,
+                    runtimeBaseColorTextureAverageLinear);
                 GPUMaterialExtensionData? extensionData =
                     ((MaterialFeatureFlags)gpuMaterial.FeatureFlags).RequiresExtensionData()
                         ? BuildGpuMaterialExtensionData(material, textureBindings.ExtensionTextureIndices)
@@ -777,11 +787,21 @@ namespace Njulf.Rendering.Resources
                 textureHandles);
         }
 
-        public static GPUMaterialData BuildGpuMaterialData(ModelMaterial material, MaterialTextureIndices textureIndices)
+        public static GPUMaterialData BuildGpuMaterialData(
+            ModelMaterial material,
+            MaterialTextureIndices textureIndices,
+            CoreVector4? runtimeBaseColorTextureAverageLinear = null)
         {
             if (material == null)
                 throw new ArgumentNullException(nameof(material));
 
+            bool hasBaseColorTexture =
+                material.BaseColorTexture != null ||
+                !string.IsNullOrWhiteSpace(material.AlbedoTexturePath);
+            bool compactAlbedoValid =
+                !hasBaseColorTexture ||
+                material.DdgiBaseColorTextureAverageLinear.HasValue ||
+                runtimeBaseColorTextureAverageLinear.HasValue;
             return new GPUMaterialData
             {
                 Albedo = material.Albedo,
@@ -818,22 +838,28 @@ namespace Njulf.Rendering.Resources
                 ExtensionDataIndex = -1,
                 Reserved0 = 0u,
                 Reserved1 = 0u,
-                DdgiAverageAlbedo = BuildDdgiAverageAlbedo(material),
+                DdgiAverageAlbedo = BuildDdgiAverageAlbedo(material, runtimeBaseColorTextureAverageLinear),
                 DdgiAverageEmissive = BuildDdgiAverageEmissive(material),
-                DdgiMaterialPolicy = BuildDdgiMaterialPolicy(material)
+                DdgiMaterialPolicy = BuildDdgiMaterialPolicy(material, compactAlbedoValid)
             };
         }
 
-        internal static CoreVector4 BuildDdgiAverageAlbedo(ModelMaterial material)
+        internal static CoreVector4 BuildDdgiAverageAlbedo(
+            ModelMaterial material,
+            CoreVector4? runtimeBaseColorTextureAverageLinear = null)
         {
             if (material == null)
                 throw new ArgumentNullException(nameof(material));
 
+            CoreVector4 textureAverage =
+                material.DdgiBaseColorTextureAverageLinear ??
+                runtimeBaseColorTextureAverageLinear ??
+                new CoreVector4(1f, 1f, 1f, 1f);
             return new CoreVector4(
-                Math.Max(material.Albedo.X, 0f),
-                Math.Max(material.Albedo.Y, 0f),
-                Math.Max(material.Albedo.Z, 0f),
-                Math.Clamp(material.Albedo.W, 0f, 1f));
+                Math.Max(material.Albedo.X, 0f) * Math.Max(textureAverage.X, 0f),
+                Math.Max(material.Albedo.Y, 0f) * Math.Max(textureAverage.Y, 0f),
+                Math.Max(material.Albedo.Z, 0f) * Math.Max(textureAverage.Z, 0f),
+                Math.Clamp(material.Albedo.W, 0f, 1f) * Math.Clamp(textureAverage.W, 0f, 1f));
         }
 
         internal static CoreVector4 BuildDdgiAverageEmissive(ModelMaterial material)
@@ -849,14 +875,14 @@ namespace Njulf.Rendering.Resources
             return new CoreVector4(x, y, z, importance);
         }
 
-        internal static CoreVector4 BuildDdgiMaterialPolicy(ModelMaterial material)
+        internal static CoreVector4 BuildDdgiMaterialPolicy(ModelMaterial material, bool compactAlbedoValid)
         {
             if (material == null)
                 throw new ArgumentNullException(nameof(material));
 
             CoreVector4 emissive = BuildDdgiAverageEmissive(material);
             float preferredMip = ResolvePreferredDdgiTextureMip(material);
-            uint flags = 0u;
+            uint flags = compactAlbedoValid ? 1u << 2 : 0u;
             if (material.BaseColorTexture != null || !string.IsNullOrWhiteSpace(material.AlbedoTexturePath))
                 flags |= 1u;
             if (material.EmissiveTexture != null || !string.IsNullOrWhiteSpace(material.EmissiveTexturePath))

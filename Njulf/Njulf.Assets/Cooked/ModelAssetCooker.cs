@@ -7,6 +7,8 @@ namespace Njulf.Assets.Cooked;
 
 public sealed class ModelAssetCooker : IDisposable
 {
+    private const int MaterialTransportMetadataRevision = 1;
+
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".gltf", ".glb", ".obj", ".fbx", ".dae", ".3ds", ".blend", ".ply", ".stl"
@@ -85,7 +87,8 @@ public sealed class ModelAssetCooker : IDisposable
             options.ImporterOptions,
             TextureOptions = platformTextureOptions,
             options.ToolVersion,
-            options.Platform
+            options.Platform,
+            MaterialTransportMetadataRevision
         }));
         string databaseKey = NormalizeRelative(outputRoot, sourcePath);
         CookedAssetDatabase database = CookedAssetDatabase.Load(databasePath);
@@ -320,6 +323,11 @@ public sealed class ModelAssetCooker : IDisposable
                 }
                 string relativeTexturePath = NormalizeRelative(materialDirectory, cooked.Path);
                 property.SetValue(material, CookedPackage.CloneSlot(slot, relativeTexturePath));
+                if (property.Name == nameof(ModelMaterial.BaseColorTexture) &&
+                    cooked.Report.LinearAverageColor is { } linearAverageColor)
+                {
+                    material.DdgiBaseColorTextureAverageLinear = linearAverageColor;
+                }
                 if (semantic == TextureSemantic.Normal && cooked.Report.VulkanFormat == 141)
                     material.FeatureFlags |= 1u << 23;
             }

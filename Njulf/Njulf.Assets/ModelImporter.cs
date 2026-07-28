@@ -2433,6 +2433,12 @@ namespace Njulf.Assets
         public string Name { get; set; } = "DefaultMaterial";
         public uint FeatureFlags { get; set; }
         public Vector4 Albedo { get; set; } = new Vector4(1f, 1f, 1f, 1f);
+        /// <summary>
+        /// Whole-base-color-texture average in linear light, excluding
+        /// <see cref="Albedo"/>. Cooked assets persist this so compact DDGI hit
+        /// shading can preserve textured material energy without sampling.
+        /// </summary>
+        public Vector4? DdgiBaseColorTextureAverageLinear { get; set; }
         public Vector4 Emissive { get; set; } = Vector4.Zero;
         public float EmissiveStrength { get; set; } = 1f;
         public float Metallic { get; set; } = 0f;

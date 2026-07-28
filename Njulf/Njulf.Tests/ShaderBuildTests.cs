@@ -821,6 +821,12 @@ public sealed class ShaderBuildTests
             Assert.That(hitShading, Does.Contain("attenuation *= max(pc.SelectedLocalLightEnergyScale, 0.0);"));
             Assert.That(hitShading, Does.Contain("bool ShouldUseCompactDdgiMaterial(uint volumeCascadeIndex)"));
             Assert.That(hitShading, Does.Contain("vec3 ResolveCompactDdgiAlbedo(GPUMaterialData material)"));
+            Assert.That(hitShading, Does.Contain("DDGI_MATERIAL_POLICY_COMPACT_ALBEDO_VALID"));
+            Assert.That(hitShading, Does.Contain("DDGI_MATERIAL_POLICY_HAS_BASE_COLOR_TEXTURE"));
+            Assert.That(hitShading, Does.Contain("vec4 terminalMip = SampleDdgiMaterialTexture("));
+            Assert.That(hitShading, Does.Contain("1000.0"));
+            Assert.That(hitShading, Does.Contain("material.Albedo.rgb * albedoSample.rgb * vertexColor"));
+            Assert.That(hitShading, Does.Not.Contain("ResolveCompactDdgiAlbedo(material) * albedoSample.rgb"));
             Assert.That(hitShading, Does.Contain("vec3 ResolveCompactDdgiEmissive(GPUMaterialData material)"));
             Assert.That(hitShading, Does.Contain("float ResolveDdgiMaterialTextureLod(GPUMaterialData material, uint volumeCascadeIndex)"));
             Assert.That(hitShading, Does.Contain("vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit("));

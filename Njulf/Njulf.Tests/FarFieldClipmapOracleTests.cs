@@ -460,6 +460,57 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void SimpleDdgiSceneClampedOrigin_PreservedPhaseSurvivesFeatureToggleBoundsDrift()
+        {
+            const float spacing = 3.0f;
+            CoreVector3 latticeSize = new(18.0f, 18.0f, 18.0f);
+            CoreVector3 camera = new(0.0f, 0.0f, 0.0f);
+            bool hasPreservedOrigin = false;
+
+            CoreVector3 initial = SimpleDdgiVolumeManager.ResolveSceneClampedOrigin(
+                new CoreVector3(-5.0f, -5.0f, -5.0f),
+                new CoreVector3(5.0f, 5.0f, 5.0f),
+                latticeSize,
+                spacing,
+                camera,
+                currentOrigin: default,
+                ref hasPreservedOrigin,
+                out bool initialRecentered);
+            CoreVector3 preserved = SimpleDdgiVolumeManager.ResolveSceneClampedOrigin(
+                new CoreVector3(-4.2f, -4.2f, -4.2f),
+                new CoreVector3(5.8f, 5.8f, 5.8f),
+                latticeSize,
+                spacing,
+                camera,
+                initial,
+                ref hasPreservedOrigin,
+                out bool preservedRecentered);
+
+            bool hasResetOrigin = false;
+            CoreVector3 reseeded = SimpleDdgiVolumeManager.ResolveSceneClampedOrigin(
+                new CoreVector3(-4.2f, -4.2f, -4.2f),
+                new CoreVector3(5.8f, 5.8f, 5.8f),
+                latticeSize,
+                spacing,
+                camera,
+                currentOrigin: default,
+                ref hasResetOrigin,
+                out bool reseededRecentered);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(initialRecentered, Is.False);
+                Assert.That(preservedRecentered, Is.False);
+                Assert.That(preserved, Is.EqualTo(initial),
+                    "A temporary feature disable must retain the established world-space lattice phase.");
+                Assert.That(reseededRecentered, Is.False);
+                Assert.That(reseeded, Is.Not.EqualTo(initial),
+                    "Clearing the has-origin state re-seeds the lattice from transient bounds.");
+                Assert.That((reseeded.X - initial.X) / spacing, Is.Not.EqualTo(MathF.Round((reseeded.X - initial.X) / spacing)).Within(1.0e-4f));
+            });
+        }
+
+        [Test]
         public void SimpleDdgiToroidalAddressing_PreservesOverlappingPhysicalSlotsAcrossRandomScrolls()
         {
             const int countX = 7;
@@ -620,6 +671,14 @@ namespace Njulf.Tests
             string simpleManager = ReadRepoText("Njulf.Rendering", "Resources", "SimpleDdgiVolumeManager.cs");
             string farFieldManager = ReadRepoText("Njulf.Rendering", "Resources", "FarFieldClipmapManager.cs");
             string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
+            int disableCoreStart = simpleManager.IndexOf(
+                "private void DisableCore(",
+                StringComparison.Ordinal);
+            int disableCoreEnd = simpleManager.IndexOf(
+                "public void MarkBlendExecuted()",
+                disableCoreStart,
+                StringComparison.Ordinal);
+            string disableCore = simpleManager[disableCoreStart..disableCoreEnd];
 
             Assert.Multiple(() =>
             {
@@ -644,6 +703,8 @@ namespace Njulf.Tests
                 Assert.That(simpleManager, Does.Contain("UploadProbeUpdateQueue(stagingRing, commandBuffer);"));
                 Assert.That(simpleManager, Does.Contain("ClearAtlasBuffersIfRequired(commandBuffer);"));
                 Assert.That(simpleManager, Does.Not.Contain("if (_recenteredThisFrame)\r\n                _atlasClearRequired = true;"));
+                Assert.That(disableCore, Does.Not.Contain("Array.Fill(_ringHasOrigins, false);"),
+                    "Disabling Simple DDGI must preserve the established camera-ring lattice phase.");
                 Assert.That(simpleManager, Does.Contain("internal static Vector3 ResolveSceneClampedOrigin("));
                 Assert.That(simpleManager, Does.Contain("private static float ResolveAlignedSceneClampedAxisOrigin("));
                 Assert.That(simpleManager, Does.Contain("float quarterExtent = latticeExtent * Math.Clamp(recenterHysteresisFraction, 0.0f, 0.49f);"));

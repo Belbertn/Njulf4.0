@@ -34,6 +34,8 @@
 
 const uint DDGI_HIT_TOP_LIGHT_LIMIT = 8u;
 const uint DDGI_HIT_LIGHT_CANDIDATE_LIMIT = 64u;
+const uint DDGI_MATERIAL_POLICY_HAS_BASE_COLOR_TEXTURE = 1u << 0;
+const uint DDGI_MATERIAL_POLICY_COMPACT_ALBEDO_VALID = 1u << 2;
 
 vec4 SampleDdgiMaterialTexture(int textureIndex, vec2 uv, float lod, vec4 fallback)
 {
@@ -73,9 +75,22 @@ float ResolveDdgiMaterialTextureLod(GPUMaterialData material, uint volumeCascade
 
 vec3 ResolveCompactDdgiAlbedo(GPUMaterialData material)
 {
-    return dot(material.DdgiAverageAlbedo.rgb, vec3(1.0)) > 0.000001
-        ? material.DdgiAverageAlbedo.rgb
-        : material.Albedo.rgb;
+    uint materialFlags = uint(round(material.DdgiMaterialPolicy.w));
+    bool compactAlbedoValid = (materialFlags & DDGI_MATERIAL_POLICY_COMPACT_ALBEDO_VALID) != 0u;
+    if (compactAlbedoValid)
+        return material.DdgiAverageAlbedo.rgb;
+    if ((materialFlags & DDGI_MATERIAL_POLICY_HAS_BASE_COLOR_TEXTURE) == 0u)
+        return material.Albedo.rgb;
+
+    // Compatibility for cooked material packages created before the linear
+    // average was persisted. Their full mip chain is already resident, so its
+    // terminal mip supplies the texture-wide fallback in linear sample space.
+    vec4 terminalMip = SampleDdgiMaterialTexture(
+        material.AlbedoTextureIndex,
+        vec2(0.5),
+        1000.0,
+        vec4(1.0));
+    return material.Albedo.rgb * terminalMip.rgb;
 }
 
 vec3 ResolveCompactDdgiEmissive(GPUMaterialData material)
@@ -208,7 +223,9 @@ bool ResolveCommittedHitSurface(
             material.TextureRotations.x);
         albedoSample = SampleDdgiMaterialTexture(material.AlbedoTextureIndex, albedoUv, materialTextureLod, vec4(1.0));
     }
-    albedo = max(ResolveCompactDdgiAlbedo(material) * albedoSample.rgb * vertexColor, vec3(0.0));
+    // The compact value already includes the whole-texture average. Textured
+    // cascades use the authored factor and the live sample exactly once.
+    albedo = max(material.Albedo.rgb * albedoSample.rgb * vertexColor, vec3(0.0));
 
     vec4 emissiveSample = vec4(1.0);
     if (sampleMaterialTextures && material.EmissiveTextureIndex != DEFAULT_BLACK_TEXTURE)

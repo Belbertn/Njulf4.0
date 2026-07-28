@@ -111,6 +111,7 @@ namespace Njulf.Rendering.Resources
             Format depthFormat,
             int bloomMipCount = 6,
             bool ambientOcclusionEnabled = true,
+            float ambientOcclusionResolutionScale = 0.5f,
             bool globalIlluminationSsgiEnabled = true,
             float globalIlluminationResolutionScale = 0.5f,
             AntiAliasingMode antiAliasingMode = AntiAliasingMode.SmaaMedium,
@@ -130,7 +131,7 @@ namespace Njulf.Rendering.Resources
                 CalculateFoggedSceneColorExtent(extent, fogEnabled),
                 FoggedSceneColorDescriptor);
             Extent2D ambientOcclusionExtent = ambientOcclusionEnabled
-                ? CalculateAmbientOcclusionExtent(extent, 0.5f)
+                ? CalculateAmbientOcclusionExtent(extent, ambientOcclusionResolutionScale)
                 : PlaceholderExtent;
             AmbientOcclusionRaw = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.AmbientOcclusionRaw,

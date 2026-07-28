@@ -47,7 +47,10 @@ public sealed record CookedTextureReport(
     int MipCount,
     long SourceBytes,
     long CookedBytes,
-    bool PassedThrough);
+    bool PassedThrough)
+{
+    public Njulf.Core.Math.Vector4? LinearAverageColor { get; init; }
+}
 
 public interface ITextureCooker
 {
@@ -87,6 +90,9 @@ public sealed class TextureCooker : ITextureCooker
         catch (Exception ex) { throw new InvalidDataException($"Texture '{source.CacheIdentity}' could not be decoded for cooking.", ex); }
         int width = image.Width;
         int height = image.Height;
+        Njulf.Core.Math.Vector4 linearAverageColor = TextureColorAverages.CalculateRgba8Linear(
+            image.Data,
+            options.ColorSpace == TextureColorSpace.Srgb);
         int targetWidth = width;
         int targetHeight = height;
         if (options.MaxDimension > 0 && Math.Max(width, height) > options.MaxDimension)
@@ -114,7 +120,10 @@ public sealed class TextureCooker : ITextureCooker
         IReadOnlyList<byte[]> outputLevels = bcFormat.HasValue ? EncodeBc(levels, targetWidth, targetHeight, bcFormat.Value) : levels;
         byte[] ktx = BuildKtx2(targetWidth, targetHeight, format, outputLevels);
         WriteAtomic(ktx2Path, ktx);
-        return new CookedTextureReport(source.CacheIdentity, width, height, targetWidth, targetHeight, format, levels.Count, encoded.Length, ktx.Length, false);
+        return new CookedTextureReport(source.CacheIdentity, width, height, targetWidth, targetHeight, format, levels.Count, encoded.Length, ktx.Length, false)
+        {
+            LinearAverageColor = linearAverageColor
+        };
     }
 
     private static CookedTextureReport CookHdr(byte[] encoded, ModelTextureSource source, string ktx2Path, TextureCookOptions options)

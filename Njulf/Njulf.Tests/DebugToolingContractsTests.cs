@@ -276,6 +276,27 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void SponzaStartupScenario_AppliesLockedCameraOnLoadAndReload()
+        {
+            string program = ReadRepoText("NjulfHelloGame", "Program.cs");
+            int callCount = program.Split(
+                "ApplyPerformanceScenarioCamera(camera,",
+                StringSplitOptions.None).Length - 1;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(callCount, Is.EqualTo(2));
+                Assert.That(program, Does.Contain(
+                    "scenario != SamplePerformanceScenario.GiSponzaRightWallStationary"));
+                Assert.That(program, Does.Contain(
+                    "SampleSponzaGiCaptureContract.Default.LowBookmark"));
+                Assert.That(program, Does.Contain("camera.FieldOfView = bookmark.FieldOfView;"));
+                Assert.That(program, Does.Contain("camera.NearPlane = bookmark.NearPlane;"));
+                Assert.That(program, Does.Contain("camera.FarPlane = bookmark.FarPlane;"));
+            });
+        }
+
+        [Test]
         public void SampleInputController_DebugSnapshotShortcutStaysDocumented()
         {
             string controller = ReadRepoText("NjulfHelloGame", "SampleInputController.cs");
@@ -548,6 +569,34 @@ namespace Njulf.Tests
                 Assert.That(first.OutputPath, Does.EndWith(".png"));
                 Assert.That(first.ColorSpace, Is.EqualTo(ScreenshotColorSpace.FinalLdrSrgb));
                 Assert.That(second.OutputPath, Is.Not.EqualTo(first.OutputPath));
+            });
+        }
+
+        [Test]
+        public void AmbientOcclusionRenderTargetProfile_TracksConfiguredResolutionScale()
+        {
+            string targets = ReadRepoText("Njulf.Rendering", "Resources", "RenderTargetManager.cs");
+            string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    targets,
+                    Does.Contain("CalculateAmbientOcclusionExtent(extent, ambientOcclusionResolutionScale)"));
+                Assert.That(
+                    targets,
+                    Does.Not.Contain("CalculateAmbientOcclusionExtent(extent, 0.5f)"));
+                Assert.That(
+                    renderer,
+                    Does.Contain("Settings.AmbientOcclusion.ResolutionScale,\n                ssgiTargetEnabled"));
+                Assert.That(
+                    renderer,
+                    Does.Contain("_lastAmbientOcclusionResolutionScale - ambientOcclusionResolutionScale"));
+                Assert.That(
+                    renderer.Split(
+                        "_lastAmbientOcclusionResolutionScale = Settings.AmbientOcclusion.ResolutionScale;",
+                        StringSplitOptions.None),
+                    Has.Length.EqualTo(3));
             });
         }
 

@@ -28,7 +28,7 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(contract.WarmupFrames, Is.EqualTo(360));
             Assert.That(contract.VerticalPathDurationSeconds, Is.InRange(10, 20));
             Assert.That(contract.VerticalTraversalFrameCount, Is.EqualTo(960));
-            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v4"));
+            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v5"));
             Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(1_398));
             Assert.That(contract.LowBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeLow"));
             Assert.That(contract.LowBookmark.Position.Y, Is.EqualTo(1.35f));
@@ -59,7 +59,12 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                 "ownership",
                 "fallback"
             }));
-            Assert.That(contract.Outputs.Single(static output => output.Name == "direct-only").DisableGlobalIllumination, Is.True);
+            SampleSponzaGiCaptureOutput directOnly = contract.Outputs.Single(static output => output.Name == "direct-only");
+            Assert.That(directOnly.DisableGlobalIllumination, Is.True);
+            Assert.That(directOnly.DisableEnvironmentLighting, Is.True);
+            Assert.That(
+                contract.Outputs.Where(static output => output.Name != "direct-only"),
+                Has.None.Matches<SampleSponzaGiCaptureOutput>(static output => output.DisableEnvironmentLighting));
             Assert.That(contract.Outputs.Single(static output => output.Name == "ownership").DebugView,
                 Is.EqualTo(GlobalIlluminationDebugView.DdgiEffectiveWeight));
             Assert.That(contract.ReceiverRois, Has.All.Matches<SampleSponzaGiReceiverRoi>(roi => roi.RequireCoarserFallback));
@@ -228,6 +233,38 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(report.Samples.Where(static sample => sample.IsInTransitionBand), Is.Not.Empty);
             Assert.That(report.Samples.Where(static sample => sample.IsInTransitionBand),
                 Has.All.Matches<SimpleDdgiReceiverCoverageSample>(sample => sample.HasCoarserFallback));
+        });
+    }
+
+    [Test]
+    public void CanonicalLighting_SatisfiesCaptureLockAndRejectsOccludedSunProfilesAndShadowLeak()
+    {
+        SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
+        Light canonical = SampleSponzaLightingProfile.CreateDirectionalKey();
+        Light disabledSourceSun = canonical;
+        disabledSourceSun.Direction = SampleSponzaLightingProfile.SourceSunDirection;
+        Light formerSyntheticSun = canonical;
+        formerSyntheticSun.Direction = System.Numerics.Vector3.Normalize(
+            new System.Numerics.Vector3(0.18f, -0.82f, 0.54f));
+        Light partialStrength = canonical;
+        partialStrength.ShadowStrength = 0.85f;
+        Light localLight = new() { Type = LightType.Point };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(contract.ValidateLockedLighting(new[] { canonical }), Is.Empty);
+            Assert.That(
+                contract.ValidateLockedLighting(new[] { disabledSourceSun }),
+                Has.Some.Contains("locked directional key"));
+            Assert.That(
+                contract.ValidateLockedLighting(new[] { formerSyntheticSun }),
+                Has.Some.Contains("locked directional key"));
+            Assert.That(
+                contract.ValidateLockedLighting(new[] { partialStrength }),
+                Has.Some.Contains("fully occluding"));
+            Assert.That(
+                contract.ValidateLockedLighting(new[] { canonical, localLight }),
+                Has.Some.Contains("exactly one light"));
         });
     }
 

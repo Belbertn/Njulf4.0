@@ -258,6 +258,7 @@ namespace Njulf.Rendering
         private string _frameSubmissionFaultReason = string.Empty;
         private bool _swapchainImageTransitionedThisFrame;
         private bool _lastAmbientOcclusionTargetEnabled = true;
+        private float _lastAmbientOcclusionResolutionScale = 0.5f;
         private AntiAliasingMode _lastAntiAliasingTargetMode = AntiAliasingMode.SmaaMedium;
         private bool _lastMotionVectorTargetEnabled = true;
         private TransparencyMode _lastTransparencyTargetMode = TransparencyMode.SortedAlphaBlend;
@@ -521,6 +522,7 @@ namespace Njulf.Rendering
                 _swapchain.DepthFormat,
                 Settings.Bloom.MipCount,
                 Settings.AmbientOcclusion.Enabled,
+                Settings.AmbientOcclusion.ResolutionScale,
                 ssgiTargetEnabled,
                 Settings.GlobalIllumination.ResolutionScale,
                 Settings.AntiAliasing.EffectiveMode,
@@ -529,6 +531,7 @@ namespace Njulf.Rendering
                 IsWeightedOitTargetEnabled(Settings),
                 _renderGraph);
             _lastAmbientOcclusionTargetEnabled = Settings.AmbientOcclusion.Enabled;
+            _lastAmbientOcclusionResolutionScale = Settings.AmbientOcclusion.ResolutionScale;
             _lastAntiAliasingTargetMode = Settings.AntiAliasing.EffectiveMode;
             _lastMotionVectorTargetEnabled = motionVectorTargetEnabled;
             _lastTransparencyTargetMode = Settings.Transparency.Mode;
@@ -10723,6 +10726,7 @@ namespace Njulf.Rendering
                 return;
 
             bool aoEnabled = Settings.AmbientOcclusion.Enabled;
+            float ambientOcclusionResolutionScale = Settings.AmbientOcclusion.ResolutionScale;
             AntiAliasingMode aaMode = Settings.AntiAliasing.EffectiveMode;
             bool motionVectorTargetEnabled = NeedsMotionVectors(Settings);
             int bloomMipCount = Settings.Bloom.MipCount;
@@ -10735,6 +10739,7 @@ namespace Njulf.Rendering
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, effectiveResolutionScale);
             bool featureTargetsChanged =
                 _lastAmbientOcclusionTargetEnabled != aoEnabled ||
+                MathF.Abs(_lastAmbientOcclusionResolutionScale - ambientOcclusionResolutionScale) > 0.0001f ||
                 _lastAntiAliasingTargetMode != aaMode ||
                 _lastMotionVectorTargetEnabled != motionVectorTargetEnabled ||
                 _lastTransparencyTargetMode != Settings.Transparency.Mode ||
@@ -10765,7 +10770,7 @@ namespace Njulf.Rendering
             _renderTargets.Recreate(
                 sceneRenderExtent,
                 _swapchain.Extent,
-                Settings.AmbientOcclusion.ResolutionScale,
+                ambientOcclusionResolutionScale,
                 globalIlluminationResolutionScale,
                 bloomMipCount,
                 aoEnabled,
@@ -10786,6 +10791,7 @@ namespace Njulf.Rendering
             _asyncComputeTimingPolicy.Clear();
             Array.Clear(_asyncComputeTimingFrames);
             _lastAmbientOcclusionTargetEnabled = aoEnabled;
+            _lastAmbientOcclusionResolutionScale = ambientOcclusionResolutionScale;
             _lastAntiAliasingTargetMode = aaMode;
             _lastMotionVectorTargetEnabled = motionVectorTargetEnabled;
             _lastTransparencyTargetMode = Settings.Transparency.Mode;
@@ -10956,6 +10962,7 @@ namespace Njulf.Rendering
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
             RegisterSceneRenderTextures();
             _lastAmbientOcclusionTargetEnabled = Settings.AmbientOcclusion.Enabled;
+            _lastAmbientOcclusionResolutionScale = Settings.AmbientOcclusion.ResolutionScale;
             _lastAntiAliasingTargetMode = Settings.AntiAliasing.EffectiveMode;
             _lastMotionVectorTargetEnabled = NeedsMotionVectors(Settings);
             _lastTransparencyTargetMode = Settings.Transparency.Mode;

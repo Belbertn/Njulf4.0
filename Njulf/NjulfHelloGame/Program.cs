@@ -143,6 +143,7 @@ internal sealed class HelloGame : Game
             SampleGlobalIlluminationValidation.ConfigureRenderSettings(renderer.Settings, startupScenario);
             SampleGlobalIlluminationValidation.ConfigureSchedulerMode(renderer.Settings, _smokeOptions.DdgiSchedulerModeOverride);
             ApplySmokeRenderSettings(renderer);
+            ApplyPerformanceScenarioCamera(camera, startupScenario);
             Console.WriteLine(
                 $"Applied startup scenario: {summary.Scenario} " +
                 $"objects={summary.ObjectCount}, lights={summary.LightCount}, materials={summary.MaterialCount}, notes={summary.Notes}");
@@ -204,6 +205,7 @@ internal sealed class HelloGame : Game
                 SampleGlobalIlluminationValidation.ConfigureRenderSettings(renderer.Settings, reloadScenario);
                 SampleGlobalIlluminationValidation.ConfigureSchedulerMode(renderer.Settings, _smokeOptions.DdgiSchedulerModeOverride);
                 ApplySmokeRenderSettings(renderer);
+                ApplyPerformanceScenarioCamera(camera, reloadScenario);
             }
         });
         _smokeRunner = new SampleLifecycleSmokeRunner(
@@ -710,6 +712,23 @@ internal sealed class HelloGame : Game
         camera.Yaw = yaw;
         camera.Pitch = pitch;
         camera.FarPlane = farPlane;
+        camera.Update();
+    }
+
+    private static void ApplyPerformanceScenarioCamera(
+        FirstPersonCamera camera,
+        SamplePerformanceScenario scenario)
+    {
+        if (scenario != SamplePerformanceScenario.GiSponzaRightWallStationary)
+            return;
+
+        SampleSponzaGiCameraBookmark bookmark = SampleSponzaGiCaptureContract.Default.LowBookmark;
+        camera.Position = bookmark.Position;
+        camera.Yaw = bookmark.Yaw;
+        camera.Pitch = bookmark.Pitch;
+        camera.FieldOfView = bookmark.FieldOfView;
+        camera.NearPlane = bookmark.NearPlane;
+        camera.FarPlane = bookmark.FarPlane;
         camera.Update();
     }
 

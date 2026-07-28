@@ -143,7 +143,45 @@ public sealed class CookedAssetTests
             Assert.That(info.Height, Is.EqualTo(1));
             Assert.That(info.MipCount, Is.EqualTo(1));
             Assert.That(info.Format, Is.EqualTo(43u));
+            Assert.That(report.LinearAverageColor, Is.EqualTo(Vector4.One));
         });
+    }
+
+    [Test]
+    public void TextureColorAverage_DecodesSrgbChannelsBeforeAveraging()
+    {
+        Vector4 average = TextureColorAverages.CalculateRgba8Linear(
+            [128, 64, 255, 127],
+            srgb: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(average.X, Is.EqualTo(0.2158605f).Within(0.000001f));
+            Assert.That(average.Y, Is.EqualTo(0.05126946f).Within(0.000001f));
+            Assert.That(average.Z, Is.EqualTo(1f).Within(0.000001f));
+            Assert.That(average.W, Is.EqualTo(127f / 255f).Within(0.000001f));
+        });
+    }
+
+    [Test]
+    public void MaterialPackage_RoundTripsDdgiLinearBaseColorTextureAverage()
+    {
+        string path = Path.Combine(_directory, "average.materials.njmat");
+        var expected = new Vector4(0.125f, 0.25f, 0.5f, 0.75f);
+        CookedPackage.WriteMaterials(
+            path,
+            new CookedMaterialTable(
+                [new ModelMaterial { DdgiBaseColorTextureAverageLinear = expected }]),
+            sourceHash: 1,
+            settingsHash: 2,
+            dependencyHash: 3);
+
+        CookedMaterialTable loaded = CookedPackage.LoadMaterials(
+            path,
+            CookedAssetReaderFlags.None,
+            out _);
+
+        Assert.That(loaded.Materials.Single().DdgiBaseColorTextureAverageLinear, Is.EqualTo(expected));
     }
 
     [Test]

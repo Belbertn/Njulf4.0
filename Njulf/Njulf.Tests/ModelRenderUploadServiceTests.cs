@@ -50,6 +50,73 @@ namespace Njulf.Tests
                 Assert.That(gpuMaterial.DdgiAverageEmissive.W, Is.EqualTo(0.2126f * 0.1f + 0.7152f * 0.2f + 0.0722f * 0.3f).Within(0.0001f));
                 Assert.That(gpuMaterial.DdgiMaterialPolicy.X, Is.EqualTo(0f));
                 Assert.That(gpuMaterial.DdgiMaterialPolicy.Y, Is.EqualTo(0f));
+                Assert.That((uint)gpuMaterial.DdgiMaterialPolicy.W, Is.EqualTo(4u));
+            });
+        }
+
+        [Test]
+        public void BuildGpuMaterialData_MultipliesLinearTextureAverageByBaseColorFactorExactlyOnce()
+        {
+            var material = new ModelMaterial
+            {
+                Albedo = new Vector4(0.2f, 0.4f, 0.6f, 0.8f),
+                AlbedoTexturePath = "base.png",
+                DdgiBaseColorTextureAverageLinear = new Vector4(0.5f, 0.25f, 0.1f, 0.75f)
+            };
+
+            GPUMaterialData gpuMaterial = ModelRenderUploadService.BuildGpuMaterialData(
+                material,
+                new MaterialTextureIndices(10, 11, 12, 13),
+                runtimeBaseColorTextureAverageLinear: new Vector4(0.9f, 0.9f, 0.9f, 0.9f));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(gpuMaterial.DdgiAverageAlbedo.X, Is.EqualTo(0.1f).Within(0.0001f));
+                Assert.That(gpuMaterial.DdgiAverageAlbedo.Y, Is.EqualTo(0.1f).Within(0.0001f));
+                Assert.That(gpuMaterial.DdgiAverageAlbedo.Z, Is.EqualTo(0.06f).Within(0.0001f));
+                Assert.That(gpuMaterial.DdgiAverageAlbedo.W, Is.EqualTo(0.6f).Within(0.0001f));
+                Assert.That((uint)gpuMaterial.DdgiMaterialPolicy.W, Is.EqualTo(5u));
+            });
+        }
+
+        [Test]
+        public void BuildGpuMaterialData_UsesRuntimeLinearTextureAverageWhenCookedMetadataIsAbsent()
+        {
+            var material = new ModelMaterial
+            {
+                Albedo = new Vector4(0.4f, 0.5f, 0.8f, 1f),
+                AlbedoTexturePath = "raw-base.png"
+            };
+
+            GPUMaterialData gpuMaterial = ModelRenderUploadService.BuildGpuMaterialData(
+                material,
+                new MaterialTextureIndices(10, 11, 12, 13),
+                runtimeBaseColorTextureAverageLinear: new Vector4(0.25f, 0.4f, 0.5f, 1f));
+
+            Assert.That(
+                gpuMaterial.DdgiAverageAlbedo,
+                Is.EqualTo(new Vector4(0.1f, 0.2f, 0.4f, 1f)));
+            Assert.That((uint)gpuMaterial.DdgiMaterialPolicy.W, Is.EqualTo(5u));
+        }
+
+        [Test]
+        public void BuildGpuMaterialData_PreservesValidBlackCompactAlbedo()
+        {
+            var material = new ModelMaterial
+            {
+                Albedo = Vector4.One,
+                AlbedoTexturePath = "black.png",
+                DdgiBaseColorTextureAverageLinear = Vector4.Zero
+            };
+
+            GPUMaterialData gpuMaterial = ModelRenderUploadService.BuildGpuMaterialData(
+                material,
+                new MaterialTextureIndices(10, 11, 12, 13));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(gpuMaterial.DdgiAverageAlbedo, Is.EqualTo(Vector4.Zero));
+                Assert.That((uint)gpuMaterial.DdgiMaterialPolicy.W, Is.EqualTo(5u));
             });
         }
 

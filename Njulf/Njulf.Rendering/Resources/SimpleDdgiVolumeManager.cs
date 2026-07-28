@@ -1348,7 +1348,12 @@ namespace Njulf.Rendering.Resources
             _activeProbeCount = 0;
             _probeStateReadbackValid = 0;
             _hasGridOrigin = false;
-            Array.Fill(_ringHasOrigins, false);
+            // A feature/backend toggle invalidates transport data, not the
+            // world-space lattice phase. Re-seeding camera-ring origins from
+            // the current scene bounds makes an unchanged camera sample a
+            // different probe lattice after re-enable. Keep the three bounded
+            // anchors; BuildVolumeTable will still recenter them by integral
+            // cell deltas when the camera or scene coverage actually moved.
             _atlasClearRequired = true;
             _atlasFresh = true;
             AbortUpdateTransaction();

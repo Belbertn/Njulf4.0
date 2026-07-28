@@ -41,15 +41,17 @@ public sealed record SampleSponzaGiReceiverRoi(
 
 /// <summary>
 /// One image that must be emitted at each endpoint. <see cref="DisableGlobalIllumination"/>
-/// gives the direct-only reference a concrete, reversible definition rather
-/// than relying on a post-processing interpretation of a beauty image.
+/// and <see cref="DisableEnvironmentLighting"/> give the direct-only reference
+/// a concrete, reversible definition rather than relying on a post-processing
+/// interpretation of a beauty image.
 /// </summary>
 public sealed record SampleSponzaGiCaptureOutput(
     string Name,
     string FileStem,
     GlobalIlluminationDebugView DebugView,
     bool DisableGlobalIllumination,
-    string Description);
+    string Description,
+    bool DisableEnvironmentLighting = false);
 
 public enum SampleSponzaGiCaptureStage : byte
 {
@@ -137,7 +139,7 @@ public sealed record SampleSponzaGiVisualMetricGate(
 /// </summary>
 public sealed class SampleSponzaGiCaptureContract
 {
-    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v4";
+    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v5";
     public const string VisualMetricGateSchemaVersion = "realtime-gi-closure-sponza-visual-metrics/v1";
     public const string CoverageOracleSchemaVersion = "realtime-gi-closure-sponza-coverage-oracle/v1";
     public const int LockedWidth = 1600;
@@ -169,6 +171,10 @@ public sealed class SampleSponzaGiCaptureContract
     public int WarmupFrames { get; }
     public int VerticalPathDurationSeconds { get; }
     public uint RandomSeed { get; }
+    public Vector3 DirectionalLightDirection { get; }
+    public Vector3 DirectionalLightColor { get; }
+    public float DirectionalLightIntensity { get; }
+    public float DirectionalLightShadowStrength { get; }
     public SampleSponzaGiCameraBookmark LowBookmark { get; }
     public SampleSponzaGiCameraBookmark HighBookmark { get; }
     public BoundingBox SceneBounds { get; }
@@ -203,6 +209,10 @@ public sealed class SampleSponzaGiCaptureContract
         int warmupFrames,
         int verticalPathDurationSeconds,
         uint randomSeed,
+        Vector3 directionalLightDirection,
+        Vector3 directionalLightColor,
+        float directionalLightIntensity,
+        float directionalLightShadowStrength,
         SampleSponzaGiCameraBookmark lowBookmark,
         SampleSponzaGiCameraBookmark highBookmark,
         BoundingBox sceneBounds,
@@ -218,6 +228,10 @@ public sealed class SampleSponzaGiCaptureContract
         WarmupFrames = warmupFrames;
         VerticalPathDurationSeconds = verticalPathDurationSeconds;
         RandomSeed = randomSeed;
+        DirectionalLightDirection = directionalLightDirection;
+        DirectionalLightColor = directionalLightColor;
+        DirectionalLightIntensity = directionalLightIntensity;
+        DirectionalLightShadowStrength = directionalLightShadowStrength;
         LowBookmark = lowBookmark ?? throw new ArgumentNullException(nameof(lowBookmark));
         HighBookmark = highBookmark ?? throw new ArgumentNullException(nameof(highBookmark));
         SceneBounds = sceneBounds;
@@ -352,6 +366,67 @@ public sealed class SampleSponzaGiCaptureContract
             violations.Add("Sponza physical indirect intensity must be 1.0.");
         if (!NearlyEqual(settings.GlobalIllumination.EnvironmentFallbackIntensity, 1.0f))
             violations.Add("Sponza environment fallback intensity must be 1.0.");
+
+        return violations;
+    }
+
+    /// <summary>
+    /// Validates the scene input that cannot be represented by
+    /// <see cref="RenderSettings"/>. This keeps an otherwise valid capture from
+    /// silently running with a different sun azimuth.
+    /// </summary>
+    public IReadOnlyList<string> ValidateLockedLighting(IReadOnlyList<Light> lights)
+    {
+        if (lights == null)
+            throw new ArgumentNullException(nameof(lights));
+
+        var violations = new List<string>();
+        Light[] directionalLights = lights
+            .Where(static light => light.Type == LightType.Directional)
+            .ToArray();
+        if (lights.Count != 1)
+        {
+            violations.Add(
+                $"The canonical Sponza capture requires exactly one light, not {lights.Count}.");
+        }
+        if (directionalLights.Length != 1)
+        {
+            violations.Add(
+                $"The canonical Sponza capture requires exactly one directional light, not {directionalLights.Length}.");
+            return violations;
+        }
+
+        Light directionalLight = directionalLights[0];
+        if (!directionalLight.CastsShadows)
+            violations.Add("The canonical Sponza directional light must cast shadows.");
+
+        Vector3 direction = new(
+            directionalLight.Direction.X,
+            directionalLight.Direction.Y,
+            directionalLight.Direction.Z);
+        if (!IsFinite(direction) || !NearlyEqual(direction.Length(), 1.0f))
+        {
+            violations.Add("The canonical Sponza directional-light direction must be finite and normalized.");
+        }
+        else if (Vector3.DistanceSquared(direction, DirectionalLightDirection) > 0.00000001f)
+        {
+            violations.Add(
+                "The Sponza directional-light direction does not match the locked directional key.");
+        }
+
+        Vector3 color = new(
+            directionalLight.Color.X,
+            directionalLight.Color.Y,
+            directionalLight.Color.Z);
+        if (!IsFinite(color) ||
+            Vector3.DistanceSquared(color, DirectionalLightColor) > 0.00000001f)
+        {
+            violations.Add("The Sponza directional-light color does not match the canonical sun profile.");
+        }
+        if (!NearlyEqual(directionalLight.Intensity, DirectionalLightIntensity))
+            violations.Add("The Sponza directional-light intensity does not match the canonical sun profile.");
+        if (!NearlyEqual(directionalLight.ShadowStrength, DirectionalLightShadowStrength))
+            violations.Add("The Sponza directional-light shadow strength must be fully occluding.");
 
         return violations;
     }
@@ -755,6 +830,23 @@ public sealed class SampleSponzaGiCaptureContract
             throw new InvalidOperationException("The capture cadence and warmup must be positive.");
         if (VerticalPathDurationSeconds is < 10 or > 20)
             throw new InvalidOperationException("The vertical traversal must last from 10 through 20 seconds.");
+        if (!IsFinite(DirectionalLightDirection) ||
+            !NearlyEqual(DirectionalLightDirection.Length(), 1.0f))
+        {
+            throw new InvalidOperationException(
+                "The locked directional-light direction must be finite and normalized.");
+        }
+        if (!IsFinite(DirectionalLightColor) ||
+            DirectionalLightColor.X < 0.0f ||
+            DirectionalLightColor.Y < 0.0f ||
+            DirectionalLightColor.Z < 0.0f ||
+            !float.IsFinite(DirectionalLightIntensity) ||
+            DirectionalLightIntensity < 0.0f ||
+            !float.IsFinite(DirectionalLightShadowStrength) ||
+            DirectionalLightShadowStrength is < 0.0f or > 1.0f)
+        {
+            throw new InvalidOperationException("The locked directional-light profile is invalid.");
+        }
         if (string.Equals(LowBookmark.Name, HighBookmark.Name, StringComparison.Ordinal))
             throw new InvalidOperationException("Low and high bookmarks require distinct stable names.");
 
@@ -794,6 +886,15 @@ public sealed class SampleSponzaGiCaptureContract
                 throw new InvalidOperationException($"Capture output '{output.Name}' has an unknown GI debug view.");
         }
 
+        SampleSponzaGiCaptureOutput directOnly = Outputs.Single(static output => output.Name == "direct-only");
+        if (!directOnly.DisableGlobalIllumination || !directOnly.DisableEnvironmentLighting)
+        {
+            throw new InvalidOperationException(
+                "The direct-only output must disable both global illumination and environment surface lighting.");
+        }
+        if (Outputs.Any(static output => output.Name != "direct-only" && output.DisableEnvironmentLighting))
+            throw new InvalidOperationException("Only the direct-only output may disable environment surface lighting.");
+
         string[] requiredReceiverRois =
         [
             "central-upper-facade", "right-upper-wall", "left-gallery-interior",
@@ -831,6 +932,16 @@ public sealed class SampleSponzaGiCaptureContract
             WarmupFrameCount,
             VerticalTraversalDurationSeconds,
             FixedRandomSeed,
+            new Vector3(
+                SampleSponzaLightingProfile.DirectionalKeyDirection.X,
+                SampleSponzaLightingProfile.DirectionalKeyDirection.Y,
+                SampleSponzaLightingProfile.DirectionalKeyDirection.Z),
+            new Vector3(
+                SampleSponzaLightingProfile.DirectionalKeyColor.X,
+                SampleSponzaLightingProfile.DirectionalKeyColor.Y,
+                SampleSponzaLightingProfile.DirectionalKeyColor.Z),
+            SampleSponzaLightingProfile.DirectionalKeyIntensity,
+            SampleSponzaLightingProfile.DirectionalKeyShadowStrength,
             new SampleSponzaGiCameraBookmark(
                 "SponzaPlazaUpperFacadeLow",
                 new Vector3(6.0f, 1.35f, 0.0f),
@@ -895,7 +1006,13 @@ public sealed class SampleSponzaGiCaptureContract
             ],
             [
                 new SampleSponzaGiCaptureOutput("beauty", "beauty", GlobalIlluminationDebugView.None, false, "Full reference beauty image."),
-                new SampleSponzaGiCaptureOutput("direct-only", "direct-only", GlobalIlluminationDebugView.None, true, "GI-disabled direct-light reference."),
+                new SampleSponzaGiCaptureOutput(
+                    "direct-only",
+                    "direct-only",
+                    GlobalIlluminationDebugView.None,
+                    true,
+                    "Direct sun/local-light reference with indirect environment surface lighting disabled.",
+                    DisableEnvironmentLighting: true),
                 new SampleSponzaGiCaptureOutput("final-indirect", "final-indirect", GlobalIlluminationDebugView.FinalIndirect, false, "Final indirect debug output."),
                 new SampleSponzaGiCaptureOutput("sampled-irradiance", "sampled-irradiance", GlobalIlluminationDebugView.DdgiSampledIrradiance, false, "Sampled DDGI irradiance before final diffuse composition."),
                 new SampleSponzaGiCaptureOutput("final-diffuse", "final-diffuse", GlobalIlluminationDebugView.DdgiFinalDiffuse, false, "Final diffuse GI after material composition."),
@@ -933,6 +1050,10 @@ public sealed class SampleSponzaGiCaptureContract
             Append(builder, metric.RequiresApprovedBaseline ? 1 : 0);
         }
         Append(builder, RandomSeed);
+        AppendVector(builder, DirectionalLightDirection);
+        AppendVector(builder, DirectionalLightColor);
+        Append(builder, DirectionalLightIntensity);
+        Append(builder, DirectionalLightShadowStrength);
         AppendBookmark(builder, LowBookmark);
         AppendBookmark(builder, HighBookmark);
         AppendVector(builder, SceneBounds.Min);
@@ -952,6 +1073,7 @@ public sealed class SampleSponzaGiCaptureContract
             Append(builder, output.FileStem);
             Append(builder, output.DebugView.ToString());
             Append(builder, output.DisableGlobalIllumination ? 1 : 0);
+            Append(builder, output.DisableEnvironmentLighting ? 1 : 0);
             Append(builder, output.Description);
         }
 

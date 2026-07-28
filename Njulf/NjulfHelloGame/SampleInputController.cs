@@ -1255,6 +1255,8 @@ internal sealed class SampleInputController
     {
         if (_renderer == null)
             throw new InvalidOperationException("A renderer is required to start a Sponza GI capture.");
+        if (_lightManager == null)
+            throw new InvalidOperationException("A light manager is required to start a Sponza GI capture.");
         if (string.IsNullOrWhiteSpace(outputDirectory))
             throw new ArgumentException("A Sponza GI capture output directory is required.", nameof(outputDirectory));
         if (_sponzaGiCaptureSequence != null)
@@ -1278,8 +1280,7 @@ internal sealed class SampleInputController
         // profile and only its deterministic capture overlay. This intentionally
         // avoids a broad preset after the Sponza profile has established its
         // physical GI configuration.
-        if (_lightManager != null)
-            SampleLighting.Configure(_lightManager, SampleLightingMode.DirectionalKey);
+        SampleLighting.Configure(_lightManager, SampleLightingMode.DirectionalKey);
         SampleLighting.ConfigureRenderSettings(_renderer.Settings, SampleLightingMode.DirectionalKey);
         SampleEnvironment.Configure(_renderer, SampleEnvironmentMode.ProceduralOutdoor);
         ApplyPerformanceScenario(contract.Scenario);
@@ -1296,6 +1297,8 @@ internal sealed class SampleInputController
             _renderer.Settings.FeatureIsolation,
             _renderer.Settings.Debug.AllowGpuTiming,
             _renderer.Settings.Diagnostics.DdgiForwardEstimateCountersEnabled,
+            _renderer.Settings.Environment.DiffuseIntensity,
+            _renderer.Settings.Environment.SpecularIntensity,
             previousCaptureScenario);
         _renderer.Settings.Particles.Enabled = false;
         _renderer.Settings.Animation.Enabled = false;
@@ -1314,6 +1317,15 @@ internal sealed class SampleInputController
             RestoreSponzaGiCaptureState();
             throw new InvalidOperationException(
                 "Sponza GI capture settings are not locked: " + string.Join(" ", lockViolations));
+        }
+
+        IReadOnlyList<string> lightingViolations =
+            contract.ValidateLockedLighting(_lightManager.GetLightSnapshot());
+        if (lightingViolations.Count != 0)
+        {
+            RestoreSponzaGiCaptureState();
+            throw new InvalidOperationException(
+                "Sponza GI capture lighting is not locked: " + string.Join(" ", lightingViolations));
         }
 
         SimpleDdgiReceiverCoverageReport coverageReport = SimpleDdgiReceiverCoverageValidator.Validate(
@@ -1413,6 +1425,13 @@ internal sealed class SampleInputController
         bool normalGiEnabled = _sponzaGiCaptureRestoreState?.GlobalIlluminationEnabled ?? true;
         gi.Enabled = output is { DisableGlobalIllumination: true } ? false : normalGiEnabled;
         gi.DebugView = output?.DebugView ?? GlobalIlluminationDebugView.None;
+        bool disableEnvironmentLighting = output is { DisableEnvironmentLighting: true };
+        _renderer.Settings.Environment.DiffuseIntensity = disableEnvironmentLighting
+            ? 0.0f
+            : _sponzaGiCaptureRestoreState?.EnvironmentDiffuseIntensity ?? 1.0f;
+        _renderer.Settings.Environment.SpecularIntensity = disableEnvironmentLighting
+            ? 0.0f
+            : _sponzaGiCaptureRestoreState?.EnvironmentSpecularIntensity ?? 1.0f;
         _renderer.Settings.Debug.Enabled = true;
         _renderer.Settings.Debug.AllowScreenshots = true;
         _renderer.Settings.Debug.CpuSnapshotsEnabled = false;
@@ -1843,6 +1862,8 @@ internal sealed class SampleInputController
             _renderer.Settings.Debug.AllowGpuTiming = state.AllowGpuTiming;
             _renderer.Settings.Diagnostics.DdgiForwardEstimateCountersEnabled =
                 state.DdgiForwardEstimateCountersEnabled;
+            _renderer.Settings.Environment.DiffuseIntensity = state.EnvironmentDiffuseIntensity;
+            _renderer.Settings.Environment.SpecularIntensity = state.EnvironmentSpecularIntensity;
             _renderer.CaptureScenario = state.CaptureScenario;
         }
 
@@ -3079,6 +3100,8 @@ internal sealed class SampleInputController
         RenderFeatureIsolationMode FeatureIsolation,
         bool AllowGpuTiming,
         bool DdgiForwardEstimateCountersEnabled,
+        float EnvironmentDiffuseIntensity,
+        float EnvironmentSpecularIntensity,
         string CaptureScenario);
 
     private sealed record SponzaGiPendingRendererScreenshot(

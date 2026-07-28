@@ -176,6 +176,17 @@ public static class SampleSmokeOptionsParser
         }
         else
         {
+            if (performanceScenario == SamplePerformanceScenario.GiSponzaRightWallStationary)
+            {
+                if (sceneSpecified && sceneKind != SampleSceneKind.SponzaPlaza)
+                {
+                    throw new ArgumentException(
+                        "The stationary Sponza right-wall scenario requires the Sponza plaza scene.");
+                }
+
+                sceneKind = SampleSceneKind.SponzaPlaza;
+            }
+
             if (mode == SampleSmokeMode.None && !string.IsNullOrWhiteSpace(baselineSnapshotDirectory) && !smokeModeSpecified)
                 mode = SampleSmokeMode.Startup;
             if (mode == SampleSmokeMode.None && sceneSpecified && !smokeModeSpecified)
