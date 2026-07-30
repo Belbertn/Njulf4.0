@@ -83,9 +83,8 @@ const uint SIMPLE_DDGI_VOLUME_KIND_RING = 2u;
 // A small support ramp prevents a single barely-valid trilinear corner from
 // abruptly taking ownership of the entire receiver when a fresh probe settles.
 const float SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP = 0.15;
-// Visibility chooses trustworthy probes; it is not an extra physical shadow
-// term. Use a continuous admission ramp so noisy moments cannot toggle a probe
-// at one hard threshold and stamp a cell-shaped discontinuity into the image.
+// The low/high interval is reserved for the late all-occluded leak safeguard.
+// Normalized probe selection uses the cubic Chebyshev confidence below.
 const float SIMPLE_DDGI_VISIBILITY_SELECTION_LOW = 0.01;
 const float SIMPLE_DDGI_VISIBILITY_SELECTION_HIGH = 0.08;
 // State-valid probes retain a small interpolation share even when conservative
@@ -126,6 +125,19 @@ const uint SIMPLE_DDGI_UPDATE_SOURCE_REFRESH = 1u << 13;
 // has been re-exposed for a new world cell.
 const uint SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT = 8u;
 const uint SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK = 0xffffff00u;
+
+uint PackSimpleDdgiRayVisibilityHit(float visibilityDistance, float hitKind)
+{
+    return packHalf2x16(vec2(
+        clamp(visibilityDistance, 0.0, 65504.0),
+        clamp(hitKind, 0.0, 2.0)));
+}
+
+vec2 UnpackSimpleDdgiRayVisibilityHit(uint packedVisibilityHit)
+{
+    return unpackHalf2x16(packedVisibilityHit);
+}
+
 const uint SIMPLE_DDGI_UPDATE_RAY_COUNT_SHIFT = 16u;
 const uint SIMPLE_DDGI_UPDATE_RAY_COUNT_MASK = 0xffff0000u;
 const uint SIMPLE_DDGI_UPDATE_GENERATION_MASK = 0x00ffffffu;
@@ -170,6 +182,7 @@ struct SimpleDdgiParams
     float secondVolumeOwnershipEarlyOutThreshold;
     float maximumWorldBias;
     float architecturalThickness;
+    float thinWallLeakClampStrength;
     uint publishedIrradianceAtlasBufferIndex;
     uint transportTargetIrradianceAtlasBufferIndex;
     uint transportSourceCacheBufferIndex;
@@ -571,6 +584,7 @@ SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
         SIMPLE_DDGI_SECOND_VOLUME_OWNERSHIP_THRESHOLD_SHIFT) / 255.0;
     p.maximumWorldBias = clamp(biasLimits.x, 0.004, 1.0);
     p.architecturalThickness = clamp(biasLimits.y, 0.008, 4.0);
+    p.thinWallLeakClampStrength = clamp(biasLimits.z, 0.0, 1.0);
     p.publishedIrradianceAtlasBufferIndex = floatBitsToUint(transportIndices.x);
     p.transportTargetIrradianceAtlasBufferIndex = floatBitsToUint(transportIndices.y);
     p.transportSourceCacheBufferIndex = floatBitsToUint(transportIndices.z);
@@ -1061,6 +1075,18 @@ float SimpleDdgiChebyshev(float mean, float mean2, float receiverDistance, float
     return clamp(variance / (variance + d * d), 0.0, 1.0);
 }
 
+float SimpleDdgiVisibilitySelectionWeight(float transportVisibility)
+{
+    // Cubing the Chebyshev bound is the standard DDGI confidence shaping. The
+    // old 0.01..0.08 smoothstep granted full selection authority to a probe
+    // with only eight-percent visibility, so a weak cross-wall residual was
+    // normalized back into a full-strength irradiance sample.
+    float visibility = clamp(transportVisibility, 0.0, 1.0);
+    return max(
+        visibility * visibility * visibility,
+        SIMPLE_DDGI_VISIBILITY_SELECTION_FLOOR);
+}
+
 vec3 SimpleDdgiBiasedSamplePosition(vec3 worldPos, vec3 normal, vec3 viewDir, SimpleDdgiParams p, float volumeSpacing)
 {
     vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
@@ -1314,6 +1340,25 @@ float SimpleDdgiRadiometricOwnership(SimpleDdgiGatherResult gather)
     return spatialCoverage * smoothstep(0.0, SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP, validSupport);
 }
 
+float SimpleDdgiLeakAttenuation(SimpleDdgiGatherResult gather, SimpleDdgiParams p)
+{
+    // Visibility participates in normalized probe selection, so normalizing the
+    // gathered irradiance removes its absolute magnitude. That is desirable for
+    // ordinary interpolation, but it lets a cell whose every probe is behind a
+    // wall promote a tiny residual weight back to full radiance. Convert the
+    // existing admission interval into a bounded confidence only at composition
+    // time. The authored thin-wall control determines how much of that confidence
+    // is applied; disabling the policy leaves the normalized estimator unchanged.
+    float visibilityConfidence = smoothstep(
+        SIMPLE_DDGI_VISIBILITY_SELECTION_LOW,
+        SIMPLE_DDGI_VISIBILITY_SELECTION_HIGH,
+        clamp(gather.transportVisibility, 0.0, 1.0));
+    return clamp(
+        mix(1.0, visibilityConfidence, p.thinWallLeakClampStrength),
+        0.05,
+        1.0);
+}
+
 bool SimpleDdgiProbeSupportsGather(SimpleDdgiProbeState state, vec4 irradiance, vec4 visibility)
 {
     uint invalidFlags = SIMPLE_DDGI_PROBE_FLAG_FRESH |
@@ -1340,6 +1385,10 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     result.selectedSpacing = volume.spacing;
     vec3 grid = (biasedWorldPos - volume.origin) / volume.spacing;
     vec3 baseF = floor(grid);
+    // Keep the interpolation affine inside each cell. Applying smoothstep to
+    // the grid fraction creates probe-centred plateaus followed by a 1.5x
+    // steeper transition at the cell midpoint, which exposes small per-probe
+    // visibility differences as a repeating light pattern on planar surfaces.
     vec3 fracV = clamp(grid - baseF, vec3(0.0), vec3(1.0));
     ivec3 base = ivec3(baseF);
     vec3 accumulated = vec3(0.0);
@@ -1384,12 +1433,8 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
             moments.y,
             max(distanceToProbe - visibilityBias, 0.0),
             volume.spacing);
-        float visibilitySelectionWeight = max(
-            smoothstep(
-                SIMPLE_DDGI_VISIBILITY_SELECTION_LOW,
-                SIMPLE_DDGI_VISIBILITY_SELECTION_HIGH,
-                transportVisibility),
-            SIMPLE_DDGI_VISIBILITY_SELECTION_FLOOR);
+        float visibilitySelectionWeight =
+            SimpleDdgiVisibilitySelectionWeight(transportVisibility);
         float selectedDataWeight = dataWeight * visibilitySelectionWeight;
         float selectedDirectionalWeight = directionalTransportWeight * visibilitySelectionWeight;
         float transportWeight = selectedDirectionalWeight * transportVisibility;
@@ -1808,12 +1853,17 @@ vec3 SampleSimpleDdgiUnifiedIrradiance(
 
     vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
     SimpleDdgiGatherResult gather = SampleSimpleDdgiGather(worldPos, safeNormal, viewDir);
-    float ownership = SimpleDdgiRadiometricOwnership(gather);
-    ownershipOut = ownership;
-    vec3 irradiance = gather.irradiance * ownership;
+    float radiometricOwnership = SimpleDdgiRadiometricOwnership(gather);
+    float leakAttenuation = SimpleDdgiLeakAttenuation(gather, p);
+    float effectiveOwnership = radiometricOwnership * leakAttenuation;
+    ownershipOut = effectiveOwnership;
+    vec3 irradiance = gather.irradiance * effectiveOwnership;
     if (allowFallback)
     {
-        float fallbackWeight = (1.0 - ownership) * p.environmentFallbackIntensity;
+        // A visibility-rejected DDGI share is intentionally dark. Only genuinely
+        // missing probe ownership receives the environment complement; otherwise
+        // a wall leak would merely be replaced by unoccluded sky irradiance.
+        float fallbackWeight = (1.0 - radiometricOwnership) * p.environmentFallbackIntensity;
         if (fallbackWeight > 0.0001)
         {
             // Environment fallback represents the receiver's missing diffuse

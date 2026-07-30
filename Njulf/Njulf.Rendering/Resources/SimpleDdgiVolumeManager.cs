@@ -1286,7 +1286,9 @@ namespace Njulf.Rendering.Resources
                     BiasLimitsAndPadding = new Vector4(
                         gi.SimpleDdgiMaximumWorldBiasMeters,
                         gi.SimpleDdgiArchitecturalThicknessMeters,
-                        0.0f,
+                        gi.DdgiThinWallPolicyEnabled
+                            ? gi.DdgiThinWallLeakClampStrength
+                            : 0.0f,
                         0.0f),
                     TransportAndAtlasIndices = new Vector4(
                         PackHeaderWord((uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),
@@ -5708,7 +5710,9 @@ namespace Njulf.Rendering.Resources
                 BiasLimitsAndPadding = new Vector4(
                     settings.SimpleDdgiMaximumWorldBiasMeters,
                     settings.SimpleDdgiArchitecturalThicknessMeters,
-                    0.0f,
+                    settings.DdgiThinWallPolicyEnabled
+                        ? settings.DdgiThinWallLeakClampStrength
+                        : 0.0f,
                     0.0f),
                 TransportAndAtlasIndices = new Vector4(
                     PackHeaderWord((uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),

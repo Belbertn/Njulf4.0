@@ -747,16 +747,17 @@ bool ResolveCommittedHitSurface(
 // this path; ordinary opaque geometry remains on Vulkan's fast opaque traversal.
 // Use a fixed LOD so a cutout has deterministic transport visibility independent
 // of probe direction or ray differentials, neither of which ray queries expose.
-bool DdgiCandidatePassesOpacity(
+bool DdgiCandidatePassesOpacityPolicy(
     uint instanceIndex,
     uint primitiveIndex,
     vec2 barycentrics,
-    bool frontFacing)
+    bool frontFacing,
+    bool enforceMaterialSidedness)
 {
     GPUDdgiRayQueryInstance instance = ReadDdgiRayQueryInstance(instanceIndex);
     GPUMaterialData material = ReadMaterial(instance.MaterialIndex);
     bool doubleSided = GiMaterialHasFlag(material.TransportFlags, GI_MATERIAL_DOUBLE_SIDED);
-    if (!EvaluateGiSidedness(doubleSided, frontFacing))
+    if (enforceMaterialSidedness && !EvaluateGiSidedness(doubleSided, frontFacing))
         return false;
     if (!DDGI_HIT_ALPHA_MASK_TRANSPORT_ENABLED)
         return true;
@@ -811,6 +812,36 @@ bool DdgiCandidatePassesOpacity(
         material.NormalScaleBias.z);
     RecordDdgiAlphaCandidateDiagnostics(instanceIndex, primitiveIndex, !covered);
     return covered;
+}
+
+bool DdgiCandidatePassesOpacity(
+    uint instanceIndex,
+    uint primitiveIndex,
+    vec2 barycentrics,
+    bool frontFacing)
+{
+    return DdgiCandidatePassesOpacityPolicy(
+        instanceIndex,
+        primitiveIndex,
+        barycentrics,
+        frontFacing,
+        true);
+}
+
+bool DdgiCandidatePassesTwoSidedOpacity(
+    uint instanceIndex,
+    uint primitiveIndex,
+    vec2 barycentrics,
+    bool frontFacing)
+{
+    // Receiver visibility treats a covered architectural shell as an occluder
+    // from either side, while retaining the authored alpha-mask coverage.
+    return DdgiCandidatePassesOpacityPolicy(
+        instanceIndex,
+        primitiveIndex,
+        barycentrics,
+        frontFacing,
+        false);
 }
 
 float TraceLightVisibility(vec3 worldPosition, vec3 normal, vec3 lightDirection, float maxDistance)

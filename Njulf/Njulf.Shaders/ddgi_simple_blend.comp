@@ -11,6 +11,13 @@ const uint SIMPLE_DDGI_BLEND_FLAG_SHARED_RAY_CACHE = 1u << 3;
 const uint SIMPLE_DDGI_BLEND_FLAG_REDUCED_COMPLEXITY = 1u << 5;
 const float SIMPLE_DDGI_BOOTSTRAP_VISIBILITY_MEAN_SPACING = 1.0;
 const float SIMPLE_DDGI_BOOTSTRAP_VISIBILITY_STDDEV_SPACING = 0.5;
+// A broad lobe keeps each hit/miss distance field smooth at production ray
+// counts. A narrower cos^32 vote chooses which field owns a direction at a
+// silhouette, so long misses cannot inflate covered-wall moments. Applying a
+// cos^64 lobe to the moments themselves leaves roughly two effective rays per
+// texel at 128 rays/probe and stamps their cells into planar surfaces.
+const float SIMPLE_DDGI_VISIBILITY_BROAD_MOMENT_EXPONENT = 16.0;
+const float SIMPLE_DDGI_VISIBILITY_HIT_CLASS_THRESHOLD = 0.35;
 // Small absolute fixed-point tolerance used only close to black. Unlike the
 // legacy 0.02 subtraction, it does not erase visible low-energy bounce.
 const float SIMPLE_DDGI_TRANSPORT_ABSOLUTE_RESIDUAL_TOLERANCE = 0.0001;
@@ -18,6 +25,7 @@ const float SIMPLE_DDGI_TRANSPORT_RESIDUAL_ENVELOPE_DECAY = 0.25;
 
 shared vec4 SharedSimpleRayRadianceDistance[256];
 shared vec4 SharedSimpleRayDirectionHit[256];
+shared uint SharedSimpleRayVisibilityHit[256];
 shared float SharedSimpleIrradianceDelta[64];
 // The reduced path projects only low-frequency irradiance. Visibility remains
 // the exact directional ray-by-texel estimator because sparse octahedral splats
@@ -63,6 +71,14 @@ vec4 ReadSimpleRayRadianceDistance(uint rayResultIndex)
 vec4 ReadSimpleRayDirectionHit(uint rayResultIndex)
 {
     return ReadStorageVec4(pc.RayResultScratchBufferIndex, rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 4u);
+}
+
+vec2 ReadSimpleRayVisibilityHit(uint rayResultIndex)
+{
+    return UnpackSimpleDdgiRayVisibilityHit(
+        ReadStorageWord(
+            pc.RayResultScratchBufferIndex,
+            rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 7u));
 }
 
 float SimpleDdgiLuminance(vec3 value)
@@ -184,6 +200,9 @@ void LoadSimpleRayCache(SimpleDdgiParams params, uint localProbeOffset, uint act
     {
         uint rayResultIndex = localProbeOffset * params.raysPerProbe + ray;
         SharedSimpleRayDirectionHit[ray] = ReadSimpleRayDirectionHit(rayResultIndex);
+        SharedSimpleRayVisibilityHit[ray] = ReadStorageWord(
+            pc.RayResultScratchBufferIndex,
+            rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 7u);
         SharedSimpleRayRadianceDistance[ray] = ReadSimpleRayRadianceDistance(rayResultIndex);
     }
 
@@ -206,6 +225,16 @@ vec4 ReadCachedSimpleRayDirectionHit(SimpleDdgiParams params, uint localProbeOff
 
     uint rayResultIndex = localProbeOffset * params.raysPerProbe + ray;
     return ReadSimpleRayDirectionHit(rayResultIndex);
+}
+
+vec2 ReadCachedSimpleRayVisibilityHit(SimpleDdgiParams params, uint localProbeOffset, uint ray, bool sharedRayCacheEnabled)
+{
+    if (sharedRayCacheEnabled)
+        return UnpackSimpleDdgiRayVisibilityHit(
+            SharedSimpleRayVisibilityHit[ray]);
+
+    uint rayResultIndex = localProbeOffset * params.raysPerProbe + ray;
+    return ReadSimpleRayVisibilityHit(rayResultIndex);
 }
 
 vec3 ClampSimpleRadiance(vec3 v)
@@ -291,27 +320,71 @@ void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint
     uint y = texel / params.visibilityTexels;
     vec2 uv = (vec2(x, y) + vec2(0.5)) / vec2(params.visibilityTexels);
     vec3 texelDirection = SimpleDdgiOctDecode(uv);
-    float mean = 0.0;
-    float mean2 = 0.0;
-    float weightSum = 0.0;
+    float broadHitMean = 0.0;
+    float broadHitMean2 = 0.0;
+    float broadHitWeightSum = 0.0;
+    float broadMissMean = 0.0;
+    float broadMissMean2 = 0.0;
+    float broadMissWeightSum = 0.0;
+    float narrowHitWeightSum = 0.0;
+    float narrowWeightSum = 0.0;
 
     uint rayCount = min(activeRayCount, SIMPLE_DDGI_MAX_RAYS_PER_PROBE);
     for (uint ray = 0u; ray < rayCount; ray++)
     {
         vec4 directionHit = ReadCachedSimpleRayDirectionHit(params, localProbeOffset, ray, sharedRayCacheEnabled);
-        vec4 radianceDistance = ReadCachedSimpleRayRadianceDistance(params, localProbeOffset, ray, sharedRayCacheEnabled);
-        float weight = pow(max(dot(texelDirection, normalize(directionHit.xyz)), 0.0), 16.0);
-        float d = max(radianceDistance.w, 0.0);
-        mean += d * weight;
-        mean2 += d * d * weight;
-        weightSum += weight;
+        float cosine = max(dot(texelDirection, normalize(directionHit.xyz)), 0.0);
+        float broadWeight = pow(
+            cosine,
+            SIMPLE_DDGI_VISIBILITY_BROAD_MOMENT_EXPONENT);
+        // cos^32 derived from the broad cos^16 weight avoids a second pow().
+        float narrowWeight = broadWeight * broadWeight;
+        vec2 visibilityHit = ReadCachedSimpleRayVisibilityHit(
+            params,
+            localProbeOffset,
+            ray,
+            sharedRayCacheEnabled);
+        float d = max(visibilityHit.x, 0.0);
+        if (visibilityHit.y >= 0.5)
+        {
+            broadHitMean += d * broadWeight;
+            broadHitMean2 += d * d * broadWeight;
+            broadHitWeightSum += broadWeight;
+            narrowHitWeightSum += narrowWeight;
+        }
+        else
+        {
+            broadMissMean += d * broadWeight;
+            broadMissMean2 += d * d * broadWeight;
+            broadMissWeightSum += broadWeight;
+        }
+        narrowWeightSum += narrowWeight;
     }
 
     vec4 previous = ReadSimpleDdgiAtlasTexel(pc.VisibilityAtlasBufferIndex, probeIndex, texel, params.visibilityTexels);
     vec2 moments;
-    if (weightSum > 0.000001)
+    if (broadHitWeightSum > 0.000001 || broadMissWeightSum > 0.000001)
     {
-        moments = vec2(mean, mean2) / weightSum;
+        bool hasHitMoments = broadHitWeightSum > 0.000001;
+        bool hasMissMoments = broadMissWeightSum > 0.000001;
+        vec2 hitMoments = hasHitMoments
+            ? vec2(broadHitMean, broadHitMean2) / broadHitWeightSum
+            : vec2(0.0);
+        vec2 missMoments = hasMissMoments
+            ? vec2(broadMissMean, broadMissMean2) / broadMissWeightSum
+            : vec2(0.0);
+        if (hasHitMoments && hasMissMoments && narrowWeightSum > 0.000001)
+        {
+            float narrowHitFraction = clamp(
+                narrowHitWeightSum / narrowWeightSum,
+                0.0,
+                1.0);
+            moments = narrowHitFraction >= SIMPLE_DDGI_VISIBILITY_HIT_CLASS_THRESHOLD
+                ? hitMoments
+                : missMoments;
+        }
+        else
+            moments = hasHitMoments ? hitMoments : missMoments;
     }
     else if (previous.z > 0.5 && !freshUpdate)
     {
@@ -494,6 +567,15 @@ void main()
     }
 
     float localIrradianceDelta = 0.0;
+    bool transportV2Active =
+        (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u;
+    // V2 solver-only updates reuse the same geometric source rays. Preserve
+    // their published visibility moments; rebuilding them from cached
+    // frontface distances would erase the two-sided shell occlusion recorded
+    // by the most recent source refresh.
+    bool refreshVisibility = !transportV2Active ||
+        SimpleDdgiUpdateRequiresSourceRefresh(update) ||
+        freshUpdate;
     if (reducedComplexityEnabled)
     {
         if (local == 0u)
@@ -506,18 +588,21 @@ void main()
             localIrradianceDelta = max(localIrradianceDelta, texelDelta);
         }
 
-        for (uint texel = local; texel < params.visibilityTexels * params.visibilityTexels; texel += gl_WorkGroupSize.x)
-            BlendVisibilityTexel(
-                params,
-                volume,
-                probeIndex,
-                localProbeOffset,
-                texel,
-                probeHysteresis,
-                true,
-                activeRayCount,
-                maintenanceUpdate,
-                freshUpdate);
+        if (refreshVisibility)
+        {
+            for (uint texel = local; texel < params.visibilityTexels * params.visibilityTexels; texel += gl_WorkGroupSize.x)
+                BlendVisibilityTexel(
+                    params,
+                    volume,
+                    probeIndex,
+                    localProbeOffset,
+                    texel,
+                    probeHysteresis,
+                    true,
+                    activeRayCount,
+                    maintenanceUpdate,
+                    freshUpdate);
+        }
     }
     else
     {
@@ -527,8 +612,11 @@ void main()
             localIrradianceDelta = max(localIrradianceDelta, texelDelta);
         }
 
-        for (uint texel = local; texel < params.visibilityTexels * params.visibilityTexels; texel += gl_WorkGroupSize.x)
-            BlendVisibilityTexel(params, volume, probeIndex, localProbeOffset, texel, probeHysteresis, sharedRayCacheEnabled, activeRayCount, maintenanceUpdate, freshUpdate);
+        if (refreshVisibility)
+        {
+            for (uint texel = local; texel < params.visibilityTexels * params.visibilityTexels; texel += gl_WorkGroupSize.x)
+                BlendVisibilityTexel(params, volume, probeIndex, localProbeOffset, texel, probeHysteresis, sharedRayCacheEnabled, activeRayCount, maintenanceUpdate, freshUpdate);
+        }
     }
 
     SharedSimpleIrradianceDelta[local] = localIrradianceDelta;
@@ -538,8 +626,6 @@ void main()
     {
         float aggregateIrradianceDelta = 0.0;
         uint irradianceTexelCount = min(params.irradianceTexels * params.irradianceTexels, 64u);
-        bool transportV2Active =
-            (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u;
         for (uint texel = 0u; texel < irradianceTexelCount; texel++)
         {
             if (transportV2Active)

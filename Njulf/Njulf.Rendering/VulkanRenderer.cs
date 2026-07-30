@@ -10623,6 +10623,8 @@ namespace Njulf.Rendering
             GlobalIlluminationSettings gi = Settings.GlobalIllumination;
             lightSignature = HashAdd(lightSignature, gi.EnvironmentFallbackIntensity);
             lightSignature = HashAdd(lightSignature, gi.DdgiSelfShadowBiasScale);
+            lightSignature = HashAdd(lightSignature, gi.DdgiThinWallPolicyEnabled);
+            lightSignature = HashAdd(lightSignature, gi.DdgiThinWallLeakClampStrength);
             lightSignature = HashAdd(lightSignature, gi.SimpleDdgiNormalBias);
             lightSignature = HashAdd(lightSignature, gi.SimpleDdgiViewBias);
             lightSignature = HashAdd(lightSignature, gi.SimpleDdgiMaximumWorldBiasMeters);

@@ -68,11 +68,85 @@ uint simpleDdgiCurrentVolumeCascade;
 #define DDGI_HIT_ALPHA_MASK_TRANSPORT_ENABLED ((pc.Flags & SIMPLE_DDGI_TRACE_FLAG_ALPHA_MASK_TRANSPORT_ENABLED) != 0u)
 #include "ddgi_hit_shading.glsl"
 
-void WriteSimpleRayResult(uint rayResultIndex, vec3 radiance, float distance, vec3 direction, float hitKind)
+void WriteSimpleRayResult(
+    uint rayResultIndex,
+    vec3 radiance,
+    float surfaceDistance,
+    float visibilityDistance,
+    vec3 direction,
+    float hitKind)
 {
     uint baseWord = rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS;
-    WriteStorageVec4(pc.RayResultScratchBufferIndex, baseWord + 0u, vec4(clamp(radiance, vec3(0.0), vec3(65504.0)), distance));
-    WriteStorageVec4(pc.RayResultScratchBufferIndex, baseWord + 4u, vec4(direction, hitKind));
+    WriteStorageVec4(pc.RayResultScratchBufferIndex, baseWord + 0u, vec4(clamp(radiance, vec3(0.0), vec3(65504.0)), surfaceDistance));
+    WriteStorageFloat(pc.RayResultScratchBufferIndex, baseWord + 4u, direction.x);
+    WriteStorageFloat(pc.RayResultScratchBufferIndex, baseWord + 5u, direction.y);
+    WriteStorageFloat(pc.RayResultScratchBufferIndex, baseWord + 6u, direction.z);
+    WriteStorageWord(
+        pc.RayResultScratchBufferIndex,
+        baseWord + 7u,
+        PackSimpleDdgiRayVisibilityHit(visibilityDistance, hitKind));
+}
+
+bool TraceSimpleDdgiBackfaceVisibilityDistance(
+    vec3 origin,
+    vec3 direction,
+    float maxDistance,
+    out float hitDistance)
+{
+    hitDistance = max(maxDistance, 0.0);
+    if (maxDistance <= DDGI_PROBE_TRACE_EPSILON)
+        return false;
+
+    // This query never shades or enters the V2 transport source cache. Its
+    // covered distance makes thin architectural shells two-sided occluders for
+    // receiver visibility. If that backface is the nearest hit, the packed
+    // visibility kind also lets relocation evacuate a probe immediately behind
+    // a one-sided floor or wall instead of leaving a bright probe there.
+    rayQueryEXT query;
+    rayQueryInitializeEXT(
+        query,
+        SceneTlas,
+        gl_RayFlagsCullFrontFacingTrianglesEXT,
+        0xff,
+        origin,
+        DDGI_PROBE_TRACE_EPSILON,
+        direction,
+        maxDistance);
+
+    uint alphaCandidateCount = 0u;
+    while (rayQueryProceedEXT(query))
+    {
+        if (rayQueryGetIntersectionTypeEXT(query, false) != gl_RayQueryCandidateIntersectionTriangleEXT)
+            continue;
+
+        alphaCandidateCount++;
+        if (alphaCandidateCount > DDGI_HIT_ALPHA_CANDIDATE_LIMIT)
+        {
+            RecordDdgiAlphaCandidateLimitReached();
+            rayQueryConfirmIntersectionEXT(query);
+            rayQueryTerminateEXT(query);
+            break;
+        }
+
+        uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(query, false);
+        uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, false);
+        vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, false);
+        bool frontFacing = rayQueryGetIntersectionFrontFaceEXT(query, false);
+        if (DdgiCandidatePassesTwoSidedOpacity(
+                instanceIndex,
+                primitiveIndex,
+                barycentrics,
+                frontFacing))
+        {
+            rayQueryConfirmIntersectionEXT(query);
+        }
+    }
+
+    if (rayQueryGetIntersectionTypeEXT(query, true) == gl_RayQueryCommittedIntersectionNoneEXT)
+        return false;
+
+    hitDistance = rayQueryGetIntersectionTEXT(query, true);
+    return true;
 }
 
 // All calls below are in main(), where params is the authoritative uploaded
@@ -132,6 +206,13 @@ void main()
     bool sourceRefresh = SimpleDdgiUpdateRequiresSourceRefresh(update);
     bool relocationRetryPending =
         (probeState.flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u;
+    float maxDistance = max(volume.spacing * float(max(max(volume.gridCount.x, volume.gridCount.y), volume.gridCount.z)), volume.spacing);
+    bool farFieldOnlyRing = volume.spacing >= 15.999;
+    bool farFieldEnabled = (pc.Flags & SIMPLE_DDGI_FLAG_FAR_FIELD_ENABLED) != 0u;
+    bool completeRayScene = (pc.Flags & SIMPLE_DDGI_TRACE_FLAG_COMPLETE_RAY_SCENE) != 0u;
+    float nearTlasMaxDistance = farFieldEnabled && !completeRayScene
+        ? min(maxDistance, max(params.farFieldStartDistance, volume.spacing))
+        : maxDistance;
 
     // A full source refresh is the authoritative repair boundary. Clear any
     // older recovery request before tracing its complete sequence; transport
@@ -142,6 +223,8 @@ void main()
     // Cached V2 source data includes the original deterministic direction, hit
     // distance, normal, and albedo. A solver-only update therefore does no ray
     // query or shadow work yet still gets an exact source hit point for bounce.
+    // Visibility moments are retained until the next source refresh, where the
+    // frontface source and backface-only visibility queries run together.
     // A relocation-pending probe is the one exception: the GPU committed a new
     // origin after the prior rays were traced, while CPU readback can lag by a
     // frame. Force fresh source work from that authoritative new origin so a
@@ -161,6 +244,7 @@ void main()
                 globalRay,
                 cachedSource.sourceRadiance,
                 cachedSource.distance,
+                cachedSource.distance,
                 cachedSource.direction,
                 SimpleDdgiTransportRayCacheHitKind(cachedSource));
             return;
@@ -174,7 +258,6 @@ void main()
         MarkSimpleDdgiProbeSourceCacheInvalid(pc.ProbeStateBufferIndex, probeIndex);
     }
 
-    float maxDistance = max(volume.spacing * float(max(max(volume.gridCount.x, volume.gridCount.y), volume.gridCount.z)), volume.spacing);
     // A valid probe owns its complete low-frequency field, including environment
     // misses. Forward composition evaluates diffuse IBL only for probe ownership
     // gaps, so sky energy is represented exactly once.
@@ -189,15 +272,8 @@ void main()
     float cacheMaterialOcclusion = 1.0;
     float hitDistance = maxDistance;
     float hitKind = 0.0;
-    bool farFieldOnlyRing = volume.spacing >= 15.999;
-    bool farFieldEnabled = (pc.Flags & SIMPLE_DDGI_FLAG_FAR_FIELD_ENABLED) != 0u;
-    bool completeRayScene = (pc.Flags & SIMPLE_DDGI_TRACE_FLAG_COMPLETE_RAY_SCENE) != 0u;
     // A detailed near segment is authoritative. The coarse far field begins only
     // after it, so a coarse voxel can never suppress closer TLAS geometry.
-    float nearTlasMaxDistance = farFieldEnabled && !completeRayScene
-        ? min(maxDistance, max(params.farFieldStartDistance, volume.spacing))
-        : maxDistance;
-
     if (nearTlasMaxDistance > DDGI_PROBE_TRACE_EPSILON)
     {
         rayQueryEXT query;
@@ -453,7 +529,28 @@ void main()
             hitKind,
             SimpleDdgiProbeGeneration(probeState));
     }
-    WriteSimpleRayResult(globalRay, radiance, hitDistance, direction, hitKind);
+    float visibilityDistance = hitDistance;
+    float visibilityHitKind = hitKind;
+    float backfaceVisibilityDistance;
+    if (TraceSimpleDdgiBackfaceVisibilityDistance(
+            probePosition,
+            direction,
+            nearTlasMaxDistance,
+            backfaceVisibilityDistance))
+    {
+        if (backfaceVisibilityDistance < visibilityDistance)
+        {
+            visibilityDistance = backfaceVisibilityDistance;
+            visibilityHitKind = 2.0;
+        }
+    }
+    WriteSimpleRayResult(
+        globalRay,
+        radiance,
+        hitDistance,
+        visibilityDistance,
+        direction,
+        visibilityHitKind);
 }
 
 #undef AddRendererDiagnostic

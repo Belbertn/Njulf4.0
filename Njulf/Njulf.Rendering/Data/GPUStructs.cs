@@ -1309,7 +1309,8 @@ namespace Njulf.Rendering.Data
         // X = absolute world-space cap for the combined normal/view bias.
         // Y = conservative architectural-thickness proxy. The shader uses a
         // fraction of it as an additional cap, preventing coarse rings from
-        // looking through thin walls. ZW reserved for ABI-compatible expansion.
+        // looking through thin walls. Z = thin-wall leak-clamp strength for the
+        // Simple-DDGI receiver and recursive-bounce paths. W remains reserved.
         public Vector4 BiasLimitsAndPadding;
         // X/Y/Z/W = published irradiance atlas, private transport target,
         // persistent source-cache bindless indices, transport generation.
@@ -1331,7 +1332,9 @@ namespace Njulf.Rendering.Data
         public Vector4 RaysAndReserved;
     }
 
-    // 32 bytes. Trace writes incoming radiance and hit distance; blend consumes it.
+    // 32 bytes. RadianceDistance.w retains full-precision surface distance.
+    // DirectionHitFlags.w bit-packs half-precision visibility distance and hit
+    // kind so visibility-only backfaces never alter bounce or relocation.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiRayResult
     {

@@ -4356,8 +4356,12 @@ void main()
         SimpleDdgiGatherResult simpleGather = SampleSimpleDdgiGather(fragWorldPosition, ddgiNormal, viewDirection);
         float simpleSupport = clamp(simpleGather.validSupport, 0.0, 1.0);
         float simpleDirectionalSupport = clamp(simpleGather.directionalSupport, 0.0, 1.0);
-        float simpleOwnership = SimpleDdgiRadiometricOwnership(simpleGather);
-        float simpleFallback = (1.0 - simpleOwnership) * simpleDdgiParams.environmentFallbackIntensity;
+        float simpleRadiometricOwnership = SimpleDdgiRadiometricOwnership(simpleGather);
+        float simpleLeakAttenuation = SimpleDdgiLeakAttenuation(simpleGather, simpleDdgiParams);
+        float simpleOwnership = simpleRadiometricOwnership * simpleLeakAttenuation;
+        // Leak attenuation represents blocked transport, not missing field
+        // coverage, so it must not be refilled with the environment complement.
+        float simpleFallback = (1.0 - simpleRadiometricOwnership) * simpleDdgiParams.environmentFallbackIntensity;
         vec3 simpleIrradiance = simpleGather.irradiance;
         simpleDdgiContributingVolumeColor = simpleGather.contributingVolumeColor;
         simpleDdgiPrimaryVolume = simpleGather.selectedVolume;
@@ -4426,7 +4430,7 @@ void main()
         ddgiCoverage = simpleGather.spatialCoverage;
         fallbackWeight = simpleFallback;
         hybridDebugDiffuse = finalDiffuseIndirect;
-        hybridSuppressionMask = vec3(simpleSupport, simpleDirectionalSupport, simpleGather.transportVisibility);
+        hybridSuppressionMask = vec3(simpleSupport, simpleLeakAttenuation, simpleDirectionalSupport);
         hybridEffectiveDdgiWeight = simpleOwnership;
         materialTransportProvenance =
             ResolveSimpleDdgiMaterialTransportProvenance(
@@ -4437,7 +4441,7 @@ void main()
         simpleHybridDiagnostics.diffuse = finalDiffuseIndirect;
         simpleHybridDiagnostics.ddgiCoverage = simpleGather.spatialCoverage;
         simpleHybridDiagnostics.environmentFallbackWeight = simpleFallback;
-        simpleHybridDiagnostics.nearContactSuppression = 0.0;
+        simpleHybridDiagnostics.nearContactSuppression = 1.0 - simpleLeakAttenuation;
         simpleHybridDiagnostics.effectiveDdgiWeight = simpleOwnership;
         simpleHybridDiagnostics.suppressionMask = hybridSuppressionMask;
         AccumulateDdgiForwardEstimateDiagnostics(simpleHybridDiagnostics, ddgiSample, ddgiDiffuse);

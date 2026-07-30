@@ -150,21 +150,126 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void VisibilitySelectionFloor_RetainsSupportWithoutRemovingTransportSuppression()
+        public void VisibilitySelection_CubesLeakProneConfidenceAndRetainsSupportFloor()
         {
-            float selection = SimpleDdgiVisibilitySelectionWeight(transportVisibility: 0.0f);
-            float partialSelection = SimpleDdgiVisibilitySelectionWeight(transportVisibility: 0.04f);
-            float fullSelection = SimpleDdgiVisibilitySelectionWeight(transportVisibility: 0.08f);
+            float blockedSelection = SimpleDdgiVisibilitySelectionWeight(transportVisibility: 0.0f);
+            float leakProneSelection = SimpleDdgiVisibilitySelectionWeight(transportVisibility: 0.2f);
+            float partialSelection = SimpleDdgiVisibilitySelectionWeight(transportVisibility: 0.5f);
+            float fullSelection = SimpleDdgiVisibilitySelectionWeight(transportVisibility: 1.0f);
 
             Assert.Multiple(() =>
             {
-                Assert.That(selection, Is.EqualTo(0.05f).Within(1.0e-6f));
-                Assert.That(partialSelection, Is.GreaterThan(selection).And.LessThan(1.0f));
+                Assert.That(blockedSelection, Is.EqualTo(0.05f).Within(1.0e-6f));
+                Assert.That(leakProneSelection, Is.EqualTo(0.05f).Within(1.0e-6f));
+                Assert.That(partialSelection, Is.EqualTo(0.125f).Within(1.0e-6f));
                 Assert.That(fullSelection, Is.EqualTo(1.0f).Within(1.0e-6f));
-                Assert.That(SmoothStep(0.0f, 0.15f, selection), Is.InRange(0.25f, 0.27f),
+                Assert.That(SmoothStep(0.0f, 0.15f, blockedSelection), Is.InRange(0.25f, 0.27f),
                     "A fully occluded support floor must leave most ownership to the environment/coarser complement.");
-                Assert.That(selection * 0.0f, Is.Zero,
+                Assert.That(leakProneSelection * 0.2f, Is.EqualTo(0.01f).Within(1.0e-6f),
+                    "A twenty-percent-visible probe must not regain full selection authority before normalization.");
+                Assert.That(blockedSelection * 0.0f, Is.Zero,
                     "The support floor must not manufacture radiance through a fully blocked transport term.");
+            });
+        }
+
+        [Test]
+        public void VisibilityMomentEstimator_IsBroadOnSmoothFieldsAndNarrowAtDepthDiscontinuities()
+        {
+            float[] directionCosines = [1.0f, 0.94f, 0.90f];
+            float[] distances = [0.10f, 8.0f, 8.0f];
+
+            float broadMean = DirectionalVisibilityMomentMean(
+                directionCosines,
+                distances,
+                exponent: 16.0f);
+            float narrowMean = DirectionalVisibilityMomentMean(
+                directionCosines,
+                distances,
+                exponent: 64.0f);
+            float resolvedCornerMean = ResolveDirectionalVisibilityMomentMean(
+                directionCosines,
+                distances,
+                [true, false, false]);
+            float resolvedOpenMean = ResolveDirectionalVisibilityMomentMean(
+                directionCosines,
+                [8.0f, 0.10f, 0.10f],
+                [false, true, true]);
+            float resolvedSmoothMean = ResolveDirectionalVisibilityMomentMean(
+                directionCosines,
+                [2.0f, 2.0f, 2.0f],
+                [true, true, true]);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(broadMean, Is.GreaterThan(2.0f));
+                Assert.That(narrowMean, Is.LessThan(0.35f));
+                Assert.That(resolvedCornerMean, Is.EqualTo(0.10f).Within(1.0e-6f),
+                    "A measured corner discontinuity must reject multi-metre miss distances.");
+                Assert.That(resolvedOpenMean, Is.EqualTo(8.0f).Within(1.0e-6f),
+                    "An open central direction must not inherit the adjacent occluder's distance.");
+                Assert.That(resolvedSmoothMean, Is.EqualTo(2.0f).Within(1.0e-6f),
+                    "A smooth field must retain broad angular support rather than exposing individual rays.");
+            });
+        }
+
+        [Test]
+        public void LinearGridFraction_DoesNotCreateProbeCentredPlateaus()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(SimpleDdgiLinearGridFraction(0.0f), Is.Zero);
+                Assert.That(SimpleDdgiLinearGridFraction(0.25f), Is.EqualTo(0.25f).Within(1.0e-6f));
+                Assert.That(SimpleDdgiLinearGridFraction(0.5f), Is.EqualTo(0.5f).Within(1.0e-6f));
+                Assert.That(SimpleDdgiLinearGridFraction(0.75f), Is.EqualTo(0.75f).Within(1.0e-6f));
+                Assert.That(SimpleDdgiLinearGridFraction(1.0f), Is.EqualTo(1.0f).Within(1.0e-6f));
+            });
+        }
+
+        [Test]
+        public void VisibilityHitSelection_UsesOnlyTheNearestBackfaceForRelocation()
+        {
+            Vector2 behindShell = SelectSimpleDdgiVisibilityHit(
+                surfaceDistance: 8.0f,
+                sourceHitKind: 0.0f,
+                backfaceDistance: 0.10f,
+                backfaceHit: true);
+            Vector2 frontfaceFirst = SelectSimpleDdgiVisibilityHit(
+                surfaceDistance: 0.05f,
+                sourceHitKind: 1.0f,
+                backfaceDistance: 0.10f,
+                backfaceHit: true);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(behindShell.X, Is.EqualTo(0.10f));
+                Assert.That(behindShell.Y, Is.EqualTo(2.0f));
+                Assert.That(frontfaceFirst.X, Is.EqualTo(0.05f));
+                Assert.That(frontfaceFirst.Y, Is.EqualTo(1.0f));
+            });
+        }
+
+        [Test]
+        public void ThinWallLeakAttenuation_SuppressesOnlyLowVisibilityResiduals()
+        {
+            float blocked = SimpleDdgiLeakAttenuation(
+                transportVisibility: 0.0f,
+                thinWallLeakClampStrength: 0.9f);
+            float transition = SimpleDdgiLeakAttenuation(
+                transportVisibility: 0.04f,
+                thinWallLeakClampStrength: 0.9f);
+            float admitted = SimpleDdgiLeakAttenuation(
+                transportVisibility: 0.08f,
+                thinWallLeakClampStrength: 0.9f);
+            float policyDisabled = SimpleDdgiLeakAttenuation(
+                transportVisibility: 0.0f,
+                thinWallLeakClampStrength: 0.0f);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(blocked, Is.EqualTo(0.1f).Within(1.0e-6f));
+                Assert.That(transition, Is.GreaterThan(blocked).And.LessThan(admitted));
+                Assert.That(admitted, Is.EqualTo(1.0f).Within(1.0e-6f));
+                Assert.That(policyDisabled, Is.EqualTo(1.0f).Within(1.0e-6f));
             });
         }
 
@@ -794,8 +899,10 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("float spatialCoverage = clamp(gather.spatialCoverage, 0.0, 1.0);"));
                 Assert.That(shared, Does.Contain("float validSupport = clamp(gather.ownership, 0.0, 1.0);"));
                 Assert.That(shared, Does.Contain("return spatialCoverage * smoothstep(0.0, SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP, validSupport);"));
-                Assert.That(shared, Does.Contain("float ownership = SimpleDdgiRadiometricOwnership(gather);"));
-                Assert.That(forward, Does.Contain("float simpleOwnership = SimpleDdgiRadiometricOwnership(simpleGather);"));
+                Assert.That(shared, Does.Contain("float radiometricOwnership = SimpleDdgiRadiometricOwnership(gather);"));
+                Assert.That(shared, Does.Contain("float effectiveOwnership = radiometricOwnership * leakAttenuation;"));
+                Assert.That(forward, Does.Contain("float simpleRadiometricOwnership = SimpleDdgiRadiometricOwnership(simpleGather);"));
+                Assert.That(forward, Does.Contain("float simpleOwnership = simpleRadiometricOwnership * simpleLeakAttenuation;"));
                 Assert.That(forward, Does.Not.Contain("float simpleOwnership = clamp(simpleGather.ownership, 0.0, 1.0);"));
                 Assert.That(shared, Does.Contain("normalized independently of support"));
             });
@@ -873,6 +980,9 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("float validSupport;"));
                 Assert.That(shared, Does.Contain("float spatialCoverage;"));
                 Assert.That(shared, Does.Contain("float transportVisibility;"));
+                Assert.That(shared, Does.Contain("float SimpleDdgiLeakAttenuation(SimpleDdgiGatherResult gather, SimpleDdgiParams p)"));
+                Assert.That(shared, Does.Contain("mix(1.0, visibilityConfidence, p.thinWallLeakClampStrength)"));
+                Assert.That(shared, Does.Contain("p.thinWallLeakClampStrength = clamp(biasLimits.z, 0.0, 1.0);"));
                 Assert.That(shared, Does.Contain("vec3 contributingVolumeColor;"));
                 Assert.That(shared, Does.Contain("uint selectedVolume;"));
                 Assert.That(shared, Does.Contain("uint validProbeCount;"));
@@ -901,7 +1011,15 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_UPDATE_SOURCE_REFRESH"));
                 Assert.That(shared, Does.Contain("vec4 SimpleDdgiPerProbeRayRotation(uint probeIndex, vec4 frameRotation)"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_VISIBILITY_SELECTION_FLOOR = 0.05"));
-                Assert.That(shared, Does.Contain("float visibilitySelectionWeight = max("));
+                Assert.That(shared, Does.Contain("float SimpleDdgiVisibilitySelectionWeight(float transportVisibility)"));
+                Assert.That(shared, Does.Contain("visibility * visibility * visibility"));
+                Assert.That(shared, Does.Contain("vec3 fracV = clamp(grid - baseF, vec3(0.0), vec3(1.0));"));
+                Assert.That(shared, Does.Not.Contain("SimpleDdgiSmoothGridFraction"));
+                Assert.That(blend, Does.Contain("SIMPLE_DDGI_VISIBILITY_BROAD_MOMENT_EXPONENT = 16.0"));
+                Assert.That(blend, Does.Contain("SIMPLE_DDGI_VISIBILITY_HIT_CLASS_THRESHOLD = 0.35"));
+                Assert.That(blend, Does.Contain("float narrowWeight = broadWeight * broadWeight;"));
+                Assert.That(blend, Does.Contain("? hitMoments"));
+                Assert.That(blend, Does.Contain(": missMoments;"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_VISIBILITY_VARIANCE_SPACING_CAP = 1.0"));
                 Assert.That(shared, Does.Contain("varianceSpacing * varianceSpacing * 0.005"));
                 Assert.That(shared, Does.Not.Contain("if (transportVisibility < 0.05)"));
@@ -934,10 +1052,14 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("!SimpleDdgiContains(candidate, worldPosition)"));
                 Assert.That(shared, Does.Contain("fallback *= EstimateFarFieldSkyVisibility(worldPos, safeNormal);"));
                 Assert.That(forward, Does.Contain("EstimateFarFieldSkyVisibility(fragWorldPosition, geometricNormal)"));
-                Assert.That(shared, Does.Contain("float fallbackWeight = (1.0 - ownership) * p.environmentFallbackIntensity;"));
+                Assert.That(shared, Does.Contain("float fallbackWeight = (1.0 - radiometricOwnership) * p.environmentFallbackIntensity;"));
                 Assert.That(shared, Does.Contain("if (fallbackWeight > 0.0001)"));
                 Assert.That(shared, Does.Contain("floatBitsToUint(hysteresis.y)"));
                 Assert.That(shared, Does.Contain("floatBitsToUint(hysteresis.z)"));
+                Assert.That(simpleManager, Does.Contain("gi.DdgiThinWallPolicyEnabled"));
+                Assert.That(simpleManager, Does.Contain("? gi.DdgiThinWallLeakClampStrength"));
+                Assert.That(renderer, Does.Contain("lightSignature = HashAdd(lightSignature, gi.DdgiThinWallPolicyEnabled);"));
+                Assert.That(renderer, Does.Contain("lightSignature = HashAdd(lightSignature, gi.DdgiThinWallLeakClampStrength);"));
                 Assert.That(shared, Does.Contain("return packed == 0u ? fallback : min(packed - 1u, fallback);"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP = 0.15"));
                 Assert.That(shared, Does.Contain("smoothstep(0.0, SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP, validSupport)"));
@@ -991,6 +1113,24 @@ namespace Njulf.Tests
                 Assert.That(trace, Does.Contain("SIMPLE_DDGI_TRACE_FLAG_COMPLETE_RAY_SCENE"));
                 Assert.That(trace, Does.Contain("farFieldEnabled && !completeRayScene"));
                 Assert.That(trace, Does.Contain("TraceFarFieldClipmapDetailed(probePosition, direction, nearTlasMaxDistance, maxDistance"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS = 8u"));
+                Assert.That(shared, Does.Contain("uint PackSimpleDdgiRayVisibilityHit("));
+                Assert.That(shared, Does.Contain("vec2 UnpackSimpleDdgiRayVisibilityHit("));
+                Assert.That(trace, Does.Contain("bool TraceSimpleDdgiBackfaceVisibilityDistance("));
+                Assert.That(trace, Does.Contain("gl_RayFlagsCullFrontFacingTrianglesEXT"));
+                Assert.That(trace, Does.Contain("gl_RayFlagsCullBackFacingTrianglesEXT"));
+                Assert.That(trace, Does.Contain("backfaceVisibilityDistance < visibilityDistance"));
+                Assert.That(trace, Does.Contain("visibilityHitKind = 2.0;"));
+                Assert.That(trace, Does.Contain("visibilityHitKind);"));
+                Assert.That(trace, Does.Contain("PackSimpleDdgiRayVisibilityHit(visibilityDistance, hitKind)"));
+                Assert.That(hitShading, Does.Contain("bool DdgiCandidatePassesTwoSidedOpacity("));
+                Assert.That(transport, Does.Contain("scratchBase + 7u"));
+                Assert.That(transport, Does.Contain("globalRay * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 7u"));
+                Assert.That(transport, Does.Contain("visibilityHit.y);"));
+                Assert.That(relocate, Does.Contain("float distance = max(visibilityHit.x, 0.0);"));
+                Assert.That(relocate, Does.Contain("ReadSimpleRayVisibilityHit(rayResultIndex)"));
+                Assert.That(relocate, Does.Contain("UnpackSimpleDdgiRayVisibilityHit("));
+                Assert.That(relocate, Does.Not.Contain("float distance = max(radianceDistance.w, 0.0);"));
                 Assert.That(trace, Does.Contain("bool frontFace = rayQueryGetIntersectionFrontFaceEXT(query, true);"));
                 Assert.That(trace, Does.Contain("hitKind = frontFace ? 1.0 : 2.0;"));
                 Assert.That(shared, Does.Contain($"SIMPLE_DDGI_TRACE_ENERGY_COUNTER_BASE = {RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase}u"));
@@ -1009,6 +1149,13 @@ namespace Njulf.Tests
                 Assert.That(blend, Does.Contain("float stepHysteresis = min(probeHysteresis, 0.60);"));
                 Assert.That(blend, Does.Contain("state.luminanceChangeEma = mix"));
                 Assert.That(blend, Does.Contain("shared vec4 SharedSimpleRayRadianceDistance[256];"));
+                Assert.That(blend, Does.Contain("shared uint SharedSimpleRayVisibilityHit[256];"));
+                Assert.That(blend, Does.Contain("vec2 ReadCachedSimpleRayVisibilityHit("));
+                Assert.That(blend, Does.Contain("ReadSimpleRayVisibilityHit(rayResultIndex)"));
+                Assert.That(blend, Does.Contain("UnpackSimpleDdgiRayVisibilityHit("));
+                Assert.That(blend, Does.Contain("bool refreshVisibility = !transportV2Active ||"));
+                Assert.That(blend, Does.Contain("SimpleDdgiUpdateRequiresSourceRefresh(update)"));
+                Assert.That(blend, Does.Contain("if (refreshVisibility)"));
                 Assert.That(blend, Does.Contain("void LoadSimpleRayCache(SimpleDdgiParams params, uint localProbeOffset, uint activeRayCount)"));
                 Assert.That(blend, Does.Contain("barrier();"));
                 Assert.That(blend, Does.Contain("SIMPLE_DDGI_BLEND_FLAG_REDUCED_COMPLEXITY"));
@@ -1063,7 +1210,7 @@ namespace Njulf.Tests
                 Assert.That(forward, Does.Contain("simpleDdgiSecondVolumeUsed"));
                 Assert.That(forward, Does.Contain(
                     "bool primaryValid = simpleDdgiPrimaryContributionWeight > 0.000001"));
-                Assert.That(forward, Does.Contain("float simpleFallback = (1.0 - simpleOwnership) * simpleDdgiParams.environmentFallbackIntensity;"));
+                Assert.That(forward, Does.Contain("float simpleFallback = (1.0 - simpleRadiometricOwnership) * simpleDdgiParams.environmentFallbackIntensity;"));
                 Assert.That(forward, Does.Contain("EstimateFarFieldSunShadow(worldPosition, normal, normalize(-light.Direction))"));
                 Assert.That(forward, Does.Contain("DDGI_INVESTIGATION_FAR_SUN_SHADOW_SAMPLE_COUNTER"));
                 Assert.That(forward, Does.Not.Contain("DDGI_INVESTIGATION_ROUGH_SPECULAR_SAMPLE_COUNTER"));
@@ -1617,7 +1764,97 @@ namespace Njulf.Tests
         }
 
         private static float SimpleDdgiVisibilitySelectionWeight(float transportVisibility) =>
-            Math.Max(SmoothStep(0.01f, 0.08f, transportVisibility), 0.05f);
+            Math.Max(
+                MathF.Pow(Math.Clamp(transportVisibility, 0.0f, 1.0f), 3.0f),
+                0.05f);
+
+        private static float DirectionalVisibilityMomentMean(
+            ReadOnlySpan<float> directionCosines,
+            ReadOnlySpan<float> distances,
+            float exponent)
+        {
+            Assert.That(distances.Length, Is.EqualTo(directionCosines.Length));
+            float weightedDistance = 0.0f;
+            float weightSum = 0.0f;
+            for (int i = 0; i < distances.Length; i++)
+            {
+                float weight = MathF.Pow(
+                    Math.Clamp(directionCosines[i], 0.0f, 1.0f),
+                    exponent);
+                weightedDistance += Math.Max(distances[i], 0.0f) * weight;
+                weightSum += weight;
+            }
+
+            return weightSum > 1.0e-6f
+                ? weightedDistance / weightSum
+                : 0.0f;
+        }
+
+        private static float ResolveDirectionalVisibilityMomentMean(
+            ReadOnlySpan<float> directionCosines,
+            ReadOnlySpan<float> distances,
+            ReadOnlySpan<bool> hitMask)
+        {
+            Assert.That(distances.Length, Is.EqualTo(directionCosines.Length));
+            Assert.That(hitMask.Length, Is.EqualTo(directionCosines.Length));
+            float hitMean = 0.0f;
+            float hitWeight = 0.0f;
+            float missMean = 0.0f;
+            float missWeight = 0.0f;
+            float narrowHitWeight = 0.0f;
+            float narrowWeight = 0.0f;
+            for (int i = 0; i < distances.Length; i++)
+            {
+                float broad = MathF.Pow(
+                    Math.Clamp(directionCosines[i], 0.0f, 1.0f),
+                    16.0f);
+                float narrow = broad * broad;
+                if (hitMask[i])
+                {
+                    hitMean += Math.Max(distances[i], 0.0f) * broad;
+                    hitWeight += broad;
+                    narrowHitWeight += narrow;
+                }
+                else
+                {
+                    missMean += Math.Max(distances[i], 0.0f) * broad;
+                    missWeight += broad;
+                }
+                narrowWeight += narrow;
+            }
+
+            float resolvedHitMean = hitWeight > 1.0e-6f ? hitMean / hitWeight : 0.0f;
+            float resolvedMissMean = missWeight > 1.0e-6f ? missMean / missWeight : 0.0f;
+            if (hitWeight <= 1.0e-6f)
+                return resolvedMissMean;
+            if (missWeight <= 1.0e-6f)
+                return resolvedHitMean;
+            float narrowHitFraction = narrowHitWeight / Math.Max(narrowWeight, 1.0e-6f);
+            return narrowHitFraction >= 0.35f ? resolvedHitMean : resolvedMissMean;
+        }
+
+        private static float SimpleDdgiLinearGridFraction(float fraction) =>
+            Math.Clamp(fraction, 0.0f, 1.0f);
+
+        private static Vector2 SelectSimpleDdgiVisibilityHit(
+            float surfaceDistance,
+            float sourceHitKind,
+            float backfaceDistance,
+            bool backfaceHit) =>
+            backfaceHit && backfaceDistance < surfaceDistance
+                ? new Vector2(backfaceDistance, 2.0f)
+                : new Vector2(surfaceDistance, sourceHitKind);
+
+        private static float SimpleDdgiLeakAttenuation(
+            float transportVisibility,
+            float thinWallLeakClampStrength) =>
+            Math.Clamp(
+                Lerp(
+                    1.0f,
+                    SmoothStep(0.01f, 0.08f, Math.Clamp(transportVisibility, 0.0f, 1.0f)),
+                    Math.Clamp(thinWallLeakClampStrength, 0.0f, 1.0f)),
+                0.05f,
+                1.0f);
 
         private static Vector3 ResolveSkyVisibilityTraceOrigin(
             Vector3 worldPosition,

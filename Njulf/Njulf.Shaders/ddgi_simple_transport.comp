@@ -36,11 +36,23 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint Padding0;
 } pc;
 
-void WriteSimpleTransportRayResult(uint rayResultIndex, vec3 radiance, float distance, vec3 direction, float hitKind)
+void WriteSimpleTransportRayResult(
+    uint rayResultIndex,
+    vec3 radiance,
+    float surfaceDistance,
+    float visibilityDistance,
+    vec3 direction,
+    float hitKind)
 {
     uint baseWord = rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS;
-    WriteStorageVec4(pc.RayResultScratchBufferIndex, baseWord, vec4(clamp(radiance, vec3(0.0), vec3(65504.0)), max(distance, 0.0)));
-    WriteStorageVec4(pc.RayResultScratchBufferIndex, baseWord + 4u, vec4(direction, hitKind));
+    WriteStorageVec4(pc.RayResultScratchBufferIndex, baseWord, vec4(clamp(radiance, vec3(0.0), vec3(65504.0)), max(surfaceDistance, 0.0)));
+    WriteStorageFloat(pc.RayResultScratchBufferIndex, baseWord + 4u, direction.x);
+    WriteStorageFloat(pc.RayResultScratchBufferIndex, baseWord + 5u, direction.y);
+    WriteStorageFloat(pc.RayResultScratchBufferIndex, baseWord + 6u, direction.z);
+    WriteStorageWord(
+        pc.RayResultScratchBufferIndex,
+        baseWord + 7u,
+        PackSimpleDdgiRayVisibilityHit(visibilityDistance, hitKind));
 }
 
 void main()
@@ -90,6 +102,11 @@ void main()
         uint scratchBase = globalRay * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS;
         vec4 sourceRadianceDistance = ReadStorageVec4(pc.RayResultScratchBufferIndex, scratchBase);
         vec4 sourceDirectionHit = ReadStorageVec4(pc.RayResultScratchBufferIndex, scratchBase + 4u);
+        vec2 sourceVisibilityHit =
+            UnpackSimpleDdgiRayVisibilityHit(
+                ReadStorageWord(
+                    pc.RayResultScratchBufferIndex,
+                    scratchBase + 7u));
         RecordSimpleDdgiTransportEnergyDiagnostics(
             params,
             pc.CurrentFrameIndex,
@@ -103,8 +120,9 @@ void main()
             globalRay,
             sourceRadianceDistance.rgb,
             sourceRadianceDistance.w,
+            sourceVisibilityHit.x,
             sourceDirectionHit.xyz,
-            sourceDirectionHit.w);
+            sourceVisibilityHit.y);
         return;
     }
 
@@ -140,10 +158,15 @@ void main()
         bounceRadiance,
         totalRadiance);
 
+    vec2 visibilityHit = UnpackSimpleDdgiRayVisibilityHit(
+        ReadStorageWord(
+            pc.RayResultScratchBufferIndex,
+            globalRay * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 7u));
     WriteSimpleTransportRayResult(
         globalRay,
         totalRadiance,
         source.distance,
+        visibilityHit.x,
         source.direction,
-        hitKind);
+        visibilityHit.y);
 }
