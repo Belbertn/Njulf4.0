@@ -1098,6 +1098,7 @@ namespace Njulf.Rendering.Data
         public uint DdgiForwardEstimateSampleCount { get; init; }
         public uint DdgiForwardEstimateZeroVisibleButCoveredCount { get; init; }
         public uint DdgiForwardEstimateZeroEffectiveButCoveredCount { get; init; }
+        public uint DdgiForwardEstimateHighOwnershipLowDeliveredIndirectCount { get; init; }
         public float DdgiForwardEstimateSampledIrradianceLuminance { get; init; }
         public float DdgiForwardEstimateRawDiffuseLuminance { get; init; }
         public float DdgiForwardEstimateFinalDiffuseLuminance { get; init; }
@@ -1138,6 +1139,10 @@ namespace Njulf.Rendering.Data
         public uint DdgiTraceEnergyHitZeroDirectCount { get; init; }
         public uint DdgiTraceEnergyHitWithDirectCount { get; init; }
         public float DdgiTraceEnergyDirectNoShadowLuminanceAverage { get; init; }
+        public uint DdgiShadowVisibilityRayCount { get; init; }
+        public uint DdgiShadowVisibilityOccludedCount { get; init; }
+        public uint DdgiShadowVisibilityNearHitCount { get; init; }
+        public float DdgiShadowVisibilityCommittedHitDistanceAverage { get; init; }
         public uint DdgiTraceEarlyOutDisabledCount { get; init; }
         public uint DdgiTraceEarlyOutBeyondRequestCount { get; init; }
         public uint DdgiTraceEarlyOutResolveBoundsCount { get; init; }

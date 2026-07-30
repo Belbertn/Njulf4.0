@@ -677,6 +677,7 @@ namespace Njulf.Rendering.Data
         public uint DdgiForwardEstimateSampleCount { get; set; }
         public uint DdgiForwardEstimateZeroVisibleButCoveredCount { get; set; }
         public uint DdgiForwardEstimateZeroEffectiveButCoveredCount { get; set; }
+        public uint DdgiForwardEstimateHighOwnershipLowDeliveredIndirectCount { get; set; }
         public float DdgiForwardEstimateSampledIrradianceLuminance { get; set; }
         public float DdgiForwardEstimateRawDiffuseLuminance { get; set; }
         public float DdgiForwardEstimateFinalDiffuseLuminance { get; set; }
@@ -717,6 +718,10 @@ namespace Njulf.Rendering.Data
         public uint DdgiTraceEnergyHitZeroDirectCount { get; set; }
         public uint DdgiTraceEnergyHitWithDirectCount { get; set; }
         public float DdgiTraceEnergyDirectNoShadowLuminanceAverage { get; set; }
+        public uint DdgiShadowVisibilityRayCount { get; set; }
+        public uint DdgiShadowVisibilityOccludedCount { get; set; }
+        public uint DdgiShadowVisibilityNearHitCount { get; set; }
+        public float DdgiShadowVisibilityCommittedHitDistanceAverage { get; set; }
         public uint DdgiTraceEarlyOutDisabledCount { get; set; }
         public uint DdgiTraceEarlyOutBeyondRequestCount { get; set; }
         public uint DdgiTraceEarlyOutResolveBoundsCount { get; set; }
@@ -1859,6 +1864,7 @@ namespace Njulf.Rendering.Data
             DdgiForwardEstimateSampleCount = 0;
             DdgiForwardEstimateZeroVisibleButCoveredCount = 0;
             DdgiForwardEstimateZeroEffectiveButCoveredCount = 0;
+            DdgiForwardEstimateHighOwnershipLowDeliveredIndirectCount = 0;
             DdgiForwardEstimateSampledIrradianceLuminance = 0;
             DdgiForwardEstimateRawDiffuseLuminance = 0;
             DdgiForwardEstimateFinalDiffuseLuminance = 0;
@@ -1899,6 +1905,10 @@ namespace Njulf.Rendering.Data
             DdgiTraceEnergyHitZeroDirectCount = 0;
             DdgiTraceEnergyHitWithDirectCount = 0;
             DdgiTraceEnergyDirectNoShadowLuminanceAverage = 0;
+            DdgiShadowVisibilityRayCount = 0;
+            DdgiShadowVisibilityOccludedCount = 0;
+            DdgiShadowVisibilityNearHitCount = 0;
+            DdgiShadowVisibilityCommittedHitDistanceAverage = 0;
             DdgiTraceEarlyOutDisabledCount = 0;
             DdgiTraceEarlyOutBeyondRequestCount = 0;
             DdgiTraceEarlyOutResolveBoundsCount = 0;

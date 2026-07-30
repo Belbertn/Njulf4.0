@@ -49,7 +49,9 @@ namespace Njulf.Tests
                 ("far-field material V2", RendererDiagnosticsBuffer.FarFieldMaterialV2CounterBase, RendererDiagnosticsBuffer.FarFieldMaterialV2CounterCount),
                 ("material GI", RendererDiagnosticsBuffer.MaterialGiCounterBase, RendererDiagnosticsBuffer.MaterialGiCounterCount),
                 ("simple DDGI gather rejection", RendererDiagnosticsBuffer.SimpleDdgiGatherRejectionCounterBase, RendererDiagnosticsBuffer.SimpleDdgiGatherRejectionCounterCount),
-                ("simple DDGI gather all failed", RendererDiagnosticsBuffer.SimpleDdgiGatherAllFailedCounterBase, RendererDiagnosticsBuffer.SimpleDdgiGatherAllFailedCounterCount)
+                ("simple DDGI gather all failed", RendererDiagnosticsBuffer.SimpleDdgiGatherAllFailedCounterBase, RendererDiagnosticsBuffer.SimpleDdgiGatherAllFailedCounterCount),
+                ("DDGI delivery failure", RendererDiagnosticsBuffer.DdgiDeliveryFailureCounterBase, RendererDiagnosticsBuffer.DdgiDeliveryFailureCounterCount),
+                ("DDGI shadow visibility", RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterBase, RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -78,6 +80,9 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.MaterialGiCounterCount, Is.EqualTo(10));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiGatherRejectionReasonCount, Is.EqualTo(9));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiGatherRoleCount, Is.EqualTo(3));
+                Assert.That(RendererDiagnosticsBuffer.DdgiDeliveryFailureCounterCount, Is.EqualTo(1));
+                Assert.That(RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterCount, Is.EqualTo(4));
+                Assert.That(RendererDiagnosticsBuffer.DdgiShadowHitDistanceScale, Is.EqualTo(256.0f));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(nextExpectedStart));
                 Assert.That(RendererDiagnosticsBuffer.CounterBufferSize, Is.EqualTo((ulong)nextExpectedStart * sizeof(uint)));
             });
@@ -166,10 +171,15 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.DdgiForwardEstimateSampleCount, Is.EqualTo(0u));
                 Assert.That(diagnostics.DdgiForwardEstimateSampledIrradianceLuminance, Is.EqualTo(0.0f));
                 Assert.That(diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight, Is.EqualTo(0.0f));
+                Assert.That(diagnostics.DdgiForwardEstimateHighOwnershipLowDeliveredIndirectCount, Is.EqualTo(0u));
                 Assert.That(diagnostics.DdgiTraceEnergySampleCount, Is.EqualTo(0u));
                 Assert.That(diagnostics.DdgiTraceEnergyRayLuminanceAverage, Is.EqualTo(0.0f));
                 Assert.That(diagnostics.DdgiTraceEnergyDirectLuminanceAverage, Is.EqualTo(0.0f));
                 Assert.That(diagnostics.DdgiTraceEnergyDirectNoShadowLuminanceAverage, Is.EqualTo(0.0f));
+                Assert.That(diagnostics.DdgiShadowVisibilityRayCount, Is.EqualTo(0u));
+                Assert.That(diagnostics.DdgiShadowVisibilityOccludedCount, Is.EqualTo(0u));
+                Assert.That(diagnostics.DdgiShadowVisibilityNearHitCount, Is.EqualTo(0u));
+                Assert.That(diagnostics.DdgiShadowVisibilityCommittedHitDistanceAverage, Is.EqualTo(0.0f));
                 Assert.That(diagnostics.DdgiTraceEarlyOutDisabledCount, Is.EqualTo(0u));
                 Assert.That(diagnostics.DdgiTraceEarlyOutBeyondRequestCount, Is.EqualTo(0u));
                 Assert.That(diagnostics.DdgiTraceEarlyOutResolveBoundsCount, Is.EqualTo(0u));
@@ -397,6 +407,7 @@ namespace Njulf.Tests
                 Assert.That((uint)GlobalIlluminationDebugView.FarFieldSunShadow, Is.EqualTo(45u));
                 Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.FarFieldSkyVisibility => 122u"));
                 Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.FarFieldSunShadow => 123u"));
+                Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiDirectionalSupport => 124u"));
                 Assert.That(renderer, Does.Contain("ScheduleReflectionProbeRecapturesFromGi(sceneData, ddgiActive, simpleDdgiActive);"));
                 Assert.That(renderer, Does.Contain("_reflectionProbeManager.RequestRecaptureAll(\"ddgi-ready\")"));
                 Assert.That(renderer, Does.Contain("_reflectionProbeManager.RequestRecaptureAll(\"simple-ddgi-dirty\")"));

@@ -25,12 +25,12 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(contract.Scenario, Is.EqualTo(SamplePerformanceScenario.GiSponzaRightWallStationary));
             Assert.That(contract.Width, Is.EqualTo(1600));
             Assert.That(contract.Height, Is.EqualTo(900));
-            Assert.That(contract.WarmupFrames, Is.EqualTo(600));
-            Assert.That(SampleSponzaGiCaptureContract.HighBookmarkStationarySettleFrameCount, Is.EqualTo(600));
+            Assert.That(contract.WarmupFrames, Is.EqualTo(SampleSponzaGiCaptureContract.FullSourceRefreshSweepFrameCount));
+            Assert.That(SampleSponzaGiCaptureContract.HighBookmarkStationarySettleFrameCount, Is.EqualTo(2048));
             Assert.That(contract.VerticalPathDurationSeconds, Is.InRange(10, 20));
             Assert.That(contract.VerticalTraversalFrameCount, Is.EqualTo(960));
-            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v6"));
-            Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(2_268));
+            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v7"));
+            Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(5_182));
             Assert.That(contract.LowBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeLow"));
             Assert.That(contract.LowBookmark.Position.Y, Is.EqualTo(1.35f));
             Assert.That(contract.HighBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeHigh"));
@@ -49,7 +49,7 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                 "beauty",
                 "direct-only",
                 "final-indirect",
-                "raw-irradiance",
+                "irradiance-log",
                 "sampled-irradiance",
                 "final-diffuse",
                 "volume-contributor",
@@ -58,6 +58,9 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                 "gather-fallback",
                 "spatial-coverage",
                 "support",
+                "data-confidence",
+                "directional-support",
+                "confidence-chain",
                 "visibility",
                 "ownership",
                 "fallback",

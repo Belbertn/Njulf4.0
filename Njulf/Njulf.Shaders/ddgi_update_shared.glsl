@@ -700,6 +700,7 @@ uint ddgiCurrentTraceVolumeCascadeIndex;
 #define DDGI_HIT_USE_SELECTED_LIGHTS 1
 #define DDGI_HIT_ENABLE_ENVIRONMENT_WRAPPER 1
 #define DDGI_HIT_ALPHA_MASK_TRANSPORT_ENABLED ((pc.Flags & DDGI_UPDATE_FLAG_ALPHA_MASK_TRANSPORT_ENABLED) != 0u)
+#define DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED DdgiTraceEnergyDiagnosticsEnabled()
 #include "ddgi_hit_shading.glsl"
 
 float ResolveStableDdgiRoundedBoxEdgeFade(vec3 edgeDistance, vec3 blendDistance)
@@ -1397,11 +1398,13 @@ void TraceProbeRay(
             hitPosition,
             surface,
             -direction,
+            probeSpacing,
             directNoShadowDiffuse);
         vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
             hitPosition,
             surface,
-            -direction);
+            -direction,
+            probeSpacing);
         vec3 stableDiffuse = EvaluateStableDdgiDiffuseRadianceAtHit(hitPosition, surface);
         directDiffuseOut = directDiffuse;
         directNoShadowDiffuseOut = directNoShadowDiffuse;

@@ -62,10 +62,12 @@ const uint SIMPLE_DDGI_TRACE_FLAG_ALPHA_MASK_TRANSPORT_ENABLED = 1u << 7;
 uint simpleDdgiCurrentMaxShadedLights;
 uint simpleDdgiCurrentMaterialTextureMaxCascade;
 uint simpleDdgiCurrentVolumeCascade;
+bool simpleDdgiCurrentDetailedDiagnostics;
 #define DDGI_HIT_DIRECT_LIGHT_CAP simpleDdgiCurrentMaxShadedLights
 #define DDGI_HIT_MAX_SHADED_LIGHTS simpleDdgiCurrentMaxShadedLights
 #define DDGI_HIT_MATERIAL_TEXTURE_MAX_CASCADE simpleDdgiCurrentMaterialTextureMaxCascade
 #define DDGI_HIT_ALPHA_MASK_TRANSPORT_ENABLED ((pc.Flags & SIMPLE_DDGI_TRACE_FLAG_ALPHA_MASK_TRANSPORT_ENABLED) != 0u)
+#define DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED simpleDdgiCurrentDetailedDiagnostics
 #include "ddgi_hit_shading.glsl"
 
 void WriteSimpleRayResult(
@@ -157,6 +159,7 @@ bool TraceSimpleDdgiBackfaceVisibilityDistance(
 void main()
 {
     SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    simpleDdgiCurrentDetailedDiagnostics = SimpleDdgiDetailedDiagnosticsEnabled(params);
     uint globalRay = gl_GlobalInvocationID.x;
     uint totalRays = params.probesToUpdate * params.raysPerProbe;
     if (globalRay >= totalRays || params.probeCount == 0u)
@@ -356,11 +359,13 @@ void main()
                     hitPosition,
                     surface,
                     -direction,
+                    max(volume.spacing, 0.001),
                     directNoShadowDiffuse);
                 vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
                     hitPosition,
                     surface,
-                    -direction);
+                    -direction,
+                    max(volume.spacing, 0.001));
                 // Direct emissive hits and next-event triangle sampling represent
                 // different paths. Transport-atlas ownership only gates the
                 // recursive irradiance term; applying it here biases the emitter
@@ -448,11 +453,13 @@ void main()
                 hitPosition,
                 farSurface,
                 -direction,
+                max(volume.spacing, 0.001),
                 directNoShadowDiffuse);
             vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
                 hitPosition,
                 farSurface,
-                -direction);
+                -direction,
+                max(volume.spacing, 0.001));
             vec3 farEmissiveDiffuse = farSurface.EmissiveRadiance + emissiveProxyDiffuse;
             radiance = directDiffuse + farEmissiveDiffuse + bounce;
             traceDirectDiffuse = directDiffuse;

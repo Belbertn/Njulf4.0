@@ -200,6 +200,7 @@ const uint GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_OCCUPANCY_SLICE = 120u;
 const uint GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_TRACE_RESULT = 121u;
 const uint GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SKY_VISIBILITY = 122u;
 const uint GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SUN_SHADOW = 123u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_DIRECTIONAL_SUPPORT = 124u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -390,6 +391,7 @@ const uint DDGI_SAMPLED_PROBE_CURRENT_FRUSTUM_COUNTER = DDGI_FORWARD_ESTIMATE_CO
 const uint DDGI_SAMPLED_PROBE_SIDE_REAR_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 44u;
 const uint DDGI_SAMPLED_PROBE_STALE_AGE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 45u;
 const uint DDGI_PRIMARY_UPDATE_REASON_AGE_REFRESH = 5u;
+const float DDGI_FORWARD_ESTIMATE_LOW_DELIVERED_LUMINANCE_THRESHOLD = 0.00001;
 
 uint PackDdgiForwardEstimateWeight(float value);
 
@@ -2005,6 +2007,19 @@ void AccumulateDdgiForwardEstimateDiagnostics(HybridDiffuseGiResult hybridDiffus
         AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_ZERO_SUPPORT_SPATIAL_COUNTER, 1u);
     if (spatialCoverage > 0.75 && effectiveWeight < 0.0001)
         AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_ZERO_EFFECTIVE_SPATIAL_COUNTER, 1u);
+
+    // Unlike the legacy zero-effective gate, this observes the failure mode in
+    // which DDGI claims the receiver but delivers effectively no indirect light.
+    float deliveredDdgiLuminance = DdgiDiagnosticLuminance(
+        max(rawDdgiDiffuse, vec3(0.0)) * effectiveWeight);
+    if (spatialCoverage > 0.75 && ownershipConsumed > 0.75 &&
+        deliveredDdgiLuminance < DDGI_FORWARD_ESTIMATE_LOW_DELIVERED_LUMINANCE_THRESHOLD)
+    {
+        AddRendererDiagnostic(
+            pc.Push.CurrentFrameIndex,
+            DDGI_HIGH_OWNERSHIP_LOW_DELIVERED_INDIRECT_COUNTER,
+            1u);
+    }
 }
 
 void AccumulateDdgiInvestigationForwardDiagnostics(
@@ -3414,7 +3429,7 @@ void WriteForwardColor(vec4 color)
 bool IsDdgiDebugView(uint view)
 {
     return view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE &&
-           view <= GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SUN_SHADOW;
+           view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_DIRECTIONAL_SUPPORT;
 }
 
 vec3 DdgiDebugCategoryColor(uint view)
@@ -3434,6 +3449,7 @@ vec3 DdgiDebugCategoryColor(uint view)
         return vec3(0.10, 0.85, 1.0);
 
     if (view == GLOBAL_ILLUMINATION_DEBUG_DDGI_DATA_CONFIDENCE ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_DIRECTIONAL_SUPPORT ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY_CONFIDENCE ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_CHAIN ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS ||
@@ -4377,7 +4393,9 @@ void main()
         ddgiSample.coverage = simpleGather.spatialCoverage;
         ddgiSample.spatialCoverage = simpleGather.spatialCoverage;
         ddgiSample.supportCoverage = simpleSupport;
-        ddgiSample.weight = simpleDirectionalSupport;
+        // Data confidence is availability. Directional support is geometric
+        // estimator authority and has its own debug view/chain channel.
+        ddgiSample.weight = simpleSupport;
         ddgiSample.ownershipConsumed = simpleOwnership;
         ddgiSample.visibility = simpleGather.transportVisibility;
         ddgiSample.visibilityConfidence = simpleGather.transportVisibility;
@@ -4637,7 +4655,25 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE)
     {
-        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE, ddgiSample.irradiance);
+        // A logarithmic, reference-white-normalized presentation keeps exact
+        // zero black while making low but nonzero probe energy visible. The raw
+        // linear value remains available through DdgiSampledIrradiance.
+        vec3 safeIrradiance = max(ddgiSample.irradiance, vec3(0.0));
+        float irradianceLuminance = DdgiDiagnosticLuminance(safeIrradiance);
+        vec3 presentedIrradiance = vec3(0.0);
+        if (irradianceLuminance > 0.00000001)
+        {
+            const float logScale = 1024.0;
+            float presentedLuminance = log2(1.0 + irradianceLuminance * logScale) /
+                log2(1.0 + logScale);
+            presentedIrradiance = clamp(
+                safeIrradiance * (presentedLuminance / irradianceLuminance),
+                vec3(0.0),
+                vec3(1.0));
+        }
+        WriteDdgiDebugColor(
+            GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE,
+            presentedIrradiance);
         return;
     }
 
@@ -4691,7 +4727,17 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_DATA_CONFIDENCE)
     {
-        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_DATA_CONFIDENCE, vec3(clamp(ddgiSample.weight, 0.0, 1.0)));
+        WriteDdgiDebugColor(
+            GLOBAL_ILLUMINATION_DEBUG_DDGI_DATA_CONFIDENCE,
+            vec3(clamp(ddgiSample.supportCoverage, 0.0, 1.0)));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_DIRECTIONAL_SUPPORT)
+    {
+        WriteDdgiDebugColor(
+            GLOBAL_ILLUMINATION_DEBUG_DDGI_DIRECTIONAL_SUPPORT,
+            vec3(clamp(ddgiSample.qualityConfidence, 0.0, 1.0)));
         return;
     }
 
@@ -4704,7 +4750,7 @@ void main()
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_CHAIN)
     {
         WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_CHAIN, vec3(
-            clamp(ddgiSample.irradianceAtlasConfidence, 0.0, 1.0),
+            clamp(ddgiSample.supportCoverage, 0.0, 1.0),
             clamp(ddgiSample.qualityConfidence, 0.0, 1.0),
             clamp(ddgiSample.visibilityConfidence, 0.0, 1.0)));
         return;

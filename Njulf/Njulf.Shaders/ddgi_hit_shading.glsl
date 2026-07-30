@@ -39,6 +39,10 @@
 #define DDGI_HIT_CURRENT_FRAME_INDEX pc.CurrentFrameIndex
 #endif
 
+#ifndef DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED
+#define DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED false
+#endif
+
 const uint DDGI_HIT_TOP_LIGHT_LIMIT = 8u;
 const uint DDGI_HIT_LIGHT_CANDIDATE_LIMIT = 64u;
 // Pathological stacks of cutout geometry cannot create unbounded any-hit
@@ -844,12 +848,25 @@ bool DdgiCandidatePassesTwoSidedOpacity(
         false);
 }
 
-float TraceLightVisibility(vec3 worldPosition, vec3 normal, vec3 lightDirection, float maxDistance)
+float TraceLightVisibility(
+    vec3 worldPosition,
+    vec3 normal,
+    vec3 lightDirection,
+    float maxDistance,
+    float receiverProbeSpacing)
 {
     float normalOffset = DDGI_PROBE_TRACE_EPSILON * 4.0;
     float rayTMin = DDGI_PROBE_TRACE_EPSILON * 2.0;
     float rayDistance = max(maxDistance - normalOffset, rayTMin);
     vec3 origin = worldPosition + normal * normalOffset;
+
+    if (DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED)
+    {
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_SHADOW_VISIBILITY_RAY_COUNTER,
+            1u);
+    }
 
     rayQueryEXT shadowQuery;
     rayQueryInitializeEXT(
@@ -885,7 +902,30 @@ float TraceLightVisibility(vec3 worldPosition, vec3 normal, vec3 lightDirection,
     }
 
     uint hitType = rayQueryGetIntersectionTypeEXT(shadowQuery, true);
-    return hitType == gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
+    bool occluded = hitType != gl_RayQueryCommittedIntersectionNoneEXT;
+    if (occluded && DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED)
+    {
+        float committedHitDistance = max(
+            rayQueryGetIntersectionTEXT(shadowQuery, true),
+            0.0);
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_SHADOW_VISIBILITY_OCCLUDED_COUNTER,
+            1u);
+        if (committedHitDistance < max(receiverProbeSpacing, 0.001))
+        {
+            AddRendererDiagnostic(
+                DDGI_HIT_CURRENT_FRAME_INDEX,
+                DDGI_SHADOW_VISIBILITY_NEAR_HIT_COUNTER,
+                1u);
+        }
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_SHADOW_VISIBILITY_HIT_DISTANCE_COUNTER,
+            uint(round(clamp(committedHitDistance, 0.0, 256.0) *
+                DDGI_SHADOW_VISIBILITY_HIT_DISTANCE_SCALE)));
+    }
+    return occluded ? 0.0 : 1.0;
 }
 
 vec3 RotateDdgiEnvironmentDirection(vec3 direction, float radians)
@@ -986,6 +1026,7 @@ vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
     vec3 lightDirection,
     float visibilityDistance,
     float attenuation,
+    float receiverProbeSpacing,
     out vec3 noShadowDiffuse)
 {
     noShadowDiffuse = vec3(0.0);
@@ -1011,7 +1052,8 @@ vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
         worldPosition,
         surface.GeometricNormal,
         lightDirection,
-        visibilityDistance);
+        visibilityDistance,
+        receiverProbeSpacing);
     // DDGI is the transport reference: shadow strength is an artistic raster
     // control, not a source of unoccluded direct energy behind geometry.
     return noShadowDiffuse * tracedVisibility;
@@ -1020,7 +1062,8 @@ vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
 vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
     vec3 worldPosition,
     GiSurfaceSample surface,
-    vec3 viewDirection)
+    vec3 viewDirection,
+    float receiverProbeSpacing)
 {
     // Estimator ownership: this function is next-event estimation at the
     // receiver. It never replaces direct surface-hit emission and never owns
@@ -1096,7 +1139,8 @@ vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
             worldPosition,
             surface.GeometricNormal,
             dominantLightDirection,
-            dominantDistance);
+            dominantDistance,
+            receiverProbeSpacing);
         return diffuseRadiance + dominantContribution * (dominantVisibility - 1.0);
     }
 
@@ -1179,7 +1223,8 @@ vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
         worldPosition,
         surface.GeometricNormal,
         lightDirection,
-        distanceToSource);
+        distanceToSource,
+        receiverProbeSpacing);
     return contribution * visibility;
 }
 
@@ -1187,6 +1232,7 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
     vec3 worldPosition,
     GiSurfaceSample surface,
     vec3 viewDirection,
+    float receiverProbeSpacing,
     out vec3 directNoShadowDiffuse)
 {
     vec3 directDiffuseRadiance = vec3(0.0);
@@ -1211,6 +1257,7 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
             lightDirection,
             DDGI_DIRECTIONAL_SHADOW_RAY_DISTANCE,
             1.0,
+            receiverProbeSpacing,
             lightNoShadowDiffuse);
         directNoShadowDiffuse += lightNoShadowDiffuse;
         selectedLightCount++;
@@ -1240,6 +1287,7 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
             localLightDirection,
             localLightDistance,
             localLightAttenuation,
+            receiverProbeSpacing,
             lightNoShadowDiffuse);
         directNoShadowDiffuse += lightNoShadowDiffuse;
     }
@@ -1268,6 +1316,7 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
             normalize(-light.Direction),
             DDGI_DIRECTIONAL_SHADOW_RAY_DISTANCE,
             1.0,
+            receiverProbeSpacing,
             lightNoShadowDiffuse);
         directNoShadowDiffuse += lightNoShadowDiffuse;
         shadedLightCount++;
@@ -1340,6 +1389,7 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
             selectedDirections[i],
             selectedDistances[i],
             selectedAttenuations[i],
+            receiverProbeSpacing,
             lightNoShadowDiffuse);
         directNoShadowDiffuse += lightNoShadowDiffuse;
     }

@@ -43,6 +43,18 @@ public sealed class GlobalIlluminationDefaultsTests
         });
     }
 
+    [Test]
+    public void NewGlobalIlluminationSettings_PreserveLowEnergyTransportPropagation()
+    {
+        var settings = new GlobalIlluminationSettings();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.SimpleDdgiTransportResidualThreshold, Is.EqualTo(0.01f));
+            Assert.That(settings.SimpleDdgiTransportMaximumSolverGenerations, Is.EqualTo(32));
+        });
+    }
+
     [TestCase(RenderQualityPreset.Low)]
     [TestCase(RenderQualityPreset.Medium)]
     [TestCase(RenderQualityPreset.High)]
@@ -64,6 +76,12 @@ public sealed class GlobalIlluminationDefaultsTests
                 Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.False);
             });
         }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.GlobalIllumination.SimpleDdgiTransportResidualThreshold, Is.EqualTo(0.01f));
+            Assert.That(settings.GlobalIllumination.SimpleDdgiTransportMaximumSolverGenerations, Is.EqualTo(32));
+        });
     }
 
     [Test]

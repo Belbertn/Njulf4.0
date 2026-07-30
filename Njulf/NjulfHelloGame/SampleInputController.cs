@@ -2274,10 +2274,13 @@ internal sealed class SampleInputController
             $"{prefix}: warmup state={diagnostics.DdgiWarmupState}, warmed visible/local/cascade0={diagnostics.DdgiWarmedVisibleProbeFraction:P1}/{diagnostics.DdgiWarmedLocalProbeFraction:P1}/{diagnostics.DdgiWarmedCascade0ProbeFraction:P1}");
         Console.WriteLine(
             $"{prefix}: forwardEstimate valid={diagnostics.DdgiForwardEstimateCountersReadbackValid}, samples={diagnostics.DdgiForwardEstimateSampleCount}, " +
-            $"zeroSupportSpatial={diagnostics.DdgiForwardEstimateZeroVisibleButCoveredCount}, zeroEffectiveSpatial={diagnostics.DdgiForwardEstimateZeroEffectiveButCoveredCount}, " +
+            $"zeroSupportSpatial={diagnostics.DdgiForwardEstimateZeroVisibleButCoveredCount}, zeroEffectiveSpatial={diagnostics.DdgiForwardEstimateZeroEffectiveButCoveredCount}, highOwnershipLowIndirect={diagnostics.DdgiForwardEstimateHighOwnershipLowDeliveredIndirectCount}, " +
             $"sampledIrrLum={diagnostics.DdgiForwardEstimateSampledIrradianceLuminance:F4}, ddgiDiffuseLum={diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F4}, " +
             $"hybridFinalLum={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F4}, fallbackWeight={diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight:F3}, " +
             $"sampledProbes currentFrustum/sideRear/staleAge={diagnostics.DdgiSampledProbeCurrentFrustumCount}/{diagnostics.DdgiSampledProbeSideRearCount}/{diagnostics.DdgiSampledProbeStaleAgeCount}");
+        Console.WriteLine(
+            $"{prefix}: probeHitShadows rays/occluded/near(<spacing)/avgCommittedDistance=" +
+            $"{diagnostics.DdgiShadowVisibilityRayCount}/{diagnostics.DdgiShadowVisibilityOccludedCount}/{diagnostics.DdgiShadowVisibilityNearHitCount}/{diagnostics.DdgiShadowVisibilityCommittedHitDistanceAverage:F3}");
         Console.WriteLine(
             $"{prefix}: visibilityMoments samples={diagnostics.DdgiVisibilityMomentSampleCount}, mean/variance/distance={diagnostics.DdgiVisibilityMomentMeanAverage:F3}/{diagnostics.DdgiVisibilityMomentVarianceAverage:F3}/{diagnostics.DdgiVisibilityProbeDistanceAverage:F3}, " +
             $"largeMargin={diagnostics.DdgiVisibilityLargeDistanceMarginCount}, zeroTransport={diagnostics.DdgiVisibilityZeroTransportCount}, zeroTransportWithIrradiance={diagnostics.DdgiVisibilityZeroTransportWithIrradianceCount}");
@@ -2479,7 +2482,8 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiCoverage => GlobalIlluminationDebugView.DdgiSpatialCoverage,
             GlobalIlluminationDebugView.DdgiSpatialCoverage => GlobalIlluminationDebugView.DdgiSupportCoverage,
             GlobalIlluminationDebugView.DdgiSupportCoverage => GlobalIlluminationDebugView.DdgiDataConfidence,
-            GlobalIlluminationDebugView.DdgiDataConfidence => GlobalIlluminationDebugView.DdgiVisibilityConfidence,
+            GlobalIlluminationDebugView.DdgiDataConfidence => GlobalIlluminationDebugView.DdgiDirectionalSupport,
+            GlobalIlluminationDebugView.DdgiDirectionalSupport => GlobalIlluminationDebugView.DdgiVisibilityConfidence,
             GlobalIlluminationDebugView.DdgiVisibilityConfidence => GlobalIlluminationDebugView.DdgiConfidenceChain,
             GlobalIlluminationDebugView.DdgiConfidenceChain => GlobalIlluminationDebugView.DdgiCascadeSelection,
             GlobalIlluminationDebugView.DdgiCascadeSelection => GlobalIlluminationDebugView.DdgiCascadeBlendWeight,
@@ -2532,7 +2536,8 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiCoverage => GlobalIlluminationDebugView.DdgiSpatialCoverage,
             GlobalIlluminationDebugView.DdgiSpatialCoverage => GlobalIlluminationDebugView.DdgiSupportCoverage,
             GlobalIlluminationDebugView.DdgiSupportCoverage => GlobalIlluminationDebugView.DdgiDataConfidence,
-            GlobalIlluminationDebugView.DdgiDataConfidence => GlobalIlluminationDebugView.DdgiVisibilityConfidence,
+            GlobalIlluminationDebugView.DdgiDataConfidence => GlobalIlluminationDebugView.DdgiDirectionalSupport,
+            GlobalIlluminationDebugView.DdgiDirectionalSupport => GlobalIlluminationDebugView.DdgiVisibilityConfidence,
             GlobalIlluminationDebugView.DdgiVisibilityConfidence => GlobalIlluminationDebugView.DdgiConfidenceChain,
             GlobalIlluminationDebugView.DdgiConfidenceChain => GlobalIlluminationDebugView.DdgiCascadeSelection,
             GlobalIlluminationDebugView.DdgiCascadeSelection => GlobalIlluminationDebugView.DdgiCascadeBlendWeight,
@@ -2556,7 +2561,8 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiGatherBlendWeight => GlobalIlluminationDebugView.DdgiGatherFallback,
             GlobalIlluminationDebugView.DdgiGatherFallback => GlobalIlluminationDebugView.DdgiSupportCoverage,
             GlobalIlluminationDebugView.DdgiSupportCoverage => GlobalIlluminationDebugView.DdgiDataConfidence,
-            GlobalIlluminationDebugView.DdgiDataConfidence => GlobalIlluminationDebugView.DdgiConfidenceChain,
+            GlobalIlluminationDebugView.DdgiDataConfidence => GlobalIlluminationDebugView.DdgiDirectionalSupport,
+            GlobalIlluminationDebugView.DdgiDirectionalSupport => GlobalIlluminationDebugView.DdgiConfidenceChain,
             GlobalIlluminationDebugView.DdgiConfidenceChain => GlobalIlluminationDebugView.DdgiIrradiance,
             GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiSampledIrradiance,
             GlobalIlluminationDebugView.DdgiSampledIrradiance => GlobalIlluminationDebugView.DdgiFinalDiffuse,
@@ -2585,7 +2591,8 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiVisibilityMoments => GlobalIlluminationDebugView.DdgiCoverage,
             GlobalIlluminationDebugView.DdgiCoverage => GlobalIlluminationDebugView.DdgiSupportCoverage,
             GlobalIlluminationDebugView.DdgiSupportCoverage => GlobalIlluminationDebugView.DdgiDataConfidence,
-            GlobalIlluminationDebugView.DdgiDataConfidence => GlobalIlluminationDebugView.DdgiVisibilityConfidence,
+            GlobalIlluminationDebugView.DdgiDataConfidence => GlobalIlluminationDebugView.DdgiDirectionalSupport,
+            GlobalIlluminationDebugView.DdgiDirectionalSupport => GlobalIlluminationDebugView.DdgiVisibilityConfidence,
             GlobalIlluminationDebugView.DdgiVisibilityConfidence => GlobalIlluminationDebugView.DdgiConfidenceChain,
             GlobalIlluminationDebugView.DdgiConfidenceChain => GlobalIlluminationDebugView.DdgiProbeLogicalPosition,
             GlobalIlluminationDebugView.DdgiProbeLogicalPosition => GlobalIlluminationDebugView.DdgiProbeRelocatedPosition,
@@ -2625,6 +2632,7 @@ internal sealed class SampleInputController
             or GlobalIlluminationDebugView.DdgiSpatialCoverage
             or GlobalIlluminationDebugView.DdgiSupportCoverage
             or GlobalIlluminationDebugView.DdgiDataConfidence
+            or GlobalIlluminationDebugView.DdgiDirectionalSupport
             or GlobalIlluminationDebugView.DdgiVisibilityConfidence
             or GlobalIlluminationDebugView.DdgiConfidenceChain
             or GlobalIlluminationDebugView.DdgiProbeLogicalPosition
@@ -2648,9 +2656,11 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiSupportCoverage =>
                 "cyan border; grayscale valid probe-data support. Black means no accepted active probes.",
             GlobalIlluminationDebugView.DdgiDataConfidence =>
-                "blue border; grayscale directional support for structured gather (atlas/data confidence for legacy).",
+                "blue border; grayscale valid probe-data availability. Black means no accepted data, not unfavorable geometry.",
+            GlobalIlluminationDebugView.DdgiDirectionalSupport =>
+                "blue border; grayscale geometric directional authority. Dark receivers may still have complete probe data.",
             GlobalIlluminationDebugView.DdgiConfidenceChain =>
-                "blue border; structured RGB = valid / directional / visibility support (legacy = alpha / quality / visibility).",
+                "blue border; RGB = data availability / directional authority / transport visibility.",
             GlobalIlluminationDebugView.DdgiSampledIrradiance =>
                 "orange border; sampled DDGI irradiance before albedo and metallic.",
             GlobalIlluminationDebugView.DdgiFinalDiffuse =>

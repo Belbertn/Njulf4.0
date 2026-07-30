@@ -2084,6 +2084,7 @@ namespace Njulf.Rendering
                     GlobalIlluminationDebugView.FarFieldTraceResult => 121u,
                     GlobalIlluminationDebugView.FarFieldSkyVisibility => 122u,
                     GlobalIlluminationDebugView.FarFieldSunShadow => 123u,
+                    GlobalIlluminationDebugView.DdgiDirectionalSupport => 124u,
                     _ => (uint)Settings.Shadows.DebugView
                 };
             }
@@ -4502,6 +4503,7 @@ namespace Njulf.Rendering
                 DdgiForwardEstimateSampleCount = giUsesDdgi ? sceneData.DdgiForwardEstimateSampleCount : 0u,
                 DdgiForwardEstimateZeroVisibleButCoveredCount = giUsesDdgi ? sceneData.DdgiForwardEstimateZeroVisibleButCoveredCount : 0u,
                 DdgiForwardEstimateZeroEffectiveButCoveredCount = giUsesDdgi ? sceneData.DdgiForwardEstimateZeroEffectiveButCoveredCount : 0u,
+                DdgiForwardEstimateHighOwnershipLowDeliveredIndirectCount = giUsesDdgi ? sceneData.DdgiForwardEstimateHighOwnershipLowDeliveredIndirectCount : 0u,
                 DdgiForwardEstimateSampledIrradianceLuminance = giUsesDdgi ? sceneData.DdgiForwardEstimateSampledIrradianceLuminance : 0.0f,
                 DdgiForwardEstimateRawDiffuseLuminance = giUsesDdgi ? sceneData.DdgiForwardEstimateRawDiffuseLuminance : 0.0f,
                 DdgiForwardEstimateFinalDiffuseLuminance = giUsesDdgi ? sceneData.DdgiForwardEstimateFinalDiffuseLuminance : 0.0f,
@@ -4542,6 +4544,10 @@ namespace Njulf.Rendering
                 DdgiTraceEnergyHitZeroDirectCount = giUsesDdgi ? sceneData.DdgiTraceEnergyHitZeroDirectCount : 0u,
                 DdgiTraceEnergyHitWithDirectCount = giUsesDdgi ? sceneData.DdgiTraceEnergyHitWithDirectCount : 0u,
                 DdgiTraceEnergyDirectNoShadowLuminanceAverage = giUsesDdgi ? sceneData.DdgiTraceEnergyDirectNoShadowLuminanceAverage : 0.0f,
+                DdgiShadowVisibilityRayCount = giUsesDdgi ? sceneData.DdgiShadowVisibilityRayCount : 0u,
+                DdgiShadowVisibilityOccludedCount = giUsesDdgi ? sceneData.DdgiShadowVisibilityOccludedCount : 0u,
+                DdgiShadowVisibilityNearHitCount = giUsesDdgi ? sceneData.DdgiShadowVisibilityNearHitCount : 0u,
+                DdgiShadowVisibilityCommittedHitDistanceAverage = giUsesDdgi ? sceneData.DdgiShadowVisibilityCommittedHitDistanceAverage : 0.0f,
                 DdgiTraceEarlyOutDisabledCount = giUsesDdgi ? sceneData.DdgiTraceEarlyOutDisabledCount : 0u,
                 DdgiTraceEarlyOutBeyondRequestCount = giUsesDdgi ? sceneData.DdgiTraceEarlyOutBeyondRequestCount : 0u,
                 DdgiTraceEarlyOutResolveBoundsCount = giUsesDdgi ? sceneData.DdgiTraceEarlyOutResolveBoundsCount : 0u,
@@ -10876,6 +10882,7 @@ namespace Njulf.Rendering
                 sceneData.DdgiForwardEstimateSampleCount = 0;
                 sceneData.DdgiForwardEstimateZeroVisibleButCoveredCount = 0;
                 sceneData.DdgiForwardEstimateZeroEffectiveButCoveredCount = 0;
+                sceneData.DdgiForwardEstimateHighOwnershipLowDeliveredIndirectCount = 0;
                 sceneData.DdgiForwardEstimateSampledIrradianceLuminance = 0.0f;
                 sceneData.DdgiForwardEstimateRawDiffuseLuminance = 0.0f;
                 sceneData.DdgiForwardEstimateFinalDiffuseLuminance = 0.0f;
@@ -10922,6 +10929,10 @@ namespace Njulf.Rendering
                 sceneData.DdgiTraceEnergyHitZeroDirectCount = 0;
                 sceneData.DdgiTraceEnergyHitWithDirectCount = 0;
                 sceneData.DdgiTraceEnergyDirectNoShadowLuminanceAverage = 0.0f;
+                sceneData.DdgiShadowVisibilityRayCount = 0;
+                sceneData.DdgiShadowVisibilityOccludedCount = 0;
+                sceneData.DdgiShadowVisibilityNearHitCount = 0;
+                sceneData.DdgiShadowVisibilityCommittedHitDistanceAverage = 0.0f;
                 sceneData.DdgiTraceEarlyOutDisabledCount = 0;
                 sceneData.DdgiTraceEarlyOutBeyondRequestCount = 0;
                 sceneData.DdgiTraceEarlyOutResolveBoundsCount = 0;
@@ -10957,6 +10968,8 @@ namespace Njulf.Rendering
             sceneData.DdgiForwardEstimateSampleCount = counters.SampleCount;
             sceneData.DdgiForwardEstimateZeroVisibleButCoveredCount = counters.ZeroVisibleButCoveredCount;
             sceneData.DdgiForwardEstimateZeroEffectiveButCoveredCount = counters.ZeroEffectiveButCoveredCount;
+            sceneData.DdgiForwardEstimateHighOwnershipLowDeliveredIndirectCount =
+                counters.HighOwnershipLowDeliveredIndirectCount;
             sceneData.DdgiForwardEstimateSampledIrradianceLuminance = Math.Max(counters.SampledIrradianceLuminanceAverage, 0.0f);
             sceneData.DdgiForwardEstimateRawDiffuseLuminance = counters.RawDiffuseLuminanceAverage;
             sceneData.DdgiForwardEstimateFinalDiffuseLuminance = counters.FinalDiffuseLuminanceAverage;
@@ -11003,6 +11016,11 @@ namespace Njulf.Rendering
             sceneData.DdgiTraceEnergyHitZeroDirectCount = counters.TraceEnergyHitZeroDirectCount;
             sceneData.DdgiTraceEnergyHitWithDirectCount = counters.TraceEnergyHitWithDirectCount;
             sceneData.DdgiTraceEnergyDirectNoShadowLuminanceAverage = Math.Max(counters.TraceEnergyDirectNoShadowLuminanceAverage, 0.0f);
+            sceneData.DdgiShadowVisibilityRayCount = counters.ShadowVisibilityRayCount;
+            sceneData.DdgiShadowVisibilityOccludedCount = counters.ShadowVisibilityOccludedCount;
+            sceneData.DdgiShadowVisibilityNearHitCount = counters.ShadowVisibilityNearHitCount;
+            sceneData.DdgiShadowVisibilityCommittedHitDistanceAverage =
+                Math.Max(counters.ShadowVisibilityCommittedHitDistanceAverage, 0.0f);
             sceneData.DdgiTraceEarlyOutDisabledCount = counters.TraceEarlyOutDisabledCount;
             sceneData.DdgiTraceEarlyOutBeyondRequestCount = counters.TraceEarlyOutBeyondRequestCount;
             sceneData.DdgiTraceEarlyOutResolveBoundsCount = counters.TraceEarlyOutResolveBoundsCount;

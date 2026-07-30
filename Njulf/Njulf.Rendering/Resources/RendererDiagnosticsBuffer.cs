@@ -59,10 +59,19 @@ namespace Njulf.Rendering.Resources
         public const int SimpleDdgiGatherAllFailedCounterBase =
             SimpleDdgiGatherRejectionCounterBase + SimpleDdgiGatherRejectionCounterCount;
         public const int SimpleDdgiGatherAllFailedCounterCount = SimpleDdgiGatherRoleCount;
-        public const int CounterCount =
+        // Append receiver-delivery and shadow-attribution counters so every
+        // existing capture offset remains stable.
+        public const int DdgiDeliveryFailureCounterBase =
             SimpleDdgiGatherAllFailedCounterBase + SimpleDdgiGatherAllFailedCounterCount;
+        public const int DdgiDeliveryFailureCounterCount = 1;
+        public const int DdgiShadowVisibilityCounterBase =
+            DdgiDeliveryFailureCounterBase + DdgiDeliveryFailureCounterCount;
+        public const int DdgiShadowVisibilityCounterCount = 4;
+        public const int CounterCount =
+            DdgiShadowVisibilityCounterBase + DdgiShadowVisibilityCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
+        public const float DdgiShadowHitDistanceScale = 256.0f;
         public const ulong CounterBufferSize = CounterCount * sizeof(uint);
 
         private readonly VulkanContext _context;
@@ -237,6 +246,7 @@ namespace Njulf.Rendering.Resources
             uint sampledProbeSideRearCount = counters[DdgiForwardEstimateCounterBase + 44];
             uint sampledProbeStaleAgeCount = counters[DdgiForwardEstimateCounterBase + 45];
             uint traceEnergySampleCount = counters[DdgiTraceEnergyCounterBase + 0];
+            uint shadowVisibilityOccludedCount = counters[DdgiShadowVisibilityCounterBase + 1];
             uint traceEarlyOutDisabledCount = counters[DdgiTraceEarlyOutCounterBase + 0];
             uint traceEarlyOutBeyondRequestCount = counters[DdgiTraceEarlyOutCounterBase + 1];
             uint traceEarlyOutResolveBoundsCount = counters[DdgiTraceEarlyOutCounterBase + 2];
@@ -263,6 +273,9 @@ namespace Njulf.Rendering.Resources
             float invInvestigationSampleCount = ddgiInvestigationSampleCount > 0 ? 1.0f / ddgiInvestigationSampleCount : 0.0f;
             float invSimpleVisibilitySampleCount = simpleVisibilitySampleCount > 0 ? 1.0f / simpleVisibilitySampleCount : 0.0f;
             float invSkyVisibilitySampleCount = skyVisibilitySampleCount > 0 ? 1.0f / skyVisibilitySampleCount : 0.0f;
+            float invShadowVisibilityOccludedCount = shadowVisibilityOccludedCount > 0
+                ? 1.0f / shadowVisibilityOccludedCount
+                : 0.0f;
             uint[] simpleVolumePrimaryGatherCounts = investigationValid
                 ? new uint[SimpleDdgiVolumeGatherCounterCount]
                 : Array.Empty<uint>();
@@ -396,6 +409,7 @@ namespace Njulf.Rendering.Resources
                     SampleCount: sampleCount,
                     ZeroSupportButSpatiallyCoveredCount: counters[DdgiForwardEstimateCounterBase + 10],
                     ZeroEffectiveButSpatiallyCoveredCount: counters[DdgiForwardEstimateCounterBase + 11],
+                    HighOwnershipLowDeliveredIndirectCount: counters[DdgiDeliveryFailureCounterBase + 0],
                     VisibilityMomentMeanAverage: counters[DdgiForwardEstimateCounterBase + 12] / DdgiForwardEstimateWeightScale * invVisibilityMomentSampleCount,
                     VisibilityMomentVarianceAverage: counters[DdgiForwardEstimateCounterBase + 13] / DdgiForwardEstimateWeightScale * invVisibilityMomentSampleCount,
                     VisibilityProbeDistanceAverage: counters[DdgiForwardEstimateCounterBase + 14] / DdgiForwardEstimateWeightScale * invVisibilityMomentSampleCount,
@@ -439,6 +453,12 @@ namespace Njulf.Rendering.Resources
                     TraceEnergyHitZeroDirectCount: counters[DdgiTraceEnergyCounterBase + 8],
                     TraceEnergyHitWithDirectCount: counters[DdgiTraceEnergyCounterBase + 9],
                     TraceEnergyDirectNoShadowLuminanceAverage: counters[DdgiTraceEnergyCounterBase + 10] / DdgiForwardEstimateLuminanceScale * invTraceEnergySampleCount,
+                    ShadowVisibilityRayCount: counters[DdgiShadowVisibilityCounterBase + 0],
+                    ShadowVisibilityOccludedCount: shadowVisibilityOccludedCount,
+                    ShadowVisibilityNearHitCount: counters[DdgiShadowVisibilityCounterBase + 2],
+                    ShadowVisibilityCommittedHitDistanceAverage:
+                        counters[DdgiShadowVisibilityCounterBase + 3] /
+                        DdgiShadowHitDistanceScale * invShadowVisibilityOccludedCount,
                     TraceEarlyOutDisabledCount: traceEarlyOutDisabledCount,
                     TraceEarlyOutBeyondRequestCount: traceEarlyOutBeyondRequestCount,
                     TraceEarlyOutResolveBoundsCount: traceEarlyOutResolveBoundsCount,

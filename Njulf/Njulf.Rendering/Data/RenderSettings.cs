@@ -502,7 +502,12 @@ namespace Njulf.Rendering.Data
         /// Counts are deterministic sparse weighted estimates; unlike view 46,
         /// the source labels describe paths that actually executed.
         /// </summary>
-        MaterialTransportHitProvenance = 49
+        MaterialTransportHitProvenance = 49,
+        /// <summary>
+        /// Geometric authority of the structured DDGI estimator. This is kept
+        /// separate from probe-data availability and transport visibility.
+        /// </summary>
+        DdgiDirectionalSupport = 50
     }
 
     public enum AntiAliasingMode : uint
@@ -1699,8 +1704,11 @@ namespace Njulf.Rendering.Data
         private float _simpleDdgiStableMaintenanceEmaThreshold = 0.03f;
         private float _simpleDdgiTransportSolverRelaxation = 0.70f;
         private float _simpleDdgiTransportAlbedoClamp = 0.95f;
-        private float _simpleDdgiTransportResidualThreshold = 0.025f;
-        private int _simpleDdgiTransportMaximumSolverGenerations = 8;
+        // Low-energy bounce crosses several probe cells before it reaches a deep
+        // interior. Eight Jacobi generations stabilized the local field but
+        // retired it before that propagation wave reached shaded galleries.
+        private float _simpleDdgiTransportResidualThreshold = 0.01f;
+        private int _simpleDdgiTransportMaximumSolverGenerations = 32;
         private int _simpleDdgiTransportSourceRefreshFrames = 240;
         private float _simpleDdgiAutomaticProbeDensityScale = 0.70f;
         private float _simpleDdgiNormalBias = 0.1f;
@@ -2404,7 +2412,11 @@ namespace Njulf.Rendering.Data
             set => _simpleDdgiTransportResidualThreshold = Clamp(value, 0.001f, 1.0f);
         }
 
-        /// <summary>Maximum published solve iterations admitted per source refresh.</summary>
+        /// <summary>
+        /// Minimum cached-source solve generations required before convergence can
+        /// retire a probe. The legacy property name is retained for settings-file
+        /// compatibility.
+        /// </summary>
         public int SimpleDdgiTransportMaximumSolverGenerations
         {
             get => _simpleDdgiTransportMaximumSolverGenerations;
@@ -3095,8 +3107,8 @@ namespace Njulf.Rendering.Data
             SimpleDdgiAutomaticProbeDensityEnabled = true;
             SimpleDdgiTransportSolverRelaxation = 0.70f;
             SimpleDdgiTransportAlbedoClamp = 0.95f;
-            SimpleDdgiTransportResidualThreshold = 0.025f;
-            SimpleDdgiTransportMaximumSolverGenerations = 8;
+            SimpleDdgiTransportResidualThreshold = 0.01f;
+            SimpleDdgiTransportMaximumSolverGenerations = 32;
             SimpleDdgiVerticalRingPolicy = SimpleDdgiVerticalRingPolicy.CameraRelativeWithHysteresis;
             SimpleDdgiVerticalRecenterHysteresisFraction = 0.25f;
             SimpleDdgiReducedBlendEnabled = tier is DdgiQualityTier.DdgiLow or DdgiQualityTier.DdgiMedium;
@@ -4651,8 +4663,8 @@ namespace Njulf.Rendering.Data
             public float SimpleDdgiStableMaintenanceEmaThreshold { get; init; } = 0.03f;
             public float SimpleDdgiTransportSolverRelaxation { get; init; } = 0.70f;
             public float SimpleDdgiTransportAlbedoClamp { get; init; } = 0.95f;
-            public float SimpleDdgiTransportResidualThreshold { get; init; } = 0.025f;
-            public int SimpleDdgiTransportMaximumSolverGenerations { get; init; } = 8;
+            public float SimpleDdgiTransportResidualThreshold { get; init; } = 0.01f;
+            public int SimpleDdgiTransportMaximumSolverGenerations { get; init; } = 32;
             public int SimpleDdgiTransportSourceRefreshFrames { get; init; } = 240;
             public float SimpleDdgiAutomaticProbeDensityScale { get; init; } = 0.70f;
             // These are spacing-relative authoring controls used by the shared

@@ -107,6 +107,11 @@ const uint SIMPLE_DDGI_VOLUME_KIND_RING = 2u;
 // A small support ramp prevents a single barely-valid trilinear corner from
 // abruptly taking ownership of the entire receiver when a fresh probe settles.
 const float SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP = 0.15;
+// Directional support is geometric estimator authority, not probe-data
+// availability or transport visibility. Keep its ownership ramp distinct so
+// an all-back-facing cell can yield to a coarser gather/environment without
+// relabelling healthy probe data as unavailable.
+const float SIMPLE_DDGI_OWNERSHIP_DIRECTIONAL_SUPPORT_RAMP = 0.15;
 // The low/high interval is reserved for the late all-occluded leak safeguard.
 // Normalized probe selection uses the cubic Chebyshev confidence below.
 const float SIMPLE_DDGI_VISIBILITY_SELECTION_LOW = 0.01;
@@ -1376,9 +1381,29 @@ float SimpleDdgiRadiometricOwnership(SimpleDdgiGatherResult gather)
     // independent of probe-to-receiver visibility: visibility already selects
     // the representative probes in the normalized gather and the late leak
     // attenuation remains responsible for genuinely all-blocked cells.
+    // Directional support is a separate geometric authority term. A cell can
+    // have complete, valid atlas data while every probe lies behind the receiver;
+    // that estimator must not publish zero irradiance at full ownership.
     float spatialCoverage = clamp(gather.spatialCoverage, 0.0, 1.0);
     float validSupport = clamp(gather.validSupport, 0.0, 1.0);
-    return spatialCoverage * smoothstep(0.0, SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP, validSupport);
+    float directionalSupport = clamp(gather.directionalSupport, 0.0, 1.0);
+    float availabilityAuthority = smoothstep(
+        0.0,
+        SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP,
+        validSupport);
+    float directionalAuthority = smoothstep(
+        0.0,
+        SIMPLE_DDGI_OWNERSHIP_DIRECTIONAL_SUPPORT_RAMP,
+        directionalSupport);
+    return spatialCoverage * availabilityAuthority * directionalAuthority;
+}
+
+float SimpleDdgiDirectionalGatherAuthority(SimpleDdgiGatherResult gather)
+{
+    return smoothstep(
+        0.0,
+        SIMPLE_DDGI_OWNERSHIP_DIRECTIONAL_SUPPORT_RAMP,
+        clamp(gather.directionalSupport, 0.0, 1.0));
 }
 
 float SimpleDdgiLeakAttenuation(SimpleDdgiGatherResult gather, SimpleDdgiParams p)
@@ -1836,7 +1861,9 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 v
     // separate edgeWeight >= 0.999 test forced a complete second eight-probe
     // gather even when the primary already owned more than the configured 95%
     // threshold. Preserve the same outer-edge ownership fade when early-out wins.
-    float selectedTransitionOwnership = selected.ownership * edgeWeight;
+    float selectedDirectionalAuthority = SimpleDdgiDirectionalGatherAuthority(selected);
+    float selectedTransitionOwnership =
+        selected.ownership * edgeWeight * selectedDirectionalAuthority;
     if (!selectedBiasOutsideSelectionDomain &&
         selectedTransitionOwnership >= p.secondVolumeOwnershipEarlyOutThreshold)
     {
@@ -1904,10 +1931,15 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 v
             p,
             diagnosticFrame,
             DDGI_INVESTIGATION_SIMPLE_VOLUME_SAMPLED_GATHER_COUNTER_BASE + fallbackVolumeIndex);
+        // A fine cell with valid atlas data but no forward-facing corner must
+        // not hide a usable coarser cell. Directional authority changes only
+        // cascade composition; data availability remains independently visible
+        // through validSupport and the DataConfidence debug view.
+        float selectedGatherWeight = edgeWeight * selectedDirectionalAuthority;
         SimpleDdgiGatherResult combined = BlendSimpleDdgiGatherResults(
             fallback,
             selected,
-            edgeWeight);
+            selectedGatherWeight);
 
         // A dense fine lattice can place all eight local probes inside roof/wall
         // geometry. If the normal two-volume path still has only trace ownership,
@@ -1918,7 +1950,8 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 v
              recoverySample < SIMPLE_DDGI_MAX_GATHER_VOLUME_SAMPLES - 2u;
              recoverySample++)
         {
-            if (combined.ownership >= SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP)
+            if (combined.ownership >= SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP &&
+                combined.directionalSupport >= SIMPLE_DDGI_OWNERSHIP_DIRECTIONAL_SUPPORT_RAMP)
                 break;
             uint recoveryVolumeIndex = 0u;
             SimpleDdgiVolume recoveryVolume;
@@ -1951,7 +1984,12 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 v
                     p,
                     diagnosticFrame,
                     DDGI_INVESTIGATION_SIMPLE_VOLUME_SAMPLED_GATHER_COUNTER_BASE + recoveryVolumeIndex);
-                combined = BlendSimpleDdgiGatherResults(recovery, combined, 1.0);
+                float combinedDirectionalAuthority =
+                    SimpleDdgiDirectionalGatherAuthority(combined);
+                combined = BlendSimpleDdgiGatherResults(
+                    recovery,
+                    combined,
+                    combinedDirectionalAuthority);
             }
         }
 

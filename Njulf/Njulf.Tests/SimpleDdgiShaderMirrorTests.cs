@@ -993,7 +993,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void RadiometricOwnership_UsesDataAvailabilityWithoutRenormalizingIrradiance()
+        public void RadiometricOwnership_UsesSeparateAvailabilityAndDirectionalAuthorityWithoutRenormalizingIrradiance()
         {
             string shared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
             string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
@@ -1003,7 +1003,11 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("float SimpleDdgiRadiometricOwnership(SimpleDdgiGatherResult gather)"));
                 Assert.That(shared, Does.Contain("float spatialCoverage = clamp(gather.spatialCoverage, 0.0, 1.0);"));
                 Assert.That(shared, Does.Contain("float validSupport = clamp(gather.validSupport, 0.0, 1.0);"));
-                Assert.That(shared, Does.Contain("return spatialCoverage * smoothstep(0.0, SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP, validSupport);"));
+                Assert.That(shared, Does.Contain("float directionalSupport = clamp(gather.directionalSupport, 0.0, 1.0);"));
+                Assert.That(shared, Does.Contain("float availabilityAuthority = smoothstep("));
+                Assert.That(shared, Does.Contain("float directionalAuthority = smoothstep("));
+                Assert.That(shared, Does.Contain("return spatialCoverage * availabilityAuthority * directionalAuthority;"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_OWNERSHIP_DIRECTIONAL_SUPPORT_RAMP"));
                 Assert.That(shared, Does.Contain("float availableMass = 0.0;"));
                 Assert.That(shared, Does.Contain("availableMass += dataWeight;"));
                 Assert.That(shared, Does.Contain("? clamp(availableMass / spatialCoverage, 0.0, 1.0)"));
@@ -1020,6 +1024,30 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void StructuredGather_BackFacingFineCellYieldsToCoarserDirectionalSupport()
+        {
+            string shared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(shared, Does.Contain(
+                    "float selectedDirectionalAuthority = SimpleDdgiDirectionalGatherAuthority(selected);"));
+                Assert.That(shared, Does.Contain(
+                    "selected.ownership * edgeWeight * selectedDirectionalAuthority"));
+                Assert.That(shared, Does.Contain(
+                    "float selectedGatherWeight = edgeWeight * selectedDirectionalAuthority;"));
+                Assert.That(shared, Does.Contain(
+                    "combined.directionalSupport >= SIMPLE_DDGI_OWNERSHIP_DIRECTIONAL_SUPPORT_RAMP"));
+                Assert.That(shared, Does.Contain(
+                    "float combinedDirectionalAuthority ="));
+                Assert.That(shared, Does.Contain(
+                    "SimpleDdgiDirectionalGatherAuthority(combined);"));
+                Assert.That(shared, Does.Not.Contain(
+                    "BlendSimpleDdgiGatherResults(recovery, combined, 1.0)"));
+            });
+        }
+
+        [Test]
         public void SecondVolumeGather_UsesCombinedTransitionOwnershipEarlyOut()
         {
             string shared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
@@ -1027,7 +1055,9 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(shared, Does.Contain(
-                    "float selectedTransitionOwnership = selected.ownership * edgeWeight;"));
+                    "float selectedTransitionOwnership ="));
+                Assert.That(shared, Does.Contain(
+                    "selected.ownership * edgeWeight * selectedDirectionalAuthority;"));
                 Assert.That(shared, Does.Contain(
                     "selectedTransitionOwnership >= p.secondVolumeOwnershipEarlyOutThreshold"));
                 Assert.That(shared, Does.Contain("selected.transitionWeight = edgeWeight;"));
@@ -1163,7 +1193,7 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("candidateOffset <= SIMPLE_DDGI_MAX_GATHER_FALLBACK_CANDIDATE_CHECKS"));
                 Assert.That(shared, Does.Contain("combined.ownership >= SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP"));
                 Assert.That(shared, Does.Contain("fallbackVolumeIndex,"));
-                Assert.That(shared, Does.Contain("BlendSimpleDdgiGatherResults(recovery, combined, 1.0)"));
+                Assert.That(shared, Does.Contain("SimpleDdgiDirectionalGatherAuthority(combined);"));
                 Assert.That(shared, Does.Contain("vec3 SimpleDdgiResolveInterpolationPosition("));
                 Assert.That(shared, Does.Contain("!selectedBiasOutsideSelectionDomain"));
                 Assert.That(shared, Does.Contain("!SimpleDdgiContains(candidate, worldPosition)"));
@@ -1179,7 +1209,8 @@ namespace Njulf.Tests
                 Assert.That(renderer, Does.Contain("lightSignature = HashAdd(lightSignature, gi.DdgiThinWallLeakClampStrength);"));
                 Assert.That(shared, Does.Contain("return packed == 0u ? fallback : min(packed - 1u, fallback);"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP = 0.15"));
-                Assert.That(shared, Does.Contain("smoothstep(0.0, SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP, validSupport)"));
+                Assert.That(shared, Does.Contain("float availabilityAuthority = smoothstep("));
+                Assert.That(shared, Does.Contain("return spatialCoverage * availabilityAuthority * directionalAuthority;"));
                 Assert.That(shared, Does.Contain("float outerWeight = 1.0 - innerValidMass;"));
                 Assert.That(shared, Does.Contain("outer.contributingVolumeColor * outerDirectionalMass"));
                 Assert.That(shared, Does.Contain("inner.contributingVolumeColor * innerDirectionalMass"));
@@ -1321,6 +1352,11 @@ namespace Njulf.Tests
                 Assert.That(hitShading, Does.Contain("for (uint sourceIndex = 0u; sourceIndex < sourceCount; sourceIndex++)"));
                 Assert.That(hitShading, Does.Contain("ReadDdgiEmissiveSource(sourceIndex)"));
                 Assert.That(hitShading, Does.Contain("float dominantVisibility = TraceLightVisibility"));
+                Assert.That(hitShading, Does.Contain("DDGI_SHADOW_VISIBILITY_RAY_COUNTER"));
+                Assert.That(hitShading, Does.Contain("DDGI_SHADOW_VISIBILITY_OCCLUDED_COUNTER"));
+                Assert.That(hitShading, Does.Contain("DDGI_SHADOW_VISIBILITY_NEAR_HIT_COUNTER"));
+                Assert.That(hitShading, Does.Contain("rayQueryGetIntersectionTEXT(shadowQuery, true)"));
+                Assert.That(hitShading, Does.Contain("committedHitDistance < max(receiverProbeSpacing, 0.001)"));
                 Assert.That(hitShading, Does.Contain("GPUDdgiEmissiveSource firstSource = ReadDdgiEmissiveSource(0u);"));
                 Assert.That(hitShading, Does.Contain("GPUDdgiEmissiveSource source = ReadDdgiEmissiveSource(selectedIndex);"));
                 Assert.That(forward, Does.Contain("bool simpleDdgiConfigured = (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_ENABLED) != 0u && simpleDdgiParams.probeCount > 0u;"));
