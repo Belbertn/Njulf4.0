@@ -1,0 +1,127 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_ray_query : require
+
+#include "ddgi_alpha_coverage.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D AlphaMaskTexture;
+layout(std430, set = 0, binding = 1) buffer AlphaVisibilityResults
+{
+    uint Values[];
+} Results;
+layout(set = 0, binding = 2) uniform accelerationStructureEXT SceneTlas;
+layout(std430, set = 0, binding = 3) readonly buffer AlphaVisibilityTexCoords
+{
+    vec2 Values[];
+} TexCoords;
+layout(std430, set = 0, binding = 4) readonly buffer AlphaVisibilityIndices
+{
+    uint Values[];
+} Indices;
+
+layout(push_constant) uniform AlphaVisibilityPushConstants
+{
+    uint DistanceIndex;
+    uint Width;
+    uint Height;
+    float Distance;
+    float RayTextureLod;
+    float AlphaCutoff;
+    uint SampleCount;
+    uint DistanceCount;
+} pc;
+
+const uint ALPHA_VISIBILITY_RAY_CANDIDATE_PLANE = 2u;
+const uint ALPHA_VISIBILITY_RAY_COVERED_PLANE = 3u;
+const float ALPHA_VISIBILITY_MASK_MODE = 1.0;
+const float ALPHA_VISIBILITY_TAN_HALF_VERTICAL_FOV = 0.5773502691896258;
+
+uint AlphaVisibilityResultIndex(uint plane, uvec2 pixel)
+{
+    uint planeStride = pc.SampleCount * pc.DistanceCount;
+    return plane * planeStride +
+        pc.DistanceIndex * pc.SampleCount +
+        pixel.y * pc.Width +
+        pixel.x;
+}
+
+void main()
+{
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    if (pixel.x >= pc.Width || pixel.y >= pc.Height)
+        return;
+
+    vec2 normalizedPixel =
+        (vec2(pixel) + vec2(0.5)) / vec2(pc.Width, pc.Height);
+    vec2 ndc = normalizedPixel * 2.0 - 1.0;
+    float aspect = float(pc.Width) / float(pc.Height);
+    vec3 rayDirection = normalize(vec3(
+        ndc.x * ALPHA_VISIBILITY_TAN_HALF_VERTICAL_FOV * aspect,
+        ndc.y * ALPHA_VISIBILITY_TAN_HALF_VERTICAL_FOV,
+        -1.0));
+
+    rayQueryEXT query;
+    rayQueryInitializeEXT(
+        query,
+        SceneTlas,
+        gl_RayFlagsTerminateOnFirstHitEXT,
+        0xff,
+        vec3(0.0, 0.0, pc.Distance),
+        0.001,
+        rayDirection,
+        pc.Distance * 2.0);
+
+    bool encounteredCandidate = false;
+    while (rayQueryProceedEXT(query))
+    {
+        if (rayQueryGetIntersectionTypeEXT(query, false) !=
+            gl_RayQueryCandidateIntersectionTriangleEXT)
+        {
+            continue;
+        }
+
+        encounteredCandidate = true;
+        uint primitiveIndex =
+            rayQueryGetIntersectionPrimitiveIndexEXT(query, false);
+        vec2 barycentrics =
+            rayQueryGetIntersectionBarycentricsEXT(query, false);
+        vec3 bary = vec3(
+            1.0 - barycentrics.x - barycentrics.y,
+            barycentrics.x,
+            barycentrics.y);
+        uint triangleBase = primitiveIndex * 3u;
+        vec2 uv =
+            TexCoords.Values[Indices.Values[triangleBase + 0u]] * bary.x +
+            TexCoords.Values[Indices.Values[triangleBase + 1u]] * bary.y +
+            TexCoords.Values[Indices.Values[triangleBase + 2u]] * bary.z;
+        float sampledAlpha =
+            textureLod(AlphaMaskTexture, uv, pc.RayTextureLod).a;
+        if (DdgiAlphaCandidateOccupiesOpaqueTransport(
+                1.0,
+                1.0,
+                sampledAlpha,
+                ALPHA_VISIBILITY_MASK_MODE,
+                pc.AlphaCutoff))
+        {
+            rayQueryConfirmIntersectionEXT(query);
+        }
+    }
+
+    if (encounteredCandidate)
+    {
+        Results.Values[
+            AlphaVisibilityResultIndex(
+                ALPHA_VISIBILITY_RAY_CANDIDATE_PLANE,
+                pixel)] = 1u;
+    }
+    if (rayQueryGetIntersectionTypeEXT(query, true) !=
+        gl_RayQueryCommittedIntersectionNoneEXT)
+    {
+        Results.Values[
+            AlphaVisibilityResultIndex(
+                ALPHA_VISIBILITY_RAY_COVERED_PLANE,
+                pixel)] = 1u;
+    }
+}

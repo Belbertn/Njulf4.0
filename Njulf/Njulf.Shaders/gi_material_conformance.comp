@@ -1,0 +1,259 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+// This conformance kernel deliberately mirrors only the material ABI required
+// by gi_material_transport.glsl. Keeping it independent of common.glsl avoids
+// imposing bindless descriptor indexing, textures, or renderer-global buffers
+// on a headless CI compute device.
+const uint MATERIAL_FEATURE_CLEARCOAT = 1u << 0u;
+const uint MATERIAL_FEATURE_SHEEN = 1u << 4u;
+const uint MATERIAL_FEATURE_TRANSMISSION = 1u << 9u;
+const uint MATERIAL_FEATURE_EMISSIVE_STRENGTH = 1u << 14u;
+const uint MATERIAL_FEATURE_SPECULAR = 1u << 15u;
+const uint MATERIAL_FEATURE_IOR = 1u << 24u;
+
+struct GPUMaterialData
+{
+    vec4 Albedo;
+    vec4 Emissive;
+    vec4 NormalScaleBias;
+    vec4 MetallicRoughnessAO;
+    vec4 BaseColorOffsetScale;
+    vec4 NormalOffsetScale;
+    vec4 MetallicRoughnessOffsetScale;
+    vec4 OcclusionOffsetScale;
+    vec4 EmissiveOffsetScale;
+    vec4 TextureRotations;
+    vec4 TextureTexCoordSets;
+    vec4 OcclusionBinding;
+    int AlbedoTextureIndex;
+    int NormalTextureIndex;
+    int MetallicRoughnessTextureIndex;
+    int OcclusionTextureIndex;
+    int EmissiveTextureIndex;
+    uint FeatureFlags;
+    int ExtensionDataIndex;
+    uint TransportFlags;
+    uint TransportProfileRevision;
+    uint PackedMeanMetallicRoughness;
+    uint TransportProfileQuality;
+    uint MaterialRevision;
+    uint TextureContentRevision;
+    uint PackedMeanGiDirectionalDiffuseBaseRg;
+    uint PackedMeanGiDirectionalDiffuseBaseBAndF0R;
+    uint PackedMeanGiDielectricF0Gb;
+    vec4 DdgiAverageAlbedo;
+    vec4 DdgiAverageEmissive;
+    vec4 DdgiMaterialPolicy;
+};
+
+struct GPUMaterialExtensionData
+{
+    vec4 Clearcoat;
+    vec4 SheenColor;
+    vec4 Anisotropy;
+    vec4 Transmission;
+    vec4 AttenuationColor;
+    vec4 Subsurface;
+    vec4 SpecularColor;
+    vec4 Iridescence;
+    vec4 Dispersion;
+    vec4 ClearcoatOffsetScale;
+    vec4 ClearcoatRoughnessOffsetScale;
+    vec4 ClearcoatNormalOffsetScale;
+    vec4 SheenColorOffsetScale;
+    vec4 SheenRoughnessOffsetScale;
+    vec4 AnisotropyOffsetScale;
+    vec4 TransmissionOffsetScale;
+    vec4 ThicknessOffsetScale;
+    vec4 SpecularOffsetScale;
+    vec4 SpecularColorOffsetScale;
+    vec4 IridescenceOffsetScale;
+    vec4 IridescenceThicknessOffsetScale;
+    vec4 SubsurfaceOffsetScale;
+    vec4 ExtensionTextureRotations0;
+    vec4 ExtensionTextureRotations1;
+    vec4 ExtensionTextureRotations2;
+    vec4 ExtensionTextureRotations3;
+    vec4 ExtensionTextureTexCoordSets0;
+    vec4 ExtensionTextureTexCoordSets1;
+    vec4 ExtensionTextureTexCoordSets2;
+    vec4 ExtensionTextureTexCoordSets3;
+    int ClearcoatTextureIndex;
+    int ClearcoatRoughnessTextureIndex;
+    int ClearcoatNormalTextureIndex;
+    int SheenColorTextureIndex;
+    int SheenRoughnessTextureIndex;
+    int AnisotropyTextureIndex;
+    int TransmissionTextureIndex;
+    int ThicknessTextureIndex;
+    int SubsurfaceTextureIndex;
+    int SpecularTextureIndex;
+    int SpecularColorTextureIndex;
+    int IridescenceTextureIndex;
+    int IridescenceThicknessTextureIndex;
+    int Padding0;
+    int Padding1;
+    int Padding2;
+    int Padding3;
+    // GPUMaterialExtensionData's measured payload ends at byte 548. std430
+    // rounds its array stride to 560, so expose those otherwise-implicit tail
+    // words in this conformance-only mirror for deterministic ABI readback.
+    uint AlignmentPadding0;
+    uint AlignmentPadding1;
+    uint AlignmentPadding2;
+};
+
+#include "gi_material_transport.glsl"
+
+struct GiMaterialConformanceCase
+{
+    vec4 BaseColorSample;
+    vec4 MetallicRoughnessSampleAndOcclusion;
+    vec4 EmissiveSampleAndNdotL;
+    vec4 VertexColor;
+    vec4 GeometricNormalAndFrontFacing;
+    vec4 ShadingNormalAndNdotV;
+    vec4 ViewDirectionAndHasExtension;
+    vec4 Irradiance;
+};
+
+struct GiMaterialConformanceResult
+{
+    vec4 GeometricNormalAndOpacity;
+    vec4 ShadingNormalAndOcclusion;
+    vec4 DiffuseReflectanceAndMetallic;
+    vec4 EmissiveRadianceAndRoughness;
+    vec4 DiffuseFromIrradianceAndOpacityPass;
+    vec4 DiffuseBrdfAndSidednessPass;
+    vec4 CompactDiffuseBrdf;
+    uint TransportFlags;
+    uint HasExtensionData;
+    uint MaterialRevision;
+    uint TransportProfileRevision;
+    uint TextureContentRevision;
+    uint PackedMeanGiDirectionalDiffuseBaseRg;
+    uint PackedMeanGiDirectionalDiffuseBaseBAndF0R;
+    uint PackedMeanGiDielectricF0Gb;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer MaterialInputBuffer
+{
+    GPUMaterialData Values[];
+} MaterialInputs;
+
+layout(std430, set = 0, binding = 1) readonly buffer ExtensionInputBuffer
+{
+    GPUMaterialExtensionData Values[];
+} ExtensionInputs;
+
+layout(std430, set = 0, binding = 2) readonly buffer CaseInputBuffer
+{
+    GiMaterialConformanceCase Values[];
+} CaseInputs;
+
+layout(std430, set = 0, binding = 3) writeonly buffer ResultOutputBuffer
+{
+    GiMaterialConformanceResult Values[];
+} ResultOutputs;
+
+layout(std430, set = 0, binding = 4) writeonly buffer MaterialRoundTripBuffer
+{
+    GPUMaterialData Values[];
+} MaterialRoundTrip;
+
+layout(std430, set = 0, binding = 5) writeonly buffer ExtensionRoundTripBuffer
+{
+    GPUMaterialExtensionData Values[];
+} ExtensionRoundTrip;
+
+layout(push_constant) uniform GiMaterialConformancePushBlock
+{
+    uint CaseCount;
+} pc;
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    uint caseIndex = gl_GlobalInvocationID.x;
+    if (caseIndex >= pc.CaseCount)
+        return;
+
+    GPUMaterialData material = MaterialInputs.Values[caseIndex];
+    GPUMaterialExtensionData extensionData = ExtensionInputs.Values[caseIndex];
+    GiMaterialConformanceCase testCase = CaseInputs.Values[caseIndex];
+    bool hasExtensionData = testCase.ViewDirectionAndHasExtension.w > 0.5;
+
+    GiSurfaceSample surface = EvaluateGiTexturedSurface(
+        material,
+        extensionData,
+        hasExtensionData,
+        testCase.BaseColorSample,
+        vec4(testCase.MetallicRoughnessSampleAndOcclusion.xyz, 1.0),
+        testCase.MetallicRoughnessSampleAndOcclusion.w,
+        testCase.EmissiveSampleAndNdotL.xyz,
+        testCase.VertexColor,
+        testCase.GeometricNormalAndFrontFacing.xyz,
+        testCase.ShadingNormalAndNdotV.xyz,
+        testCase.ViewDirectionAndHasExtension.xyz,
+        false);
+
+    bool opacityPass = EvaluateGiOpacity(
+        surface.Opacity,
+        material.NormalScaleBias.y,
+        material.NormalScaleBias.z);
+    bool opaqueTransportPass = MaterialAlphaOccupiesOpaqueTransport(
+        surface.Opacity,
+        material.NormalScaleBias.y,
+        material.NormalScaleBias.z);
+    bool sidednessPass = EvaluateGiSidedness(
+        material.NormalScaleBias.w > 0.5,
+        testCase.GeometricNormalAndFrontFacing.w > 0.5);
+    vec3 diffuseFromIrradiance = EvaluateGiDiffuseFromIrradiance(
+        testCase.Irradiance.xyz,
+        surface.DiffuseReflectance);
+    vec3 diffuseBrdf = EvaluateGiDiffuseBrdf(
+        surface.DirectionalDiffuseBase,
+        surface.DielectricF0,
+        testCase.EmissiveSampleAndNdotL.w,
+        testCase.ShadingNormalAndNdotV.w);
+    GiSurfaceSample compactSurface = EvaluateGiCompactSurface(
+        material,
+        testCase.GeometricNormalAndFrontFacing.xyz,
+        testCase.ShadingNormalAndNdotV.xyz);
+    vec3 compactDiffuseBrdf = EvaluateGiDiffuseBrdf(
+        compactSurface.DirectionalDiffuseBase,
+        compactSurface.DielectricF0,
+        testCase.EmissiveSampleAndNdotL.w,
+        testCase.ShadingNormalAndNdotV.w);
+
+    GiMaterialConformanceResult result;
+    result.GeometricNormalAndOpacity = vec4(surface.GeometricNormal, surface.Opacity);
+    result.ShadingNormalAndOcclusion = vec4(surface.ShadingNormal, surface.MaterialOcclusion);
+    result.DiffuseReflectanceAndMetallic = vec4(surface.DiffuseReflectance, surface.Metallic);
+    result.EmissiveRadianceAndRoughness = vec4(surface.EmissiveRadiance, surface.Roughness);
+    result.DiffuseFromIrradianceAndOpacityPass =
+        vec4(diffuseFromIrradiance, opacityPass ? 1.0 : 0.0);
+    result.DiffuseBrdfAndSidednessPass =
+        vec4(diffuseBrdf, sidednessPass ? 1.0 : 0.0);
+    result.CompactDiffuseBrdf =
+        vec4(compactDiffuseBrdf, opaqueTransportPass ? 1.0 : 0.0);
+    result.TransportFlags = surface.Flags;
+    result.HasExtensionData = hasExtensionData ? 1u : 0u;
+    result.MaterialRevision = material.MaterialRevision;
+    result.TransportProfileRevision = material.TransportProfileRevision;
+    result.TextureContentRevision = material.TextureContentRevision;
+    result.PackedMeanGiDirectionalDiffuseBaseRg =
+        material.PackedMeanGiDirectionalDiffuseBaseRg;
+    result.PackedMeanGiDirectionalDiffuseBaseBAndF0R =
+        material.PackedMeanGiDirectionalDiffuseBaseBAndF0R;
+    result.PackedMeanGiDielectricF0Gb =
+        material.PackedMeanGiDielectricF0Gb;
+    ResultOutputs.Values[caseIndex] = result;
+
+    // A real shader load/store round trip locks the complete measured ABI,
+    // including integer fields and explicit extension-array alignment words.
+    MaterialRoundTrip.Values[caseIndex] = material;
+    ExtensionRoundTrip.Values[caseIndex] = extensionData;
+}

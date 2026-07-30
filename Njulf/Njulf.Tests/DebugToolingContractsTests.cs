@@ -45,7 +45,9 @@ namespace Njulf.Tests
                 ("far field", RendererDiagnosticsBuffer.FarFieldCounterBase, RendererDiagnosticsBuffer.FarFieldCounterCount),
                 ("DDGI investigation", RendererDiagnosticsBuffer.DdgiInvestigationCounterBase, RendererDiagnosticsBuffer.DdgiInvestigationCounterCount),
                 ("simple DDGI transport", RendererDiagnosticsBuffer.SimpleDdgiTransportCounterBase, RendererDiagnosticsBuffer.SimpleDdgiTransportCounterCount),
-                ("directional shadow receiver", RendererDiagnosticsBuffer.DirectionalShadowReceiverCounterBase, RendererDiagnosticsBuffer.DirectionalShadowReceiverCounterCount)
+                ("directional shadow receiver", RendererDiagnosticsBuffer.DirectionalShadowReceiverCounterBase, RendererDiagnosticsBuffer.DirectionalShadowReceiverCounterCount),
+                ("far-field material V2", RendererDiagnosticsBuffer.FarFieldMaterialV2CounterBase, RendererDiagnosticsBuffer.FarFieldMaterialV2CounterCount),
+                ("material GI", RendererDiagnosticsBuffer.MaterialGiCounterBase, RendererDiagnosticsBuffer.MaterialGiCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -70,6 +72,8 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.DirectionalShadowReceiverCascadeCount, Is.EqualTo(ShadowSettings.MaxDirectionalCascades));
                 Assert.That(RendererDiagnosticsBuffer.DirectionalShadowReceiverCounterFamilyCount, Is.EqualTo(16));
                 Assert.That(RendererDiagnosticsBuffer.DirectionalShadowReceiverDepthQuantizationScale, Is.EqualTo(65535.0f));
+                Assert.That(RendererDiagnosticsBuffer.FarFieldMaterialV2CounterCount, Is.EqualTo(2));
+                Assert.That(RendererDiagnosticsBuffer.MaterialGiCounterCount, Is.EqualTo(10));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(nextExpectedStart));
                 Assert.That(RendererDiagnosticsBuffer.CounterBufferSize, Is.EqualTo((ulong)nextExpectedStart * sizeof(uint)));
             });
@@ -293,6 +297,57 @@ namespace Njulf.Tests
                 Assert.That(program, Does.Contain("camera.FieldOfView = bookmark.FieldOfView;"));
                 Assert.That(program, Does.Contain("camera.NearPlane = bookmark.NearPlane;"));
                 Assert.That(program, Does.Contain("camera.FarPlane = bookmark.FarPlane;"));
+            });
+        }
+
+        [Test]
+        public void ProductionSmokeHost_ObservesRealWindowAndRestoresExactQualitySettings()
+        {
+            string program = ReadRepoText("NjulfHelloGame", "Program.cs");
+            string lifecycle = ReadRepoText(
+                "NjulfHelloGame",
+                "SampleLifecycleSmokeRunner.cs");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    program,
+                    Does.Contain(
+                        "Window.WindowState = Silk.NET.Windowing.WindowState.Minimized;"));
+                Assert.That(
+                    program,
+                    Does.Contain(
+                        "Window.Size = new Silk.NET.Maths.Vector2D<int>(width, height);"));
+                Assert.That(
+                    program,
+                    Does.Contain(
+                        "Silk.NET.Maths.Vector2D<int> framebufferSize = Window.FramebufferSize;"));
+                Assert.That(
+                    program,
+                    Does.Contain("_smokeRunner?.OnFramebufferMutationObserved("));
+                Assert.That(program, Does.Contain("_smokeRunner?.OnUpdate(_drawnFrames);"));
+                Assert.That(
+                    lifecycle,
+                    Does.Contain("minimize-zero-framebuffer"));
+                Assert.That(
+                    lifecycle,
+                    Does.Contain("FramebufferMutationKind.Restore"));
+                Assert.That(
+                    program,
+                    Does.Contain(
+                        "SampleRenderSettingsSnapshot.Capture(renderer.Settings)"));
+                Assert.That(
+                    program,
+                    Does.Contain(
+                        "() => initialSettings.Restore(renderer.Settings)"));
+                Assert.That(
+                    program,
+                    Does.Contain(
+                        "SampleRenderSettingsFingerprint.Capture(renderer.Settings)"));
+                Assert.That(
+                    program,
+                    Does.Contain(
+                        "_smokeOptions.Mode is SampleSmokeMode.QualitySwitch or SampleSmokeMode.LongRun"));
             });
         }
 

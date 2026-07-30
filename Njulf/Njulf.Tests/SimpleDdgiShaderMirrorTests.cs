@@ -961,7 +961,8 @@ namespace Njulf.Tests
                 Assert.That(trace, Does.Contain("uint sourceRayOrdinal = min("));
                 Assert.That(trace, Does.Contain("uint directionRayIndex = sourceRayOrdinal * params.raysPerProbe / sourceRayCount;"));
                 Assert.That(transport, Does.Contain("vec3 bounceRadiance = vec3(0.0);"));
-                Assert.That(transport, Does.Contain("bounceRadiance = bouncedIrradiance * albedo / SIMPLE_DDGI_PI;"));
+                Assert.That(transport, Does.Contain("bounceRadiance = ApplyGiMaterialOcclusion("));
+                Assert.That(transport, Does.Contain("EvaluateGiDiffuseFromIrradiance("));
                 Assert.That(transport, Does.Contain("ReadSimpleDdgiTransportRayCache("));
                 Assert.That(transport, Does.Contain("SampleSimpleDdgiUnifiedIrradiance("));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID"));
@@ -974,13 +975,15 @@ namespace Njulf.Tests
                 Assert.That(trace, Does.Contain("SimpleDdgiFibonacciDirection(directionRayIndex, params.raysPerProbe, rayRotation)"));
                 Assert.That(trace, Does.Contain("if (!SimpleDdgiUpdateMatchesProbeGeneration(update, probeState))"));
                 Assert.That(trace, Does.Contain("vec3 probePosition = SimpleDdgiProbeLogicalPosition(volume, localProbeIndex) + probeState.relocation;"));
-                Assert.That(trace, Does.Contain("surfaceNormal * max(0.03, volume.spacing * 0.02)"));
-                Assert.That(trace, Does.Contain("emissiveProxyDiffuse * (1.0 - bounceOwnership)"));
+                Assert.That(trace, Does.Contain("surface.GeometricNormal * max(0.03, volume.spacing * 0.02)"));
+                Assert.That(trace, Does.Contain("vec3 emissiveDiffuse = surface.EmissiveRadiance + emissiveProxyDiffuse;"));
+                Assert.That(trace, Does.Not.Contain("emissiveProxyDiffuse * (1.0 - bounceOwnership)"));
                 Assert.That(trace, Does.Contain("vec3 radiance = SampleDdgiEnvironmentMissRadianceWithFallback"));
                 Assert.That(hitShading, Does.Contain("max(environment.SkyIntensity, 0.0)"));
                 Assert.That(hitShading, Does.Not.Contain("max(environment.DiffuseIntensity, 0.0)"));
                 Assert.That(shared, Does.Contain("max(environment.SkyIntensity, 0.0)"));
-                Assert.That(forward, Does.Contain("diffuseIbl = diffuseWeight * (albedo / PI) * irradiance * environment.DiffuseIntensity;"));
+                Assert.That(forward, Does.Contain("diffuseIbl = EvaluateGiDiffuseFromIrradiance("));
+                Assert.That(forward, Does.Contain("irradiance * environment.DiffuseIntensity,"));
                 Assert.That(simpleManager, Does.Contain("_settings.Environment.Enabled ? _settings.Environment.SkyIntensity : 0.0f"));
                 Assert.That(simpleManager, Does.Contain("_transportSourceCacheRayCapacity != sourceCacheRayCapacity"));
                 Assert.That(simpleManager, Does.Contain("ProbeStateSourceCacheInvalidFlag"));
@@ -1049,7 +1052,8 @@ namespace Njulf.Tests
                 Assert.That(hitShading, Does.Contain("for (uint sourceIndex = 0u; sourceIndex < sourceCount; sourceIndex++)"));
                 Assert.That(hitShading, Does.Contain("ReadDdgiEmissiveSource(sourceIndex)"));
                 Assert.That(hitShading, Does.Contain("float dominantVisibility = TraceLightVisibility"));
-                Assert.That(hitShading, Does.Not.Contain("ReadDdgiEmissiveSource(0u)"));
+                Assert.That(hitShading, Does.Contain("GPUDdgiEmissiveSource firstSource = ReadDdgiEmissiveSource(0u);"));
+                Assert.That(hitShading, Does.Contain("GPUDdgiEmissiveSource source = ReadDdgiEmissiveSource(selectedIndex);"));
                 Assert.That(forward, Does.Contain("bool simpleDdgiConfigured = (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_ENABLED) != 0u && simpleDdgiParams.probeCount > 0u;"));
                 Assert.That(forward, Does.Contain("(simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) != 0u;"));
                 Assert.That(forward, Does.Contain("else if (simpleDdgiConfigured)"));
@@ -1075,7 +1079,8 @@ namespace Njulf.Tests
                 Assert.That(forward, Does.Contain("simpleDdgiContributingVolumeColor = simpleGather.contributingVolumeColor;"));
                 Assert.That(forward, Does.Contain("? simpleDdgiContributingVolumeColor"));
                 Assert.That(forward, Does.Contain("ddgiSample.minProbeSpacing = simpleGather.selectedSpacing;"));
-                Assert.That(forward, Does.Contain("ddgiDiffuse = simpleIrradiance * simpleDdgiParams.indirectIntensity * albedo * max(1.0 - metallic, 0.0) / PI;"));
+                Assert.That(forward, Does.Contain("simpleIrradiance * simpleDdgiParams.indirectIntensity,"));
+                Assert.That(forward, Does.Contain("diffuseReflectance),"));
                 Assert.That(forward, Does.Contain("finalDiffuseIndirect = finalDdgiDiffuse + diffuseIbl * simpleFallback * indirectAo;"));
                 Assert.That(forward, Does.Not.Contain("finalDiffuseIndirect = ddgiDiffuse + diffuseIbl * indirectAo;"));
                 Assert.That(blend, Does.Contain("float SimpleDdgiStableRelativeDelta"));

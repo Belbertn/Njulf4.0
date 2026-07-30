@@ -28,6 +28,10 @@ internal static class Program
                 "clean-stale" => RunCleanStale(args[1..]),
                 "migrate" => RunMigrate(args[1..]),
                 "keygen" => RunKeygen(args[1..]),
+                "khronos-material-gi" => await KhronosMaterialGiGateCommand.RunAsync(args[1..]).ConfigureAwait(false),
+                "alpha-visibility-gate" => AlphaVisibilityGateCommand.Run(args[1..]),
+                "material-gi-test-matrix" => MaterialGiTestMatrixCommand.Run(args[1..]),
+                "material-gi-evidence" => MaterialGiEvidenceCommand.Run(args[1..]),
                 "--child-import" => await RunChildImport(args[1..]).ConfigureAwait(false),
                 _ => UnknownCommand(args[0])
             };
@@ -402,5 +406,11 @@ internal static class Program
         Console.WriteLine("  Njulf.AssetTool clean-stale --out <folder> [--platform <rid>]");
         Console.WriteLine("  Njulf.AssetTool migrate <cooked-folder> [--out <folder>] [--signing-key <pem>]");
         Console.WriteLine("  Njulf.AssetTool keygen --private <pem> --public <pem>");
+        Console.WriteLine("  Njulf.AssetTool khronos-material-gi --cache <folder> --out <folder> --report <json> [--manifest <json>] [--offline]");
+        Console.WriteLine("  Njulf.AssetTool alpha-visibility-gate --report <json> --evidence <bin> [--verify]");
+        Console.WriteLine("  Njulf.AssetTool material-gi-test-matrix --out <json> --build-commit <sha> --shader-fingerprint <sha256> --settings-fingerprint <sha256> --device-id <id> --gpu-name <name> --driver-version <version> --attest-release-build --trx <CpuOracle|GpuOracle|ReleaseTests>=<trx>");
+        Console.WriteLine("  Njulf.AssetTool material-gi-evidence assemble --root <folder> --request <json> --bundle <relative-json>");
+        Console.WriteLine("  Njulf.AssetTool material-gi-evidence pin-manifest --root <folder> --manifest <relative-json> --bundle <relative-json> --alpha-report <relative-json> --alpha-evidence <relative-bin> --approval-id <id> --approved-at-utc <timestamp> --qualified-device <id> [--qualified-device <id> ...]");
+        Console.WriteLine("  Njulf.AssetTool material-gi-evidence verify-manifest --manifest <json> [--evaluation-date <yyyy-MM-dd>]");
     }
 }

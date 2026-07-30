@@ -8,6 +8,7 @@ using Njulf.Core.Scene;
 using Njulf.Input;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
 using CoreVector3 = Njulf.Core.Math.Vector3;
@@ -20,11 +21,49 @@ namespace NjulfHelloGame;
 
 internal static class Program
 {
-    public static void Main(string[] args)
+    public static int Main(string[] args)
     {
+        if (SampleMaterialGiComparisonCli.TryRun(
+                args,
+                Console.Out,
+                Console.Error,
+                out int comparisonExitCode))
+        {
+            return comparisonExitCode;
+        }
+        if (SampleMaterialGiApprovedHdrCli.TryRun(
+                args,
+                Console.Out,
+                Console.Error,
+                out int visualRegressionExitCode))
+        {
+            return visualRegressionExitCode;
+        }
+
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(args);
-        using var game = new HelloGame(options, args);
-        game.Run();
+        using var gateFailureGuard =
+            options.KhronosMaterialGiRenderedGate is { } gateOptions
+                ? new SampleKhronosMaterialGiRenderedGateHostFailureGuard(gateOptions)
+                : null;
+        try
+        {
+            using var game = new HelloGame(options, args);
+            game.Run();
+        }
+        catch (Exception exception) when (options.KhronosMaterialGiRenderedGate is not null)
+        {
+            string failure =
+                $"Khronos rendered-gate host failed: {exception.GetType().Name}: {exception.Message}";
+            gateFailureGuard?.RecordHostFailure(failure);
+            Environment.ExitCode = 1;
+            Console.Error.WriteLine(failure);
+        }
+        if (gateFailureGuard is not null &&
+            !gateFailureGuard.CompleteHostRun(Environment.ExitCode))
+        {
+            Environment.ExitCode = 1;
+        }
+        return Environment.ExitCode;
     }
 }
 
@@ -42,20 +81,29 @@ internal sealed class HelloGame : Game
     private SamplePerformanceScenarioRunner? _performanceScenarioRunner;
     private IReadOnlyList<ParticleEffectInstance>? _sampleVfxEffects;
     private readonly SampleSmokeOptions _smokeOptions;
+    private readonly SampleMaterialGiRolloutBootstrap _materialGiRolloutBootstrap;
     private readonly RendererStartupLog _startupLog;
     private readonly SampleHealthReportWriter _healthReportWriter = new();
     private SampleSceneKind _sceneKind;
     private SampleLifecycleSmokeRunner? _smokeRunner;
     private SampleSceneReloadRunner? _sceneReloadRunner;
     private SampleLongRunMonitor? _longRunMonitor;
+    private SampleQualitySwitchSmokeRunner? _qualitySwitchSmokeRunner;
+    private SampleTextureHotReloadSmokeRunner? _textureHotReloadSmokeRunner;
     private SampleBenchmarkRunner? _benchmarkRunner;
+    private SampleMaterialGiCaptureRunner? _materialGiCaptureRunner;
+    private SampleKhronosMaterialGiRenderedSceneBuild? _khronosMaterialGiRenderedScene;
+    private SampleKhronosMaterialGiRenderedGateRunner? _khronosMaterialGiRenderedGateRunner;
     private string? _lastSuccessfulStartupStep;
     private string? _startupFailure;
+    private string? _runtimeSmokeFailure;
     private int _drawnFrames;
     private int _baselineScenarioRenderedFrames;
     private bool _baselineSnapshotExported;
     private float _modelRotation;
     private (int Width, int Height)? _pendingSmokeResize;
+    private PendingSmokeWindowMutation? _observingSmokeWindowMutation;
+    private long _framebufferResizeRevision;
 #if NJULF_EDITOR
     private ImGuiEditorOverlayHost? _editorHost;
     private EditorInputBridge? _editorInput;
@@ -69,6 +117,10 @@ internal sealed class HelloGame : Game
     public HelloGame(SampleSmokeOptions smokeOptions, string[] commandLineArgs)
     {
         _smokeOptions = smokeOptions ?? throw new ArgumentNullException(nameof(smokeOptions));
+        _materialGiRolloutBootstrap = SampleMaterialGiRolloutBootstrap.Load(
+            _smokeOptions.MaterialGiQualificationManifestPath,
+            qualificationCandidate:
+                _smokeOptions.Benchmark.MaterialGiQualificationCandidate);
         _sceneKind = _smokeOptions.SceneKind;
         _startupLog = new RendererStartupLog(_smokeOptions.StartupLogPath, commandLineArgs);
 
@@ -76,7 +128,8 @@ internal sealed class HelloGame : Game
         WindowTitle = "Njulf Hello Game - Mesh Shader glTF Sample";
         WindowWidth = 1600;
         WindowHeight = 900;
-        VSync = !_smokeOptions.Benchmark.Enabled || !_smokeOptions.Benchmark.DisableVSync;
+        VSync = _smokeOptions.KhronosMaterialGiRenderedGate is null &&
+                (!_smokeOptions.Benchmark.Enabled || !_smokeOptions.Benchmark.DisableVSync);
     }
 
     protected override void ConfigureServices(IServiceCollection services)
@@ -118,7 +171,8 @@ internal sealed class HelloGame : Game
         LightManager lightManager = services.GetRequiredService<LightManager>();
         VulkanRenderer renderer = Renderer as VulkanRenderer
             ?? throw new InvalidOperationException("NjulfHelloGame requires the Vulkan renderer.");
-        renderer.Settings.Debug.AllowGpuTiming = true;
+        if (ShouldAutoEnableGpuTiming())
+            renderer.Settings.Debug.AllowGpuTiming = true;
         ConfigureSceneRenderSettings(renderer);
 
         if (_sceneKind == SampleSceneKind.SponzaPlaza)
@@ -136,6 +190,7 @@ internal sealed class HelloGame : Game
         ConfigureSceneLighting(lightManager);
         ConfigureSceneEnvironment(renderer);
         ConfigureSceneRenderSettings(renderer);
+        ApplySmokeRenderSettings(renderer);
         SamplePerformanceScenario startupScenario = ResolveStartupScenario();
         if (startupScenario != SamplePerformanceScenario.Normal)
         {
@@ -176,7 +231,33 @@ internal sealed class HelloGame : Game
         if (_sceneKind == SampleSceneKind.SponzaPlaza)
             _editorController.SetScenePath(Path.Combine(AppContext.BaseDirectory, "Scenes", "SampleScene.njscene.json"));
 #endif
-        if (!string.IsNullOrWhiteSpace(_smokeOptions.SponzaGiCaptureDirectory))
+        if (_smokeOptions.KhronosMaterialGiRenderedGate is not null)
+        {
+            SampleKhronosMaterialGiRenderedSceneBuild scene =
+                _khronosMaterialGiRenderedScene ??
+                throw new InvalidOperationException(
+                    "Khronos rendered-gate scene evidence was not created.");
+            _khronosMaterialGiRenderedGateRunner =
+                new SampleKhronosMaterialGiRenderedGateRunner(
+                    scene,
+                    renderer,
+                    camera,
+                    lightManager,
+                    () => (WindowWidth, WindowHeight),
+                    Exit);
+        }
+        else if (!string.IsNullOrWhiteSpace(_smokeOptions.MaterialGiCaptureDirectory))
+        {
+            _materialGiCaptureRunner = new SampleMaterialGiCaptureRunner(
+                renderer,
+                camera,
+                lightManager,
+                _smokeOptions.MaterialGiCaptureDirectory,
+                () => (WindowWidth, WindowHeight),
+                Exit,
+                _smokeOptions.AsyncComputeModeOverride ?? AsyncComputeMode.Disabled);
+        }
+        else if (!string.IsNullOrWhiteSpace(_smokeOptions.SponzaGiCaptureDirectory))
         {
             _inputController.StartSponzaGiCapture(
                 _smokeOptions.SponzaGiCaptureDirectory,
@@ -207,19 +288,80 @@ internal sealed class HelloGame : Game
                 ApplySmokeRenderSettings(renderer);
                 ApplyPerformanceScenarioCamera(camera, reloadScenario);
             }
+            ApplySmokeRenderSettings(renderer);
         });
         _smokeRunner = new SampleLifecycleSmokeRunner(
             _smokeOptions,
             ResizeForSmoke,
             _sceneReloadRunner.Reload,
-            Exit);
-        _longRunMonitor = new SampleLongRunMonitor();
+            Exit,
+            initialWindowSize: () =>
+            {
+                Silk.NET.Maths.Vector2D<int> size =
+                    Window?.Size ??
+                    new Silk.NET.Maths.Vector2D<int>(WindowWidth, WindowHeight);
+                return (size.X, size.Y);
+            });
+        if (_smokeOptions.Mode == SampleSmokeMode.LongRun)
+        {
+            var workload = new SampleDeterministicLongRunWorkload(
+                camera,
+                Scene,
+                materialManager);
+            BindlessHeap bindlessHeap = services.GetRequiredService<BindlessHeap>();
+            _longRunMonitor = new SampleLongRunMonitor(
+                _smokeOptions,
+                workload,
+                bindlessHeap.GetDescriptorPressureSnapshot,
+                () => SampleRenderSettingsFingerprint.Capture(
+                    renderer.Settings));
+            Console.WriteLine(
+                $"Long-run stability gate armed: warmup={_smokeOptions.LongRunWarmupFrames}, " +
+                $"sampleInterval={_smokeOptions.LongRunSampleInterval}, " +
+                $"retainedSamples={_smokeOptions.LongRunMaxRetainedSamples}, " +
+                $"minutes={_smokeOptions.LongRunMinutes:R}, frames={_smokeOptions.FrameCount}.");
+        }
+        else if (_smokeOptions.Mode == SampleSmokeMode.QualitySwitch)
+        {
+            SampleRenderSettingsSnapshot initialSettings =
+                SampleRenderSettingsSnapshot.Capture(renderer.Settings);
+            _qualitySwitchSmokeRunner = new SampleQualitySwitchSmokeRunner(
+                preset =>
+                {
+                    renderer.Settings.ApplyQualityPreset(preset);
+                    _materialGiRolloutBootstrap.Apply(renderer.Settings, Console.Out);
+                    SampleLighting.ConfigureRenderSettings(
+                        renderer.Settings,
+                        ResolveSceneLightingMode());
+                },
+                () => initialSettings.Restore(renderer.Settings),
+                () => renderer.Settings.QualityPreset,
+                () => SampleRenderSettingsFingerprint.Capture(renderer.Settings),
+                () => GetRendererDeviceIdentity(renderer),
+                RecordSmokeOperation,
+                Exit);
+        }
+        else if (_smokeOptions.Mode == SampleSmokeMode.TextureHotReload)
+        {
+            var session = new SampleTextureHotReloadSession(
+                services.GetRequiredService<TextureManager>(),
+                materialManager,
+                Scene,
+                renderer);
+            _textureHotReloadSmokeRunner = new SampleTextureHotReloadSmokeRunner(
+                session,
+                () => GetRendererDeviceIdentity(renderer),
+                RecordSmokeOperation,
+                Exit);
+        }
         if (_smokeOptions.Benchmark.Enabled)
         {
             _benchmarkRunner = new SampleBenchmarkRunner(
                 _smokeOptions.Benchmark,
                 _smokeOptions.PerformanceScenario,
-                Exit);
+                Exit,
+                () => SampleRenderSettingsFingerprint.Capture(
+                    renderer.Settings));
             Console.WriteLine(
                 $"Benchmark armed: warmup={_smokeOptions.Benchmark.WarmupFrameCount}, " +
                 $"measure={_smokeOptions.Benchmark.MeasureFrameCount}, vsync={(VSync ? "on" : "off")}");
@@ -243,6 +385,27 @@ internal sealed class HelloGame : Game
             $"api={device.ApiVersion}, driver={device.DriverVersion}");
     }
 
+    private static string GetRendererDeviceIdentity(VulkanRenderer renderer)
+    {
+        DeviceRequirementReport? device = renderer.SelectedDeviceRequirementReport;
+        return device == null
+            ? "unknown"
+            : $"{device.DeviceName}|{device.VendorId:X8}|{device.DeviceId:X8}|" +
+              $"{device.ApiVersion}|{device.DriverVersion}";
+    }
+
+    private void RecordSmokeOperation(SampleSmokeOperationResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        _smokeRunner?.RecordOperation(
+            result.Name,
+            result.Status,
+            result.FrameIndex,
+            result.Detail);
+        if (string.Equals(result.Status, "failed", StringComparison.OrdinalIgnoreCase))
+            _runtimeSmokeFailure ??= result.Detail ?? $"{result.Name} failed.";
+    }
+
     private SamplePerformanceScenario ResolveStartupScenario()
     {
         if (_smokeOptions.PerformanceScenario != SamplePerformanceScenario.Normal)
@@ -253,6 +416,16 @@ internal sealed class HelloGame : Game
 
     private void ApplySmokeRenderSettings(VulkanRenderer renderer)
     {
+        if (_smokeOptions.QualityPresetOverride.HasValue)
+        {
+            renderer.Settings.ApplyQualityPreset(
+                _smokeOptions.QualityPresetOverride.Value);
+        }
+        if (_smokeOptions.Benchmark.BudgetProfileOverride.HasValue)
+        {
+            renderer.Settings.PerformanceBudgets.ActiveProfile =
+                _smokeOptions.Benchmark.BudgetProfileOverride.Value;
+        }
         if (_smokeOptions.EnableSceneGpuCompaction)
             renderer.Settings.SceneSubmission.GpuCompactionEnabled = true;
         if (_smokeOptions.EnableSceneIndirectDispatch)
@@ -263,7 +436,9 @@ internal sealed class HelloGame : Game
             renderer.Settings.SceneSubmission.GpuShadowCompactionEnabled = true;
         if (_smokeOptions.EnableSceneSubmissionValidation)
             renderer.Settings.SceneSubmission.ValidationCompareCpuGpuLists = true;
-        if (_smokeOptions.EnableAsyncCompute)
+        if (_smokeOptions.AsyncComputeModeOverride.HasValue)
+            renderer.Settings.AsyncCompute.Mode = _smokeOptions.AsyncComputeModeOverride.Value;
+        else if (_smokeOptions.EnableAsyncCompute)
             renderer.Settings.AsyncCompute.Mode = AsyncComputeMode.ForceEnabledForValidation;
         if (_smokeOptions.EnableFarFieldClipmap)
             renderer.Settings.GlobalIllumination.FarFieldClipmapEnabled = true;
@@ -272,15 +447,30 @@ internal sealed class HelloGame : Game
 
         SampleGlobalIlluminationValidation.ConfigureSchedulerMode(renderer.Settings, _smokeOptions.DdgiSchedulerModeOverride);
         renderer.Settings.Transparency.Mode = _smokeOptions.TransparencyMode;
+        _materialGiRolloutBootstrap.Apply(renderer.Settings, Console.Out);
+    }
+
+    protected override void OnResize(int width, int height)
+    {
+        _framebufferResizeRevision++;
+        base.OnResize(width, height);
     }
 
     protected override void Update(float deltaTime)
     {
         ApplyPendingSmokeResize();
+        ObserveSmokeWindowMutation();
+        _smokeRunner?.OnUpdate(_drawnFrames);
 #if NJULF_EDITOR
         UpdateEditor(deltaTime);
 #endif
-        _inputController?.Update(deltaTime, WindowWidth, WindowHeight);
+        if (_materialGiCaptureRunner == null &&
+            _khronosMaterialGiRenderedGateRunner == null)
+            _inputController?.Update(deltaTime, WindowWidth, WindowHeight);
+        _materialGiCaptureRunner?.PrepareFrame();
+        _khronosMaterialGiRenderedGateRunner?.PrepareFrame();
+        if (_smokeOptions.Mode == SampleSmokeMode.LongRun)
+            _longRunMonitor?.PrepareFrame(_drawnFrames);
 
         if (AssetManifest.RotationSpeed != 0f)
         {
@@ -305,23 +495,27 @@ internal sealed class HelloGame : Game
             _editorHost?.ClearRenderer((VulkanRenderer)Renderer);
 #endif
         Renderer.DrawScene(Scene, Camera);
-        if (_drawnFrames == 0 &&
-            ShouldAutoEnableGpuTiming() &&
-            Renderer is VulkanRenderer renderer)
-        {
-            renderer.Settings.Debug.AllowGpuTiming = true;
-        }
-
+        _materialGiCaptureRunner?.OnFrameRendered();
+        _khronosMaterialGiRenderedGateRunner?.OnFrameRendered();
         _diagnosticsReporter?.PrintFirstFrameDiagnostics(Renderer);
         if (Camera is FirstPersonCamera firstPersonCamera)
             _diagnosticsReporter?.PrintMovementFrameDiagnostics(Renderer, firstPersonCamera);
 
-        if (_smokeOptions.Mode == SampleSmokeMode.LongRun || _smokeOptions.Mode == SampleSmokeMode.All)
-            _longRunMonitor?.Sample(_drawnFrames);
-
         CaptureBaselineSnapshotIfRequested();
         if (Renderer is VulkanRenderer benchmarkRenderer)
         {
+            if (_smokeOptions.Mode == SampleSmokeMode.LongRun)
+            {
+                _longRunMonitor?.Sample(
+                    _drawnFrames,
+                    benchmarkRenderer.LastDiagnostics,
+                    benchmarkRenderer.LastBudgetSnapshot);
+            }
+            _qualitySwitchSmokeRunner?.OnFrameRendered(
+                _drawnFrames,
+                benchmarkRenderer.LastDiagnostics,
+                benchmarkRenderer.LastBudgetSnapshot);
+            _textureHotReloadSmokeRunner?.OnFrameRendered(_drawnFrames);
             _benchmarkRunner?.OnFrameRendered(
                 _drawnFrames,
                 benchmarkRenderer.LastDiagnostics,
@@ -356,19 +550,116 @@ internal sealed class HelloGame : Game
     private bool ShouldAutoEnableGpuTiming()
     {
         return _smokeOptions.EnableGpuTiming ||
-            _smokeOptions.Benchmark.Enabled;
+            _smokeOptions.Benchmark.Enabled ||
+            _smokeOptions.Mode is SampleSmokeMode.QualitySwitch or SampleSmokeMode.LongRun;
     }
 
     protected override void Unload()
     {
-        RendererDiagnostics diagnostics = (Renderer as VulkanRenderer)?.LastDiagnostics ?? RendererDiagnostics.Empty;
-        _healthReportWriter.TryWrite(
-            _smokeOptions,
-            _startupLog.Path,
-            _smokeRunner?.Results ?? Array.Empty<SampleSmokeOperationResult>(),
-            diagnostics,
-            _startupFailure == null ? "passed" : "failed",
-            _startupFailure);
+        _materialGiCaptureRunner?.CancelIfIncomplete(
+            _startupFailure ?? "The application closed before the material/GI capture completed.");
+        _khronosMaterialGiRenderedGateRunner?.CancelIfIncomplete(
+            _startupFailure ?? "The application closed before the Khronos rendered gate completed.");
+        VulkanRenderer? renderer = Renderer as VulkanRenderer;
+        RendererDiagnostics diagnostics =
+            renderer?.LastDiagnostics ?? RendererDiagnostics.Empty;
+        if (_longRunMonitor != null)
+        {
+            try
+            {
+                SampleLongRunCompletion completion = _longRunMonitor.Complete();
+                _smokeRunner?.RecordOperation(
+                    "long-run-stability",
+                    completion.Passed ? "passed" : "failed",
+                    Math.Max(0, _drawnFrames - 1),
+                    $"report='{completion.ReportPath}'" +
+                    (completion.Failure == null ? string.Empty : $", {completion.Failure}"));
+                _smokeRunner?.RecordOperation(
+                    "device-loss-recovery",
+                    completion.Report.DeviceLossRecovery.Status,
+                    Math.Max(0, _drawnFrames - 1),
+                    completion.Report.DeviceLossRecovery.Reason);
+                if (!completion.Passed)
+                    _runtimeSmokeFailure ??= completion.Failure;
+            }
+            catch (Exception ex)
+            {
+                _runtimeSmokeFailure ??= $"Long-run report finalization failed: {ex.Message}";
+            }
+        }
+
+        IReadOnlyList<SampleSmokeOperationResult> smokeOperations =
+            _smokeRunner?.Results ?? Array.Empty<SampleSmokeOperationResult>();
+        if (SampleHealthReportEvaluation.FindFirstFailedOperation(smokeOperations) is { } failedOperation)
+        {
+            _runtimeSmokeFailure ??=
+                failedOperation.Detail ?? $"{failedOperation.Name} failed.";
+        }
+        else if (SampleHealthReportEvaluation.FindIncompleteSmokeOperation(
+                     _smokeOptions,
+                     smokeOperations,
+                     _drawnFrames) is { } incompleteOperation)
+        {
+            _runtimeSmokeFailure ??=
+                incompleteOperation.Detail ?? "Smoke execution was incomplete.";
+        }
+        if (_smokeOptions.Benchmark.Enabled)
+        {
+            if (_benchmarkRunner?.Report is not { } benchmarkReport)
+            {
+                _runtimeSmokeFailure ??=
+                    "Benchmark closed before its complete measurement report was published.";
+            }
+            else
+            {
+                SampleBenchmarkGateEvaluation benchmarkGate =
+                    SampleBenchmarkGateEvaluation.Evaluate(benchmarkReport);
+                if (!benchmarkGate.Passed)
+                    _runtimeSmokeFailure ??= benchmarkGate.Failure;
+            }
+        }
+
+        string? failure = _startupFailure ?? _runtimeSmokeFailure;
+        string status = failure == null ? "passed" : "failed";
+        SampleHealthReportEvaluation healthEvaluation =
+            SampleHealthReportEvaluation.Evaluate(diagnostics);
+        if (_smokeOptions.Enabled && healthEvaluation.FirstGiDiagnosticError is { } giError)
+        {
+            status = "failed";
+            failure ??=
+                $"GI diagnostic {giError.Code} reported an error for " +
+                $"'{giError.Feature}': {giError.Message}";
+        }
+        if (_smokeOptions.FailOnValidationMessage &&
+            (diagnostics.ValidationWarningMessageCount > 0 ||
+             diagnostics.ValidationErrorMessageCount > 0))
+        {
+            status = "failed";
+            failure ??=
+                $"Vulkan validation emitted " +
+                $"{diagnostics.ValidationWarningMessageCount} warning message(s) and " +
+                $"{diagnostics.ValidationErrorMessageCount} error message(s).";
+        }
+        if (failure != null)
+            Environment.ExitCode = 1;
+        try
+        {
+            _healthReportWriter.Write(
+                _smokeOptions,
+                _startupLog.Path,
+                smokeOperations,
+                diagnostics,
+                status,
+                failure,
+                renderer?.Settings);
+        }
+        catch (Exception ex)
+        {
+            Environment.ExitCode = 1;
+            Console.Error.WriteLine(
+                $"Required health report publication failed: " +
+                $"{ex.GetType().Name}: {ex.Message}");
+        }
 
 #if NJULF_EDITOR
         _editorInput?.Dispose();
@@ -462,6 +753,61 @@ internal sealed class HelloGame : Game
         if (_sceneKind == SampleSceneKind.MaterialShowcase)
         {
             _sceneLoader = null;
+            if (_smokeOptions.KhronosMaterialGiRenderedGate is { } gateOptions)
+            {
+                try
+                {
+                    ContentManager contentManager =
+                        Services?.GetRequiredService<ContentManager>() ??
+                        throw new InvalidOperationException(
+                            "Khronos rendered gate requires the shipping ContentManager.");
+                    _khronosMaterialGiRenderedScene =
+                        SampleKhronosMaterialGiRenderedSceneBuilder.Build(
+                            gateOptions,
+                            Scene,
+                            contentManager,
+                            materialManager);
+                    meshManager.CompactStaticBuffers();
+                    Console.WriteLine(
+                        $"Official Khronos Material/GI scene: " +
+                        $"assets={_khronosMaterialGiRenderedScene.Assets.Count}, " +
+                        $"objects={_khronosMaterialGiRenderedScene.RenderObjectCount}, " +
+                        $"unlitObjects={_khronosMaterialGiRenderedScene.RuntimeUnlitRenderObjectCount}, " +
+                        $"packageSha256={_khronosMaterialGiRenderedScene.PackageSha256}.");
+                    return new Model { Name = "Official Khronos Material/GI Conformance" };
+                }
+                catch (Exception exception)
+                {
+                    string failure =
+                        $"Khronos rendered-gate preflight failed: " +
+                        $"{exception.GetType().Name}: {exception.Message}";
+                    SampleKhronosMaterialGiRenderedGateReportPublisher.TryWriteFailed(
+                        gateOptions,
+                        failure,
+                        _khronosMaterialGiRenderedScene);
+                    Environment.ExitCode = 1;
+                    throw;
+                }
+            }
+            if (SampleMaterialGiConformanceScene.IsCaptureSceneRequested(_smokeOptions))
+            {
+                TextureManager textureManager = Services?.GetRequiredService<TextureManager>()
+                    ?? throw new InvalidOperationException(
+                        "Material/GI conformance capture requires the renderer TextureManager.");
+                SampleMaterialGiConformanceSceneBuildSummary summary =
+                    SampleMaterialGiConformanceScene.Configure(
+                        Scene,
+                        meshManager,
+                        materialManager,
+                        textureManager);
+                meshManager.CompactStaticBuffers();
+                Console.WriteLine(
+                    $"Material/GI conformance scene: fixtures={summary.FixtureCount}, " +
+                    $"oracleCases={summary.CatalogCaseFixtureCount}, skinned={summary.SkinnedFixtureCount}, " +
+                    $"liveEdits={summary.LiveEditTargetCount}, sceneSha256={summary.SceneFingerprint}.");
+                return new Model { Name = "Material-GI Conformance" };
+            }
+
             SampleMaterialShowcaseScene.Configure(Scene, meshManager, materialManager);
             meshManager.CompactStaticBuffers();
             return new Model { Name = "Material Showcase" };
@@ -520,36 +866,37 @@ internal sealed class HelloGame : Game
     private void ConfigureSceneRenderSettings(VulkanRenderer renderer)
     {
         RenderSettings settings = renderer.Settings;
-        if (_sceneKind == SampleSceneKind.MaterialShowcase)
+        if (_smokeOptions.KhronosMaterialGiRenderedGate is not null)
+        {
+            SampleKhronosMaterialGiRenderedGateRunner.ApplyLockedSettings(settings);
+        }
+        else if (_sceneKind == SampleSceneKind.MaterialShowcase)
         {
             SampleMaterialShowcaseScene.ConfigureRenderSettings(settings);
             settings.Particles.Enabled = false;
-            return;
         }
-
-        if (_sceneKind == SampleSceneKind.FoliageShowcase)
+        else if (_sceneKind == SampleSceneKind.FoliageShowcase)
         {
             ConfigureFoliageShowcaseRenderSettings(settings);
-            return;
         }
-
-        if (_sceneKind == SampleSceneKind.GlobalIlluminationTest)
+        else if (_sceneKind == SampleSceneKind.GlobalIlluminationTest)
         {
             SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, SamplePerformanceScenario.GiCornellRoom);
             settings.Particles.Enabled = false;
-            return;
         }
-
-        if (_sceneKind == SampleSceneKind.VfxShowcase)
+        else if (_sceneKind == SampleSceneKind.VfxShowcase)
         {
             SampleVfxShowcaseScene.ConfigureRenderSettings(settings);
-            return;
+        }
+        else
+        {
+            SamplePlazaGlobalIllumination.ConfigureRenderSettingsForMemoryProfile(
+                settings,
+                ResolveSponzaGpuMemoryProfile(renderer));
+            settings.Particles.Enabled = false;
         }
 
-        SamplePlazaGlobalIllumination.ConfigureRenderSettingsForMemoryProfile(
-            settings,
-            ResolveSponzaGpuMemoryProfile(renderer));
-        settings.Particles.Enabled = false;
+        _materialGiRolloutBootstrap.Apply(settings, Console.Out);
     }
 
     private void RestoreSceneRenderSettings(VulkanRenderer renderer)
@@ -631,6 +978,7 @@ internal sealed class HelloGame : Game
         ConfigureSceneLighting(lightManager);
         ConfigureSceneEnvironment(renderer);
         ConfigureSceneRenderSettings(renderer);
+        ApplySmokeRenderSettings(renderer);
         _inputController?.SetParticleEffects(_sampleVfxEffects);
         _inputController?.SetLightingMode(ResolveSceneLightingMode());
         _inputController?.SetPerformanceScenarioRunner(_performanceScenarioRunner);
@@ -642,6 +990,11 @@ internal sealed class HelloGame : Game
 
     private void ConfigureSceneLighting(LightManager lightManager)
     {
+        if (_smokeOptions.KhronosMaterialGiRenderedGate is not null)
+        {
+            SampleKhronosMaterialGiRenderedGateRunner.ConfigureLockedLighting(lightManager);
+            return;
+        }
         if (_sceneKind == SampleSceneKind.GlobalIlluminationTest)
             return;
 
@@ -653,6 +1006,11 @@ internal sealed class HelloGame : Game
 
     private void ConfigureSceneEnvironment(VulkanRenderer renderer)
     {
+        if (_smokeOptions.KhronosMaterialGiRenderedGate is not null)
+        {
+            SampleEnvironment.Configure(renderer, SampleEnvironmentMode.StudioNeutral);
+            return;
+        }
         SampleEnvironment.Configure(renderer, _sceneKind switch
         {
             SampleSceneKind.MaterialShowcase => SampleEnvironmentMode.StudioNeutral,
@@ -760,6 +1118,13 @@ internal sealed class HelloGame : Game
 
     private void ResizeForSmoke(int width, int height)
     {
+        if (_pendingSmokeResize is not null ||
+            _observingSmokeWindowMutation is not null)
+        {
+            throw new InvalidOperationException(
+                "A smoke framebuffer mutation is already pending observation.");
+        }
+
         _pendingSmokeResize = (width, height);
     }
 
@@ -771,17 +1136,106 @@ internal sealed class HelloGame : Game
         _pendingSmokeResize = null;
         int width = resize.Width;
         int height = resize.Height;
-        if (width <= 0 || height <= 0)
+        if (Window == null)
         {
-            Renderer?.Resize(width, height);
+            _smokeRunner?.OnFramebufferMutationObserved(
+                succeeded: false,
+                "The Silk.NET window was unavailable while applying the framebuffer mutation.");
             return;
         }
 
-        WindowWidth = width;
-        WindowHeight = height;
-        Renderer?.Resize(width, height);
-        if (Camera != null)
-            Camera.AspectRatio = (float)width / height;
+        _observingSmokeWindowMutation = new PendingSmokeWindowMutation(
+            width,
+            height,
+            System.Diagnostics.Stopwatch.GetTimestamp(),
+            _framebufferResizeRevision);
+        try
+        {
+            if (width <= 0 || height <= 0)
+            {
+                Window.WindowState = Silk.NET.Windowing.WindowState.Minimized;
+            }
+            else
+            {
+                if (Window.WindowState == Silk.NET.Windowing.WindowState.Minimized)
+                    Window.WindowState = Silk.NET.Windowing.WindowState.Normal;
+                Window.Size = new Silk.NET.Maths.Vector2D<int>(width, height);
+            }
+        }
+        catch (Exception ex)
+        {
+            _observingSmokeWindowMutation = null;
+            _smokeRunner?.OnFramebufferMutationObserved(
+                succeeded: false,
+                $"Silk.NET window mutation {width}x{height} threw " +
+                $"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private void ObserveSmokeWindowMutation()
+    {
+        if (_observingSmokeWindowMutation is not { } mutation ||
+            Window == null)
+        {
+            return;
+        }
+
+        try
+        {
+            Silk.NET.Maths.Vector2D<int> logicalSize = Window.Size;
+            Silk.NET.Maths.Vector2D<int> framebufferSize = Window.FramebufferSize;
+            Silk.NET.Windowing.WindowState state = Window.WindowState;
+            bool minimizeRequested = mutation.Width <= 0 || mutation.Height <= 0;
+            bool observed = minimizeRequested
+                ? state == Silk.NET.Windowing.WindowState.Minimized &&
+                  (framebufferSize.X <= 0 || framebufferSize.Y <= 0)
+                : state != Silk.NET.Windowing.WindowState.Minimized &&
+                  logicalSize.X == mutation.Width &&
+                  logicalSize.Y == mutation.Height &&
+                  framebufferSize.X > 0 &&
+                  framebufferSize.Y > 0;
+            TimeSpan elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(
+                mutation.StartedTimestamp);
+            bool timedOut = elapsed >= TimeSpan.FromSeconds(5);
+            if (!observed && !timedOut)
+                return;
+
+            _observingSmokeWindowMutation = null;
+            if (observed &&
+                !minimizeRequested &&
+                _framebufferResizeRevision ==
+                mutation.FramebufferResizeRevisionAtRequest)
+            {
+                // Silk normally publishes FramebufferResize first. Keep this
+                // fallback for backends that expose the new framebuffer before
+                // raising the event, without rebuilding the swapchain twice.
+                WindowWidth = framebufferSize.X;
+                WindowHeight = framebufferSize.Y;
+                Renderer?.Resize(framebufferSize.X, framebufferSize.Y);
+                if (Camera != null)
+                {
+                    Camera.AspectRatio =
+                        (float)framebufferSize.X / framebufferSize.Y;
+                }
+            }
+
+            string detail =
+                $"requested={mutation.Width}x{mutation.Height}, " +
+                $"logical={logicalSize.X}x{logicalSize.Y}, " +
+                $"framebuffer={framebufferSize.X}x{framebufferSize.Y}, " +
+                $"state={state}, observed={observed}, elapsedMs={elapsed.TotalMilliseconds:F1}";
+            _smokeRunner?.OnFramebufferMutationObserved(
+                succeeded: observed,
+                detail);
+        }
+        catch (Exception ex)
+        {
+            _observingSmokeWindowMutation = null;
+            _smokeRunner?.OnFramebufferMutationObserved(
+                succeeded: false,
+                $"Observing Silk.NET window mutation {mutation.Width}x{mutation.Height} " +
+                $"threw {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     private void CaptureBaselineSnapshotIfRequested()
@@ -853,4 +1307,10 @@ internal sealed class HelloGame : Game
         if (Services.GetService<MaterialManager>() == null)
             throw new InvalidOperationException("MaterialManager was not registered by AddRendering.");
     }
+
+    private sealed record PendingSmokeWindowMutation(
+        int Width,
+        int Height,
+        long StartedTimestamp,
+        long FramebufferResizeRevisionAtRequest);
 }

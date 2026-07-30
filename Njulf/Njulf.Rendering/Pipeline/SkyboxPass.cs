@@ -37,7 +37,8 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
-            return sceneData.AnimationDebugView == AnimationDebugView.None;
+            return sceneData.AnimationDebugView == AnimationDebugView.None &&
+                !MaterialDebugViewPolicy.IsLinearDirectCapture((MaterialDebugView)sceneData.DebugViewMode);
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)

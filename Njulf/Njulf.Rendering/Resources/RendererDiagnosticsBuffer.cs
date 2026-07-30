@@ -45,7 +45,13 @@ namespace Njulf.Rendering.Resources
         public const int DirectionalShadowReceiverCounterFamilyCount = 16;
         public const int DirectionalShadowReceiverCounterCount = DirectionalShadowReceiverCascadeCount * DirectionalShadowReceiverCounterFamilyCount + 1;
         public const float DirectionalShadowReceiverDepthQuantizationScale = 65535.0f;
-        public const int CounterCount = DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCounterCount;
+        // Appended so every pre-V2 diagnostic capture offset remains stable.
+        public const int FarFieldMaterialV2CounterBase =
+            DirectionalShadowReceiverCounterBase + DirectionalShadowReceiverCounterCount;
+        public const int FarFieldMaterialV2CounterCount = 2;
+        public const int MaterialGiCounterBase = FarFieldMaterialV2CounterBase + FarFieldMaterialV2CounterCount;
+        public const int MaterialGiCounterCount = 10;
+        public const int CounterCount = MaterialGiCounterBase + MaterialGiCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const ulong CounterBufferSize = CounterCount * sizeof(uint);
@@ -57,6 +63,10 @@ namespace Njulf.Rendering.Resources
         private readonly DdgiForwardEstimateCounters[] _lastCompletedDdgiForwardEstimateCounters = new DdgiForwardEstimateCounters[FramesInFlight];
         private readonly DdgiInvestigationCounters[] _lastCompletedDdgiInvestigationCounters = new DdgiInvestigationCounters[FramesInFlight];
         private readonly DirectionalShadowReceiverCounters[] _lastCompletedDirectionalShadowReceiverCounters = new DirectionalShadowReceiverCounters[FramesInFlight];
+        private readonly FarFieldMaterialV2Counters[] _lastCompletedFarFieldMaterialV2Counters =
+            new FarFieldMaterialV2Counters[FramesInFlight];
+        private readonly MaterialGiGpuCounters[] _lastCompletedMaterialGiCounters =
+            new MaterialGiGpuCounters[FramesInFlight];
         private bool _disposed;
 
         public RendererDiagnosticsBuffer(VulkanContext context, BufferManager bufferManager)
@@ -94,6 +104,21 @@ namespace Njulf.Rendering.Resources
             ValidateFrameIndex(frameIndex);
             _bufferManager.InvalidateBuffer(_buffers[frameIndex], 0, CounterBufferSize);
             uint* counters = (uint*)_bufferManager.GetMappedPointer(_buffers[frameIndex]);
+
+            _lastCompletedFarFieldMaterialV2Counters[frameIndex] = new FarFieldMaterialV2Counters(
+                ConflictCount: counters[FarFieldMaterialV2CounterBase + 0],
+                StalePublicationRejectCount: counters[FarFieldMaterialV2CounterBase + 1]);
+            _lastCompletedMaterialGiCounters[frameIndex] = new MaterialGiGpuCounters(
+                EstimatedAlphaCandidateTestCount: counters[MaterialGiCounterBase + 0],
+                EstimatedAlphaCandidateRejectCount: counters[MaterialGiCounterBase + 1],
+                NonFiniteMaterialOrRadianceCount: counters[MaterialGiCounterBase + 2],
+                ClampedMaterialOrRadianceCount: counters[MaterialGiCounterBase + 3],
+                AlphaCandidateLimitReachedCount: counters[MaterialGiCounterBase + 4],
+                EstimatedDetailedTransportHitCount: counters[MaterialGiCounterBase + 5],
+                EstimatedCompactTransportHitCount: counters[MaterialGiCounterBase + 6],
+                EstimatedCorrectnessFallbackHitCount: counters[MaterialGiCounterBase + 7],
+                EstimatedFarFieldTransportHitCount: counters[MaterialGiCounterBase + 8],
+                EstimatedEmissiveSamplingInvocationCount: counters[MaterialGiCounterBase + 9]);
 
             _lastCompletedCounters[frameIndex] = new GpuMeshletCounters(
                 checked((int)counters[0]),
@@ -454,6 +479,18 @@ namespace Njulf.Rendering.Resources
         {
             ValidateFrameIndex(frameIndex);
             return _lastCompletedDirectionalShadowReceiverCounters[frameIndex];
+        }
+
+        public FarFieldMaterialV2Counters GetLastCompletedFarFieldMaterialV2Counters(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _lastCompletedFarFieldMaterialV2Counters[frameIndex];
+        }
+
+        public MaterialGiGpuCounters GetLastCompletedMaterialGiCounters(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _lastCompletedMaterialGiCounters[frameIndex];
         }
 
         private static int DecodeSignedCounter(uint value)

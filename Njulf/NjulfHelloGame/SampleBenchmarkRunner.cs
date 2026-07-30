@@ -18,6 +18,7 @@ public sealed class SampleBenchmarkRunner
     private readonly SampleBenchmarkOptions _options;
     private readonly SamplePerformanceScenario _scenario;
     private readonly Action _exit;
+    private readonly Func<string> _getSettingsFingerprint;
     private readonly SampleBenchmarkAnalyzer _analyzer = new();
     private int _samplesCaptured;
     private int _firstMeasurementFrame = -1;
@@ -27,11 +28,14 @@ public sealed class SampleBenchmarkRunner
     public SampleBenchmarkRunner(
         SampleBenchmarkOptions options,
         SamplePerformanceScenario scenario,
-        Action exit)
+        Action exit,
+        Func<string> getSettingsFingerprint)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _scenario = scenario;
         _exit = exit ?? throw new ArgumentNullException(nameof(exit));
+        _getSettingsFingerprint = getSettingsFingerprint ??
+            throw new ArgumentNullException(nameof(getSettingsFingerprint));
     }
 
     public SampleBenchmarkReport? Report { get; private set; }
@@ -71,6 +75,15 @@ public sealed class SampleBenchmarkRunner
             _samplesCaptured,
             _firstMeasurementFrame,
             _lastMeasurementFrame);
+        Report = Report with
+        {
+            ProducerIdentity =
+                SampleMaterialGiProducerIdentityFactory.Create(
+                    Report.LastDiagnostics,
+                    _getSettingsFingerprint(),
+                    ResolveQualityTier(
+                        Report.LastDiagnostics.ActiveBudgetProfile))
+        };
         if (SampleDdgiBenchmarkSuite.RequiredProductionGateScenes.Any(scene => scene.Scenario == _scenario))
         {
             SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(Report);
@@ -91,18 +104,28 @@ public sealed class SampleBenchmarkRunner
         _exit();
     }
 
+    private static string ResolveQualityTier(
+        RenderBudgetProfileKind profile) => profile switch
+        {
+            RenderBudgetProfileKind.LowSpec1080p30 => "Low",
+            RenderBudgetProfileKind.MidSpec1080p60 => "Medium",
+            RenderBudgetProfileKind.HighSpec1440p60 => "High",
+            RenderBudgetProfileKind.Ultra4k60 => "Ultra",
+            _ => profile.ToString()
+        };
+
     internal static string WriteReport(SampleBenchmarkReport report, string? path)
     {
         string targetPath = string.IsNullOrWhiteSpace(path)
             ? Path.Combine(AppContext.BaseDirectory, "BenchmarkReports", $"benchmark-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.json")
             : Path.GetFullPath(path);
-        string? directory = Path.GetDirectoryName(targetPath);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
-
-        string json = JsonSerializer.Serialize(report, SerializerOptions);
-        File.WriteAllText(targetPath, json);
-        return targetPath;
+        byte[] payload =
+            JsonSerializer.SerializeToUtf8Bytes(report, SerializerOptions);
+        return SampleEvidenceFileIo.WriteAtomic(
+            targetPath,
+            payload,
+            SampleEvidenceFileIo.MaximumJsonBytes,
+            "Benchmark report").Path;
     }
 }
 
@@ -200,7 +223,8 @@ public sealed class SampleBenchmarkAnalyzer
     ];
 
     private readonly List<RendererDiagnostics> _samples = new();
-    private RenderBudgetSnapshot _lastBudget = RenderBudgetSnapshot.Empty;
+    private readonly Dictionary<string, BudgetMetric> _worstBudgetMetrics =
+        new(StringComparer.Ordinal);
 
     public void AddSample(RendererDiagnostics diagnostics, RenderBudgetSnapshot budget)
     {
@@ -210,7 +234,7 @@ public sealed class SampleBenchmarkAnalyzer
             throw new ArgumentNullException(nameof(budget));
 
         _samples.Add(diagnostics);
-        _lastBudget = budget;
+        AccumulateWorstBudgetMetrics(budget.Metrics);
     }
 
     public SampleBenchmarkReport CreateReport(
@@ -232,6 +256,9 @@ public sealed class SampleBenchmarkAnalyzer
             "GPU frame",
             _samples.Where(d => d.GpuTimingValid != 0).Select(d => MicrosecondsToMilliseconds(d.GpuFrameMicroseconds)));
         int gpuValidSamples = _samples.Count(d => d.GpuTimingValid != 0);
+        BudgetMetric[] worstBudgetMetrics = _worstBudgetMetrics.Values
+            .OrderBy(static metric => metric.Name, StringComparer.Ordinal)
+            .ToArray();
 
         return new SampleBenchmarkReport(
             Kind: "njulf-renderer-benchmark",
@@ -249,8 +276,8 @@ public sealed class SampleBenchmarkAnalyzer
             GpuTimingUnavailableReason: last.GpuTimingValid == 0 ? last.GpuTimingUnavailableReason : string.Empty,
             GpuPasses: gpuPasses,
             CpuStages: cpuStages,
-            Findings: BuildFindings(cpuFrame, gpuFrame, gpuPasses, cpuStages, _lastBudget),
-            BudgetMetrics: _lastBudget.Metrics,
+            Findings: BuildFindings(cpuFrame, gpuFrame, gpuPasses, cpuStages, worstBudgetMetrics),
+            BudgetMetrics: worstBudgetMetrics,
             LastDiagnostics: last)
         {
             AccuracyOracleResults = SampleGiAccuracyOracleEvaluator.Evaluate(scenario, _samples)
@@ -279,7 +306,7 @@ public sealed class SampleBenchmarkAnalyzer
         SampleBenchmarkTimingStats gpuFrame,
         IReadOnlyList<SampleBenchmarkTimingStats> gpuPasses,
         IReadOnlyList<SampleBenchmarkTimingStats> cpuStages,
-        RenderBudgetSnapshot budget)
+        IReadOnlyList<BudgetMetric> budgetMetrics)
     {
         var findings = new List<SampleBenchmarkFinding>();
         SampleBenchmarkTimingStats? topGpu = gpuPasses.FirstOrDefault();
@@ -300,7 +327,9 @@ public sealed class SampleBenchmarkAnalyzer
                 $"CPU dominated this sample set; stage p95={topCpu.P95Milliseconds:F3}ms avg={topCpu.AverageMilliseconds:F3}ms."));
         }
 
-        foreach (BudgetMetric metric in budget.Metrics.Where(metric => metric.Status is RenderBudgetStatus.OverBudget or RenderBudgetStatus.Warning))
+        foreach (BudgetMetric metric in budgetMetrics.Where(
+                     static metric => metric.Status is
+                         RenderBudgetStatus.OverBudget or RenderBudgetStatus.Warning))
         {
             findings.Add(new SampleBenchmarkFinding(
                 "budget",
@@ -317,6 +346,55 @@ public sealed class SampleBenchmarkAnalyzer
         }
 
         return findings;
+    }
+
+    private void AccumulateWorstBudgetMetrics(IReadOnlyList<BudgetMetric> metrics)
+    {
+        foreach (BudgetMetric metric in metrics)
+        {
+            string key = metric.Name + "\u001f" + metric.Unit;
+            if (!_worstBudgetMetrics.TryGetValue(key, out BudgetMetric? current) ||
+                IsWorse(metric, current))
+            {
+                _worstBudgetMetrics[key] = metric;
+            }
+        }
+    }
+
+    private static bool IsWorse(BudgetMetric candidate, BudgetMetric current)
+    {
+        int candidateRank = GetBudgetStatusRank(candidate.Status);
+        int currentRank = GetBudgetStatusRank(current.Status);
+        if (candidateRank != currentRank)
+            return candidateRank > currentRank;
+
+        return GetBudgetPressure(candidate) > GetBudgetPressure(current);
+    }
+
+    private static int GetBudgetStatusRank(RenderBudgetStatus status)
+    {
+        if (!Enum.IsDefined(status))
+            return 7;
+
+        // Availability is a coverage contract, not a benign low-pressure sample.
+        // Retain it when any measurement frame loses a metric so the release gate
+        // can fail closed for metrics required by the measured scenario.
+        return status switch
+        {
+            RenderBudgetStatus.Unknown => 6,
+            RenderBudgetStatus.Unavailable => 5,
+            RenderBudgetStatus.OverBudget => 4,
+            RenderBudgetStatus.Warning => 3,
+            RenderBudgetStatus.WithinBudget => 2,
+            _ => 0
+        };
+    }
+
+    private static double GetBudgetPressure(BudgetMetric metric)
+    {
+        if (double.IsFinite(metric.FailureThreshold) && metric.FailureThreshold > 0.0)
+            return metric.Value / metric.FailureThreshold;
+        return metric.Value;
     }
 
     private static SampleBenchmarkTimingStats BuildStats(string name, IEnumerable<double> values)

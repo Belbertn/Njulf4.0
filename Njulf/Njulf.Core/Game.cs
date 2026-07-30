@@ -227,18 +227,27 @@ namespace Njulf.Core
             }
             finally
             {
-                renderer.EndFrame();
-                if (!_firstFrameLogged)
+                try
                 {
-                    RunStartupStep("FirstFrame.End", () => { });
-                    _firstFrameLogged = true;
+                    renderer.EndFrame();
+                    if (!_firstFrameLogged)
+                    {
+                        RunStartupStep("FirstFrame.End", () => { });
+                        _firstFrameLogged = true;
+                    }
                 }
-                _isRenderingFrame = false;
-
-                if (_exitRequestedAfterFrame)
+                finally
                 {
-                    _exitRequestedAfterFrame = false;
-                    _window?.Close();
+                    // EndFrame can surface queue, present, or deferred validation
+                    // failures. Always restore the lifecycle guard before the
+                    // exception unwinds into the window backend.
+                    _isRenderingFrame = false;
+
+                    if (_exitRequestedAfterFrame)
+                    {
+                        _exitRequestedAfterFrame = false;
+                        _window?.Close();
+                    }
                 }
             }
         }

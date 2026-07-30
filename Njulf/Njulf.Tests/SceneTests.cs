@@ -45,6 +45,75 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ClearAndDispose_AllowsSceneReuse()
+        {
+            var scene = new Scene();
+            var first = new DisposableUpdateable();
+            var second = new DisposableUpdateable();
+            scene.Add(first);
+
+            scene.ClearAndDispose();
+            scene.Add(second);
+            scene.Update(0.016f);
+            scene.Dispose();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(first.DisposeCount, Is.EqualTo(1));
+                Assert.That(second.DisposeCount, Is.EqualTo(1));
+                Assert.That(second.UpdateSequence, Is.EqualTo(1));
+            });
+        }
+
+        [Test]
+        public void ClearAndDispose_WhenEntityDisposalFails_RetainsFailureUntilRetry()
+        {
+            var scene = new Scene();
+            var failing = new DisposableUpdateable { DisposeFailure = new InvalidOperationException("expected") };
+            var healthy = new DisposableUpdateable();
+            scene.Add(failing);
+            scene.Add(healthy);
+
+            AggregateException failure =
+                Assert.Throws<AggregateException>(scene.ClearAndDispose)!;
+            Assert.That(
+                () => scene.Add(new DisposableUpdateable()),
+                Throws.TypeOf<ObjectDisposedException>());
+            failing.DisposeFailure = null;
+            scene.ClearAndDispose();
+            var replacement = new DisposableUpdateable();
+            scene.Add(replacement);
+            scene.Dispose();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(failure.InnerExceptions, Has.Count.EqualTo(1));
+                Assert.That(failure.InnerExceptions[0].Message, Is.EqualTo("expected"));
+                Assert.That(scene.Updateables, Is.Empty);
+                Assert.That(failing.DisposeCount, Is.EqualTo(2));
+                Assert.That(healthy.DisposeCount, Is.EqualTo(1));
+                Assert.That(replacement.DisposeCount, Is.EqualTo(1));
+            });
+        }
+
+        [Test]
+        public void Dispose_PermanentlyClosesScene()
+        {
+            var scene = new Scene();
+
+            scene.Dispose();
+            scene.Dispose();
+
+            Assert.Multiple(() =>
+            {
+                Assert.Throws<ObjectDisposedException>(
+                    () => scene.Add(new DisposableUpdateable()));
+                Assert.Throws<ObjectDisposedException>(scene.Clear);
+                Assert.Throws<ObjectDisposedException>(() => scene.Update(0.016f));
+            });
+        }
+
+        [Test]
         public void Remove_DropsOneOwnershipReferenceAtATime()
         {
             var scene = new Scene();
@@ -141,14 +210,19 @@ namespace Njulf.Tests
             public bool Enabled { get; set; } = true;
             public int UpdateOrder { get; set; }
             public int DisposeCount { get; private set; }
+            public int UpdateSequence { get; private set; }
+            public Exception? DisposeFailure { get; set; }
 
             public void Update(float deltaTime)
             {
+                UpdateSequence++;
             }
 
             public void Dispose()
             {
                 DisposeCount++;
+                if (DisposeFailure != null)
+                    throw DisposeFailure;
             }
         }
 

@@ -3,6 +3,7 @@ using System.Text.Json;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
 namespace Njulf.Tests;
@@ -24,6 +25,9 @@ public sealed class PerformanceSnapshotWriterTests
             FoliageVisibleClusterCount = 24,
             FoliageVisibleMeshletDrawCount = 96,
             FoliageDdgiSampleCount = 120,
+            FoliageDdgiTransportExcludedClusterCount = 32,
+            FoliageDdgiTransportExclusionReason =
+                AccelerationStructureManager.FoliageDdgiExclusionReason,
             FoliageInstanceBufferBytes = 1024,
             GpuFoliageForwardMicroseconds = 250,
             HiZEnabled = 1,
@@ -362,6 +366,8 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"LdrSceneColor\""));
             Assert.That(json, Does.Contain("\"VisibleMeshletDrawCount\": 96"));
             Assert.That(json, Does.Contain("\"DdgiSampleCount\": 120"));
+            Assert.That(json, Does.Contain("\"DdgiTransportExcludedClusterCount\": 32"));
+            Assert.That(json, Does.Contain("requires explicit DDGI proxy cards or clusters"));
             Assert.That(json, Does.Contain("\"BufferBytes\": 1024"));
             Assert.That(json, Does.Contain("\"SsgiWidth\": 960"));
             Assert.That(json, Does.Contain("\"SsgiRayCount\": 6"));
@@ -827,6 +833,47 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(migrated.GiTiming.ForwardGiGatherInclusiveAttribution, Is.EqualTo(GiTimingAttribution.Inclusive));
             Assert.That(migrated.Capture.ResolvedGiSettings.StableHash, Is.Not.EqualTo("unknown"));
         });
+    }
+
+    [Test]
+    public void PerformanceSnapshotReader_RejectsAmbiguousAndOversizedJson()
+    {
+        string directory = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            "performance-snapshot-reader-bounds-tests",
+            Guid.NewGuid().ToString("N"));
+        string duplicatePath = Path.Combine(directory, "duplicate.json");
+        string oversizedPath = Path.Combine(directory, "oversized.json");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            File.WriteAllText(
+                duplicatePath,
+                """
+                {
+                  "SchemaVersion": 3,
+                  "SchemaVersion": 3
+                }
+                """);
+            var reader = new PerformanceSnapshotReader();
+            Assert.That(
+                () => reader.Read(duplicatePath),
+                Throws.TypeOf<InvalidDataException>()
+                    .With.Message.Contains("duplicate JSON property"));
+
+            File.WriteAllBytes(
+                oversizedPath,
+                new byte[DurableJsonFileWriter.MaximumPayloadBytes + 1]);
+            Assert.That(
+                () => reader.Read(oversizedPath),
+                Throws.TypeOf<InvalidDataException>()
+                    .With.Message.Contains("invalid bounded length"));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static System.Text.Json.Nodes.JsonObject JsonObjectCapture(System.Text.Json.Nodes.JsonObject root) =>

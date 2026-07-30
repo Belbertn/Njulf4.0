@@ -17,19 +17,68 @@ public sealed record CookedAssetDatabaseEntry
 
 public sealed record CookedAssetDatabase
 {
-    public int SchemaVersion { get; init; } = 1;
+    public const int CurrentSchemaVersion = 1;
+    public const int MaximumDatabaseBytes =
+        AssetArtifactFileIo.DefaultMaximumJsonBytes;
+
+    public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public SortedDictionary<string, CookedAssetDatabaseEntry> Assets { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 
     public static CookedAssetDatabase Load(string path)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
         if (!File.Exists(path))
             return new CookedAssetDatabase();
         try
         {
-            return JsonSerializer.Deserialize<CookedAssetDatabase>(File.ReadAllBytes(path), CookedJson.Options)
-                ?? new CookedAssetDatabase();
+            byte[] snapshot = AssetArtifactFileIo.ReadBoundedSnapshot(
+                path,
+                MaximumDatabaseBytes,
+                "Cooked asset database");
+            CookedAssetDatabase database =
+                CookedJson.Deserialize<CookedAssetDatabase>(
+                snapshot,
+                Path.GetFullPath(path),
+                "asset database");
+            if (database.SchemaVersion != CurrentSchemaVersion)
+            {
+                throw new InvalidDataException(
+                    $"Cooked asset database '{path}' uses unsupported schema " +
+                    $"version {database.SchemaVersion}.");
+            }
+            if (database.Assets is null)
+            {
+                throw new InvalidDataException(
+                    $"Cooked asset database '{path}' has no asset table.");
+            }
+
+            var normalized = new SortedDictionary<
+                string,
+                CookedAssetDatabaseEntry>(
+                StringComparer.OrdinalIgnoreCase);
+            foreach ((string key, CookedAssetDatabaseEntry entry) in database.Assets)
+            {
+                if (string.IsNullOrWhiteSpace(key) ||
+                    entry is null ||
+                    string.IsNullOrWhiteSpace(entry.SourcePath) ||
+                    string.IsNullOrWhiteSpace(entry.Status) ||
+                    entry.Dependencies is null ||
+                    entry.Outputs is null)
+                {
+                    throw new InvalidDataException(
+                        $"Cooked asset database '{path}' contains an incomplete entry.");
+                }
+                if (!normalized.TryAdd(key, entry))
+                {
+                    throw new InvalidDataException(
+                        $"Cooked asset database '{path}' contains duplicate " +
+                        $"case-insensitive asset key '{key}'.");
+                }
+            }
+
+            return database with { Assets = normalized };
         }
-        catch (JsonException ex)
+        catch (CookedAssetFormatException ex)
         {
             throw new InvalidDataException($"Cooked asset database '{path}' is invalid.", ex);
         }
@@ -38,15 +87,13 @@ public sealed record CookedAssetDatabase
     public void SaveAtomic(string path)
     {
         string fullPath = Path.GetFullPath(path);
-        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-        string temporary = fullPath + ".tmp";
         var options = new JsonSerializerOptions(CookedJson.Options) { WriteIndented = true };
-        using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
-        {
-            JsonSerializer.Serialize(stream, this, options);
-            stream.Flush(flushToDisk: true);
-        }
-        File.Move(temporary, fullPath, overwrite: true);
+        byte[] payload = JsonSerializer.SerializeToUtf8Bytes(this, options);
+        AssetArtifactFileIo.WriteAtomic(
+            fullPath,
+            payload,
+            MaximumDatabaseBytes,
+            "Cooked asset database");
     }
 }
 
@@ -74,6 +121,61 @@ public sealed record AssetCookReport(
 {
     public int MeshletLod1Count { get; init; }
     public int MeshletLod2Count { get; init; }
+}
+
+public static class AssetCookReportJson
+{
+    public const int MaximumReportBytes =
+        AssetArtifactFileIo.DefaultMaximumJsonBytes;
+
+    public static AssetCookReport Read(string path)
+    {
+        byte[] snapshot = AssetArtifactFileIo.ReadBoundedSnapshot(
+            path,
+            MaximumReportBytes,
+            "Asset cook report");
+        try
+        {
+            AssetCookReport report =
+                CookedJson.Deserialize<AssetCookReport>(
+                snapshot,
+                Path.GetFullPath(path),
+                "cook report");
+            if (string.IsNullOrWhiteSpace(report.SourcePath) ||
+                report.AssetId == Guid.Empty ||
+                string.IsNullOrWhiteSpace(report.Status) ||
+                report.Textures is null ||
+                report.Warnings is null ||
+                report.Outputs is null)
+            {
+                throw new InvalidDataException(
+                    $"Asset cook report '{path}' contains incomplete identity or collections.");
+            }
+
+            return report;
+        }
+        catch (CookedAssetFormatException exception)
+        {
+            throw new InvalidDataException(
+                $"Asset cook report '{path}' is invalid.",
+                exception);
+        }
+    }
+
+    public static void WriteAtomic(string path, AssetCookReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        var options = new JsonSerializerOptions(CookedJson.Options)
+        {
+            WriteIndented = true
+        };
+        byte[] payload = JsonSerializer.SerializeToUtf8Bytes(report, options);
+        AssetArtifactFileIo.WriteAtomic(
+            path,
+            payload,
+            MaximumReportBytes,
+            "Asset cook report");
+    }
 }
 
 public sealed record AssetCookResult(AssetCookReport Report, bool Skipped);

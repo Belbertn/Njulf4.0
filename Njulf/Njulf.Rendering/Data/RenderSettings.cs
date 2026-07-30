@@ -477,7 +477,32 @@ namespace Njulf.Rendering.Data
         FarFieldOccupancySlice = 42,
         FarFieldTraceResult = 43,
         FarFieldSkyVisibility = 44,
-        FarFieldSunShadow = 45
+        FarFieldSunShadow = 45,
+        /// <summary>
+        /// Source-capability view. Red is textured/SSGI support, green is
+        /// compact/probe ownership, and blue is the far/environment-capable
+        /// remainder. These are capabilities, not an exact ray-hit provenance
+        /// classification.
+        /// </summary>
+        MaterialTransportSourceOwnership = 46,
+        /// <summary>
+        /// Non-overlapping post-composition ownership: retained DDGI in red,
+        /// SSGI replacement in green, and retained environment fallback in blue.
+        /// </summary>
+        HybridEstimatorOwnership = 47,
+        /// <summary>
+        /// Final support-weighted convex hybrid diffuse estimate.
+        /// </summary>
+        HybridFinalComposition = 48,
+        /// <summary>
+        /// Exact mutually-exclusive DDGI hit-source classification aggregated
+        /// over the last fence-complete diagnostic frame. Red is detailed
+        /// textured transport, green is compact profile transport, yellow is
+        /// the explicit correctness fallback, and blue is far-field transport.
+        /// Counts are deterministic sparse weighted estimates; unlike view 46,
+        /// the source labels describe paths that actually executed.
+        /// </summary>
+        MaterialTransportHitProvenance = 49
     }
 
     public enum AntiAliasingMode : uint
@@ -660,7 +685,33 @@ namespace Njulf.Rendering.Data
         SpecularColor = 51,
         IridescenceFactor = 52,
         IridescenceThickness = 53,
-        Dispersion = 54
+        Dispersion = 54,
+        MaterialOcclusion = 55,
+        CanonicalDiffuseReflectance = 56,
+        CompiledEmission = 57,
+        GeometricNormal = 58,
+        Opacity = 59,
+        Sidedness = 60,
+        ShadingModel = 61,
+        TransportProfile = 62,
+        MaterialRevisions = 63,
+        /// <summary>
+        /// Capture-only linear direct-diffuse signal. This value intentionally
+        /// sits outside the interactive material-inspection range.
+        /// </summary>
+        CaptureLinearDirectDiffuse = 71,
+        /// <summary>
+        /// Capture-only direct specular, evaluated as aggregate direct lighting
+        /// minus the exact diffuse term accumulated by the same shader.
+        /// </summary>
+        CaptureLinearDirectSpecular = 72
+    }
+
+    public static class MaterialDebugViewPolicy
+    {
+        public static bool IsLinearDirectCapture(MaterialDebugView view) =>
+            view is MaterialDebugView.CaptureLinearDirectDiffuse or
+                MaterialDebugView.CaptureLinearDirectSpecular;
     }
 
     public enum FoliageDebugView : uint
@@ -1611,6 +1662,7 @@ namespace Njulf.Rendering.Data
         private float _ddgiCascade3MaxRayDistance = 192.0f;
         private int _ddgiMaxShadedLights = 8;
         private int _ddgiMaterialTextureMaxCascade = 1;
+        private int _ddgiEmissiveTriangleBudget = 256;
         private ulong _ddgiAtlasMemoryBudgetBytes = DefaultDdgiAtlasMemoryBudgetBytes;
         private float _ddgiAsyncComputeReservedBudgetFraction = 0.25f;
         private float _ddgiThinWallProxyThickness = 0.12f;
@@ -1696,10 +1748,17 @@ namespace Njulf.Rendering.Data
         private float _giAccelerationStructureStaticResidentDistance = 256.0f;
         private int _giAccelerationStructureMaximumStaticInstances = 8_192;
         private int _giAccelerationStructureEvictionGraceFrames = 120;
+        private GlobalIlluminationDebugView _debugView;
 
         public bool Enabled { get; set; } = true;
         public GlobalIlluminationMode Mode { get; set; } = GlobalIlluminationMode.Hybrid;
-        public GlobalIlluminationDebugView DebugView { get; set; } = GlobalIlluminationDebugView.None;
+        public GlobalIlluminationDebugView DebugView
+        {
+            get => _debugView;
+            set => _debugView = Enum.IsDefined(value)
+                ? value
+                : GlobalIlluminationDebugView.None;
+        }
 
         /// <summary>
         /// Emergency runtime kill-switch for dynamic global-illumination paths.
@@ -1729,6 +1788,161 @@ namespace Njulf.Rendering.Data
         public bool UseDdgi { get; set; } = true;
         public bool UseRayQueryBackend { get; set; }
         public DdgiQualityTier DdgiQualityTier { get; set; } = DdgiQualityTier.DdgiHigh;
+
+        /// <summary>
+        /// Requests the canonical authored-material transport compiler and V2
+        /// shader contract. Runtime consumers use the corresponding
+        /// <c>Effective*</c> property, so this switch alone cannot authorize V2.
+        /// </summary>
+        public bool GiMaterialTransportV2 { get; set; }
+
+        /// <summary>
+        /// Requests replacement of overlapping DDGI/environment and SSGI
+        /// diffuse estimates by a signed convex delta. Runtime activation still
+        /// requires the non-persisted rollout policy.
+        /// </summary>
+        public bool GiHybridCompositionV2 { get; set; }
+
+        /// <summary>
+        /// Requests bounded world-space emissive triangles and deterministic
+        /// alias sampling. The effective qualified path and legacy bounds proxy
+        /// are mutually exclusive.
+        /// </summary>
+        public bool GiEmissiveMeshSampling { get; set; }
+
+        /// <summary>
+        /// Non-persisted release policy. Qualification evidence must be applied
+        /// independently of ordinary render settings so a copied user setting
+        /// cannot promote V2 to a shipping default.
+        /// </summary>
+        public MaterialGiRolloutPolicy MaterialGiRollout { get; } = new();
+
+        /// <summary>
+        /// Material-GI V2 features requested by ordinary configuration. This is
+        /// not an execution authorization and may include persisted or copied
+        /// values that the rollout policy rejects.
+        /// </summary>
+        public MaterialGiV2Feature ConfiguredMaterialGiV2Features
+        {
+            get
+            {
+                MaterialGiV2Feature features = MaterialGiV2Feature.None;
+                if (GiMaterialTransportV2)
+                    features |= MaterialGiV2Feature.MaterialTransport;
+                if (GiEmissiveMeshSampling)
+                    features |= MaterialGiV2Feature.EmissiveMeshSampling;
+                if (GiFarFieldMaterialV2)
+                    features |= MaterialGiV2Feature.FarFieldMaterial;
+                if (GiHybridCompositionV2)
+                    features |= MaterialGiV2Feature.HybridComposition;
+                return features;
+            }
+        }
+
+        /// <summary>
+        /// Material-GI V2 features authorized for runtime execution by the
+        /// non-persisted rollout policy.
+        /// </summary>
+        public MaterialGiV2Feature ActiveMaterialGiV2Features =>
+            MaterialGiRollout.ResolveEffectiveFeatures(
+                ConfiguredMaterialGiV2Features);
+
+        public bool EffectiveGiMaterialTransportV2 =>
+            IsMaterialGiV2FeatureActive(
+                MaterialGiV2Feature.MaterialTransport);
+
+        public bool EffectiveGiEmissiveMeshSampling =>
+            IsMaterialGiV2FeatureActive(
+                MaterialGiV2Feature.EmissiveMeshSampling);
+
+        public bool EffectiveGiFarFieldMaterialV2 =>
+            IsMaterialGiV2FeatureActive(
+                MaterialGiV2Feature.FarFieldMaterial);
+
+        public bool EffectiveGiHybridCompositionV2 =>
+            IsMaterialGiV2FeatureActive(
+                MaterialGiV2Feature.HybridComposition);
+
+        public void UseLegacyMaterialGiRollout()
+        {
+            MaterialGiRollout.UseLegacy();
+            ApplyMaterialGiFeatureMask(MaterialGiV2Feature.None);
+        }
+
+        /// <summary>
+        /// Explicit non-shipping opt-in used by conformance executables and
+        /// samples. Release qualification remains unavailable in this mode.
+        /// </summary>
+        public void EnableMaterialGiV2ForConformance(
+            MaterialGiV2Feature features = MaterialGiV2Feature.All)
+        {
+            MaterialGiRollout.EnableConformance(features);
+            ApplyMaterialGiFeatureMask(features);
+        }
+
+        /// <summary>
+        /// Explicit non-shipping mode for producing the performance matrix
+        /// consumed by a first release qualification. Unlike conformance mode,
+        /// diagnostics mark qualification as required, but never as approved.
+        /// </summary>
+        public void EnableMaterialGiV2ForQualificationCandidate()
+        {
+            MaterialGiRollout.EnableQualificationCandidate();
+            ApplyMaterialGiFeatureMask(MaterialGiV2Feature.All);
+        }
+
+        public void ApplyMaterialGiV2Qualification(
+            MaterialGiRolloutQualificationManifest manifest,
+            DateOnly? evaluationDate = null)
+        {
+            MaterialGiRollout.ApplyQualification(manifest, evaluationDate);
+            ApplyMaterialGiFeatureMask(manifest.EnabledFeatures);
+        }
+
+        public void ApplyMaterialGiV2Qualification(
+            string manifestPath,
+            DateOnly? evaluationDate = null) =>
+            ApplyMaterialGiV2Qualification(
+                MaterialGiRolloutQualificationManifest.Load(manifestPath),
+                evaluationDate);
+
+        public MaterialGiRolloutEvaluation EvaluateMaterialGiRollout(
+            DateOnly? evaluationDate = null)
+        {
+            MaterialGiV2Feature configuredFeatures =
+                ConfiguredMaterialGiV2Features;
+            MaterialGiV2Feature activeFeatures =
+                MaterialGiRollout.ResolveEffectiveFeatures(
+                    configuredFeatures,
+                    evaluationDate);
+            return MaterialGiRollout
+                .Evaluate(configuredFeatures, evaluationDate) with
+            {
+                ActiveFeatures = activeFeatures
+            };
+        }
+
+        private bool IsMaterialGiV2FeatureActive(
+            MaterialGiV2Feature feature) =>
+            (ActiveMaterialGiV2Features & feature) != 0;
+
+        private void ApplyMaterialGiFeatureMask(MaterialGiV2Feature features)
+        {
+            GiMaterialTransportV2 =
+                (features & MaterialGiV2Feature.MaterialTransport) != 0;
+            GiEmissiveMeshSampling =
+                (features & MaterialGiV2Feature.EmissiveMeshSampling) != 0;
+            GiFarFieldMaterialV2 =
+                (features & MaterialGiV2Feature.FarFieldMaterial) != 0;
+            GiHybridCompositionV2 =
+                (features & MaterialGiV2Feature.HybridComposition) != 0;
+        }
+
+        public int DdgiEmissiveTriangleBudget
+        {
+            get => _ddgiEmissiveTriangleBudget;
+            set => _ddgiEmissiveTriangleBudget = Clamp(value, 1, 256);
+        }
         public bool DdgiProbeClassificationEnabled { get; set; } = true;
         public bool DdgiProbeRelocationEnabled { get; set; } = true;
         public bool DdgiProbeL1MetadataEnabled { get; set; } = true;
@@ -1831,6 +2045,12 @@ namespace Njulf.Rendering.Data
         /// A/B validation and emergency rollback.
         /// </summary>
         public bool FarFieldPagedEnabled { get; set; } = true;
+        /// <summary>
+        /// Requests the independently versioned dominant-surface material
+        /// payload. Runtime consumers use the effective policy-authorized
+        /// switch; the unqualified default retains V1 occupancy/RGB8.
+        /// </summary>
+        public bool GiFarFieldMaterialV2 { get; set; }
         public bool FarFieldForceAll { get; set; }
         /// <summary>
         /// Restricts static GI ray-query geometry to a camera-relative working set
@@ -2850,6 +3070,13 @@ namespace Njulf.Rendering.Data
         public void ApplyDdgiQualityTier(DdgiQualityTier tier)
         {
             DdgiQualityTier = tier;
+            DdgiEmissiveTriangleBudget = tier switch
+            {
+                DdgiQualityTier.DdgiLow => 64,
+                DdgiQualityTier.DdgiMedium => 128,
+                DdgiQualityTier.DdgiUltra => 256,
+                _ => 256
+            };
             DdgiAdaptiveBudgetingEnabled = true;
             DdgiAdaptiveBudgetHysteresisFraction = 0.15f;
             DdgiEmergencyDegradeGpuTimeMultiplier = 2.0f;
@@ -3722,10 +3949,18 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 4;
+        public const int SerializationVersion = 5;
+        internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
         private float _resolutionScale = 1.0f;
+
+        /// <summary>
+        /// Internal pre-publication guard used by renderer-owned tier budgets.
+        /// Subscribers run before any preset state mutates and may reject a
+        /// transition by throwing, leaving the previous preset intact.
+        /// </summary>
+        internal event Action<RenderQualityPreset>? QualityPresetChanging;
 
         public float Exposure
         {
@@ -3807,6 +4042,10 @@ namespace Njulf.Rendering.Data
 
         public void ApplyQualityPreset(RenderQualityPreset preset)
         {
+            if (!Enum.IsDefined(preset))
+                throw new ArgumentOutOfRangeException(nameof(preset));
+
+            QualityPresetChanging?.Invoke(preset);
             QualityPreset = preset;
             ShowRawHdrSceneColor = false;
             // Simple DDGI is the production DDGI implementation. Presets restore
@@ -4097,26 +4336,109 @@ namespace Njulf.Rendering.Data
             if (string.IsNullOrWhiteSpace(path))
                 throw new ArgumentException("Render settings path cannot be null or empty.", nameof(path));
 
-            string? directory = Path.GetDirectoryName(Path.GetFullPath(path));
-            if (!string.IsNullOrEmpty(directory))
-                Directory.CreateDirectory(directory);
-
             var options = CreateJsonOptions();
-            File.WriteAllText(path, JsonSerializer.Serialize(RenderSettingsFile.FromSettings(this), options));
+            byte[] payload = JsonSerializer.SerializeToUtf8Bytes(
+                RenderSettingsFile.FromSettings(this),
+                options);
+            if (payload.Length > MaximumSettingsFileBytes)
+            {
+                throw new InvalidOperationException(
+                    $"Render settings output contains {payload.Length} bytes, exceeding " +
+                    $"the {MaximumSettingsFileBytes}-byte limit.");
+            }
+
+            string fullPath = Path.GetFullPath(path);
+            string directory =
+                Path.GetDirectoryName(fullPath)
+                ?? throw new InvalidOperationException(
+                    $"Render settings path '{fullPath}' has no parent directory.");
+            Directory.CreateDirectory(directory);
+            string temporaryPath = Path.Combine(
+                directory,
+                $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
+            try
+            {
+                using (var output = new FileStream(
+                           temporaryPath,
+                           FileMode.CreateNew,
+                           FileAccess.Write,
+                           FileShare.None,
+                           bufferSize: 64 * 1024,
+                           options: FileOptions.WriteThrough))
+                {
+                    output.Write(payload);
+                    output.Flush(flushToDisk: true);
+                }
+
+                if (File.Exists(fullPath))
+                {
+                    File.Replace(
+                        temporaryPath,
+                        fullPath,
+                        destinationBackupFileName: null,
+                        ignoreMetadataErrors: true);
+                }
+                else
+                {
+                    File.Move(temporaryPath, fullPath);
+                }
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath))
+                    File.Delete(temporaryPath);
+            }
         }
 
         public static RenderSettings Load(string path)
         {
             if (string.IsNullOrWhiteSpace(path))
                 throw new ArgumentException("Render settings path cannot be null or empty.", nameof(path));
-            if (!File.Exists(path))
-                throw new FileNotFoundException("Render settings file was not found.", path);
+            string fullPath = Path.GetFullPath(path);
+            using var input = new FileStream(
+                fullPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 64 * 1024,
+                options: FileOptions.SequentialScan);
+            long admittedLength = input.Length;
+            if (admittedLength <= 0 ||
+                admittedLength > MaximumSettingsFileBytes)
+            {
+                throw new InvalidDataException(
+                    $"Render settings file '{fullPath}' contains {admittedLength} bytes; " +
+                    $"the valid range is [1, {MaximumSettingsFileBytes}].");
+            }
 
-            RenderSettingsFile? file = JsonSerializer.Deserialize<RenderSettingsFile>(
-                File.ReadAllText(path),
-                CreateJsonOptions());
+            var payload = new byte[checked((int)admittedLength)];
+            try
+            {
+                input.ReadExactly(payload);
+            }
+            catch (EndOfStreamException exception)
+            {
+                throw new InvalidDataException(
+                    $"Render settings file '{fullPath}' became shorter during its bounded read.",
+                    exception);
+            }
+
+            if (input.ReadByte() != -1 ||
+                input.Length != admittedLength)
+            {
+                throw new InvalidDataException(
+                    $"Render settings file '{fullPath}' changed length during its bounded read.");
+            }
+
+            RenderSettingsFile? file =
+                JsonSerializer.Deserialize<RenderSettingsFile>(
+                    payload,
+                    CreateJsonOptions());
             if (file == null)
-                throw new InvalidDataException($"Render settings file '{path}' did not contain a valid settings object.");
+            {
+                throw new InvalidDataException(
+                    $"Render settings file '{fullPath}' did not contain a valid settings object.");
+            }
 
             var settings = new RenderSettings();
             file.ApplyTo(settings);
@@ -4148,7 +4470,9 @@ namespace Njulf.Rendering.Data
             // A missing version is legacy by definition. Version 4 adds explicit
             // XYZ serialization for authored Simple-DDGI volumes; Vector3 exposes
             // fields rather than properties and therefore cannot safely be left to
-            // the default System.Text.Json contract.
+            // the default System.Text.Json contract. Version 5 makes the four
+            // material-GI V2 rollout switches fail-closed; release qualification
+            // remains an external, non-persisted policy.
             public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
@@ -4211,6 +4535,10 @@ namespace Njulf.Rendering.Data
                 settings.Bloom.Enabled = BloomEnabled;
                 settings.AmbientOcclusion.Enabled = AmbientOcclusionEnabled;
                 GlobalIllumination?.ApplyTo(settings.GlobalIllumination);
+                // Rollout authority is never persisted. This also clears V2
+                // booleans from current-version files so no raw consumer can
+                // observe an unauthenticated feature request during startup.
+                settings.GlobalIllumination.UseLegacyMaterialGiRollout();
                 settings.Fog.Enabled = FogEnabled;
                 settings.Reflections.Enabled = ReflectionsEnabled;
                 settings.Shadows.DirectionalShadowsEnabled = ShadowsEnabled;
@@ -4240,6 +4568,9 @@ namespace Njulf.Rendering.Data
             public bool UseDdgi { get; init; } = true;
             public bool UseRayQueryBackend { get; init; }
             public DdgiQualityTier DdgiQualityTier { get; init; } = DdgiQualityTier.DdgiHigh;
+            public bool GiMaterialTransportV2 { get; init; }
+            public bool GiHybridCompositionV2 { get; init; }
+            public bool GiEmissiveMeshSampling { get; init; }
             public bool DdgiProbeClassificationEnabled { get; init; } = true;
             public bool DdgiProbeRelocationEnabled { get; init; }
             public bool DdgiProbeL1MetadataEnabled { get; init; } = true;
@@ -4334,6 +4665,7 @@ namespace Njulf.Rendering.Data
             public int SimpleDdgiProbeUpdatesPerFrame { get; init; } = 2_048;
             public bool FarFieldClipmapEnabled { get; init; } = true;
             public bool FarFieldPagedEnabled { get; init; } = true;
+            public bool GiFarFieldMaterialV2 { get; init; }
             public bool FarFieldSkyVisibilityEnabled { get; init; } = true;
             public bool FarFieldSunShadowEnabled { get; init; } = true;
             public int FarFieldClipmapResolution { get; init; } = 128;
@@ -4441,6 +4773,9 @@ namespace Njulf.Rendering.Data
                     UseDdgi = settings.UseDdgi,
                     UseRayQueryBackend = settings.UseRayQueryBackend,
                     DdgiQualityTier = settings.DdgiQualityTier,
+                    GiMaterialTransportV2 = settings.GiMaterialTransportV2,
+                    GiHybridCompositionV2 = settings.GiHybridCompositionV2,
+                    GiEmissiveMeshSampling = settings.GiEmissiveMeshSampling,
                     DdgiProbeClassificationEnabled = settings.DdgiProbeClassificationEnabled,
                     DdgiProbeRelocationEnabled = settings.DdgiProbeRelocationEnabled,
                     DdgiProbeL1MetadataEnabled = settings.DdgiProbeL1MetadataEnabled,
@@ -4535,6 +4870,7 @@ namespace Njulf.Rendering.Data
                     SimpleDdgiProbeUpdatesPerFrame = settings.SimpleDdgiProbeUpdatesPerFrame,
                     FarFieldClipmapEnabled = settings.FarFieldClipmapEnabled,
                     FarFieldPagedEnabled = settings.FarFieldPagedEnabled,
+                    GiFarFieldMaterialV2 = settings.GiFarFieldMaterialV2,
                     FarFieldSkyVisibilityEnabled = settings.FarFieldSkyVisibilityEnabled,
                     FarFieldSunShadowEnabled = settings.FarFieldSunShadowEnabled,
                     FarFieldClipmapResolution = settings.FarFieldClipmapResolution,
@@ -4642,6 +4978,9 @@ namespace Njulf.Rendering.Data
                 settings.UseDdgi = UseDdgi;
                 settings.UseRayQueryBackend = UseRayQueryBackend;
                 settings.DdgiQualityTier = DdgiQualityTier;
+                settings.GiMaterialTransportV2 = GiMaterialTransportV2;
+                settings.GiHybridCompositionV2 = GiHybridCompositionV2;
+                settings.GiEmissiveMeshSampling = GiEmissiveMeshSampling;
                 settings.DdgiProbeClassificationEnabled = DdgiProbeClassificationEnabled;
                 settings.DdgiProbeRelocationEnabled = DdgiProbeRelocationEnabled;
                 settings.DdgiProbeL1MetadataEnabled = DdgiProbeL1MetadataEnabled;
@@ -4740,6 +5079,7 @@ namespace Njulf.Rendering.Data
                 settings.SimpleDdgiProbeUpdatesPerFrame = SimpleDdgiProbeUpdatesPerFrame;
                 settings.FarFieldClipmapEnabled = FarFieldClipmapEnabled;
                 settings.FarFieldPagedEnabled = FarFieldPagedEnabled;
+                settings.GiFarFieldMaterialV2 = GiFarFieldMaterialV2;
                 settings.FarFieldSkyVisibilityEnabled = FarFieldSkyVisibilityEnabled;
                 settings.FarFieldSunShadowEnabled = FarFieldSunShadowEnabled;
                 settings.FarFieldClipmapResolution = FarFieldClipmapResolution;

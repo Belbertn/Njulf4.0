@@ -13,6 +13,13 @@ public sealed record RendererValidationSettings(
     public bool EnableValidation => Mode != RendererValidationMode.Off;
     public bool EnableGpuAssisted => Mode is RendererValidationMode.GpuAssisted or RendererValidationMode.All;
     public bool EnableSynchronization => Mode is RendererValidationMode.Synchronization or RendererValidationMode.All;
+    public RendererValidationFeatureSelection FeatureSelection => EnableValidation
+        ? new RendererValidationFeatureSelection(
+            GpuAssisted: EnableGpuAssisted,
+            ReserveGpuAssistedBindingSlot: EnableGpuAssisted,
+            SynchronizationValidation: EnableSynchronization,
+            BestPractices: EnableBestPractices)
+        : RendererValidationFeatureSelection.None;
 
     public static RendererValidationSettings Default { get; } = new(
 #if DEBUG
@@ -100,4 +107,28 @@ public sealed record RendererValidationSettings(
             value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
             value.Equals("on", StringComparison.OrdinalIgnoreCase);
     }
+}
+
+/// <summary>
+/// Vulkan validation-layer features that must be attached to
+/// <c>VkInstanceCreateInfo::pNext</c>. Keeping this selection independent of
+/// Silk.NET makes the command-line modes straightforward to test.
+/// </summary>
+public readonly record struct RendererValidationFeatureSelection(
+    bool GpuAssisted,
+    bool ReserveGpuAssistedBindingSlot,
+    bool SynchronizationValidation,
+    bool BestPractices)
+{
+    public static RendererValidationFeatureSelection None { get; } = new(
+        GpuAssisted: false,
+        ReserveGpuAssistedBindingSlot: false,
+        SynchronizationValidation: false,
+        BestPractices: false);
+
+    public int EnabledFeatureCount =>
+        (GpuAssisted ? 1 : 0) +
+        (ReserveGpuAssistedBindingSlot ? 1 : 0) +
+        (SynchronizationValidation ? 1 : 0) +
+        (BestPractices ? 1 : 0);
 }

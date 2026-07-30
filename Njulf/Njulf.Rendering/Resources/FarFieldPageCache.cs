@@ -57,10 +57,12 @@ namespace Njulf.Rendering.Resources
         private int[] _gpuTableEntryIndices = Array.Empty<int>();
         private ulong _frameSerial;
         private int _evictionCount;
+        private int _stalePublicationRejectCount;
         private const ulong SafePublishDelayFrames = 3;
 
         public int Capacity => _slots.Length;
         public int EvictionCount => _evictionCount;
+        public int StalePublicationRejectCount => _stalePublicationRejectCount;
         public int ResidentCount => Count(FarFieldPageResidencyState.Resident);
         public int PendingCount => Count(FarFieldPageResidencyState.Pending) +
             Count(FarFieldPageResidencyState.Baking) +
@@ -78,6 +80,7 @@ namespace Njulf.Rendering.Resources
             _gpuTableEntryIndices = new int[capacity];
             Array.Fill(_gpuTableEntryIndices, -1);
             _evictionCount = 0;
+            _stalePublicationRejectCount = 0;
         }
 
         public void Clear()
@@ -89,6 +92,7 @@ namespace Njulf.Rendering.Resources
             Array.Clear(_slots, 0, _slots.Length);
             Array.Fill(_gpuTableEntryIndices, -1);
             _evictionCount = 0;
+            _stalePublicationRejectCount = 0;
         }
 
         public void BeginFrame(ulong frameSerial)
@@ -106,7 +110,11 @@ namespace Njulf.Rendering.Resources
             }
         }
 
-        public void Request(FarFieldPageKey key, ulong sourceRevision, int priority)
+        public void Request(
+            FarFieldPageKey key,
+            ulong sourceRevision,
+            int priority,
+            ulong validationRevision = 0)
         {
             if (_slots.Length == 0)
                 return;
@@ -116,6 +124,7 @@ namespace Njulf.Rendering.Resources
             {
                 ref PageSlot slot = ref _slots[existingSlot];
                 slot.LastRequestedFrame = _frameSerial;
+                slot.ValidationRevision = validationRevision;
                 // Priority is a current-frame demand signal, not a historical high
                 // watermark.  Keeping the old maximum made a page requested once
                 // near the camera effectively unevictable after the camera moved.
@@ -157,6 +166,7 @@ namespace Njulf.Rendering.Resources
                 State = FarFieldPageResidencyState.Pending,
                 Generation = AdvanceGeneration(victim.Generation),
                 SourceRevision = sourceRevision,
+                ValidationRevision = validationRevision,
                 LastRequestedFrame = _frameSerial,
                 Priority = priority
             };
@@ -207,10 +217,14 @@ namespace Njulf.Rendering.Resources
 
             ref PageSlot slot = ref _slots[request.PhysicalPageIndex];
             if (slot.Key != request.Key || slot.State != FarFieldPageResidencyState.Baking)
+            {
+                _stalePublicationRejectCount++;
                 return;
+            }
 
             if (slot.Generation != request.Generation || slot.SourceRevision != request.SourceRevision)
             {
+                _stalePublicationRejectCount++;
                 slot.State = FarFieldPageResidencyState.Pending;
                 return;
             }
@@ -261,6 +275,18 @@ namespace Njulf.Rendering.Resources
             return false;
         }
 
+        public bool TryGetValidationRevision(FarFieldPageKey key, out ulong validationRevision)
+        {
+            if (_slotByKey.TryGetValue(key, out int slot))
+            {
+                validationRevision = _slots[slot].ValidationRevision;
+                return true;
+            }
+
+            validationRevision = 0;
+            return false;
+        }
+
         public void BuildGpuTable(Span<GPUFarFieldPageTableEntry> destination)
         {
             destination.Clear();
@@ -294,7 +320,9 @@ namespace Njulf.Rendering.Resources
                     WorldPageZ = slot.Key.Z,
                     CascadeAndFlags = flags,
                     PhysicalPageIndex = checked((uint)physicalPage),
-                    Generation = slot.Generation
+                    Generation = slot.Generation,
+                    Reserved0 = unchecked((uint)slot.SourceRevision),
+                    Reserved1 = unchecked((uint)(slot.SourceRevision >> 32))
                 };
                 _gpuTableEntryIndices[physicalPage] = tableIndex;
             }
@@ -393,6 +421,7 @@ namespace Njulf.Rendering.Resources
             public FarFieldPageResidencyState State;
             public uint Generation;
             public ulong SourceRevision;
+            public ulong ValidationRevision;
             public ulong LastRequestedFrame;
             public ulong LastResidentFrame;
             public ulong LastPublishedFrame;

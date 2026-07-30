@@ -58,7 +58,11 @@ namespace Njulf.Rendering.Pipeline
                 or GlobalIlluminationDebugView.SsgiFiltered
                 or GlobalIlluminationDebugView.SsgiHistory
                 or GlobalIlluminationDebugView.SsgiRayHitMask
-                or GlobalIlluminationDebugView.SsgiHistoryRejection;
+                or GlobalIlluminationDebugView.SsgiHistoryRejection
+                or GlobalIlluminationDebugView.MaterialTransportSourceOwnership
+                or GlobalIlluminationDebugView.HybridEstimatorOwnership
+                or GlobalIlluminationDebugView.HybridFinalComposition
+                or GlobalIlluminationDebugView.MaterialTransportHitProvenance;
         }
 
         public static bool ShouldRunSsgiProducer(GlobalIlluminationSettings gi)
@@ -79,8 +83,15 @@ namespace Njulf.Rendering.Pipeline
             if (gi == null)
                 throw new ArgumentNullException(nameof(gi));
 
+            if (gi.DebugView == GlobalIlluminationDebugView.MaterialTransportHitProvenance)
+                return gi.EffectiveUseDdgi || gi.EffectiveUseSimpleDdgi;
+
             return gi.EffectiveUseSsgi &&
-                gi.DebugView is GlobalIlluminationDebugView.None or GlobalIlluminationDebugView.FinalIndirect;
+                gi.DebugView is GlobalIlluminationDebugView.None
+                    or GlobalIlluminationDebugView.FinalIndirect
+                    or GlobalIlluminationDebugView.MaterialTransportSourceOwnership
+                    or GlobalIlluminationDebugView.HybridEstimatorOwnership
+                    or GlobalIlluminationDebugView.HybridFinalComposition;
         }
 
         public static bool ShouldCompositeSsgi(GlobalIlluminationSettings gi, uint forwardDebugViewMode)

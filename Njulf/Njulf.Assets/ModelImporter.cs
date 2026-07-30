@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Njulf.Assets.Gltf;
 using Njulf.Core.Animation;
 using Njulf.Core.Math;
@@ -282,11 +283,14 @@ namespace Njulf.Assets
                         AllowTrailingCommas = true,
                         CommentHandling = JsonCommentHandling.Skip
                     })
-                    : JsonDocument.Parse(File.ReadAllBytes(fullPath), new JsonDocumentOptions
-                    {
-                        AllowTrailingCommas = true,
-                        CommentHandling = JsonCommentHandling.Skip
-                    });
+                    : JsonDocument.Parse(AssetArtifactFileIo.ReadBoundedSnapshot(
+                        fullPath,
+                        AssetArtifactFileIo.DefaultMaximumJsonBytes,
+                        "glTF document"), new JsonDocumentOptions
+                        {
+                            AllowTrailingCommas = true,
+                            CommentHandling = JsonCommentHandling.Skip
+                        });
 
                 if (!document.RootElement.TryGetProperty("extensionsRequired", out JsonElement required) ||
                     required.ValueKind != JsonValueKind.Array)
@@ -341,7 +345,8 @@ namespace Njulf.Assets
                 "KHR_materials_specular",
                 "KHR_materials_iridescence",
                 "KHR_materials_dispersion",
-                "KHR_texture_basisu"
+                "KHR_texture_basisu",
+                "EXT_texture_webp"
             };
         }
 
@@ -1388,8 +1393,11 @@ namespace Njulf.Assets
             string extension = Path.GetExtension(modelPath);
             if (string.Equals(extension, ".gltf", StringComparison.OrdinalIgnoreCase))
             {
-                using FileStream stream = File.OpenRead(modelPath);
-                using JsonDocument document = JsonDocument.Parse(stream, new JsonDocumentOptions
+                byte[] json = AssetArtifactFileIo.ReadBoundedSnapshot(
+                    modelPath,
+                    AssetArtifactFileIo.DefaultMaximumJsonBytes,
+                    "glTF document");
+                using JsonDocument document = JsonDocument.Parse(json, new JsonDocumentOptions
                 {
                     AllowTrailingCommas = true,
                     CommentHandling = JsonCommentHandling.Skip
@@ -1462,7 +1470,8 @@ namespace Njulf.Assets
                 "KHR_materials_iridescence",
                 "KHR_materials_dispersion",
                 "KHR_materials_unlit",
-                "KHR_texture_basisu"
+                "KHR_texture_basisu",
+                "EXT_texture_webp"
             };
             var optionalWarn = new HashSet<string>(StringComparer.Ordinal)
             {
@@ -1561,7 +1570,10 @@ namespace Njulf.Assets
                             throw new FileNotFoundException($"Required external glTF buffer was not found: {absolutePath}", absolutePath);
                         }
 
-                        data = File.ReadAllBytes(absolutePath);
+                        data = AssetArtifactFileIo.ReadBoundedSnapshot(
+                            absolutePath,
+                            AssetArtifactFileIo.MaximumCookSourceBytes,
+                            $"external glTF buffer {index}");
                         diagnostics.ExternalBufferCount++;
                     }
                 }
@@ -1586,7 +1598,10 @@ namespace Njulf.Assets
 
         private static GlbPayload ReadGlb(string modelPath)
         {
-            byte[] data = File.ReadAllBytes(modelPath);
+            byte[] data = AssetArtifactFileIo.ReadBoundedSnapshot(
+                modelPath,
+                AssetArtifactFileIo.MaximumCookSourceBytes,
+                "GLB asset");
             if (data.Length < 20)
                 throw new InvalidDataException($"glB asset '{modelPath}' is too small to contain a valid header.");
 
@@ -1768,7 +1783,8 @@ namespace Njulf.Assets
                 textures.Add(new GltfTexture(
                     ReadInt(textureElement, "source"),
                     ReadInt(textureElement, "sampler"),
-                    ReadBasisSource(textureElement)));
+                    ReadBasisSource(textureElement),
+                    ReadWebPSource(textureElement)));
             }
 
             return textures;
@@ -1787,15 +1803,36 @@ namespace Njulf.Assets
             return ReadInt(basis, "source");
         }
 
+        private static int? ReadWebPSource(JsonElement textureElement)
+        {
+            if (!textureElement.TryGetProperty("extensions", out JsonElement extensions) ||
+                extensions.ValueKind != JsonValueKind.Object ||
+                !extensions.TryGetProperty("EXT_texture_webp", out JsonElement webP) ||
+                webP.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            return ReadInt(webP, "source");
+        }
+
         private static TextureContainerKind GetTextureContainerKind(string? path, string? mimeType)
         {
             if (string.Equals(mimeType, "image/ktx2", StringComparison.OrdinalIgnoreCase))
                 return TextureContainerKind.Ktx2;
+            if (string.Equals(mimeType, "image/webp", StringComparison.OrdinalIgnoreCase))
+                return TextureContainerKind.WebP;
 
-            return !string.IsNullOrWhiteSpace(path) &&
-                   string.Equals(Path.GetExtension(path), ".ktx2", StringComparison.OrdinalIgnoreCase)
-                ? TextureContainerKind.Ktx2
-                : TextureContainerKind.StandardImage;
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                string extension = Path.GetExtension(path);
+                if (string.Equals(extension, ".ktx2", StringComparison.OrdinalIgnoreCase))
+                    return TextureContainerKind.Ktx2;
+                if (string.Equals(extension, ".webp", StringComparison.OrdinalIgnoreCase))
+                    return TextureContainerKind.WebP;
+            }
+
+            return TextureContainerKind.StandardImage;
         }
 
         private static List<TextureSamplerDescription> ReadGltfSamplers(JsonElement root, AssetImportDiagnostics diagnostics)
@@ -1950,7 +1987,7 @@ namespace Njulf.Assets
             {
                 Name = name,
                 AlphaMode = ReadAlphaMode(materialElement),
-                AlphaCutoff = ReadFloat(materialElement, "alphaCutoff"),
+                AlphaCutoff = ReadAlphaCutoff(materialElement),
                 DoubleSided = ReadBool(materialElement, "doubleSided")
             };
 
@@ -2056,6 +2093,7 @@ namespace Njulf.Assets
                 ior.ValueKind == JsonValueKind.Object)
             {
                 material.Ior = ReadFloat(ior, "ior") ?? 1.5f;
+                material.FeatureFlags |= ModelMaterialFeatureBits.Ior;
             }
 
             if (extensions.TryGetProperty("KHR_materials_volume", out JsonElement volume) &&
@@ -2141,7 +2179,10 @@ namespace Njulf.Assets
                 return default;
 
             GltfTexture texture = textures[textureIndex];
-            int? sourceIndex = texture.BasisSource ?? texture.Source;
+            int? sourceIndex =
+                texture.BasisSource ??
+                texture.WebPSource ??
+                texture.Source;
             if (!sourceIndex.HasValue || sourceIndex.Value < 0 || sourceIndex.Value >= imageSources.Count)
                 return default;
 
@@ -2205,6 +2246,22 @@ namespace Njulf.Assets
             return element.TryGetProperty(propertyName, out JsonElement value) && value.TryGetSingle(out float result)
                 ? result
                 : null;
+        }
+
+        private static float? ReadAlphaCutoff(JsonElement material)
+        {
+            if (!material.TryGetProperty("alphaCutoff", out JsonElement value))
+                return null;
+            if (value.ValueKind != JsonValueKind.Number ||
+                !value.TryGetSingle(out float cutoff) ||
+                !float.IsFinite(cutoff) ||
+                cutoff < 0f)
+            {
+                throw new InvalidDataException(
+                    "glTF material alphaCutoff must be a finite, non-negative number.");
+            }
+
+            return cutoff;
         }
 
         private static float? ReadNestedFloat(JsonElement owner, string objectName, string propertyName)
@@ -2430,6 +2487,15 @@ namespace Njulf.Assets
     {
         public static ModelMaterial Default => new ModelMaterial();
 
+        /// <summary>
+        /// Creates a shallow authored-material snapshot. Texture slots and
+        /// sources are immutable binding descriptors, so retaining their
+        /// references avoids copying encoded payloads while allowing runtime
+        /// upload code to normalize legacy path-only bindings without mutating
+        /// the imported model.
+        /// </summary>
+        public ModelMaterial Clone() => (ModelMaterial)MemberwiseClone();
+
         public string Name { get; set; } = "DefaultMaterial";
         public uint FeatureFlags { get; set; }
         public Vector4 Albedo { get; set; } = new Vector4(1f, 1f, 1f, 1f);
@@ -2467,6 +2533,13 @@ namespace Njulf.Assets
         public float TransmissionFactor { get; set; }
         public float Ior { get; set; } = 1.5f;
         public float ThicknessFactor { get; set; }
+        /// <summary>
+        /// Optical attenuation distance. Positive infinity is the glTF
+        /// default and is encoded as JSON null in cooked material tables so
+        /// the package remains standards-compliant JSON without enabling
+        /// named non-finite numeric literals globally.
+        /// </summary>
+        [JsonConverter(typeof(PositiveInfinityAsNullJsonConverter))]
         public float AttenuationDistance { get; set; } = float.PositiveInfinity;
         public Vector4 AttenuationColor { get; set; } = new Vector4(1f, 1f, 1f, 1f);
         public string? TransmissionTexturePath { get; set; }
@@ -2509,6 +2582,51 @@ namespace Njulf.Assets
         public ModelTextureSlot? MetallicRoughnessTexture { get; set; }
         public ModelTextureSlot? OcclusionTexture { get; set; }
         public ModelTextureSlot? EmissiveTexture { get; set; }
+
+        internal sealed class PositiveInfinityAsNullJsonConverter
+            : JsonConverter<float>
+        {
+            public override bool HandleNull => true;
+
+            public override float Read(
+                ref Utf8JsonReader reader,
+                Type typeToConvert,
+                JsonSerializerOptions options)
+            {
+                if (reader.TokenType == JsonTokenType.Null)
+                    return float.PositiveInfinity;
+
+                if (reader.TokenType == JsonTokenType.Number &&
+                    reader.TryGetSingle(out float value) &&
+                    float.IsFinite(value))
+                {
+                    return value;
+                }
+
+                throw new JsonException(
+                    "Attenuation distance must be a finite JSON number or null.");
+            }
+
+            public override void Write(
+                Utf8JsonWriter writer,
+                float value,
+                JsonSerializerOptions options)
+            {
+                if (float.IsPositiveInfinity(value))
+                {
+                    writer.WriteNullValue();
+                    return;
+                }
+
+                if (!float.IsFinite(value))
+                {
+                    throw new JsonException(
+                        "Attenuation distance must be finite or positive infinity.");
+                }
+
+                writer.WriteNumberValue(value);
+            }
+        }
     }
 
     internal static class ModelMaterialFeatureBits
@@ -2536,6 +2654,8 @@ namespace Njulf.Assets
         public const uint IridescenceThicknessTexture = 1u << 20;
         public const uint Dispersion = 1u << 21;
         public const uint Foliage = 1u << 22;
+        // Bit 23 is assigned by the cooker to the runtime-only BC5 normal flag.
+        public const uint Ior = 1u << 24;
     }
 
     public enum ModelAlphaMode
@@ -2715,5 +2835,9 @@ namespace Njulf.Assets
     internal readonly record struct GlbPayload(byte[] Json, byte[]? BinaryChunk);
     internal readonly record struct GltfBufferData(byte[] Bytes, int DeclaredLength);
     internal readonly record struct GltfBufferViewData(int Buffer, int ByteOffset, int ByteLength);
-    internal readonly record struct GltfTexture(int? Source, int? Sampler, int? BasisSource);
+    internal readonly record struct GltfTexture(
+        int? Source,
+        int? Sampler,
+        int? BasisSource,
+        int? WebPSource);
 }

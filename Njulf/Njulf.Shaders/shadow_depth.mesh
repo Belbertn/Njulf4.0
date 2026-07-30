@@ -14,6 +14,7 @@ struct ShadowDepthTaskPayload
 };
 
 taskPayloadSharedEXT ShadowDepthTaskPayload shadowPayload;
+shared uint meshNegativeDeterminant;
 
 layout(push_constant) uniform ShadowDepthPushConstantBlock
 {
@@ -31,14 +32,20 @@ void main()
 
     GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(pc.Push.MeshletDrawBufferBaseIndex, pc.Push.CurrentFrameIndex, shadowPayload.DrawCommandIndex);
     GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
 
     if (gl_LocalInvocationIndex == 0u)
+    {
         SetMeshOutputsEXT(meshlet.LocalVertexCount, meshlet.LocalTriangleCount);
+        meshNegativeDeterminant =
+            ReadRowMajorLinearDeterminant(instanceBufferIndex, objectWordOffset) < 0.0
+                ? 1u
+                : 0u;
+    }
 
     barrier();
 
-    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
-    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
     GPUObjectData objectData = ReadInstanceData(pc.Push.CurrentFrameIndex, command.InstanceId);
 
     for (uint vertexSlot = gl_LocalInvocationIndex;
@@ -60,6 +67,10 @@ void main()
         uint i0 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 0u);
         uint i1 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 1u);
         uint i2 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 2u);
-        gl_PrimitiveTriangleIndicesEXT[triangleSlot] = uvec3(i0, i1, i2);
+        gl_PrimitiveTriangleIndicesEXT[triangleSlot] = ResolveMirroredInstanceTriangle(
+            i0,
+            i1,
+            i2,
+            meshNegativeDeterminant != 0u);
     }
 }

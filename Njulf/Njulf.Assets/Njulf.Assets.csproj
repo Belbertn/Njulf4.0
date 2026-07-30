@@ -12,6 +12,12 @@
         <ExcludeAssets Condition="'$(CookedAssetsOnly)' == 'true'">runtime</ExcludeAssets>
       </PackageReference>
       <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
+      <!-- Runtime WebP upload and descriptor-stable hot reload remain supported
+           by cooked hosts, so the reviewed native decoder must ship in Release. -->
+      <PackageReference Include="Imazen.WebP.NativeRuntime.All" Version="1.6.1" />
+      <PackageReference Include="Ktx2.NET" Version="1.0.5">
+        <ExcludeAssets Condition="'$(CookedAssetsOnly)' == 'true'">runtime</ExcludeAssets>
+      </PackageReference>
       <PackageReference Include="Meshoptimizer.NET" Version="1.0.7" />
       <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
       <PackageReference Include="System.IO.Hashing" Version="10.0.0" />

@@ -297,14 +297,11 @@ namespace Njulf.Rendering.Diagnostics
                     rejectedVolumeCount++;
 
                 SimpleDdgiLayoutVolumeRequest request = decision.Request;
-                // The allocator stores accepted bytes on its decision. Rejected entries retain
-                // their request but intentionally allocate zero bytes, so recompute the requested
-                // cost here to keep the persisted pre-allocation evidence exact for both paths.
-                ulong requestedPersistentBytes = SimpleDdgiLayoutCompiler.EstimatePersistentBytes(
-                    request.ProbeCount,
-                    sampledAtlasRequested,
-                    transportV2Enabled,
-                    transportRayCapacity);
+                // Admission owns the exact cumulative capacity model, including
+                // update/readback caps and sampled-atlas growth quanta. Persist
+                // its incremental evidence directly instead of reconstructing a
+                // potentially different standalone plan here.
+                ulong requestedPersistentBytes = decision.RequestedPersistentBytes;
                 volumes.Add(new SimpleDdgiLayoutVolumeTelemetry(
                     request.Id,
                     request.SourceOrdinal,
@@ -1394,12 +1391,17 @@ namespace Njulf.Rendering.Diagnostics
 
     public static class GiResidencyReporter
     {
-        public static GiResidencySnapshot Create(RendererDiagnostics diagnostics, MemoryBudgetSnapshot memory)
+        public static GiResidencySnapshot Create(
+            RendererDiagnostics diagnostics,
+            MemoryBudgetSnapshot memory,
+            RenderBudgetProfile profile)
         {
             if (diagnostics == null)
                 throw new ArgumentNullException(nameof(diagnostics));
             if (memory == null)
                 throw new ArgumentNullException(nameof(memory));
+            if (profile == null)
+                throw new ArgumentNullException(nameof(profile));
 
             ulong trackedGiBytes = GetCategoryBytes(memory, MemoryBudgetCategory.GlobalIllumination);
             bool hasTrackedGiEntry = HasCategory(memory, MemoryBudgetCategory.GlobalIllumination);
@@ -1417,10 +1419,9 @@ namespace Njulf.Rendering.Diagnostics
                 CreateComponent(
                     "GI render targets",
                     diagnostics.GlobalIlluminationRenderTargetBytes,
-                    0,
+                    profile.GlobalIlluminationRenderTargetBudgetBytes,
                     false,
-                    "Renderer render-target accounting; disjoint from allocation-tracker GI resources. No GI-specific render-target cap is declared.",
-                    countsTowardCombinedBudget: false),
+                    "Renderer render-target accounting; disjoint from allocation-tracker GI resources and governed by the active tier's explicit render-target cap."),
                 CreateComponent(
                     "DDGI cache",
                     ResolveDdgiCacheBytes(diagnostics),

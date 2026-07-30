@@ -7,7 +7,7 @@ namespace Njulf.Assets.Cooked;
 
 public sealed class ModelAssetCooker : IDisposable
 {
-    private const int MaterialTransportMetadataRevision = 1;
+    private const int MaterialTransportMetadataRevision = 2;
 
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -61,9 +61,6 @@ public sealed class ModelAssetCooker : IDisposable
 
         string stem = SanitizeName(Path.GetFileNameWithoutExtension(sourcePath));
         string modelPath = Path.Combine(modelDirectory, stem + ".njmodel");
-        string meshPath = Path.Combine(modelDirectory, stem + ".meshes.njmesh");
-        string materialPath = Path.Combine(materialDirectory, stem + ".materials.njmat");
-        string animationPath = Path.Combine(modelDirectory, stem + ".anim.njanim");
         string reportPath = Path.Combine(reportDirectory, stem + ".cook-report.json");
         string databasePath = Path.Combine(outputRoot, "assetdb.njassetdb");
         if (File.Exists(modelPath))
@@ -88,7 +85,13 @@ public sealed class ModelAssetCooker : IDisposable
             TextureOptions = platformTextureOptions,
             options.ToolVersion,
             options.Platform,
-            MaterialTransportMetadataRevision
+            MaterialTransportMetadataRevision,
+            TextureStatisticsAlgorithmVersion = TextureTransportStatistics.CurrentAlgorithmVersion,
+            PrimitiveTransportAlgorithmVersion = GiPrimitiveTransportProfile.CurrentAlgorithmVersion,
+            TextureTransportStatistics.StbDecoderVersion,
+            TextureTransportStatistics.WebPDecoderVersion,
+            TextureTransportStatistics.BcDecoderVersion,
+            TextureTransportStatistics.KtxStatisticsDecoderVersion
         }));
         string databaseKey = NormalizeRelative(outputRoot, sourcePath);
         CookedAssetDatabase database = CookedAssetDatabase.Load(databasePath);
@@ -107,12 +110,45 @@ public sealed class ModelAssetCooker : IDisposable
             existing.Status == "Succeeded" && OutputsAreCurrent(outputRoot, existing.Outputs))
         {
             AssetCookReport skippedReport = File.Exists(reportPath)
-                ? JsonSerializer.Deserialize<AssetCookReport>(File.ReadAllBytes(reportPath), CookedJson.Options)
-                    ?? CreateSkippedReport(sourcePath, existing.Outputs)
+                ? AssetCookReportJson.Read(reportPath)
                 : CreateSkippedReport(sourcePath, existing.Outputs);
             return new AssetCookResult(skippedReport, true);
         }
 
+        // A stable .njmodel is the single package publication point. Every
+        // mutable sidecar receives a new generation name so the previously
+        // published manifest can never observe partially overwritten bytes.
+        // Stale generations are reclaimed by CleanStale after the database
+        // commits the new output set.
+        string generation = Guid.NewGuid().ToString("N");
+        string meshPath = Path.Combine(
+            modelDirectory,
+            $"{stem}.{generation}.meshes.njmesh");
+        string materialPath = Path.Combine(
+            materialDirectory,
+            $"{stem}.{generation}.materials.njmat");
+        string animationPath = Path.Combine(
+            modelDirectory,
+            $"{stem}.{generation}.anim.njanim");
+        string stagedModelPath =
+            AssetArtifactFileIo.CreateSiblingTemporaryPath(
+                modelPath,
+                "publishing");
+        var generationArtifacts = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            meshPath,
+            materialPath,
+            animationPath,
+            stagedModelPath
+        };
+        bool modelPublished = false;
+        string? publishedSignaturePath = null;
+        string? previousSignatureBackupPath = null;
+        bool signaturePublished = false;
+
+        try
+        {
         var warnings = new List<string>();
         var textureReports = new List<CookedTextureReport>();
         var timer = Stopwatch.StartNew();
@@ -131,7 +167,7 @@ public sealed class ModelAssetCooker : IDisposable
         long meshMs = timer.ElapsedMilliseconds;
 
         timer.Restart();
-        CookedMaterialTable materials = CookMaterials(model.Materials, materialDirectory, textureDirectory, platformTextureOptions, options.ToolVersion, textureReports);
+        CookedMaterialTable materials = CookMaterials(model, materialDirectory, textureDirectory, platformTextureOptions, options.ToolVersion, textureReports);
         long textureMs = timer.ElapsedMilliseconds;
 
         timer.Restart();
@@ -170,26 +206,57 @@ public sealed class ModelAssetCooker : IDisposable
                 subMesh.Name, index, subMesh.MaterialSlot, subMesh.NodeIndex, subMesh.SkinIndex, subMesh.SkinningBindTransform)).ToArray(),
             processed.BoundingBox,
             processed.BoundingSphere);
-        CookedPackage.WriteModel(modelPath, manifest, options.ToolVersion);
+        CookedPackage.WriteModel(
+            stagedModelPath,
+            manifest,
+            options.ToolVersion);
         long serializationMs = timer.ElapsedMilliseconds;
 
-        var outputPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { modelPath, meshPath, materialPath };
+        var outputPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { meshPath, materialPath };
         if (animationReference is not null)
             outputPaths.Add(animationPath);
         foreach (ModelMaterial material in materials.Materials)
-        foreach (System.Reflection.PropertyInfo property in typeof(ModelMaterial).GetProperties().Where(p => p.PropertyType == typeof(ModelTextureSlot) && p.CanRead))
-        {
-            if (property.GetValue(material) is not ModelTextureSlot { Source.FilePath: { } texturePath })
-                continue;
-            string absoluteTexturePath = Path.GetFullPath(Path.Combine(materialDirectory, texturePath));
-            outputPaths.Add(absoluteTexturePath);
-            outputPaths.Add(Path.ChangeExtension(absoluteTexturePath, ".njtex"));
-        }
+            foreach (System.Reflection.PropertyInfo property in typeof(ModelMaterial).GetProperties().Where(p => p.PropertyType == typeof(ModelTextureSlot) && p.CanRead))
+            {
+                if (property.GetValue(material) is not ModelTextureSlot { Source.FilePath: { } texturePath })
+                    continue;
+                string absoluteTexturePath = Path.GetFullPath(Path.Combine(materialDirectory, texturePath));
+                outputPaths.Add(absoluteTexturePath);
+                outputPaths.Add(Path.ChangeExtension(absoluteTexturePath, ".njtex"));
+            }
         if (!string.IsNullOrWhiteSpace(options.SigningPrivateKey))
         {
             foreach (string path in outputPaths.Where(File.Exists).OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray())
                 outputPaths.Add(CookedPackageSigner.SignFile(path, options.SigningPrivateKey));
+            string stagedSignature = CookedPackageSigner.SignFile(
+                stagedModelPath,
+                options.SigningPrivateKey);
+            generationArtifacts.Add(stagedSignature);
+            publishedSignaturePath =
+                CookedPackageSigner.SignaturePath(modelPath);
+            if (File.Exists(publishedSignaturePath))
+            {
+                previousSignatureBackupPath =
+                    AssetArtifactFileIo.CreateSiblingTemporaryPath(
+                        publishedSignaturePath,
+                        "previous");
+                File.Copy(
+                    publishedSignaturePath,
+                    previousSignatureBackupPath);
+                generationArtifacts.Add(previousSignatureBackupPath);
+            }
+            File.Move(
+                stagedSignature,
+                publishedSignaturePath,
+                overwrite: true);
+            signaturePublished = true;
+            outputPaths.Add(publishedSignaturePath);
         }
+        File.Move(stagedModelPath, modelPath, overwrite: true);
+        modelPublished = true;
+        if (previousSignatureBackupPath != null)
+            TryDeleteUnpublishedArtifact(previousSignatureBackupPath);
+        outputPaths.Add(modelPath);
         var outputs = new SortedDictionary<string, ulong>(StringComparer.Ordinal);
         foreach (string path in outputPaths.Where(File.Exists).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
             outputs[NormalizeRelative(outputRoot, path)] = CookedHash.File(path);
@@ -219,7 +286,7 @@ public sealed class ModelAssetCooker : IDisposable
             MeshletLod1Count = mesh.MeshletsLod1.Length,
             MeshletLod2Count = mesh.MeshletsLod2.Length
         };
-        WriteJsonAtomic(reportPath, report);
+        AssetCookReportJson.WriteAtomic(reportPath, report);
         database.Assets[databaseKey] = new CookedAssetDatabaseEntry
         {
             SourcePath = sourcePath,
@@ -234,6 +301,54 @@ public sealed class ModelAssetCooker : IDisposable
         };
         database.SaveAtomic(databasePath);
         return new AssetCookResult(report, false);
+        }
+        catch (Exception cookFailure)
+        {
+            List<Exception>? rollbackFailures = null;
+            if (!modelPublished)
+            {
+                if (signaturePublished &&
+                    publishedSignaturePath != null)
+                {
+                    try
+                    {
+                        if (previousSignatureBackupPath != null &&
+                            File.Exists(previousSignatureBackupPath))
+                        {
+                            File.Move(
+                                previousSignatureBackupPath,
+                                publishedSignaturePath,
+                                overwrite: true);
+                        }
+                        else
+                        {
+                            TryDeleteUnpublishedArtifact(
+                                publishedSignaturePath);
+                        }
+                    }
+                    catch (Exception rollbackFailure)
+                    {
+                        (rollbackFailures ??= []).Add(
+                            rollbackFailure);
+                    }
+                }
+                foreach (string artifact in generationArtifacts)
+                {
+                    TryDeleteUnpublishedArtifact(artifact);
+                    TryDeleteUnpublishedArtifact(
+                        CookedPackageSigner.SignaturePath(artifact));
+                }
+            }
+
+            if (rollbackFailures != null)
+            {
+                throw new AggregateException(
+                    "Model cook failed and restoring the previously published " +
+                    "package signature was incomplete.",
+                    [cookFailure, .. rollbackFailures]);
+            }
+            throw;
+        }
     }
 
     public IReadOnlyList<AssetCookResult> CookFolder(string sourceFolder, string outputRoot, ModelCookOptions? options = null)
@@ -278,51 +393,158 @@ public sealed class ModelAssetCooker : IDisposable
     }
 
     private CookedMaterialTable CookMaterials(
-        IReadOnlyList<ModelMaterial> sourceMaterials,
+        ModelMesh model,
         string materialDirectory,
         string textureDirectory,
         TextureCookOptions defaultOptions,
         uint toolVersion,
         List<CookedTextureReport> reports)
     {
+        IReadOnlyList<ModelMaterial> sourceMaterials = model.Materials;
         ModelMaterial[] materials = sourceMaterials.Count == 0
             ? [ModelMaterial.Default]
             : sourceMaterials.Select(CloneMaterial).ToArray();
         var cookedTextures = new Dictionary<string, (string Path, CookedTextureReport Report)>(StringComparer.Ordinal);
-        foreach (ModelMaterial material in materials)
+        IReadOnlyList<ModelSubMesh> primitiveSubMeshes =
+            GetPrimitiveTransportSubMeshes(model);
+        var primitiveProfiles =
+            new GiPrimitiveTransportProfile?[primitiveSubMeshes.Count];
+        for (int materialIndex = 0; materialIndex < materials.Length; materialIndex++)
         {
+            ModelMaterial material = materials[materialIndex];
+            var materialImages =
+                new Dictionary<(int MaterialIndex, string PropertyName), TextureTransportImage>();
+            var materialTransportImages =
+                new Dictionary<string, TextureTransportImage?>(StringComparer.Ordinal);
             foreach (System.Reflection.PropertyInfo property in typeof(ModelMaterial).GetProperties().Where(p => p.PropertyType == typeof(ModelTextureSlot) && p.CanRead && p.CanWrite))
             {
                 ModelTextureSlot? slot = property.GetValue(material) as ModelTextureSlot;
                 if (slot?.Source is null)
                     continue;
                 ModelTextureSource source = slot.Source;
-                byte[] sourceBytes = source.Bytes is { Length: > 0 }
-                    ? source.Bytes
-                    : File.ReadAllBytes(Path.GetFullPath(source.FilePath ?? throw new InvalidDataException($"Texture '{source.CacheIdentity}' has no source data.")));
+                byte[] sourceBytes = ReadStableTextureSourceBytes(source);
                 ulong sourceHash = CookedHash.Bytes(sourceBytes);
-                string identity = string.IsNullOrWhiteSpace(source.CacheIdentity) ? source.DebugName : source.CacheIdentity;
+                string identity = ResolveTextureSourceIdentity(source);
                 TextureSemantic semantic = ClassifyTextureSemantic(property.Name, slot.ColorSpace);
-                string key = $"{identity}|{slot.ColorSpace}|{semantic}|{defaultOptions.TargetFormatPolicy}|{sourceHash:x16}";
+                bool foliageMaterial =
+                    (material.FeatureFlags & (1u << 22)) != 0 ||
+                    ContainsFoliageToken(material.Name);
+                bool preserveAlphaCoverage =
+                    property.Name == nameof(ModelMaterial.BaseColorTexture) &&
+                    (material.AlphaMode == ModelAlphaMode.Mask || foliageMaterial);
+                string alphaCoverageKey = preserveAlphaCoverage
+                    ? $"enabled:{material.AlphaCutoff:R}"
+                    : "disabled";
+                string samplerAnisotropy = slot.Sampler.MaxAnisotropy.ToString(
+                    "R",
+                    System.Globalization.CultureInfo.InvariantCulture);
+                string key =
+                    $"{identity}|{slot.ColorSpace}|{semantic}|{defaultOptions.TargetFormatPolicy}|" +
+                    $"sampler:{slot.Sampler.WrapU}:{slot.Sampler.WrapV}:" +
+                    $"{slot.Sampler.MinFilter}:{slot.Sampler.MagFilter}:" +
+                    $"{slot.Sampler.MipFilter}:{samplerAnisotropy}|" +
+                    $"alpha:{alphaCoverageKey}|" +
+                    $"stats:{TextureTransportStatistics.CurrentAlgorithmVersion}|" +
+                    $"decoder:{TextureTransportStatistics.StbDecoderVersion}|" +
+                    $"{TextureTransportStatistics.WebPDecoderVersion}|" +
+                    $"{TextureTransportStatistics.KtxStatisticsDecoderVersion}|{sourceHash:x16}";
+                var textureOptions = defaultOptions with
+                {
+                    ColorSpace = slot.ColorSpace,
+                    Semantic = semantic,
+                    PreserveAlphaCoverage = preserveAlphaCoverage,
+                    AlphaCutoff = material.AlphaCutoff
+                };
+                TextureTransportImage? transportImage;
                 if (!cookedTextures.TryGetValue(key, out var cooked))
                 {
                     string textureStem = SanitizeName(string.IsNullOrWhiteSpace(source.DebugName) ? "texture" : Path.GetFileNameWithoutExtension(source.DebugName));
                     string suffix = CookedHash.Bytes(Encoding.UTF8.GetBytes(key)).ToString("x16")[..8];
                     string ktxPath = Path.Combine(textureDirectory, $"{textureStem}_{suffix}.ktx2");
-                    var textureOptions = defaultOptions with { ColorSpace = slot.ColorSpace, Semantic = semantic };
-                    CookedTextureReport textureReport = _textureCooker.Cook(source, ktxPath, textureOptions);
-                    string metaPath = Path.ChangeExtension(ktxPath, ".njtex");
-                    var meta = new CookedTextureMeta(
-                        CookedPackage.StableAssetId(key), identity, sourceHash, Path.GetFileName(ktxPath), slot.ColorSpace, slot.Sampler,
-                        textureReport.OriginalWidth, textureReport.OriginalHeight, textureReport.CookedWidth, textureReport.CookedHeight,
-                        textureReport.MipCount, textureReport.VulkanFormat, textureReport.CookedBytes);
-                    CookedPackage.WriteTextureMeta(metaPath, meta, toolVersion);
+                    CookedTextureReport textureReport;
+                    if (!TryReuseCookedTexture(
+                            ktxPath,
+                            source,
+                            sourceBytes,
+                            sourceHash,
+                            identity,
+                            semantic,
+                            slot,
+                            preserveAlphaCoverage,
+                            textureOptions,
+                            toolVersion,
+                            out textureReport,
+                            out transportImage))
+                    {
+                        textureReport = _textureCooker.Cook(
+                            CreateMemoryBackedTextureSource(source, sourceBytes),
+                            ktxPath,
+                            textureOptions);
+                        transportImage = textureReport.SourceTransportImage;
+                        string metaPath = Path.ChangeExtension(ktxPath, ".njtex");
+                        var meta = new CookedTextureMeta(
+                            CookedPackage.StableAssetId(key), identity, sourceHash, Path.GetFileName(ktxPath),
+                            textureReport.TransportStatistics.ColorSpace, slot.Sampler,
+                            textureReport.OriginalWidth, textureReport.OriginalHeight, textureReport.CookedWidth, textureReport.CookedHeight,
+                            textureReport.MipCount, textureReport.VulkanFormat, textureReport.CookedBytes)
+                        {
+                            Ktx2ContentHash = CookedHash.File(ktxPath),
+                            Semantic = semantic,
+                            TransportStatistics = textureReport.TransportStatistics,
+                            AlphaCoveragePreserved = textureReport.AlphaCoveragePreserved,
+                            AlphaCoverageCutoff = textureReport.AlphaCoveragePreserved
+                                ? textureReport.AlphaCutoff
+                                : null
+                        };
+                        CookedPackage.WriteTextureMeta(metaPath, meta, toolVersion);
+                    }
+                    textureReport = textureReport with
+                    {
+                        // Source-resolution pixels are transient primitive-
+                        // integration input. Keeping them in cook reports
+                        // retains hundreds of MiB per 4K texture even though
+                        // the property is excluded from report JSON.
+                        SourceTransportImage = null
+                    };
                     cooked = (ktxPath, textureReport);
                     cookedTextures.Add(key, cooked);
                     reports.Add(textureReport);
                 }
+                else if (!materialTransportImages.TryGetValue(
+                             key,
+                             out transportImage))
+                {
+                    TextureTransportSourceAnalysis analysis =
+                        TextureCooker.AnalyzeTransportSource(
+                            sourceBytes,
+                            source.ContainerKind,
+                            identity,
+                            textureOptions with
+                            {
+                                ColorSpace =
+                                    cooked.Report.TransportStatistics.ColorSpace
+                            },
+                            AssetArtifactFileIo.MaximumCookSourceBytes,
+                            int.MaxValue);
+                    if (analysis.Statistics.SourceContentHash != sourceHash)
+                    {
+                        throw new InvalidDataException(
+                            $"Texture '{identity}' transport analysis hash " +
+                            $"0x{analysis.Statistics.SourceContentHash:x16} " +
+                            $"does not match source hash 0x{sourceHash:x16}.");
+                    }
+                    transportImage = analysis.Image;
+                }
+                materialTransportImages[key] = transportImage;
                 string relativeTexturePath = NormalizeRelative(materialDirectory, cooked.Path);
-                property.SetValue(material, CookedPackage.CloneSlot(slot, relativeTexturePath));
+                property.SetValue(
+                    material,
+                    CookedPackage.CloneSlot(
+                        slot,
+                        relativeTexturePath,
+                        identity));
+                if (transportImage is not null)
+                    materialImages[(materialIndex, property.Name)] = transportImage;
                 if (property.Name == nameof(ModelMaterial.BaseColorTexture) &&
                     cooked.Report.LinearAverageColor is { } linearAverageColor)
                 {
@@ -333,13 +555,102 @@ public sealed class ModelAssetCooker : IDisposable
             }
             foreach (System.Reflection.PropertyInfo pathProperty in typeof(ModelMaterial).GetProperties().Where(p => p.PropertyType == typeof(string) && p.Name.EndsWith("TexturePath", StringComparison.Ordinal) && p.CanWrite))
                 pathProperty.SetValue(material, null);
+            BuildPrimitiveTransportProfilesForMaterial(
+                materialIndex,
+                primitiveSubMeshes,
+                materials,
+                materialImages,
+                primitiveProfiles);
         }
+        GiPrimitiveTransportProfile[] completedProfiles = primitiveProfiles
+            .Select(
+                (profile, subMeshIndex) => profile ??
+                    throw new InvalidDataException(
+                        $"Primitive transport profile {subMeshIndex} was not generated."))
+            .ToArray();
+        IReadOnlyList<GiPrimitiveTransportProfile> boundedProfiles =
+            GiPrimitiveTransportProfileGenerator.ApplyPackageEmissiveRecordBudget(
+                completedProfiles);
         return new CookedMaterialTable(materials)
         {
             Pipelines = materials.Select(ClassifyMaterial).ToArray(),
-            Fallbacks = materials.Select(material => new CookedMaterialFallback(material.Name, GetFallbackFlags(material))).ToArray()
+            Fallbacks = materials.Select(material => new CookedMaterialFallback(material.Name, GetFallbackFlags(material))).ToArray(),
+            PrimitiveTransportProfiles = boundedProfiles,
+            PrimitiveTransportAlgorithmVersion = GiPrimitiveTransportProfile.CurrentAlgorithmVersion,
+            HasCompleteTransportMetadata =
+                boundedProfiles.Count > 0 &&
+                boundedProfiles.All(profile => profile.IsComplete)
         };
     }
+
+    private static IReadOnlyList<ModelSubMesh> GetPrimitiveTransportSubMeshes(
+        ModelMesh model)
+    {
+        if (model.SubMeshes.Count > 0)
+            return model.SubMeshes;
+        return
+        [
+            new ModelSubMesh
+            {
+                Name = string.IsNullOrWhiteSpace(model.Name) ? "Mesh" : model.Name,
+                MaterialIndex = 0,
+                Vertices = model.Vertices,
+                Normals = model.Normals,
+                Tangents = model.Tangents,
+                Bitangents = model.Bitangents,
+                TexCoords = model.TexCoords,
+                TexCoords1 = model.TexCoords1,
+                VertexColors = model.VertexColors,
+                JointIndices0 = model.JointIndices0,
+                JointWeights0 = model.JointWeights0,
+                Indices = model.Indices,
+                BoundingBox = model.BoundingBox,
+                BoundingSphere = model.BoundingSphere
+            }
+        ];
+    }
+
+    private static void BuildPrimitiveTransportProfilesForMaterial(
+        int materialIndex,
+        IReadOnlyList<ModelSubMesh> subMeshes,
+        IReadOnlyList<ModelMaterial> materials,
+        IReadOnlyDictionary<(int MaterialIndex, string PropertyName), TextureTransportImage> materialImages,
+        GiPrimitiveTransportProfile?[] profiles)
+    {
+        for (int subMeshIndex = 0; subMeshIndex < subMeshes.Count; subMeshIndex++)
+        {
+            ModelSubMesh subMesh = subMeshes[subMeshIndex];
+            int effectiveMaterialIndex =
+                subMesh.MaterialIndex >= 0 &&
+                subMesh.MaterialIndex < materials.Count
+                ? subMesh.MaterialIndex
+                : 0;
+            if (effectiveMaterialIndex != materialIndex)
+                continue;
+            var textures = new GiPrimitiveTextureInputs(
+                BaseColor: GetImage(materialImages, effectiveMaterialIndex, nameof(ModelMaterial.BaseColorTexture)),
+                MetallicRoughness: GetImage(materialImages, effectiveMaterialIndex, nameof(ModelMaterial.MetallicRoughnessTexture)),
+                Occlusion: GetImage(materialImages, effectiveMaterialIndex, nameof(ModelMaterial.OcclusionTexture)),
+                Emissive: GetImage(materialImages, effectiveMaterialIndex, nameof(ModelMaterial.EmissiveTexture)),
+                Normal: GetImage(materialImages, effectiveMaterialIndex, nameof(ModelMaterial.NormalTexture)),
+                Clearcoat: GetImage(materialImages, effectiveMaterialIndex, nameof(ModelMaterial.ClearcoatTexture)),
+                SheenColor: GetImage(materialImages, effectiveMaterialIndex, nameof(ModelMaterial.SheenColorTexture)),
+                Transmission: GetImage(materialImages, effectiveMaterialIndex, nameof(ModelMaterial.TransmissionTexture)),
+                Specular: GetImage(materialImages, effectiveMaterialIndex, nameof(ModelMaterial.SpecularTexture)),
+                SpecularColor: GetImage(materialImages, effectiveMaterialIndex, nameof(ModelMaterial.SpecularColorTexture)));
+            profiles[subMeshIndex] = GiPrimitiveTransportProfileGenerator.Generate(
+                subMeshIndex,
+                subMesh,
+                materials[effectiveMaterialIndex],
+                textures);
+        }
+    }
+
+    private static TextureTransportImage? GetImage(
+        IReadOnlyDictionary<(int MaterialIndex, string PropertyName), TextureTransportImage> images,
+        int materialIndex,
+        string propertyName) =>
+        images.TryGetValue((materialIndex, propertyName), out TextureTransportImage? image) ? image : null;
 
     private static ModelMaterial CloneMaterial(ModelMaterial source)
     {
@@ -347,6 +658,172 @@ public sealed class ModelAssetCooker : IDisposable
         foreach (System.Reflection.PropertyInfo property in typeof(ModelMaterial).GetProperties().Where(p => p.CanRead && p.CanWrite))
             property.SetValue(clone, property.GetValue(source));
         return clone;
+    }
+
+    private static byte[] ReadStableTextureSourceBytes(ModelTextureSource source)
+    {
+        if (source.Bytes is { Length: > 0 } bytes)
+        {
+            if (WebPTextureDecoder.IsDeclaredWebP(source, bytes) &&
+                bytes.Length > WebPTextureDecoder.DefaultMaximumEncodedBytes)
+            {
+                throw new NotSupportedException(
+                    $"WebP texture '{ResolveTextureSourceIdentity(source)}' contains " +
+                    $"{bytes.Length} encoded bytes, exceeding the decode limit " +
+                    $"{WebPTextureDecoder.DefaultMaximumEncodedBytes}.");
+            }
+
+            return bytes.ToArray();
+        }
+
+        if (string.IsNullOrWhiteSpace(source.FilePath))
+        {
+            throw new InvalidDataException(
+                $"Texture '{ResolveTextureSourceIdentity(source)}' has no source data.");
+        }
+
+        string fullPath = Path.GetFullPath(source.FilePath);
+        if (WebPTextureDecoder.IsDeclaredWebP(source) ||
+            WebPTextureDecoder.FileHasWebPSignature(fullPath))
+        {
+            return WebPTextureDecoder.ReadBoundedFile(
+                fullPath,
+                ResolveTextureSourceIdentity(source));
+        }
+
+        return AssetArtifactFileIo.ReadBoundedSnapshot(
+            fullPath,
+            AssetArtifactFileIo.MaximumCookSourceBytes,
+            "Texture source");
+    }
+
+    private static ModelTextureSource CreateMemoryBackedTextureSource(
+        ModelTextureSource source,
+        byte[] encoded) =>
+        new()
+        {
+            DebugName = source.DebugName,
+            SourceKind = source.SourceKind,
+            Bytes = encoded,
+            MimeType = source.MimeType,
+            CacheIdentity = source.CacheIdentity,
+            ContainerKind = source.ContainerKind,
+            EncodedByteLength = encoded.Length
+        };
+
+    private static bool TryReuseCookedTexture(
+        string ktxPath,
+        ModelTextureSource source,
+        byte[] sourceBytes,
+        ulong sourceHash,
+        string identity,
+        TextureSemantic semantic,
+        ModelTextureSlot slot,
+        bool preserveAlphaCoverage,
+        TextureCookOptions textureOptions,
+        uint toolVersion,
+        out CookedTextureReport report,
+        out TextureTransportImage? transportImage)
+    {
+        report = null!;
+        transportImage = null;
+        string metaPath = Path.ChangeExtension(ktxPath, ".njtex");
+        if (!File.Exists(ktxPath) || !File.Exists(metaPath))
+            return false;
+
+        try
+        {
+            using (var metadataReader = new CookedAssetReader(
+                       metaPath,
+                       CookedAssetKind.Texture))
+            {
+                if (metadataReader.Header.BuildToolVersion != toolVersion)
+                    return false;
+            }
+
+            byte[] ktxBytes = AssetArtifactFileIo.ReadBoundedSnapshot(
+                ktxPath,
+                AssetArtifactFileIo.MaximumCookSourceBytes,
+                "Reusable cooked texture");
+            var contract = new CookedTextureRuntimeContract(
+                identity,
+                semantic,
+                slot.ColorSpace,
+                slot.Sampler,
+                preserveAlphaCoverage,
+                preserveAlphaCoverage ? textureOptions.AlphaCutoff : null);
+            AuthenticatedCookedTexture authenticated =
+                CookedTextureAuthentication.Authenticate(
+                    ktxPath,
+                    ktxBytes,
+                    contract);
+            CookedTextureMeta metadata = authenticated.Metadata;
+            if (metadata.SourceHash != sourceHash)
+                return false;
+
+            TextureTransportSourceAnalysis analysis =
+                TextureCooker.AnalyzeTransportSource(
+                    sourceBytes,
+                    source.ContainerKind,
+                    identity,
+                    textureOptions with
+                    {
+                        ColorSpace = metadata.ColorSpace
+                    },
+                    AssetArtifactFileIo.MaximumCookSourceBytes,
+                    int.MaxValue);
+            if (analysis.Statistics.SourceContentHash != sourceHash ||
+                analysis.Statistics.IsValid !=
+                metadata.TransportStatistics.IsValid)
+            {
+                return false;
+            }
+
+            transportImage = analysis.Image;
+            report = new CookedTextureReport(
+                metadata.SourceIdentity,
+                metadata.OriginalWidth,
+                metadata.OriginalHeight,
+                metadata.CookedWidth,
+                metadata.CookedHeight,
+                metadata.VulkanFormat,
+                metadata.MipCount,
+                sourceBytes.LongLength,
+                metadata.EncodedBytes,
+                PassedThrough: false)
+            {
+                TransportStatistics = metadata.TransportStatistics,
+                AlphaCoveragePreserved =
+                    metadata.AlphaCoveragePreserved,
+                AlphaCutoff = textureOptions.AlphaCutoff,
+                LinearAverageColor =
+                    metadata.TransportStatistics.IsValid
+                        ? metadata.TransportStatistics.LinearChannelMean.ToVector4()
+                        : null,
+                SourceTransportImage = transportImage
+            };
+            return true;
+        }
+        catch (Exception exception)
+            when (exception is IOException or
+                  InvalidDataException or
+                  NotSupportedException or
+                  ArgumentException or
+                  OverflowException)
+        {
+            return false;
+        }
+    }
+
+    private static string ResolveTextureSourceIdentity(ModelTextureSource source)
+    {
+        if (!string.IsNullOrWhiteSpace(source.CacheIdentity))
+            return source.CacheIdentity;
+        if (!string.IsNullOrWhiteSpace(source.FilePath))
+            return Path.GetFullPath(source.FilePath);
+        if (!string.IsNullOrWhiteSpace(source.DebugName))
+            return source.DebugName;
+        return "UnnamedTexture";
     }
 
     private static TextureSemantic ClassifyTextureSemantic(string propertyName, TextureColorSpace colorSpace)
@@ -415,7 +892,11 @@ public sealed class ModelAssetCooker : IDisposable
             return result;
         try
         {
-            JsonNode? root = JsonNode.Parse(File.ReadAllText(sourcePath));
+            byte[] sourceJson = AssetArtifactFileIo.ReadBoundedSnapshot(
+                sourcePath,
+                AssetArtifactFileIo.MaximumCookSourceBytes,
+                "glTF dependency document");
+            JsonNode? root = JsonNode.Parse(sourceJson);
             string directory = Path.GetDirectoryName(sourcePath)!;
             foreach (JsonNode? node in (root?["buffers"] as JsonArray ?? []).Concat(root?["images"] as JsonArray ?? []))
             {
@@ -438,13 +919,13 @@ public sealed class ModelAssetCooker : IDisposable
     {
         var result = new SortedDictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
         foreach (ModelMaterial material in model.Materials)
-        foreach (System.Reflection.PropertyInfo property in typeof(ModelMaterial).GetProperties().Where(p => p.PropertyType == typeof(ModelTextureSlot) && p.CanRead))
-        {
-            if (property.GetValue(material) is not ModelTextureSlot { Source.FilePath: { } filePath })
-                continue;
-            string path = Path.GetFullPath(filePath);
-            result[path.Replace('\\', '/')] = File.Exists(path) ? CookedHash.File(path) : 0;
-        }
+            foreach (System.Reflection.PropertyInfo property in typeof(ModelMaterial).GetProperties().Where(p => p.PropertyType == typeof(ModelTextureSlot) && p.CanRead))
+            {
+                if (property.GetValue(material) is not ModelTextureSlot { Source.FilePath: { } filePath })
+                    continue;
+                string path = Path.GetFullPath(filePath);
+                result[path.Replace('\\', '/')] = File.Exists(path) ? CookedHash.File(path) : 0;
+            }
         return result;
     }
 
@@ -464,19 +945,21 @@ public sealed class ModelAssetCooker : IDisposable
         return string.IsNullOrEmpty(result) ? "asset" : result;
     }
 
-    private static string NormalizeRelative(string root, string path) => Path.GetRelativePath(root, path).Replace('\\', '/');
-
-    private static void WriteJsonAtomic<T>(string path, T value)
+    private static void TryDeleteUnpublishedArtifact(string path)
     {
-        string temporary = path + ".tmp";
-        var options = new JsonSerializerOptions(CookedJson.Options) { WriteIndented = true };
-        using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
+        try
         {
-            JsonSerializer.Serialize(stream, value, options);
-            stream.Flush(flushToDisk: true);
+            if (File.Exists(path))
+                File.Delete(path);
         }
-        File.Move(temporary, path, overwrite: true);
+        catch
+        {
+            // Preserve the original cook failure. Generation-qualified
+            // leftovers are unreferenced and CleanStale can reclaim them.
+        }
     }
+
+    private static string NormalizeRelative(string root, string path) => Path.GetRelativePath(root, path).Replace('\\', '/');
 
     private static AssetCookReport CreateSkippedReport(string sourcePath, IReadOnlyDictionary<string, ulong> outputs) => new(
         sourcePath, CookedPackage.StableAssetId(sourcePath), "Succeeded", ModelImportBackend.Auto,

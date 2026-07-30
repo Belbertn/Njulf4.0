@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
-using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Resources;
 using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
 using CoreVector2 = Njulf.Core.Math.Vector2;
@@ -108,10 +107,11 @@ internal static class SampleMaterialShowcaseScene
                 metallic: 0f,
                 roughness: 0.45f,
                 MaterialFeatureFlags.Clearcoat,
-                extension =>
+                extension => extension with
                 {
-                    extension.Clearcoat = new CoreVector4(1f, 0.04f, 1f, 1f);
-                    return extension;
+                    ClearcoatFactor = 1f,
+                    ClearcoatRoughness = 0.04f,
+                    ClearcoatNormalScale = 1f
                 }),
             "MaterialQuality.ClearcoatPaint",
             new CoreVector3(-3.0f, SphereCenterY, 1.35f));
@@ -126,10 +126,10 @@ internal static class SampleMaterialShowcaseScene
                 metallic: 0f,
                 roughness: 0.8f,
                 MaterialFeatureFlags.Sheen,
-                extension =>
+                extension => extension with
                 {
-                    extension.SheenColor = new CoreVector4(0.35f, 0.55f, 1.0f, 0.4f);
-                    return extension;
+                    SheenColorFactor = new CoreVector3(0.35f, 0.55f, 1.0f),
+                    SheenRoughness = 0.4f
                 }),
             "MaterialQuality.SheenVelvet",
             new CoreVector3(-1.8f, SphereCenterY, 1.35f));
@@ -144,10 +144,10 @@ internal static class SampleMaterialShowcaseScene
                 metallic: 1f,
                 roughness: 0.28f,
                 MaterialFeatureFlags.Anisotropy,
-                extension =>
+                extension => extension with
                 {
-                    extension.Anisotropy = new CoreVector4(0.85f, 0f, 0f, 0f);
-                    return extension;
+                    AnisotropyStrength = 0.85f,
+                    AnisotropyRotation = 0f
                 }),
             "MaterialQuality.AnisotropicMetal",
             new CoreVector3(-0.6f, SphereCenterY, 1.35f));
@@ -162,11 +162,12 @@ internal static class SampleMaterialShowcaseScene
                 metallic: 0f,
                 roughness: 0.02f,
                 MaterialFeatureFlags.Transmission,
-                extension =>
+                extension => extension with
                 {
-                    extension.Transmission = new CoreVector4(0.85f, 1.45f, 0.1f, 0f);
-                    extension.AttenuationColor = new CoreVector4(0.78f, 0.95f, 1.0f, 0f);
-                    return extension;
+                    TransmissionFactor = 0.85f,
+                    Ior = 1.45f,
+                    ThicknessFactor = 0.1f,
+                    AttenuationColor = new CoreVector3(0.78f, 0.95f, 1.0f)
                 },
                 MaterialBlendMode.AlphaBlend),
             "MaterialQuality.SimpleGlass",
@@ -182,10 +183,10 @@ internal static class SampleMaterialShowcaseScene
                 metallic: 0f,
                 roughness: 0.55f,
                 MaterialFeatureFlags.Subsurface,
-                extension =>
+                extension => extension with
                 {
-                    extension.Subsurface = new CoreVector4(1.0f, 0.46f, 0.22f, 0.5f);
-                    return extension;
+                    SubsurfaceColor = new CoreVector3(1.0f, 0.46f, 0.22f),
+                    SubsurfaceStrength = 0.5f
                 }),
             "MaterialQuality.SubsurfaceWax",
             new CoreVector3(1.8f, SphereCenterY, 1.35f));
@@ -200,12 +201,9 @@ internal static class SampleMaterialShowcaseScene
                 metallic: 0f,
                 roughness: 0.3f,
                 MaterialFeatureFlags.EmissiveStrength,
-                extension =>
-                {
-                    extension.Clearcoat = new CoreVector4(0f, 0f, 1f, 6f);
-                    return extension;
-                },
-                emissive: new CoreVector3(0.1f, 0.75f, 1.0f)),
+                extension => extension,
+                emissive: new CoreVector3(0.1f, 0.75f, 1.0f),
+                emissiveStrength: 6f),
             "MaterialQuality.EmissiveHighIntensity",
             new CoreVector3(3.0f, SphereCenterY, 1.35f));
 
@@ -219,10 +217,10 @@ internal static class SampleMaterialShowcaseScene
                 metallic: 0f,
                 roughness: 0.18f,
                 MaterialFeatureFlags.Specular,
-                extension =>
+                extension => extension with
                 {
-                    extension.SpecularColor = new CoreVector4(0.35f, 0.65f, 1.0f, 0.85f);
-                    return extension;
+                    SpecularColorFactor = new CoreVector3(0.35f, 0.65f, 1.0f),
+                    SpecularFactor = 0.85f
                 }),
             "MaterialQuality.SpecularTint",
             new CoreVector3(-3.0f, SphereCenterY, 2.7f));
@@ -237,11 +235,13 @@ internal static class SampleMaterialShowcaseScene
                 metallic: 0f,
                 roughness: 0.04f,
                 MaterialFeatureFlags.Transmission | MaterialFeatureFlags.VolumeApproximation,
-                extension =>
+                extension => extension with
                 {
-                    extension.Transmission = new CoreVector4(0.92f, 1.48f, 0.65f, 1.4f);
-                    extension.AttenuationColor = new CoreVector4(0.55f, 1.0f, 0.62f, 0f);
-                    return extension;
+                    TransmissionFactor = 0.92f,
+                    Ior = 1.48f,
+                    ThicknessFactor = 0.65f,
+                    AttenuationDistance = 1.4f,
+                    AttenuationColor = new CoreVector3(0.55f, 1.0f, 0.62f)
                 },
                 MaterialBlendMode.AlphaBlend),
             "MaterialQuality.VolumeGlass",
@@ -257,11 +257,14 @@ internal static class SampleMaterialShowcaseScene
                 metallic: 0f,
                 roughness: 0.12f,
                 MaterialFeatureFlags.Iridescence | MaterialFeatureFlags.Specular,
-                extension =>
+                extension => extension with
                 {
-                    extension.SpecularColor = new CoreVector4(1f, 1f, 1f, 1f);
-                    extension.Iridescence = new CoreVector4(1f, 1.3f, 120f, 650f);
-                    return extension;
+                    SpecularColorFactor = CoreVector3.One,
+                    SpecularFactor = 1f,
+                    IridescenceFactor = 1f,
+                    IridescenceIor = 1.3f,
+                    IridescenceThicknessMinimum = 120f,
+                    IridescenceThicknessMaximum = 650f
                 }),
             "MaterialQuality.IridescenceFilm",
             new CoreVector3(-0.6f, SphereCenterY, 2.7f));
@@ -276,11 +279,12 @@ internal static class SampleMaterialShowcaseScene
                 metallic: 0f,
                 roughness: 0.01f,
                 MaterialFeatureFlags.Transmission | MaterialFeatureFlags.Dispersion,
-                extension =>
+                extension => extension with
                 {
-                    extension.Transmission = new CoreVector4(0.9f, 1.55f, 0.1f, 0f);
-                    extension.Dispersion = new CoreVector4(0.8f, 0f, 0f, 0f);
-                    return extension;
+                    TransmissionFactor = 0.9f,
+                    Ior = 1.55f,
+                    ThicknessFactor = 0.1f,
+                    Dispersion = 0.8f
                 },
                 MaterialBlendMode.AlphaBlend),
             "MaterialQuality.DispersionGlass",
@@ -377,42 +381,19 @@ internal static class SampleMaterialShowcaseScene
         MaterialFeatureFlags featureFlags,
         MaterialSurfaceFlags surfaceFlags)
     {
-        var material = new GPUMaterialData
+        return materialManager.RegisterMaterialDefinition(new MaterialDefinition
         {
-            Albedo = new CoreVector4(albedo, Math.Clamp(alpha, 0f, 1f)),
-            Emissive = CoreVector4.Zero,
-            NormalScaleBias = new CoreVector4(
-                1f,
-                renderMode.ToGpuAlphaModeCode(),
-                0.5f,
-                surfaceFlags.HasFlag(MaterialSurfaceFlags.DoubleSided) ? 1f : 0f),
-            MetallicRoughnessAO = new CoreVector4(
-                Math.Clamp(metallic, 0f, 1f),
-                Math.Clamp(roughness, 0.04f, 1f),
-                1f,
-                0f),
-            BaseColorOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            NormalOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            MetallicRoughnessOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            EmissiveOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            TextureRotations = CoreVector4.Zero,
-            TextureTexCoordSets = CoreVector4.Zero,
-            AlbedoTextureIndex = BindlessIndex.DefaultWhiteTexture,
-            NormalTextureIndex = BindlessIndex.DefaultNormalTexture,
-            MetallicRoughnessTextureIndex = BindlessIndex.DefaultBlackTexture,
-            EmissiveTextureIndex = BindlessIndex.DefaultBlackTexture,
-            FeatureFlags = (uint)featureFlags,
-            ExtensionDataIndex = -1
-        };
-
-        return materialManager.RegisterMaterial(
-            material,
-            new MaterialRenderMetadata
-            {
-                BlendMode = blendMode,
-                SurfaceFlags = surfaceFlags,
-                AlphaCutoff = 0.5f
-            });
+            Name = $"MaterialShowcase.{blendMode}",
+            BaseColorFactor = new CoreVector4(albedo, Math.Clamp(alpha, 0f, 1f)),
+            MetallicFactor = Math.Clamp(metallic, 0f, 1f),
+            RoughnessFactor = Math.Clamp(roughness, 0.04f, 1f),
+            AlphaMode = ToAlphaMode(renderMode),
+            AlphaCutoff = 0.5f,
+            DoubleSided = surfaceFlags.HasFlag(MaterialSurfaceFlags.DoubleSided),
+            ReceivesShadows = surfaceFlags.HasFlag(MaterialSurfaceFlags.ReceivesShadows),
+            RenderBlendModeOverride = blendMode,
+            FeatureFlags = featureFlags
+        });
     }
 
     private static MaterialHandle CreateMaterial(
@@ -421,28 +402,12 @@ internal static class SampleMaterialShowcaseScene
         float metallic,
         float roughness)
     {
-        return materialManager.RegisterMaterial(new GPUMaterialData
+        return materialManager.RegisterMaterialDefinition(new MaterialDefinition
         {
-            Albedo = new CoreVector4(albedo, 1f),
-            Emissive = CoreVector4.Zero,
-            NormalScaleBias = new CoreVector4(1f, MaterialRenderMode.Opaque.ToGpuAlphaModeCode(), 0.5f, 0f),
-            MetallicRoughnessAO = new CoreVector4(
-                Math.Clamp(metallic, 0f, 1f),
-                Math.Clamp(roughness, 0.04f, 1f),
-                1f,
-                0f),
-            BaseColorOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            NormalOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            MetallicRoughnessOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            EmissiveOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            TextureRotations = CoreVector4.Zero,
-            TextureTexCoordSets = CoreVector4.Zero,
-            AlbedoTextureIndex = BindlessIndex.DefaultWhiteTexture,
-            NormalTextureIndex = BindlessIndex.DefaultNormalTexture,
-            MetallicRoughnessTextureIndex = BindlessIndex.DefaultBlackTexture,
-            EmissiveTextureIndex = BindlessIndex.DefaultBlackTexture,
-            FeatureFlags = 0u,
-            ExtensionDataIndex = -1
+            Name = "MaterialShowcase.Pbr",
+            BaseColorFactor = new CoreVector4(albedo, 1f),
+            MetallicFactor = Math.Clamp(metallic, 0f, 1f),
+            RoughnessFactor = Math.Clamp(roughness, 0.04f, 1f)
         });
     }
 
@@ -453,91 +418,42 @@ internal static class SampleMaterialShowcaseScene
         float metallic,
         float roughness,
         MaterialFeatureFlags featureFlags,
-        Func<GPUMaterialExtensionData, GPUMaterialExtensionData> configureExtension,
+        Func<MaterialExtensionDefinition, MaterialExtensionDefinition> configureExtension,
         MaterialBlendMode blendMode = MaterialBlendMode.Opaque,
-        CoreVector3 emissive = default)
+        CoreVector3 emissive = default,
+        float emissiveStrength = 1f)
     {
-        var extension = configureExtension(CreateDefaultExtensionData());
-        var material = new GPUMaterialData
+        MaterialExtensionDefinition extension = configureExtension(MaterialExtensionDefinition.None);
+        return materialManager.RegisterMaterialDefinition(new MaterialDefinition
         {
-            Albedo = new CoreVector4(albedo, 1f),
-            Emissive = new CoreVector4(emissive, 1f),
-            NormalScaleBias = new CoreVector4(
-                1f,
-                blendMode == MaterialBlendMode.AlphaBlend ? MaterialRenderMode.Blend.ToGpuAlphaModeCode() : MaterialRenderMode.Opaque.ToGpuAlphaModeCode(),
-                0.5f,
-                0f),
-            MetallicRoughnessAO = new CoreVector4(
-                Math.Clamp(metallic, 0f, 1f),
-                Math.Clamp(roughness, 0.04f, 1f),
-                1f,
-                0f),
-            BaseColorOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            NormalOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            MetallicRoughnessOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            EmissiveOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            TextureRotations = CoreVector4.Zero,
-            TextureTexCoordSets = CoreVector4.Zero,
-            AlbedoTextureIndex = BindlessIndex.DefaultWhiteTexture,
-            NormalTextureIndex = BindlessIndex.DefaultNormalTexture,
-            MetallicRoughnessTextureIndex = BindlessIndex.DefaultBlackTexture,
-            EmissiveTextureIndex = BindlessIndex.DefaultBlackTexture,
-            FeatureFlags = (uint)featureFlags,
-            ExtensionDataIndex = -1
-        };
-
-        return materialManager.RegisterMaterial(
-            material,
-            extension,
-            new MaterialRenderMetadata
-            {
-                BlendMode = blendMode,
-                SurfaceFlags = MaterialSurfaceFlags.ReceivesShadows,
-                AlphaCutoff = 0.5f
-            });
+            Name = name,
+            BaseColorFactor = new CoreVector4(albedo, 1f),
+            EmissiveFactor = emissive,
+            EmissiveStrength = emissiveStrength,
+            MetallicFactor = Math.Clamp(metallic, 0f, 1f),
+            RoughnessFactor = Math.Clamp(roughness, 0.04f, 1f),
+            AlphaMode = IsTransparent(blendMode) ? MaterialAlphaMode.Blend : MaterialAlphaMode.Opaque,
+            RenderBlendModeOverride = blendMode,
+            FeatureFlags = featureFlags,
+            Extensions = extension
+        });
     }
 
-    private static GPUMaterialExtensionData CreateDefaultExtensionData()
+    private static MaterialAlphaMode ToAlphaMode(MaterialRenderMode renderMode)
     {
-        return new GPUMaterialExtensionData
+        return renderMode switch
         {
-            Clearcoat = new CoreVector4(0f, 0f, 1f, 1f),
-            SheenColor = CoreVector4.Zero,
-            Anisotropy = CoreVector4.Zero,
-            Transmission = new CoreVector4(0f, 1.5f, 0f, 0f),
-            AttenuationColor = new CoreVector4(1f, 1f, 1f, 0f),
-            Subsurface = CoreVector4.Zero,
-            SpecularColor = new CoreVector4(1f, 1f, 1f, 1f),
-            Iridescence = new CoreVector4(0f, 1.3f, 100f, 400f),
-            Dispersion = CoreVector4.Zero,
-            ClearcoatOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            ClearcoatRoughnessOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            ClearcoatNormalOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            SheenColorOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            SheenRoughnessOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            AnisotropyOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            TransmissionOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            ThicknessOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            SpecularOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            SpecularColorOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            IridescenceOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            IridescenceThicknessOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            SubsurfaceOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            ClearcoatTextureIndex = BindlessIndex.DefaultWhiteTexture,
-            ClearcoatRoughnessTextureIndex = BindlessIndex.DefaultWhiteTexture,
-            ClearcoatNormalTextureIndex = BindlessIndex.DefaultNormalTexture,
-            SheenColorTextureIndex = BindlessIndex.DefaultWhiteTexture,
-            SheenRoughnessTextureIndex = BindlessIndex.DefaultWhiteTexture,
-            AnisotropyTextureIndex = BindlessIndex.DefaultWhiteTexture,
-            TransmissionTextureIndex = BindlessIndex.DefaultWhiteTexture,
-            ThicknessTextureIndex = BindlessIndex.DefaultWhiteTexture,
-            SubsurfaceTextureIndex = BindlessIndex.DefaultWhiteTexture,
-            SpecularTextureIndex = BindlessIndex.DefaultWhiteTexture,
-            SpecularColorTextureIndex = BindlessIndex.DefaultWhiteTexture,
-            IridescenceTextureIndex = BindlessIndex.DefaultWhiteTexture,
-            IridescenceThicknessTextureIndex = BindlessIndex.DefaultWhiteTexture
+            MaterialRenderMode.Mask => MaterialAlphaMode.Mask,
+            MaterialRenderMode.Blend => MaterialAlphaMode.Blend,
+            _ => MaterialAlphaMode.Opaque
         };
     }
+
+    private static bool IsTransparent(MaterialBlendMode blendMode) =>
+        blendMode is MaterialBlendMode.AlphaBlend or
+            MaterialBlendMode.PremultipliedAlpha or
+            MaterialBlendMode.Additive or
+            MaterialBlendMode.Multiply;
 
     private static GPUVertex[] CreateSphereVertices()
     {

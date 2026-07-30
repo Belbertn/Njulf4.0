@@ -23,6 +23,8 @@ layout(push_constant) uniform FarFieldJumpFloodPushBlock
     uint PageTableEntryIndex;
     uint PageGeneration;
     uint DiagnosticFlags;
+    uint PageSourceRevisionLow;
+    uint PageSourceRevisionHigh;
 } pc;
 
 const uint FARFIELD_JUMP_FLOOD_MODE_SEED = 0u;
@@ -119,8 +121,11 @@ void main()
         if (dispatchIndex >= voxelCount)
             return;
 
-        uint occupied = ReadStorageWord(pc.VoxelBufferIndex, pc.PageVoxelOffset + dispatchIndex);
-        uint seed = (occupied & 0x80000000u) != 0u
+        bool occupied = FarFieldVoxelOccupied(
+            pc.VoxelBufferIndex,
+            pc.PageVoxelOffset + dispatchIndex,
+            params);
+        uint seed = occupied
             ? PackFarFieldSeed(FarFieldVoxelFromLinear(dispatchIndex, params))
             : 0u;
         WriteStorageWord(pc.SourceSeedBufferIndex, dispatchIndex, seed);

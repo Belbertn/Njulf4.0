@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
 using Njulf.Assets;
 using Njulf.Assets.Cooked;
 
@@ -81,13 +80,9 @@ internal static class SampleAssetValidationGate
             AssetCookReport report;
             try
             {
-                report = JsonSerializer.Deserialize<AssetCookReport>(File.ReadAllBytes(reportPath), new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true,
-                    NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals
-                }) ?? throw new InvalidDataException("Report deserialized to null.");
+                report = AssetCookReportJson.Read(reportPath);
             }
-            catch (Exception ex) when (ex is JsonException or InvalidDataException)
+            catch (InvalidDataException ex)
             {
                 throw new InvalidOperationException($"Cook report '{reportPath}' is invalid: {ex.Message}", ex);
             }

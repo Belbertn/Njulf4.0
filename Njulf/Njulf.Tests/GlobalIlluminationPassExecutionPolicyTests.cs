@@ -53,6 +53,10 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
     [TestCase(GlobalIlluminationDebugView.FarFieldTraceResult, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.FarFieldSkyVisibility, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.FarFieldSunShadow, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.MaterialTransportSourceOwnership, false, true, true)]
+    [TestCase(GlobalIlluminationDebugView.HybridEstimatorOwnership, false, true, true)]
+    [TestCase(GlobalIlluminationDebugView.HybridFinalComposition, false, true, true)]
+    [TestCase(GlobalIlluminationDebugView.MaterialTransportHitProvenance, false, true, true)]
     public void DebugViews_MapToExpectedExecutionPolicy(
         GlobalIlluminationDebugView view,
         bool expectedDdgiDebug,
@@ -107,11 +111,19 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
     }
 
     [Test]
-    public void SsgiComposite_AllowsOnlyNormalAndFinalIndirectForwardOutputs()
+    public void SsgiComposite_AllowsNormalFinalAndStandaloneHybridDiagnosticOutputs()
     {
         var normal = CreateEnabledSsgiSettings(GlobalIlluminationDebugView.None);
         var finalIndirect = CreateEnabledSsgiSettings(GlobalIlluminationDebugView.FinalIndirect);
         var raw = CreateEnabledSsgiSettings(GlobalIlluminationDebugView.SsgiRaw);
+        var sourceOwnership = CreateEnabledSsgiSettings(
+            GlobalIlluminationDebugView.MaterialTransportSourceOwnership);
+        var estimatorOwnership = CreateEnabledSsgiSettings(
+            GlobalIlluminationDebugView.HybridEstimatorOwnership);
+        var finalComposition = CreateEnabledSsgiSettings(
+            GlobalIlluminationDebugView.HybridFinalComposition);
+        var transportProvenance = CreateEnabledSsgiSettings(
+            GlobalIlluminationDebugView.MaterialTransportHitProvenance);
 
         Assert.Multiple(() =>
         {
@@ -131,6 +143,26 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
             Assert.That(
                 GlobalIlluminationPassExecutionPolicy.ShouldCompositeSsgi(raw, 81u),
                 Is.False);
+            Assert.That(
+                GlobalIlluminationPassExecutionPolicy.ShouldCompositeSsgi(
+                    sourceOwnership,
+                    GlobalIlluminationPassExecutionPolicy.ForwardDebugViewNone),
+                Is.True);
+            Assert.That(
+                GlobalIlluminationPassExecutionPolicy.ShouldCompositeSsgi(
+                    estimatorOwnership,
+                    GlobalIlluminationPassExecutionPolicy.ForwardDebugViewNone),
+                Is.True);
+            Assert.That(
+                GlobalIlluminationPassExecutionPolicy.ShouldCompositeSsgi(
+                    finalComposition,
+                    GlobalIlluminationPassExecutionPolicy.ForwardDebugViewNone),
+                Is.True);
+            Assert.That(
+                GlobalIlluminationPassExecutionPolicy.ShouldCompositeSsgi(
+                    transportProvenance,
+                    GlobalIlluminationPassExecutionPolicy.ForwardDebugViewNone),
+                Is.True);
             Assert.That(
                 GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(normal, 1u),
                 Is.False);
@@ -187,6 +219,11 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
         var ddgiOnly = CreateEnabledSsgiSettings(GlobalIlluminationDebugView.None);
         ddgiOnly.Mode = GlobalIlluminationMode.Ddgi;
 
+        var ddgiOnlyProvenance = CreateEnabledSsgiSettings(
+            GlobalIlluminationDebugView.MaterialTransportHitProvenance);
+        ddgiOnlyProvenance.UseSsgi = false;
+        ddgiOnlyProvenance.Mode = GlobalIlluminationMode.Ddgi;
+
         Assert.Multiple(() =>
         {
             Assert.That(GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(disabled), Is.False);
@@ -195,6 +232,8 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
             Assert.That(GlobalIlluminationPassExecutionPolicy.ShouldCompositeSsgi(ssgiOff), Is.False);
             Assert.That(GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(ddgiOnly), Is.False);
             Assert.That(GlobalIlluminationPassExecutionPolicy.ShouldCompositeSsgi(ddgiOnly), Is.False);
+            Assert.That(GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(ddgiOnlyProvenance), Is.False);
+            Assert.That(GlobalIlluminationPassExecutionPolicy.ShouldCompositeSsgi(ddgiOnlyProvenance), Is.True);
         });
     }
 

@@ -63,6 +63,30 @@ public sealed unsafe class AccelerationStructureManagerTests
     }
 
     [Test]
+    public void CreateInstance_FlipsTriangleFacingForNegativeDeterminantAndPreservesSidedness()
+    {
+        Matrix4x4 mirrored =
+            Matrix4x4.CreateScale(new Vector3(-1f, 1f, 1f));
+        const GeometryInstanceFlagsKHR authoredFlags =
+            GeometryInstanceFlagsKHR.ForceOpaqueBitKhr |
+            GeometryInstanceFlagsKHR.TriangleFacingCullDisableBitKhr;
+
+        AccelerationStructureInstanceKHR instance =
+            AccelerationStructureManager.CreateInstance(
+                mirrored,
+                blasAddress: 1,
+                instanceCustomIndex: 0,
+                AccelerationStructureManager.StaticOpaqueInstanceMask,
+                authoredFlags);
+
+        Assert.That(
+            instance.Flags,
+            Is.EqualTo(
+                authoredFlags |
+                GeometryInstanceFlagsKHR.TriangleFlipFacingBitKhr));
+    }
+
+    [Test]
     public void CreateRayQueryInstanceMetadata_UsesMeshOffsetsMaterialAndNormalMatrix()
     {
         var meshInfo = new MeshInfo
@@ -208,6 +232,7 @@ public sealed unsafe class AccelerationStructureManagerTests
             Assert.That(skinned.InstanceFlags, Is.EqualTo(GeometryInstanceFlagsKHR.ForceOpaqueBitKhr));
             Assert.That(foliage.Include, Is.False);
             Assert.That(foliage.VisibilityPolicy, Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.FoliageProxyPending));
+            Assert.That(foliage.Reason, Is.EqualTo(AccelerationStructureManager.FoliageDdgiExclusionReason));
         });
     }
 

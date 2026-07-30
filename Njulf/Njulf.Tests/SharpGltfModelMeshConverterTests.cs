@@ -466,11 +466,17 @@ public sealed class SharpGltfModelMeshConverterTests
 
         ModelMaterial material = mesh.Materials.Single(imported => imported.Name == "ExtensionMaterial");
         ModelMaterial unlitMaterial = mesh.Materials.Single(imported => imported.Name == "UnlitMaterial");
+        ModelMaterial iorOnlyMaterial = mesh.Materials.Single(imported => imported.Name == "IorOnlyMaterial");
 
         Assert.Multiple(() =>
         {
             Assert.That(unlitMaterial.Unlit, Is.True);
             Assert.That(material.Ior, Is.EqualTo(1.6f).Within(0.0001f));
+            Assert.That(material.FeatureFlags & (1u << 24), Is.Not.Zero);
+            Assert.That(iorOnlyMaterial.Ior, Is.EqualTo(2.2f).Within(0.0001f));
+            Assert.That(iorOnlyMaterial.FeatureFlags & (1u << 24), Is.Not.Zero);
+            Assert.That(iorOnlyMaterial.FeatureFlags & (1u << 9), Is.Zero);
+            Assert.That(iorOnlyMaterial.TransmissionFactor, Is.Zero);
             Assert.That(material.Dispersion, Is.EqualTo(0.24f).Within(0.0001f));
             Assert.That(material.EmissiveStrength, Is.EqualTo(2.5f).Within(0.0001f));
 
@@ -1151,6 +1157,12 @@ public sealed class SharpGltfModelMeshConverterTests
                     "name": "UnlitMaterial",
                     "extensions": {
                       "KHR_materials_unlit": {}
+                    }
+                  },
+                  {
+                    "name": "IorOnlyMaterial",
+                    "extensions": {
+                      "KHR_materials_ior": { "ior": 2.2 }
                     }
                   }
                 ],

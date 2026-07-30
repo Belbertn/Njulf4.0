@@ -67,6 +67,29 @@ public sealed class GlobalIlluminationDefaultsTests
     }
 
     [Test]
+    public void QualityPreset_PrepublicationGuardRejectsWithoutPartialMutation()
+    {
+        var settings = new RenderSettings();
+        RenderQualityPreset originalPreset = settings.QualityPreset;
+        float originalResolutionScale = settings.ResolutionScale;
+        settings.QualityPresetChanging += preset =>
+        {
+            if (preset == RenderQualityPreset.Low)
+                throw new InvalidOperationException("tier budget rejected");
+        };
+
+        Assert.That(
+            () => settings.ApplyQualityPreset(RenderQualityPreset.Low),
+            Throws.TypeOf<InvalidOperationException>()
+                .With.Message.EqualTo("tier budget rejected"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.QualityPreset, Is.EqualTo(originalPreset));
+            Assert.That(settings.ResolutionScale, Is.EqualTo(originalResolutionScale));
+        });
+    }
+
+    [Test]
     public void SettingsFileWithoutBackendSelector_DefaultsToSimpleDdgi()
     {
         string path = Path.Combine(

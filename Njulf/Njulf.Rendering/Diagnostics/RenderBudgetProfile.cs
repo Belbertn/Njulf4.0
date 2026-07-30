@@ -41,6 +41,13 @@ namespace Njulf.Rendering.Diagnostics
         ulong GlobalIlluminationMemoryBudgetBytes,
         int TransparentObjectBudget)
     {
+        /// <summary>
+        /// Explicit cap for GI-owned render targets. This remains separate from
+        /// DDGI caches, far-field pages, and acceleration-structure budgets so
+        /// aggregate residency never compares against a partial component sum.
+        /// </summary>
+        public ulong GlobalIlluminationRenderTargetBudgetBytes { get; init; }
+
         public static RenderBudgetProfile Development { get; } = new(
             RenderBudgetProfileKind.Development,
             "Development 1080p60",
@@ -67,7 +74,11 @@ namespace Njulf.Rendering.Diagnostics
             2.5,
             0.25,
             96UL * 1024UL * 1024UL,
-            4_096);
+            4_096)
+        {
+            GlobalIlluminationRenderTargetBudgetBytes =
+                96UL * 1024UL * 1024UL
+        };
 
         public static RenderBudgetProfile LowSpec1080p30 { get; } = Development with
         {
@@ -93,6 +104,8 @@ namespace Njulf.Rendering.Diagnostics
             GlobalIlluminationGpuBudgetMilliseconds = 0.25,
             GlobalIlluminationCpuBudgetMilliseconds = 0.5,
             GlobalIlluminationMemoryBudgetBytes = 1,
+            GlobalIlluminationRenderTargetBudgetBytes =
+                48UL * 1024UL * 1024UL,
             TransparentObjectBudget = 1_024
         };
 
@@ -102,6 +115,8 @@ namespace Njulf.Rendering.Diagnostics
             Name = "Mid Spec 1080p60",
             CpuFrameBudgetMilliseconds = 5.0,
             GpuFrameBudgetMilliseconds = 11.0,
+            GlobalIlluminationRenderTargetBudgetBytes =
+                96UL * 1024UL * 1024UL,
             UploadBudgetBytesPerFrame = 16UL * 1024UL * 1024UL
         };
 
@@ -130,6 +145,8 @@ namespace Njulf.Rendering.Diagnostics
             GlobalIlluminationGpuBudgetMilliseconds = 3.0,
             GlobalIlluminationCpuBudgetMilliseconds = 0.25,
             GlobalIlluminationMemoryBudgetBytes = 192UL * 1024UL * 1024UL,
+            GlobalIlluminationRenderTargetBudgetBytes =
+                192UL * 1024UL * 1024UL,
             TransparentObjectBudget = 6_144
         };
 
@@ -157,6 +174,8 @@ namespace Njulf.Rendering.Diagnostics
             GlobalIlluminationGpuBudgetMilliseconds = 4.0,
             GlobalIlluminationCpuBudgetMilliseconds = 0.35,
             GlobalIlluminationMemoryBudgetBytes = 384UL * 1024UL * 1024UL,
+            GlobalIlluminationRenderTargetBudgetBytes =
+                384UL * 1024UL * 1024UL,
             TransparentObjectBudget = 8_192
         };
 
@@ -186,7 +205,10 @@ namespace Njulf.Rendering.Diagnostics
             double.PositiveInfinity,
             double.PositiveInfinity,
             ulong.MaxValue,
-            int.MaxValue);
+            int.MaxValue)
+        {
+            GlobalIlluminationRenderTargetBudgetBytes = ulong.MaxValue
+        };
 
         public static IReadOnlyList<RenderBudgetProfile> Defaults { get; } =
         [

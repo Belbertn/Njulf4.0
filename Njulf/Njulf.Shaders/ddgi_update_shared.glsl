@@ -693,15 +693,13 @@ void StableDdgiBilinearOctahedralTexels(
     c11 = RemapStableDdgiOctahedralTexelCoord(baseCoord + ivec2(1, 1), texelsPerProbe);
 }
 
-// This is assigned before each probe ray and also covers its direct-light
-// visibility queries.  Candidate alpha texture fetches must follow the same
-// cascade texture policy as committed-hit shading.
+// This is assigned before each probe ray and covers committed-hit material LOD.
+// Candidate alpha is deliberately independent from the color cascade policy.
 uint ddgiCurrentTraceVolumeCascadeIndex;
 
 #define DDGI_HIT_USE_SELECTED_LIGHTS 1
 #define DDGI_HIT_ENABLE_ENVIRONMENT_WRAPPER 1
 #define DDGI_HIT_ALPHA_MASK_TRANSPORT_ENABLED ((pc.Flags & DDGI_UPDATE_FLAG_ALPHA_MASK_TRANSPORT_ENABLED) != 0u)
-#define DDGI_HIT_CANDIDATE_MATERIAL_TEXTURES_ALLOWED ShouldSampleDdgiMaterialTextures(ddgiCurrentTraceVolumeCascadeIndex)
 #include "ddgi_hit_shading.glsl"
 
 float ResolveStableDdgiRoundedBoxEdgeFade(vec3 edgeDistance, vec3 blendDistance)
@@ -980,13 +978,24 @@ vec3 SampleStableDdgiIrradiance(vec3 worldPosition, vec3 normal)
         return vec3(0.0);
 
     vec3 sampledIrradiance = blendedIrradiance / blendedCoverage;
-    return clamp(sampledIrradiance, vec3(0.0), vec3(64.0));
+    // Preserve HDR transport energy. The upper bound is the finite half-float
+    // storage limit, not an artistic radiance clamp.
+    return clamp(
+        sampledIrradiance,
+        vec3(0.0),
+        vec3(GI_MATERIAL_MAXIMUM_FINITE_RADIANCE));
 }
 
-vec3 EvaluateStableDdgiDiffuseRadianceAtHit(vec3 worldPosition, vec3 normal, vec3 albedo)
+vec3 EvaluateStableDdgiDiffuseRadianceAtHit(
+    vec3 worldPosition,
+    GiSurfaceSample surface)
 {
-    vec3 stableIrradiance = SampleStableDdgiIrradiance(worldPosition + normal * DDGI_PROBE_TRACE_EPSILON, normal);
-    return stableIrradiance * (albedo / PI);
+    vec3 stableIrradiance = SampleStableDdgiIrradiance(
+        worldPosition + surface.GeometricNormal * DDGI_PROBE_TRACE_EPSILON,
+        surface.ShadingNormal);
+    return ApplyGiMaterialOcclusion(
+        EvaluateGiDiffuseFromIrradiance(stableIrradiance, surface.DiffuseReflectance),
+        surface.MaterialOcclusion);
 }
 
 DdgiProbeUpdateRequest ReadProbeUpdateRequest(uint updateIndex)
@@ -1282,6 +1291,8 @@ void TraceProbeRay(
     float normalBias,
     float viewBias,
     float maxDistance,
+    float probeSpacing,
+    float rayAngularRadius,
     uint volumeCascadeIndex,
     out vec3 radiance,
     out vec2 visibilityMoment,
@@ -1309,21 +1320,35 @@ void TraceProbeRay(
     rayQueryInitializeEXT(
         query,
         SceneTlas,
-        0u,
+        gl_RayFlagsCullBackFacingTrianglesEXT,
         0xff,
         origin,
         tMin,
         direction,
         maxDistance);
 
+    uint alphaCandidateCount = 0u;
     while (rayQueryProceedEXT(query))
     {
         if (rayQueryGetIntersectionTypeEXT(query, false) == gl_RayQueryCandidateIntersectionTriangleEXT)
         {
+            alphaCandidateCount++;
+            if (alphaCandidateCount > DDGI_HIT_ALPHA_CANDIDATE_LIMIT)
+            {
+                RecordDdgiAlphaCandidateLimitReached();
+                rayQueryConfirmIntersectionEXT(query);
+                rayQueryTerminateEXT(query);
+                break;
+            }
             uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(query, false);
             uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, false);
             vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, false);
-            if (DdgiCandidatePassesOpacity(instanceIndex, primitiveIndex, barycentrics))
+            bool candidateFrontFace = rayQueryGetIntersectionFrontFaceEXT(query, false);
+            if (DdgiCandidatePassesOpacity(
+                instanceIndex,
+                primitiveIndex,
+                barycentrics,
+                candidateFrontFace))
                 rayQueryConfirmIntersectionEXT(query);
         }
     }
@@ -1344,11 +1369,14 @@ void TraceProbeRay(
         visibilityMoment = vec2(hitT, hitT * hitT);
 
         vec3 hitPosition = origin + direction * hitT;
-        vec3 surfaceNormal = normalize(-direction);
-        vec3 surfaceAlbedo = vec3(DDGI_DIFFUSE_ALBEDO);
-        vec3 surfaceEmissive = vec3(0.0);
+        GiSurfaceSample surface = EmptyGiSurfaceSample(
+            normalize(-direction),
+            normalize(-direction),
+            GI_MATERIAL_REFLECTS_INDIRECT_DIFFUSE);
+        surface.DirectionalDiffuseBase = vec3(DDGI_DIFFUSE_ALBEDO);
+        surface.DielectricF0 = vec3(0.0);
+        surface.DiffuseReflectance = vec3(DDGI_DIFFUSE_ALBEDO);
         bool sampleMaterialTextures = ShouldSampleDdgiMaterialTextures(volumeCascadeIndex);
-        float materialTextureLod = DdgiMaterialTextureLod(volumeCascadeIndex);
         uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(query, true);
         uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
         vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, true);
@@ -1357,21 +1385,33 @@ void TraceProbeRay(
             primitiveIndex,
             barycentrics,
             direction,
+            frontFace,
             volumeCascadeIndex,
             sampleMaterialTextures,
-            materialTextureLod,
-            surfaceNormal,
-            surfaceAlbedo,
-            surfaceEmissive);
+            hitT,
+            probeSpacing,
+            rayAngularRadius,
+            surface);
         vec3 directNoShadowDiffuse;
-        vec3 directDiffuse = EvaluateDirectDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo, directNoShadowDiffuse);
-        vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
-        vec3 stableDiffuse = EvaluateStableDdgiDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
+        vec3 directDiffuse = EvaluateDirectDiffuseRadianceAtHit(
+            hitPosition,
+            surface,
+            -direction,
+            directNoShadowDiffuse);
+        vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
+            hitPosition,
+            surface,
+            -direction);
+        vec3 stableDiffuse = EvaluateStableDdgiDiffuseRadianceAtHit(hitPosition, surface);
         directDiffuseOut = directDiffuse;
         directNoShadowDiffuseOut = directNoShadowDiffuse;
-        emissiveDiffuseOut = surfaceEmissive + emissiveProxyDiffuse;
+        // Direct surface-hit emission and receiver-side emissive NEE have
+        // different segment topology. Cached recursive transport is the
+        // separate stableDiffuse term, so none of these estimators gates or
+        // replaces another estimator of the same path class.
+        emissiveDiffuseOut = surface.EmissiveRadiance + emissiveProxyDiffuse;
         stableDiffuseOut = stableDiffuse;
-        radiance = surfaceEmissive + emissiveProxyDiffuse + directDiffuse + stableDiffuse;
+        radiance = surface.EmissiveRadiance + emissiveProxyDiffuse + directDiffuse + stableDiffuse;
         return;
     }
 
@@ -1739,6 +1779,8 @@ void main()
                 normalBias,
                 viewBias,
                 maxDistance,
+                max(min(probeSpacing.x, min(probeSpacing.y, probeSpacing.z)), 0.001),
+                sqrt(max(raySolidAngle / PI, 0.0)),
                 volumeCascadeIndex,
                 radiance,
                 visibilityMoment,

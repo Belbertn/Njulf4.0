@@ -6,7 +6,7 @@ namespace Njulf.Assets.Scenes;
 /// <summary>Versioned, renderer-independent source representation of an authorable scene.</summary>
 public sealed class SceneDocument
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 3;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -36,15 +36,59 @@ public sealed class SceneObjectDocument
     public SceneMaterialOverrideDocument? MaterialOverride { get; init; }
 }
 
-/// <summary>Editable material values persisted independently of renderer-specific handles.</summary>
+/// <summary>
+/// Optional authored material overrides persisted independently of
+/// renderer-specific handles. A missing value means "retain the value from the
+/// referenced asset"; explicit zero/false/default policy values remain
+/// distinguishable from absence.
+/// </summary>
 public sealed class SceneMaterialOverrideDocument
 {
-    public SceneColor Albedo { get; init; } = new(1f, 1f, 1f, 1f);
-    public SceneColor Emissive { get; init; } = new(0f, 0f, 0f, 0f);
-    public float Metallic { get; init; }
-    public float Roughness { get; init; } = 1f;
-    public float NormalScale { get; init; } = 1f;
-    public float AlphaCutoff { get; init; } = 0.5f;
+    /// <summary>
+    /// Stable token used to persist an explicitly cleared renderer blend-mode
+    /// override. A missing <see cref="RenderBlendModeOverride"/> retains the
+    /// referenced asset's policy.
+    /// </summary>
+    public const string AutomaticBlendMode = "Automatic";
+
+    public string? Name { get; init; }
+    public SceneColor? Albedo { get; init; }
+    /// <summary>
+    /// V1 compatibility field. Schema-v3 documents write
+    /// <see cref="EmissiveColor"/> and <see cref="EmissiveStrength"/>
+    /// separately.
+    /// </summary>
+    public SceneColor? Emissive { get; init; }
+    public SceneColor? EmissiveColor { get; init; }
+    public float? EmissiveStrength { get; init; }
+    public float? Metallic { get; init; }
+    public float? Roughness { get; init; }
+    public float? OcclusionStrength { get; init; }
+    public float? NormalScale { get; init; }
+    public string? AlphaMode { get; init; }
+    public float? AlphaCutoff { get; init; }
+    public bool? DoubleSided { get; init; }
+    public bool? ReceivesShadows { get; init; }
+    /// <summary>
+    /// A renderer blend-mode name, or <see cref="AutomaticBlendMode"/> to
+    /// explicitly clear a renderer-specific override.
+    /// </summary>
+    public string? RenderBlendModeOverride { get; init; }
+    public string? ShadingModel { get; init; }
+    /// <summary>Default, Enabled, or Disabled. Missing retains the asset value.</summary>
+    public string? DiffuseGiParticipation { get; init; }
+    /// <summary>Default, Enabled, or Disabled. Missing retains the asset value.</summary>
+    public string? EmissionGiParticipation { get; init; }
+    /// <summary>
+    /// Schema-v2 compatibility field. Prefer
+    /// <see cref="EmissionGiParticipation"/>.
+    /// </summary>
+    public bool? EmitsIntoGi { get; init; }
+    /// <summary>
+    /// Schema-v2 compatibility field. Prefer
+    /// <see cref="DiffuseGiParticipation"/>.
+    /// </summary>
+    public bool? ReceivesDiffuseGi { get; init; }
 }
 
 public sealed class SceneLightDocument

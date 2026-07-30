@@ -38,6 +38,68 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void LoadRadianceHdr_RejectsOversizedEncodedInputBeforeDecode()
+        {
+            string path = Path.Combine(
+                TestContext.CurrentContext.WorkDirectory,
+                $"oversized-rgbe-{Guid.NewGuid():N}.hdr");
+            try
+            {
+                using (var output = new FileStream(
+                           path,
+                           FileMode.CreateNew,
+                           FileAccess.Write,
+                           FileShare.None))
+                {
+                    output.SetLength(EnvironmentMapProcessor.MaximumEncodedHdrBytes + 1);
+                }
+
+                InvalidDataException exception = Assert.Throws<InvalidDataException>(
+                    () => EnvironmentMapProcessor.LoadRadianceHdr(path))!;
+
+                Assert.That(exception.Message, Does.Contain("input limit"));
+            }
+            finally
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+        }
+
+        [Test]
+        public void LoadRadianceHdr_RejectsDecodedPixelBudgetAndUnsupportedOrientation()
+        {
+            string oversizedDimensions = WriteHdrFixture(
+                $"oversized-dimensions-{Guid.NewGuid():N}.hdr",
+                "-Y 4097 +X 8192");
+            string unsupportedOrientation = WriteHdrFixture(
+                $"unsupported-orientation-{Guid.NewGuid():N}.hdr",
+                "+Y 1 +X 1");
+            try
+            {
+                InvalidDataException dimensionsException =
+                    Assert.Throws<InvalidDataException>(
+                        () => EnvironmentMapProcessor.LoadRadianceHdr(
+                            oversizedDimensions))!;
+                InvalidDataException orientationException =
+                    Assert.Throws<InvalidDataException>(
+                        () => EnvironmentMapProcessor.LoadRadianceHdr(
+                            unsupportedOrientation))!;
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(dimensionsException.Message, Does.Contain("pixel decode limit"));
+                    Assert.That(orientationException.Message, Does.Contain("Unsupported HDR resolution"));
+                });
+            }
+            finally
+            {
+                File.Delete(oversizedDimensions);
+                File.Delete(unsupportedOrientation);
+            }
+        }
+
+        [Test]
         public void ConvertEquirectangularToCubemap_PreservesConstantRadiance()
         {
             var image = CreateConstantImage(4, 2, 2.0f, 4.0f, 8.0f);
@@ -208,6 +270,17 @@ namespace Njulf.Tests
             }
 
             return new HdrEquirectangularImage(width, height, pixels);
+        }
+
+        private static string WriteHdrFixture(string name, string resolution)
+        {
+            string path = Path.Combine(
+                TestContext.CurrentContext.WorkDirectory,
+                name);
+            File.WriteAllText(
+                path,
+                $"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n{resolution}\n");
+            return path;
         }
 
         private static float[] BytesToFloats(byte[] bytes)

@@ -22,6 +22,8 @@ namespace Njulf.Rendering.Resources
 {
     public sealed unsafe class AccelerationStructureManager : IDisposable
     {
+        public const string FoliageDdgiExclusionReason =
+            "foliage uses clustered alpha geometry and requires explicit DDGI proxy cards or clusters";
         internal const byte StaticOpaqueInstanceMask = 0x01;
         private const ulong MinResourceBufferSize = 16;
         private const ulong IndexStride = sizeof(uint);
@@ -699,15 +701,18 @@ namespace Njulf.Rendering.Resources
                     meshInfo.IsSkinned,
                     metadata.RenderMode,
                     metadata.IsGeometryDecal,
-                    domain);
+                    domain,
+                    metadata.DoubleSided);
                 if (!policy.Include)
                     return false;
 
                 materialIndex = checked((uint)Math.Max(materialHandle.Index, 0));
-                instanceFlags = policy.VisibilityPolicy == DdgiAccelerationStructureVisibilityPolicy.AlphaMaskTested &&
-                                alphaMaskedTransportEnabled
-                    ? default
-                    : policy.InstanceFlags;
+                instanceFlags = policy.InstanceFlags;
+                bool alphaTested =
+                    policy.VisibilityPolicy == DdgiAccelerationStructureVisibilityPolicy.AlphaMaskTested ||
+                    policy.VisibilityPolicy == DdgiAccelerationStructureVisibilityPolicy.SkinnedAlphaMaskTestedProxy;
+                if (alphaTested && !alphaMaskedTransportEnabled)
+                    instanceFlags |= GeometryInstanceFlagsKHR.ForceOpaqueBitKhr;
                 return true;
             }
             catch (InvalidOperationException)
@@ -1485,6 +1490,8 @@ namespace Njulf.Rendering.Resources
             byte mask,
             GeometryInstanceFlagsKHR flags = GeometryInstanceFlagsKHR.ForceOpaqueBitKhr)
         {
+            if (worldMatrix.Determinant() < 0.0f)
+                flags |= GeometryInstanceFlagsKHR.TriangleFlipFacingBitKhr;
             return new AccelerationStructureInstanceKHR
             {
                 Transform = CreateTransform(worldMatrix),
@@ -1512,8 +1519,12 @@ namespace Njulf.Rendering.Resources
             bool isSkinned,
             MaterialRenderMode renderMode,
             bool isGeometryDecal,
-            AccelerationStructureGeometryDomain domain)
+            AccelerationStructureGeometryDomain domain,
+            bool doubleSided = false)
         {
+            GeometryInstanceFlagsKHR sidednessFlags = doubleSided
+                ? GeometryInstanceFlagsKHR.TriangleFacingCullDisableBitKhr
+                : default;
             if (isGeometryDecal)
             {
                 return new DdgiAccelerationStructureGeometryPolicy(
@@ -1531,7 +1542,7 @@ namespace Njulf.Rendering.Resources
                     0,
                     default,
                     DdgiAccelerationStructureVisibilityPolicy.FoliageProxyPending,
-                    "foliage uses clustered alpha geometry and needs explicit DDGI proxy cards/clusters");
+                    FoliageDdgiExclusionReason);
             }
 
             if (renderMode == MaterialRenderMode.Blend)
@@ -1546,10 +1557,20 @@ namespace Njulf.Rendering.Resources
 
             if (isSkinned || domain == AccelerationStructureGeometryDomain.Skinned)
             {
+                if (renderMode == MaterialRenderMode.Mask)
+                {
+                    return new DdgiAccelerationStructureGeometryPolicy(
+                        true,
+                        StaticOpaqueInstanceMask,
+                        sidednessFlags,
+                        DdgiAccelerationStructureVisibilityPolicy.SkinnedAlphaMaskTestedProxy,
+                        "skinned alpha-masked meshes use bind-pose triangles while preserving authored alpha coverage");
+                }
+
                 return new DdgiAccelerationStructureGeometryPolicy(
                     true,
                     StaticOpaqueInstanceMask,
-                    GeometryInstanceFlagsKHR.ForceOpaqueBitKhr,
+                    GeometryInstanceFlagsKHR.ForceOpaqueBitKhr | sidednessFlags,
                     DdgiAccelerationStructureVisibilityPolicy.SkinnedBindPoseProxy,
                     "skinned meshes contribute a bind-pose triangle proxy until animated proxy geometry is available");
             }
@@ -1559,7 +1580,7 @@ namespace Njulf.Rendering.Resources
                 return new DdgiAccelerationStructureGeometryPolicy(
                     true,
                     StaticOpaqueInstanceMask,
-                    default,
+                    sidednessFlags,
                     DdgiAccelerationStructureVisibilityPolicy.AlphaMaskTested,
                     "alpha-masked geometry is evaluated at ray-query candidates using the glTF cutoff");
             }
@@ -1567,7 +1588,7 @@ namespace Njulf.Rendering.Resources
             return new DdgiAccelerationStructureGeometryPolicy(
                 true,
                 StaticOpaqueInstanceMask,
-                GeometryInstanceFlagsKHR.ForceOpaqueBitKhr,
+                GeometryInstanceFlagsKHR.ForceOpaqueBitKhr | sidednessFlags,
                 DdgiAccelerationStructureVisibilityPolicy.OpaqueTriangles,
                 domain == AccelerationStructureGeometryDomain.Dynamic
                     ? "dynamic opaque geometry participates with TLAS updates"
@@ -1967,7 +1988,8 @@ namespace Njulf.Rendering.Resources
         ExcludedTransparent = 2,
         ExcludedGeometryDecal = 3,
         SkinnedBindPoseProxy = 4,
-        FoliageProxyPending = 5
+        FoliageProxyPending = 5,
+        SkinnedAlphaMaskTestedProxy = 6
     }
 
     internal enum TopLevelAccelerationStructureBuildAction

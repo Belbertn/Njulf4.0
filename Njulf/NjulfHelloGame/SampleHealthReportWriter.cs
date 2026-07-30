@@ -9,34 +9,46 @@ internal sealed class SampleHealthReportWriter
 {
     private readonly RendererHealthReportWriter _writer = new();
 
-    public void TryWrite(
+    public void Write(
         SampleSmokeOptions options,
         string? startupLogPath,
         IReadOnlyList<SampleSmokeOperationResult> operations,
         RendererDiagnostics diagnostics,
         string status,
-        string? failure)
+        string? failure,
+        RenderSettings? settings = null)
     {
         if (string.IsNullOrWhiteSpace(options.HealthReportPath))
             return;
 
-        try
+        SampleHealthReportEvaluation evaluation =
+            SampleHealthReportEvaluation.Evaluate(diagnostics);
+        MaterialGiProducerIdentity? producerIdentity = null;
+        if (string.Equals(status, "passed", StringComparison.Ordinal))
         {
-            _writer.Write(options.HealthReportPath, new
-            {
-                kind = "renderer-health",
-                timestampUtc = DateTimeOffset.UtcNow,
-                status,
-                failure,
-                startupLogPath,
-                options,
-                operations,
-                diagnostics
-            });
+            producerIdentity =
+                SampleMaterialGiProducerIdentityFactory.Create(
+                    diagnostics,
+                    SampleRenderSettingsFingerprint.Capture(
+                        settings ?? throw new InvalidOperationException(
+                            "A passed health report requires the exact producer render settings.")));
         }
-        catch (Exception ex)
+        _writer.Write(options.HealthReportPath, new
         {
-            Console.Error.WriteLine($"Health report write failed: {ex.Message}");
-        }
+            kind = "renderer-health",
+            schema = MaterialGiReleaseEvidenceContract.HealthProducerSchema,
+            producerIdentity,
+            timestampUtc = DateTimeOffset.UtcNow,
+            status,
+            failure,
+            validationWarningCount = diagnostics.ValidationWarningMessageCount,
+            validationErrorCount = diagnostics.ValidationErrorMessageCount,
+            giDiagnosticWarningCount = evaluation.GiDiagnosticWarningCount,
+            giDiagnosticErrorCount = evaluation.GiDiagnosticErrorCount,
+            startupLogPath,
+            options,
+            operations,
+            diagnostics
+        });
     }
 }

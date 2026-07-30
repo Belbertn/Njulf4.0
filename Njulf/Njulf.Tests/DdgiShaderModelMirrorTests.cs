@@ -175,24 +175,36 @@ namespace Njulf.Tests
             string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
             string update = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
             string hitShading = ReadRepoText("Njulf.Shaders", "ddgi_hit_shading.glsl");
+            string materialTransport = ReadRepoText("Njulf.Shaders", "gi_material_transport.glsl");
             string sampleDiffuse = ExtractFunction(forward, "vec3 SampleDdgiDiffuse(");
             string sampleVolume = ExtractFunction(forward, "DdgiSampleResult SampleDdgiVolumeIrradiance(");
             string traceEnergy = ExtractFunction(update, "void RecordDdgiTraceEnergyDiagnostics(");
             string directLight = ExtractFunction(hitShading, "vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(");
+            string stableIrradiance = ExtractFunction(update, "vec3 SampleStableDdgiIrradiance(");
             string stableDiffuse = ExtractFunction(update, "vec3 EvaluateStableDdgiDiffuseRadianceAtHit(");
+            string diffuseBrdf = ExtractFunction(materialTransport, "vec3 EvaluateGiDiffuseBrdf(");
+            string diffuseFromIrradiance = ExtractFunction(
+                materialTransport,
+                "vec3 EvaluateGiDiffuseFromIrradiance(");
 
             Assert.Multiple(() =>
             {
-                Assert.That(sampleDiffuse, Does.Contain("return ddgi.irradiance * (albedo / PI) * diffuseWeight;"));
+                Assert.That(sampleDiffuse, Does.Contain("EvaluateGiDiffuseFromIrradiance(ddgi.irradiance, diffuseReflectance)"));
+                Assert.That(sampleDiffuse, Does.Contain("ApplyGiMaterialOcclusion("));
                 Assert.That(sampleVolume, Does.Contain("float finalIntensity = globalIntensity * info.volumeIntensity;"));
                 Assert.That(sampleVolume, Does.Not.Contain("albedo / PI"));
                 Assert.That(update, Does.Contain("vec3 probeRayRadiance = radiance;"));
                 Assert.That(update, Does.Not.Contain("vec3 sampleIrradiance = DdgiRawAtlasRadianceConventionEnabled()"));
                 Assert.That(update, Does.Not.Contain("atlasRadianceScale"));
                 Assert.That(update, Does.Not.Contain("rawIrradiance / globalIntensity"));
-                Assert.That(update, Does.Contain("return clamp(sampledIrradiance, vec3(0.0), vec3(64.0));"));
-                Assert.That(directLight, Does.Contain("noShadowDiffuse = incomingRadiance * nDotL * (albedo / PI);"));
-                Assert.That(stableDiffuse, Does.Contain("return stableIrradiance * (albedo / PI);"));
+                Assert.That(stableIrradiance, Does.Contain("vec3(GI_MATERIAL_MAXIMUM_FINITE_RADIANCE)"));
+                Assert.That(directLight, Does.Contain("surface.DirectionalDiffuseBase"));
+                Assert.That(directLight, Does.Contain("surface.DielectricF0"));
+                Assert.That(directLight, Does.Contain("EvaluateGiDiffuseBrdf("));
+                Assert.That(stableDiffuse, Does.Contain("EvaluateGiDiffuseFromIrradiance(stableIrradiance, surface.DiffuseReflectance)"));
+                Assert.That(stableDiffuse, Does.Contain("ApplyGiMaterialOcclusion("));
+                Assert.That(diffuseBrdf, Does.Contain("/ GI_MATERIAL_PI;"));
+                Assert.That(diffuseFromIrradiance, Does.Contain("/ GI_MATERIAL_PI;"));
                 Assert.That(traceEnergy, Does.Not.Contain("albedo / PI"));
             });
         }

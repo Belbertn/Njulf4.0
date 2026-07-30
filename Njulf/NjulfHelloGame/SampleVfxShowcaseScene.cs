@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
-using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Resources;
 using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
 using CoreVector2 = Njulf.Core.Math.Vector2;
@@ -59,24 +58,12 @@ internal static class SampleVfxShowcaseScene
 
     private static MaterialHandle CreateFloorMaterial(MaterialManager materialManager)
     {
-        return materialManager.RegisterMaterial(new GPUMaterialData
+        return materialManager.RegisterMaterialDefinition(new MaterialDefinition
         {
-            Albedo = new CoreVector4(0.16f, 0.17f, 0.18f, 1f),
-            Emissive = CoreVector4.Zero,
-            NormalScaleBias = new CoreVector4(1f, MaterialRenderMode.Opaque.ToGpuAlphaModeCode(), 0.5f, 0f),
-            MetallicRoughnessAO = new CoreVector4(0f, 0.82f, 1f, 0f),
-            BaseColorOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            NormalOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            MetallicRoughnessOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            EmissiveOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            TextureRotations = CoreVector4.Zero,
-            TextureTexCoordSets = CoreVector4.Zero,
-            AlbedoTextureIndex = BindlessIndex.DefaultWhiteTexture,
-            NormalTextureIndex = BindlessIndex.DefaultNormalTexture,
-            MetallicRoughnessTextureIndex = BindlessIndex.DefaultBlackTexture,
-            EmissiveTextureIndex = BindlessIndex.DefaultBlackTexture,
-            FeatureFlags = 0u,
-            ExtensionDataIndex = -1
+            Name = "VfxShowcase.Floor",
+            BaseColorFactor = new CoreVector4(0.16f, 0.17f, 0.18f, 1f),
+            MetallicFactor = 0f,
+            RoughnessFactor = 0.82f
         });
     }
 

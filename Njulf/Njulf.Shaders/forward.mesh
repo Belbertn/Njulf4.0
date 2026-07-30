@@ -14,6 +14,7 @@ struct ForwardTaskPayload
 };
 
 taskPayloadSharedEXT ForwardTaskPayload forwardPayload;
+shared uint meshNegativeDeterminant;
 
 layout(location = 0) out vec3 meshNormal[];
 layout(location = 1) out vec2 meshTexCoord[];
@@ -44,14 +45,20 @@ void main()
         pc.Push.CurrentFrameIndex,
         forwardPayload.DrawCommandIndex);
     GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
 
     if (gl_LocalInvocationIndex == 0u)
+    {
         SetMeshOutputsEXT(meshlet.LocalVertexCount, meshlet.LocalTriangleCount);
+        meshNegativeDeterminant =
+            ReadRowMajorLinearDeterminant(instanceBufferIndex, objectWordOffset) < 0.0
+                ? 1u
+                : 0u;
+    }
 
     barrier();
 
-    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
-    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
     GPUObjectData objectData = ReadInstanceData(pc.Push.CurrentFrameIndex, command.InstanceId);
 
     for (uint vertexSlot = gl_LocalInvocationIndex;
@@ -75,7 +82,7 @@ void main()
         meshMaterialIndex[vertexSlot] = command.MaterialIndex;
         meshObjectIndex[vertexSlot] = command.InstanceId;
         meshWorldPosition[vertexSlot] = worldPosition.xyz;
-        float worldHandedness = ReadRowMajorLinearDeterminant(instanceBufferIndex, objectWordOffset) < 0.0 ? -1.0 : 1.0;
+        float worldHandedness = meshNegativeDeterminant != 0u ? -1.0 : 1.0;
         meshWorldTangent[vertexSlot] = vec4(worldTangent, vertex.Tangent.w * worldHandedness);
         meshMeshletIndex[vertexSlot] = command.MeshletIndex;
         meshTexCoord2[vertexSlot] = vertex.TexCoord2;
@@ -90,6 +97,10 @@ void main()
         uint i0 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 0u);
         uint i1 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 1u);
         uint i2 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 2u);
-        gl_PrimitiveTriangleIndicesEXT[triangleSlot] = uvec3(i0, i1, i2);
+        gl_PrimitiveTriangleIndicesEXT[triangleSlot] = ResolveMirroredInstanceTriangle(
+            i0,
+            i1,
+            i2,
+            meshNegativeDeterminant != 0u);
     }
 }

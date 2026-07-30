@@ -107,6 +107,68 @@ public sealed class ModelImporterFacadeTests
         });
     }
 
+    [TestCase(ModelImportBackend.SharpGltf)]
+    [TestCase(ModelImportBackend.Assimp)]
+    public void ImportDetailed_ExtTextureWebPSelectsBoundedWebPSourceOverFallback(
+        ModelImportBackend backend)
+    {
+        string path = CreateMinimalExtTextureWebPGltf(
+            $"-{backend.ToString().ToLowerInvariant()}-webp");
+        using var importer = new ModelImporter();
+
+        ModelImportResult result = importer.ImportDetailed(
+            path,
+            new ImporterOptions { Backend = backend });
+        ModelTextureSource? source = result.Mesh?.Materials
+            .Select(static material => material.BaseColorTexture?.Source)
+            .FirstOrDefault(static candidate => candidate is not null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.ImportedSuccessfully, Is.True, result.FailureMessage);
+            Assert.That(source, Is.Not.Null);
+            Assert.That(source!.ContainerKind, Is.EqualTo(TextureContainerKind.WebP));
+            Assert.That(source.MimeType, Is.EqualTo("image/webp"));
+            Assert.That(source.FilePath, Does.EndWith(".webp").IgnoreCase);
+            Assert.That(source.EncodedByteLength, Is.EqualTo(WebPTestFixtures.Lossless.Length));
+            Assert.That(result.Diagnostics.UnsupportedRequiredExtensionCount, Is.Zero);
+        });
+    }
+
+    [TestCase(ModelImportBackend.SharpGltf)]
+    [TestCase(ModelImportBackend.Assimp)]
+    public void ImportDetailed_AlphaCutoffRejectsNegativeAndPreservesValueAboveOne(
+        ModelImportBackend backend)
+    {
+        string backendSuffix = backend.ToString().ToLowerInvariant();
+        string negativePath = CreateMinimalExternalGltfWithAlphaCutoff(
+            -0.25f,
+            $"-{backendSuffix}-negative-alpha");
+        string aboveOnePath = CreateMinimalExternalGltfWithAlphaCutoff(
+            1.25f,
+            $"-{backendSuffix}-above-one-alpha");
+        using var importer = new ModelImporter();
+        var options = new ImporterOptions { Backend = backend };
+
+        ModelImportResult negative = importer.ImportDetailed(negativePath, options);
+        ModelImportResult aboveOne = importer.ImportDetailed(aboveOnePath, options);
+        ModelMaterial? authoredMaskedMaterial = aboveOne.Mesh?.Materials
+            .SingleOrDefault(static material => material.AlphaMode == ModelAlphaMode.Mask);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(negative.ImportedSuccessfully, Is.False);
+            Assert.That(negative.Mesh, Is.Null);
+            Assert.That(aboveOne.ImportedSuccessfully, Is.True, aboveOne.FailureMessage);
+            Assert.That(aboveOne.Mesh, Is.Not.Null);
+            Assert.That(
+                authoredMaskedMaterial,
+                Is.Not.Null,
+                "The importer must retain the authored MASK material even when a backend also emits a default material.");
+            Assert.That(authoredMaskedMaterial!.AlphaCutoff, Is.EqualTo(1.25f));
+        });
+    }
+
     [Test]
     public void ImportDetailed_MissingFileReturnsFailureResultWithoutThrowing()
     {
@@ -202,11 +264,15 @@ public sealed class ModelImporterFacadeTests
         return path;
     }
 
-    private static string CreateMinimalExternalGltf()
+    private static string CreateMinimalExternalGltf(string suffix = "")
     {
         string directory = CreateTestDirectory();
-        string binPath = Path.Combine(directory, $"{TestContext.CurrentContext.Test.ID}.bin");
-        string gltfPath = Path.Combine(directory, $"{TestContext.CurrentContext.Test.ID}.gltf");
+        string binPath = Path.Combine(
+            directory,
+            $"{TestContext.CurrentContext.Test.ID}{suffix}.bin");
+        string gltfPath = Path.Combine(
+            directory,
+            $"{TestContext.CurrentContext.Test.ID}{suffix}.gltf");
 
         byte[] positions =
         [
@@ -268,6 +334,74 @@ public sealed class ModelImporterFacadeTests
               """);
 
         return gltfPath;
+    }
+
+    private static string CreateMinimalExternalGltfWithAlphaCutoff(
+        float alphaCutoff,
+        string suffix)
+    {
+        string path = CreateMinimalExternalGltf(suffix);
+        string serializedCutoff = alphaCutoff.ToString(
+            "R",
+            System.Globalization.CultureInfo.InvariantCulture);
+        string json = File.ReadAllText(path)
+            .Replace(
+                "\"mode\": 4",
+                "\"mode\": 4,\n                        \"material\": 0",
+                StringComparison.Ordinal)
+            .Replace(
+                "\"buffers\":",
+                $"\"materials\": [{{ \"alphaMode\": \"MASK\", \"alphaCutoff\": {serializedCutoff} }}],\n                \"buffers\":",
+                StringComparison.Ordinal);
+        File.WriteAllText(path, json);
+        return path;
+    }
+
+    private static string CreateMinimalExtTextureWebPGltf(string suffix)
+    {
+        string path = CreateMinimalExternalGltf(suffix);
+        string directory = Path.GetDirectoryName(path)!;
+        string stem = Path.GetFileNameWithoutExtension(path);
+        string fallbackPath = Path.Combine(directory, $"{stem}-fallback.png");
+        string webPPath = Path.Combine(directory, $"{stem}-primary.webp");
+        File.WriteAllBytes(
+            fallbackPath,
+            Convert.FromBase64String(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="));
+        File.WriteAllBytes(webPPath, WebPTestFixtures.Lossless);
+
+        string json = File.ReadAllText(path)
+            .Replace(
+                "\"scene\": 0",
+                "\"extensionsUsed\": [\"EXT_texture_webp\"],\n" +
+                "                \"extensionsRequired\": [\"EXT_texture_webp\"],\n" +
+                "                \"scene\": 0",
+                StringComparison.Ordinal)
+            .Replace(
+                "\"mode\": 4",
+                "\"mode\": 4,\n                        \"material\": 0",
+                StringComparison.Ordinal)
+            .Replace(
+                "\"buffers\":",
+                $$"""
+                "materials": [
+                  { "name": "WebPMaterial", "pbrMetallicRoughness": { "baseColorTexture": { "index": 0 } } }
+                ],
+                "images": [
+                  { "name": "FallbackPng", "uri": "{{Path.GetFileName(fallbackPath)}}", "mimeType": "image/png" },
+                  { "name": "PrimaryWebP", "uri": "{{Path.GetFileName(webPPath)}}", "mimeType": "image/webp" }
+                ],
+                "textures": [
+                  {
+                    "source": 0,
+                    "extensions": { "EXT_texture_webp": { "source": 1 } }
+                  }
+                ],
+                "buffers":
+                """,
+                StringComparison.Ordinal);
+        File.WriteAllText(path, json);
+        return path;
     }
 
     private static string CreateUnsupportedRequiredExtensionGltf()

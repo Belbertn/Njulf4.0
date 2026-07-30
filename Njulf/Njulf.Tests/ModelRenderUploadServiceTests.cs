@@ -1,4 +1,5 @@
 using Njulf.Assets;
+using Njulf.Assets.Cooked;
 using Njulf.Core.Math;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
@@ -165,7 +166,16 @@ namespace Njulf.Tests
             GPUMaterialData blend = ModelRenderUploadService.BuildGpuMaterialData(
                 new ModelMaterial { AlphaMode = ModelAlphaMode.Blend, AlphaCutoff = 0.45f },
                 textures);
-
+            GPUMaterialData aboveOne = ModelRenderUploadService.BuildGpuMaterialData(
+                new ModelMaterial { AlphaMode = ModelAlphaMode.Mask, AlphaCutoff = 1.25f },
+                textures);
+            MaterialRenderMetadata aboveOneMetadata =
+                ModelRenderUploadService.BuildMaterialRenderMetadata(
+                    new ModelMaterial
+                    {
+                        AlphaMode = ModelAlphaMode.Mask,
+                        AlphaCutoff = 1.25f
+                    });
             Assert.Multiple(() =>
             {
                 Assert.That(opaque.NormalScaleBias.Y, Is.EqualTo(0f));
@@ -177,6 +187,26 @@ namespace Njulf.Tests
                 Assert.That(blend.NormalScaleBias.Y, Is.EqualTo(2f));
                 Assert.That(blend.NormalScaleBias.Z, Is.EqualTo(0.45f));
                 Assert.That(blend.NormalScaleBias.W, Is.EqualTo(0f));
+                Assert.That(aboveOne.NormalScaleBias.Z, Is.EqualTo(1.25f));
+                Assert.That(aboveOneMetadata.AlphaCutoff, Is.EqualTo(1.25f));
+                Assert.That(
+                    () => ModelRenderUploadService.BuildGpuMaterialData(
+                        new ModelMaterial { AlphaCutoff = -0.25f },
+                        textures),
+                    Throws.InstanceOf<ArgumentOutOfRangeException>());
+                Assert.That(
+                    () => ModelRenderUploadService.BuildMaterialRenderMetadata(
+                        new ModelMaterial { AlphaCutoff = -0.25f }),
+                    Throws.InstanceOf<ArgumentOutOfRangeException>());
+                Assert.That(
+                    () => ModelRenderUploadService.BuildGpuMaterialData(
+                        new ModelMaterial { AlphaCutoff = float.NaN },
+                        textures),
+                    Throws.InstanceOf<ArgumentOutOfRangeException>());
+                Assert.That(
+                    () => ModelRenderUploadService.BuildMaterialRenderMetadata(
+                        new ModelMaterial { AlphaCutoff = float.NegativeInfinity }),
+                    Throws.InstanceOf<ArgumentOutOfRangeException>());
                 Assert.That(MaterialRenderModeExtensions.FromGpuMaterial(blend), Is.EqualTo(MaterialRenderMode.Blend));
             });
         }
@@ -580,6 +610,665 @@ namespace Njulf.Tests
             Assert.That(offset, Is.EqualTo(263UL));
         }
 
+        [Test]
+        public void UploadModel_WhenSecondMaterialTextureLoadFails_RollsBackPendingTexturesAndCommittedMaterial()
+        {
+            var backend = new RecordingModelRenderUploadBackend
+            {
+                FailTextureLoadCall = 8
+            };
+            var service = new ModelRenderUploadService(backend);
+
+            InvalidOperationException? failure = Assert.Throws<InvalidOperationException>(
+                () => service.UploadModel(CreateRollbackTestModel()));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(failure!.Message, Is.EqualTo("Injected texture load failure."));
+                Assert.That(backend.AcquiredTextures, Has.Count.EqualTo(7));
+                Assert.That(
+                    backend.DirectTextureReleaseCalls.Select(static handle => handle.Index),
+                    Is.EqualTo(new[] { 106, 105 }));
+                Assert.That(
+                    backend.MaterialReleaseCalls.Select(static handle => handle.Index),
+                    Is.EqualTo(new[] { 200 }));
+                Assert.That(
+                    backend.RollbackCalls,
+                    Is.EqualTo(
+                        new[]
+                        {
+                            "texture:106",
+                            "texture:105",
+                            "material:200"
+                        }));
+                Assert.That(backend.EveryAcquiredTextureWasReleasedExactlyOnce, Is.True);
+            });
+        }
+
+        [Test]
+        public void UploadModel_WhenMeshRegistrationFails_ReleasesEveryMaterialInReverseOrder()
+        {
+            var backend = new RecordingModelRenderUploadBackend
+            {
+                FailMeshRegistration = true
+            };
+            var service = new ModelRenderUploadService(backend);
+
+            InvalidOperationException? failure = Assert.Throws<InvalidOperationException>(
+                () => service.UploadModel(CreateRollbackTestModel()));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(failure!.Message, Is.EqualTo("Injected mesh registration failure."));
+                Assert.That(backend.AcquiredTextures, Has.Count.EqualTo(10));
+                Assert.That(backend.DirectTextureReleaseCalls, Is.Empty);
+                Assert.That(
+                    backend.MaterialReleaseCalls.Select(static handle => handle.Index),
+                    Is.EqualTo(new[] { 200, 201, 200 }));
+                Assert.That(
+                    backend.RollbackCalls,
+                    Is.EqualTo(
+                        new[]
+                        {
+                            "material:200",
+                            "material:201",
+                            "material:200"
+                        }));
+                Assert.That(
+                    backend.NoOutstandingTextureReferences,
+                    Is.True);
+            });
+        }
+
+        [TestCase(
+            (int)ModelUploadPublicationStage.AfterMeshRegistration,
+            1)]
+        [TestCase(
+            (int)ModelUploadPublicationStage.AfterMeshRegistration,
+            2)]
+        [TestCase(
+            (int)ModelUploadPublicationStage.AfterMeshRegistration,
+            3)]
+        [TestCase(
+            (int)ModelUploadPublicationStage.AfterMeshRegistration,
+            4)]
+        [TestCase(
+            (int)ModelUploadPublicationStage.AfterRenderObjectAttachment,
+            1)]
+        [TestCase(
+            (int)ModelUploadPublicationStage.AfterRenderObjectAttachment,
+            2)]
+        [TestCase(
+            (int)ModelUploadPublicationStage.AfterRenderObjectAttachment,
+            3)]
+        [TestCase(
+            (int)ModelUploadPublicationStage.AfterRenderObjectAttachment,
+            4)]
+        [TestCase(
+            (int)ModelUploadPublicationStage.AfterBaseMaterialTransfer,
+            1)]
+        [TestCase(
+            (int)ModelUploadPublicationStage.AfterBaseMaterialTransfer,
+            2)]
+        [TestCase(
+            (int)ModelUploadPublicationStage.AfterBaseMaterialTransfer,
+            3)]
+        [TestCase(
+            (int)ModelUploadPublicationStage.AfterBaseMaterialTransfer,
+            4)]
+        public void PublicationRollbackFailure_DisposeRetriesOnlyFailedOccurrence(
+            int stageValue,
+            int failedRollbackCall)
+        {
+            ModelUploadPublicationStage stage =
+                (ModelUploadPublicationStage)stageValue;
+            var backend = new RecordingModelRenderUploadBackend
+            {
+                FailRollbackCall = failedRollbackCall
+            };
+            var service =
+                new ModelRenderUploadService(backend);
+            service.UploadPublicationFaultInjector =
+                currentStage =>
+                {
+                    if (currentStage == stage)
+                    {
+                        throw new InvalidOperationException(
+                            $"Injected publication failure at {stage}.");
+                    }
+                };
+            string[] expectedInitialRollback =
+            [
+                "mesh:0",
+                "material:200",
+                "material:201",
+                "material:200"
+            ];
+
+            Assert.That(
+                () => service.UploadModel(
+                    CreateRollbackTestModel()),
+                Throws.TypeOf<AggregateException>());
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    backend.RollbackCalls,
+                    Is.EqualTo(expectedInitialRollback));
+                Assert.That(
+                    service.PendingMaterialRollbackResourceCount,
+                    Is.EqualTo(1));
+                Assert.That(
+                    service.LastUploadDiagnostics.ModelName,
+                    Is.Empty);
+            });
+
+            string failedResource =
+                expectedInitialRollback[
+                    failedRollbackCall - 1];
+            service.Dispose();
+            int callsAfterCompletion =
+                backend.RollbackCalls.Count;
+            service.Dispose();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    backend.RollbackCalls,
+                    Is.EqualTo(
+                        expectedInitialRollback.Concat(
+                            new[] { failedResource })));
+                Assert.That(
+                    service.PendingMaterialRollbackResourceCount,
+                    Is.Zero);
+                Assert.That(
+                    backend.NoOutstandingTextureReferences,
+                    Is.True);
+                Assert.That(
+                    backend.NoOutstandingMeshReferences,
+                    Is.True);
+                Assert.That(
+                    backend.NoOutstandingMaterialReferences,
+                    Is.True);
+                Assert.That(
+                    backend.RollbackCalls.Count,
+                    Is.EqualTo(callsAfterCompletion));
+            });
+        }
+
+        [Test]
+        public void InvalidPrimitiveProfile_FallbackRetainRollbackIsDurable()
+        {
+            var backend = new RecordingModelRenderUploadBackend
+            {
+                RollbackFailureResource = "material:200",
+                RemainingRollbackFailures = 1
+            };
+            var service =
+                new ModelRenderUploadService(backend);
+            service.UploadPublicationFaultInjector =
+                stage =>
+                {
+                    if (stage ==
+                        ModelUploadPublicationStage
+                            .AfterPrimitiveMaterialRegistration)
+                    {
+                        throw new InvalidOperationException(
+                            "Injected failure after fallback material retain.");
+                    }
+                };
+
+            Assert.That(
+                () => service.UploadModel(
+                    CreateRollbackTestModel()),
+                Throws.TypeOf<AggregateException>());
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    backend.MaterialRetainCalls
+                        .Select(static handle => handle.Index),
+                    Is.EqualTo(new[] { 200 }));
+                Assert.That(
+                    backend.RollbackCalls,
+                    Is.EqualTo(
+                        new[]
+                        {
+                            "material:200",
+                            "material:201",
+                            "material:200"
+                        }));
+                Assert.That(
+                    service.PendingMaterialRollbackResourceCount,
+                    Is.EqualTo(1));
+            });
+
+            service.Dispose();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    backend.RollbackCalls,
+                    Is.EqualTo(
+                        new[]
+                        {
+                            "material:200",
+                            "material:201",
+                            "material:200",
+                            "material:200"
+                        }));
+                Assert.That(
+                    service.PendingMaterialRollbackResourceCount,
+                    Is.Zero);
+                Assert.That(
+                    backend.NoOutstandingTextureReferences,
+                    Is.True);
+                Assert.That(
+                    backend.NoOutstandingMaterialReferences,
+                    Is.True);
+            });
+        }
+
+        [Test]
+        public void PrimitiveTextureRetain_RegistrationAndReleaseFailureRemainDurablyOwned()
+        {
+            var backend = new RecordingModelRenderUploadBackend
+            {
+                FailPrimitiveMaterialRegistration = true,
+                RollbackFailureResource = "texture:101",
+                RemainingRollbackFailures = 1
+            };
+            var service =
+                new ModelRenderUploadService(backend);
+
+            Exception? uploadFailure = null;
+            Njulf.Core.Scene.Model? unexpectedlyUploaded = null;
+            try
+            {
+                unexpectedlyUploaded =
+                    service.UploadModel(
+                        CreateValidTexturedRollbackTestModel());
+            }
+            catch (Exception failure)
+            {
+                uploadFailure = failure;
+            }
+            if (unexpectedlyUploaded != null)
+            {
+                unexpectedlyUploaded.Dispose();
+                Assert.Fail(
+                    "Expected primitive material registration to fail. " +
+                    $"Registrations={backend.PrimitiveMaterialRegistrationCalls}; " +
+                    $"diagnostics={service.LastUploadDiagnostics.PrimitiveProfileDiagnostic}");
+            }
+            Assert.That(
+                uploadFailure,
+                Is.TypeOf<AggregateException>());
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    backend.PrimitiveMaterialRegistrationCalls,
+                    Is.EqualTo(1));
+                Assert.That(
+                    backend.RollbackCalls,
+                    Is.EqualTo(
+                        new[]
+                        {
+                            "texture:101",
+                            "texture:100",
+                            "material:200"
+                        }));
+                Assert.That(
+                    service.PendingMaterialRollbackResourceCount,
+                    Is.EqualTo(1));
+                Assert.That(
+                    service.LastUploadDiagnostics.ModelName,
+                    Is.Empty);
+            });
+
+            service.Dispose();
+            int callsAfterCompletion =
+                backend.RollbackCalls.Count;
+            service.Dispose();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    backend.RollbackCalls,
+                    Is.EqualTo(
+                        new[]
+                        {
+                            "texture:101",
+                            "texture:100",
+                            "material:200",
+                            "texture:101"
+                        }));
+                Assert.That(
+                    backend.DirectTextureReleaseCalls
+                        .Select(static handle => handle.Index),
+                    Is.EqualTo(new[] { 101, 100, 101 }));
+                Assert.That(
+                    service.PendingMaterialRollbackResourceCount,
+                    Is.Zero);
+                Assert.That(
+                    backend.NoOutstandingTextureReferences,
+                    Is.True);
+                Assert.That(
+                    backend.NoOutstandingMaterialReferences,
+                    Is.True);
+                Assert.That(
+                    backend.RollbackCalls.Count,
+                    Is.EqualTo(callsAfterCompletion));
+            });
+        }
+
+        [TestCase("texture:106")]
+        [TestCase("texture:105")]
+        [TestCase("material:200")]
+        public void FailedMaterialRollback_DisposeRetriesOnlyFailedOccurrence(
+            string failedResource)
+        {
+            var backend = new RecordingModelRenderUploadBackend
+            {
+                FailTextureLoadCall = 8,
+                RollbackFailureResource = failedResource,
+                RemainingRollbackFailures = 1
+            };
+            var service =
+                new ModelRenderUploadService(backend);
+
+            Assert.That(
+                () => service.UploadModel(
+                    CreateRollbackTestModel()),
+                Throws.TypeOf<AggregateException>());
+            Assert.That(
+                service.PendingMaterialRollbackResourceCount,
+                Is.EqualTo(1));
+
+            service.Dispose();
+            int callsAfterCompletion =
+                backend.RollbackCalls.Count;
+            service.Dispose();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    service.PendingMaterialRollbackResourceCount,
+                    Is.Zero);
+                Assert.That(
+                    backend.RollbackCalls.Count(
+                        item =>
+                            item == failedResource),
+                    Is.EqualTo(2));
+                Assert.That(
+                    backend.RollbackCalls
+                        .Where(
+                            item =>
+                                item != failedResource)
+                        .GroupBy(static item => item)
+                        .Select(
+                            static group =>
+                                group.Count()),
+                    Is.All.EqualTo(1));
+                Assert.That(
+                    backend.RollbackCalls.Count,
+                    Is.EqualTo(callsAfterCompletion));
+                Assert.That(
+                    backend
+                        .EveryAcquiredTextureWasReleasedExactlyOnce,
+                    Is.True);
+            });
+        }
+
+        [Test]
+        public void PendingMaterialRollback_SubsequentUploadDrainsBeforeValidation()
+        {
+            var backend = new RecordingModelRenderUploadBackend
+            {
+                FailTextureLoadCall = 8,
+                RollbackFailureResource = "texture:106",
+                RemainingRollbackFailures = 1
+            };
+            using var service =
+                new ModelRenderUploadService(backend);
+
+            Assert.That(
+                () => service.UploadModel(
+                    CreateRollbackTestModel()),
+                Throws.TypeOf<AggregateException>());
+            Assert.That(
+                service.PendingMaterialRollbackResourceCount,
+                Is.EqualTo(1));
+
+            Assert.That(
+                () => service.UploadModel(null!),
+                Throws.ArgumentNullException);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    service.PendingMaterialRollbackResourceCount,
+                    Is.Zero);
+                Assert.That(
+                    backend.RollbackCalls.Count(
+                        static item =>
+                            item == "texture:106"),
+                    Is.EqualTo(2));
+                Assert.That(
+                    backend
+                        .EveryAcquiredTextureWasReleasedExactlyOnce,
+                    Is.True);
+            });
+        }
+
+        [Test]
+        public void PendingMaterialRollback_RepeatedDisposeFailureRetainsOwnershipAndClosesUploads()
+        {
+            var backend = new RecordingModelRenderUploadBackend
+            {
+                FailTextureLoadCall = 8,
+                RollbackFailureResource = "texture:106",
+                RemainingRollbackFailures = 2
+            };
+            var service =
+                new ModelRenderUploadService(backend);
+
+            Assert.That(
+                () => service.UploadModel(
+                    CreateRollbackTestModel()),
+                Throws.TypeOf<AggregateException>());
+            Assert.That(
+                service.Dispose,
+                Throws.TypeOf<AggregateException>());
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    service.PendingMaterialRollbackResourceCount,
+                    Is.EqualTo(1));
+                Assert.That(
+                    () => service.UploadModel(
+                        CreateRollbackTestModel()),
+                    Throws.TypeOf<ObjectDisposedException>());
+            });
+
+            service.Dispose();
+            int callsAfterCompletion =
+                backend.RollbackCalls.Count;
+            service.Dispose();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    service.PendingMaterialRollbackResourceCount,
+                    Is.Zero);
+                Assert.That(
+                    backend.RollbackCalls.Count(
+                        static item =>
+                            item == "texture:106"),
+                    Is.EqualTo(3));
+                Assert.That(
+                    backend.RollbackCalls.Count,
+                    Is.EqualTo(callsAfterCompletion));
+                Assert.That(
+                    backend
+                        .EveryAcquiredTextureWasReleasedExactlyOnce,
+                    Is.True);
+            });
+        }
+
+        private static ModelMesh CreateRollbackTestModel()
+        {
+            var model = new ModelMesh
+            {
+                Name = "Rollback test model",
+                Vertices =
+                [
+                    new Vector3(0f, 0f, 0f),
+                    new Vector3(1f, 0f, 0f),
+                    new Vector3(0f, 1f, 0f)
+                ],
+                Normals =
+                [
+                    Vector3.UnitZ,
+                    Vector3.UnitZ,
+                    Vector3.UnitZ
+                ],
+                TexCoords =
+                [
+                    Vector2.Zero,
+                    Vector2.UnitX,
+                    Vector2.UnitY
+                ],
+                Indices = [0u, 1u, 2u]
+            };
+            model.Materials.Add(CreateInvalidTexturedMaterial("First", 0));
+            model.Materials.Add(CreateInvalidTexturedMaterial("Second", 5));
+            return model;
+        }
+
+        private static ModelMesh CreateValidTexturedRollbackTestModel()
+        {
+            byte[] png =
+                Njulf.Rendering.Debug.PngScreenshotEncoder.Encode(
+                    [
+                        0, 0, 0, 0,
+                        255, 255, 255, 255
+                    ],
+                    width: 2,
+                    height: 1,
+                    Njulf.Rendering.Debug.ScreenshotPixelFormat.Rgba8);
+            Vector3[] vertices =
+            [
+                new Vector3(0f, 0f, 0f),
+                new Vector3(1f, 0f, 0f),
+                new Vector3(0f, 1f, 0f),
+                new Vector3(2f, 0f, 0f),
+                new Vector3(3f, 0f, 0f),
+                new Vector3(2f, 1f, 0f)
+            ];
+            Vector3[] normals =
+                Enumerable.Repeat(
+                        Vector3.UnitZ,
+                        vertices.Length)
+                    .ToArray();
+            Vector2[] texCoords =
+            [
+                new Vector2(0.25f, 0.5f),
+                new Vector2(0.25f, 0.5f),
+                new Vector2(0.25f, 0.5f),
+                new Vector2(0.75f, 0.5f),
+                new Vector2(0.75f, 0.5f),
+                new Vector2(0.75f, 0.5f)
+            ];
+            uint[] indices =
+                [0u, 1u, 2u, 3u, 4u, 5u];
+            var model = new ModelMesh
+            {
+                Name = "Primitive texture rollback test model",
+                Vertices = vertices,
+                Normals = normals,
+                TexCoords = texCoords,
+                Indices = indices
+            };
+            var source =
+                new ModelTextureSource
+                {
+                    DebugName = "sparse-two-pixel.png",
+                    SourceKind =
+                        TextureSourceKind.EmbeddedMemory,
+                    ContainerKind =
+                        TextureContainerKind.StandardImage,
+                    Bytes = png,
+                    MimeType = "image/png",
+                    CacheIdentity =
+                        "rollback-test:sparse-two-pixel",
+                    EncodedByteLength = png.Length
+                };
+            var binding =
+                new ModelTextureSlot
+                {
+                    Source = source,
+                    ColorSpace =
+                        TextureColorSpace.Srgb,
+                    Sampler =
+                        new TextureSamplerDescription(
+                            TextureWrapMode.ClampToEdge,
+                            TextureWrapMode.ClampToEdge,
+                            TextureFilterMode.Nearest,
+                            TextureFilterMode.Nearest,
+                            TextureMipFilterMode.Nearest,
+                            1f)
+                };
+            model.Materials.Add(
+                new ModelMaterial
+                {
+                    Name = "Valid textured material",
+                    Albedo = Vector4.One,
+                    Emissive = Vector4.One,
+                    EmissiveStrength = 1f,
+                    AlphaMode = ModelAlphaMode.Mask,
+                    AlphaCutoff = 0.5f,
+                    BaseColorTexture = binding,
+                    EmissiveTexture = binding
+                });
+            model.SubMeshes.Add(
+                new ModelSubMesh
+                {
+                    Name = "Sparse correlated primitive",
+                    MaterialIndex = 0,
+                    Vertices = vertices,
+                    Normals = normals,
+                    TexCoords = texCoords,
+                    Indices = indices
+                });
+            return model;
+        }
+
+        private static ModelMaterial CreateInvalidTexturedMaterial(string name, int identityOffset)
+        {
+            return new ModelMaterial
+            {
+                Name = name,
+                BaseColorTexture = CreateInvalidTextureSlot($"{name}-{identityOffset + 0}"),
+                NormalTexture = CreateInvalidTextureSlot($"{name}-{identityOffset + 1}"),
+                MetallicRoughnessTexture = CreateInvalidTextureSlot($"{name}-{identityOffset + 2}"),
+                OcclusionTexture = CreateInvalidTextureSlot($"{name}-{identityOffset + 3}"),
+                EmissiveTexture = CreateInvalidTextureSlot($"{name}-{identityOffset + 4}")
+            };
+        }
+
+        private static ModelTextureSlot CreateInvalidTextureSlot(string identity)
+        {
+            return new ModelTextureSlot
+            {
+                Source = new ModelTextureSource
+                {
+                    DebugName = identity,
+                    CacheIdentity = $"rollback-test:{identity}",
+                    Bytes = [0x00],
+                    EncodedByteLength = 1
+                }
+            };
+        }
+
         private static GPUVertex[] InvokeBuildGpuVertices(ModelSubMesh subMesh)
         {
             MethodInfo method = typeof(ModelRenderUploadService).GetMethod(
@@ -617,6 +1306,378 @@ namespace Njulf.Tests
                 ?? throw new MissingMethodException(nameof(MeshManager), "AddUploadStagingBytes");
 
             return (ulong)method.Invoke(null, new object[] { currentOffset, size })!;
+        }
+
+        private sealed class RecordingModelRenderUploadBackend : IModelRenderUploadBackend
+        {
+            private readonly List<TextureHandle> _pendingTextureOwnership = new();
+            private readonly Dictionary<TextureHandle, int> _outstandingTextureReferences = new();
+            private readonly Dictionary<TextureHandle, int> _textureReleaseOccurrences = new();
+            private readonly Dictionary<TextureHandle, TextureTransportStatistics> _textureStatistics = new();
+            private readonly Dictionary<MaterialHandle, MaterialDefinition> _materialDefinitions = new();
+            private readonly Dictionary<MaterialHandle, TextureHandle[]> _materialTextures = new();
+            private readonly Dictionary<MaterialHandle, int> _materialReferences = new();
+            private readonly Dictionary<MeshHandle, int> _meshReferences = new();
+            private int _nextTextureIndex = 100;
+            private int _nextMaterialIndex = 200;
+            private int _nextMeshIndex;
+            private int _textureLoadCalls;
+            private int _rollbackAttemptCalls;
+
+            public int FailTextureLoadCall { get; init; }
+
+            public bool FailMeshRegistration { get; init; }
+
+            public bool FailPrimitiveMaterialRegistration { get; init; }
+
+            public string? RollbackFailureResource { get; init; }
+
+            public int RemainingRollbackFailures { get; set; }
+
+            public int FailRollbackCall { get; init; }
+
+            public List<TextureHandle> AcquiredTextures { get; } = new();
+
+            public List<TextureHandle> DirectTextureReleaseCalls { get; } = new();
+
+            public List<MaterialHandle> MaterialReleaseCalls { get; } = new();
+
+            public List<MaterialHandle> MaterialRetainCalls { get; } = new();
+
+            public List<MeshHandle> MeshReleaseCalls { get; } = new();
+
+            public List<string> RollbackCalls { get; } = new();
+
+            public int PrimitiveMaterialRegistrationCalls { get; private set; }
+
+            public bool EveryAcquiredTextureWasReleasedExactlyOnce =>
+                AcquiredTextures.Count > 0 &&
+                AcquiredTextures.All(
+                    handle =>
+                        _outstandingTextureReferences.GetValueOrDefault(handle) == 0 &&
+                        _textureReleaseOccurrences.GetValueOrDefault(handle) == 1);
+
+            public bool NoOutstandingTextureReferences =>
+                AcquiredTextures.Count > 0 &&
+                AcquiredTextures.All(
+                    handle =>
+                        _outstandingTextureReferences
+                            .GetValueOrDefault(handle) ==
+                        0);
+
+            public bool NoOutstandingMeshReferences =>
+                _meshReferences.Count == 0;
+
+            public bool NoOutstandingMaterialReferences =>
+                _materialReferences.Count == 0;
+
+            public TextureHandle DefaultWhiteTexture { get; } = new(1, 1);
+
+            public TextureHandle DefaultNormalTexture { get; } = new(2, 1);
+
+            public TextureHandle DefaultBlackTexture { get; } = new(3, 1);
+
+            public void InitializeDefaultTextures()
+            {
+            }
+
+            public TextureHandle LoadTexture(
+                ModelTextureSource source,
+                TextureSamplerDescription samplerDescription,
+                bool generateMipmaps,
+                bool srgb,
+                bool requireWithinMemoryBudget,
+                TextureSemantic semantic,
+                RuntimeTextureMipPolicy mipPolicy)
+            {
+                TextureHandle handle =
+                    AcquireTexture();
+                if (source.Bytes is { Length: > 0 } bytes)
+                {
+                    _textureStatistics[handle] =
+                        new TextureTransportStatistics
+                        {
+                            Status =
+                                TextureTransportStatisticsStatus.Valid,
+                            Validity =
+                                TextureTransportStatisticsValidity
+                                    .SourceContentHash |
+                                TextureTransportStatisticsValidity
+                                    .DecodedPixels |
+                                TextureTransportStatisticsValidity
+                                    .LinearChannelMoments |
+                                TextureTransportStatisticsValidity
+                                    .EmissiveLuminanceMoments |
+                                TextureTransportStatisticsValidity
+                                    .AlphaHistogram,
+                            SourceContentHash =
+                                CookedHash.Bytes(bytes),
+                            Semantic = semantic,
+                            ColorSpace = source.ContainerKind ==
+                                         TextureContainerKind.StandardImage &&
+                                         srgb
+                                ? TextureColorSpace.Srgb
+                                : TextureColorSpace.Linear,
+                            Width = 1,
+                            Height = 1,
+                            PixelCount = 1,
+                            LinearChannelMean =
+                                TextureTransportVector4.One,
+                            LinearChannelSecondMoment =
+                                TextureTransportVector4.One,
+                            Decoder =
+                                "ModelRenderUploadServiceTests fixture",
+                            AlphaHistogram =
+                                Enumerable.Range(
+                                        0,
+                                        TextureTransportStatistics
+                                            .AlphaHistogramBinCount)
+                                    .Select(
+                                        static index =>
+                                            index ==
+                                            TextureTransportStatistics
+                                                .AlphaHistogramBinCount -
+                                            1
+                                                ? 1UL
+                                                : 0UL)
+                                    .ToArray()
+                        };
+                }
+
+                return handle;
+            }
+
+            public TextureHandle LoadOptionalTextureFromFile(
+                string? path,
+                TextureHandle fallback,
+                bool generateMipmaps,
+                bool srgb,
+                TextureSemantic semantic,
+                RuntimeTextureMipPolicy mipPolicy)
+            {
+                return string.IsNullOrWhiteSpace(path) ? fallback : AcquireTexture();
+            }
+
+            public int GetBindlessTextureIndex(TextureHandle handle)
+            {
+                return handle.Index;
+            }
+
+            public bool TryGetTextureTransportStatistics(
+                TextureHandle handle,
+                out TextureTransportStatistics statistics)
+            {
+                return _textureStatistics.TryGetValue(
+                    handle,
+                    out statistics!);
+            }
+
+            public void RetainTexture(TextureHandle handle)
+            {
+                IncrementTextureReference(handle);
+                _pendingTextureOwnership.Add(handle);
+            }
+
+            public void ReleaseTexture(TextureHandle handle)
+            {
+                DirectTextureReleaseCalls.Add(handle);
+                RecordRollbackAttempt(
+                    $"texture:{handle.Index}");
+                ReleaseTextureReference(handle);
+                int pendingIndex =
+                    _pendingTextureOwnership.LastIndexOf(
+                        handle);
+                if (pendingIndex >= 0)
+                {
+                    _pendingTextureOwnership.RemoveAt(
+                        pendingIndex);
+                }
+            }
+
+            public MaterialHandle RegisterMaterialDefinition(MaterialDefinition definition)
+            {
+                return RegisterMaterial(definition);
+            }
+
+            public MaterialHandle RegisterMaterialDefinition(
+                MaterialDefinition definition,
+                GiMaterialTransportProfile primitiveProfile)
+            {
+                PrimitiveMaterialRegistrationCalls++;
+                if (FailPrimitiveMaterialRegistration)
+                {
+                    throw new InvalidOperationException(
+                        "Injected primitive material registration failure.");
+                }
+
+                return RegisterMaterial(definition);
+            }
+
+            public MaterialDefinition GetMaterialDefinition(MaterialHandle handle)
+            {
+                return _materialDefinitions[handle];
+            }
+
+            public IReadOnlyList<TextureHandle> GetMaterialTextures(MaterialHandle handle)
+            {
+                return _materialTextures[handle];
+            }
+
+            public void ReleaseMaterial(MaterialHandle handle)
+            {
+                if (!_materialTextures.TryGetValue(handle, out TextureHandle[]? textures) ||
+                    !_materialReferences.TryGetValue(handle, out int references) ||
+                    references <= 0)
+                {
+                    throw new InvalidOperationException($"Material {handle.Index} was released more than once.");
+                }
+
+                MaterialReleaseCalls.Add(handle);
+                RecordRollbackAttempt(
+                    $"material:{handle.Index}");
+                foreach (TextureHandle texture in textures)
+                    ReleaseTextureReference(texture);
+                references--;
+                if (references == 0)
+                {
+                    _materialReferences.Remove(handle);
+                    _materialTextures.Remove(handle);
+                    _materialDefinitions.Remove(handle);
+                }
+                else
+                {
+                    _materialReferences[handle] = references;
+                }
+            }
+
+            public void RetainMaterial(MaterialHandle handle)
+            {
+                if (!_materialTextures.TryGetValue(handle, out TextureHandle[]? textures) ||
+                    !_materialReferences.TryGetValue(handle, out int references) ||
+                    references <= 0)
+                {
+                    throw new InvalidOperationException($"Material {handle.Index} is not live.");
+                }
+
+                foreach (TextureHandle texture in textures)
+                    IncrementTextureReference(texture);
+                _materialReferences[handle] =
+                    checked(references + 1);
+                MaterialRetainCalls.Add(handle);
+            }
+
+            public MeshHandle[] RegisterMeshes(IReadOnlyList<MeshManager.MeshRegistrationData> meshes)
+            {
+                if (FailMeshRegistration)
+                    throw new InvalidOperationException("Injected mesh registration failure.");
+
+                var handles = new MeshHandle[meshes.Count];
+                for (int i = 0; i < handles.Length; i++)
+                {
+                    handles[i] =
+                        new MeshHandle(_nextMeshIndex++, 1);
+                    _meshReferences.Add(handles[i], 1);
+                }
+                return handles;
+            }
+
+            public void RetainMesh(MeshHandle handle)
+            {
+                if (!_meshReferences.TryGetValue(handle, out int references) ||
+                    references <= 0)
+                {
+                    throw new InvalidOperationException($"Mesh {handle.Index} is not live.");
+                }
+
+                _meshReferences[handle] =
+                    checked(references + 1);
+            }
+
+            public void ReleaseMesh(MeshHandle handle)
+            {
+                if (!_meshReferences.TryGetValue(handle, out int references) ||
+                    references <= 0)
+                {
+                    throw new InvalidOperationException($"Mesh {handle.Index} was released more than acquired.");
+                }
+
+                MeshReleaseCalls.Add(handle);
+                RecordRollbackAttempt(
+                    $"mesh:{handle.Index}");
+                references--;
+                if (references == 0)
+                    _meshReferences.Remove(handle);
+                else
+                    _meshReferences[handle] = references;
+            }
+
+            private TextureHandle AcquireTexture()
+            {
+                _textureLoadCalls++;
+                if (_textureLoadCalls == FailTextureLoadCall)
+                    throw new InvalidOperationException("Injected texture load failure.");
+
+                var handle = new TextureHandle(_nextTextureIndex++, 1);
+                AcquiredTextures.Add(handle);
+                IncrementTextureReference(handle);
+                _pendingTextureOwnership.Add(handle);
+                return handle;
+            }
+
+            private MaterialHandle RegisterMaterial(MaterialDefinition definition)
+            {
+                var handle = new MaterialHandle(_nextMaterialIndex++, 1);
+                _materialDefinitions.Add(handle, definition);
+                _materialTextures.Add(handle, _pendingTextureOwnership.ToArray());
+                _materialReferences.Add(handle, 1);
+                _pendingTextureOwnership.Clear();
+                return handle;
+            }
+
+            private void IncrementTextureReference(TextureHandle handle)
+            {
+                _outstandingTextureReferences[handle] =
+                    checked(_outstandingTextureReferences.GetValueOrDefault(handle) + 1);
+            }
+
+            private void RecordRollbackAttempt(
+                string resource)
+            {
+                RollbackCalls.Add(resource);
+                int attempt =
+                    Interlocked.Increment(
+                        ref _rollbackAttemptCalls);
+                bool failAbsoluteCall =
+                    FailRollbackCall > 0 &&
+                    attempt == FailRollbackCall;
+                bool failResource =
+                    RemainingRollbackFailures > 0 &&
+                    string.Equals(
+                        resource,
+                        RollbackFailureResource,
+                        StringComparison.Ordinal);
+                if (!failAbsoluteCall &&
+                    !failResource)
+                {
+                    return;
+                }
+
+                if (failResource)
+                    RemainingRollbackFailures--;
+                throw new InvalidOperationException(
+                    $"Injected rollback failure for {resource}.");
+            }
+
+            private void ReleaseTextureReference(TextureHandle handle)
+            {
+                int outstanding = _outstandingTextureReferences.GetValueOrDefault(handle);
+                if (outstanding <= 0)
+                    throw new InvalidOperationException($"Texture {handle.Index} was released more than acquired.");
+
+                _outstandingTextureReferences[handle] = outstanding - 1;
+                _textureReleaseOccurrences[handle] =
+                    checked(_textureReleaseOccurrences.GetValueOrDefault(handle) + 1);
+            }
         }
     }
 }

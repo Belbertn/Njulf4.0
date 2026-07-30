@@ -71,6 +71,61 @@ public sealed class SimpleDdgiSampledAtlasTests
     }
 
     [Test]
+    public void StableCapacityReconciliation_ShrinksAfterQualityRollback()
+    {
+        int ultraCapacity =
+            SimpleDdgiSampledAtlas.CalculateProvisionedProbeCapacity(23_636, 2_048);
+        int highCapacity =
+            SimpleDdgiSampledAtlas.CalculateProvisionedProbeCapacity(17_960, 2_048);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ultraCapacity, Is.EqualTo(23_808));
+            Assert.That(highCapacity, Is.EqualTo(18_176));
+            Assert.That(
+                SimpleDdgiSampledAtlas.RequiresStableCapacityReallocation(
+                    ultraCapacity,
+                    highCapacity,
+                    2_048,
+                    2_048),
+                Is.True);
+            Assert.That(
+                SimpleDdgiSampledAtlas.RequiresStableCapacityReallocation(
+                    highCapacity,
+                    highCapacity,
+                    2_048,
+                    2_048),
+                Is.False);
+        });
+    }
+
+    [TestCase(1)]
+    [TestCase(64)]
+    [TestCase(128)]
+    [TestCase(255)]
+    [TestCase(256)]
+    [TestCase(2_048)]
+    public void LayoutAdmissionRounding_MatchesOrConservativelyBoundsDeviceProvisioning(
+        int layersPerTexture)
+    {
+        int deviceCapacity = checked(
+            layersPerTexture *
+            BindlessIndex.MaxSimpleDdgiSampledAtlasTextureGroups);
+        int requestedProbes = Math.Min(257, deviceCapacity);
+        int runtimeCapacity =
+            SimpleDdgiSampledAtlas.CalculateProvisionedProbeCapacity(
+                requestedProbes,
+                layersPerTexture);
+        int admittedCapacity =
+            SimpleDdgiMemoryPlan.ResolveSampledAtlasProbeCapacity(
+                requestedProbes);
+
+        Assert.That(admittedCapacity, Is.GreaterThanOrEqualTo(runtimeCapacity));
+        if (layersPerTexture >= 256)
+            Assert.That(admittedCapacity, Is.EqualTo(runtimeCapacity));
+    }
+
+    [Test]
     public void UpdatedProbeCopies_CoalesceRunsAndBoundPathologicalRegionLists()
     {
         int[] contiguousAndDuplicate = [3, 4, 4, 5, 12, 13, 90];

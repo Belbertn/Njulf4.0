@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Njulf.Assets;
 using NUnit.Framework;
@@ -117,6 +118,104 @@ public sealed class AssetValidationTests
             Assert.That(entry.TimedOut, Is.True);
             Assert.That(entry.Crashed, Is.True);
         });
+    }
+
+    [Test]
+    public async Task ValidateAssetAsync_ChildProcessOutputIsBoundedAndProcessIsTerminated()
+    {
+        string path = WriteTriangleObj();
+        var validator = new AssetValidator();
+
+        AssetValidationEntry entry = await validator.ValidateAssetAsync(
+            path,
+            options: new AssetValidationOptions
+            {
+                Timeout = TimeSpan.FromSeconds(10),
+                MaximumChildProcessOutputBytes = 1024,
+                ChildProcessMode = AssetValidationChildProcessMode.Always,
+                ChildProcessExecutablePath = "powershell.exe",
+                ChildProcessArgumentTemplate =
+                [
+                    "-NoProfile",
+                    "-Command",
+                    "[Console]::Out.Write('x' * 4096); Start-Sleep -Seconds 30"
+                ]
+            });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.Status, Is.EqualTo(AssetValidationStatus.RejectedInvalid));
+            Assert.That(entry.FailureType, Is.EqualTo("ChildProcessOutputLimit"));
+            Assert.That(entry.FailureMessage, Does.Contain("1024-byte limit"));
+            Assert.That(entry.Crashed, Is.True);
+            Assert.That(entry.ElapsedMilliseconds, Is.LessThan(10_000));
+        });
+    }
+
+    [Test]
+    public async Task ValidateAssetAsync_ExternalCancellationTerminatesChildAndPropagates()
+    {
+        string directory = CreateTestDirectory();
+        string path = WriteTriangleObj(directory, "cancelled-child");
+        string pidPath = Path.Combine(directory, "child.pid");
+        string escapedPidPath = pidPath.Replace("'", "''", StringComparison.Ordinal);
+        var validator = new AssetValidator();
+        using var cancellation = new CancellationTokenSource();
+
+        Task<AssetValidationEntry> validation = validator.ValidateAssetAsync(
+            path,
+            options: new AssetValidationOptions
+            {
+                Timeout = TimeSpan.FromSeconds(30),
+                ChildProcessMode = AssetValidationChildProcessMode.Always,
+                ChildProcessExecutablePath = "powershell.exe",
+                ChildProcessArgumentTemplate =
+                [
+                    "-NoProfile",
+                    "-Command",
+                    $"$PID | Set-Content -LiteralPath '{escapedPidPath}'; " +
+                    "Start-Sleep -Seconds 30"
+                ]
+            },
+            cancellationToken: cancellation.Token);
+        for (int attempt = 0;
+             attempt < 100 && !File.Exists(pidPath);
+             attempt++)
+        {
+            await Task.Delay(50);
+        }
+
+        bool pidWasPublished = File.Exists(pidPath);
+        cancellation.Cancel();
+        Assert.CatchAsync<OperationCanceledException>(
+            async () => await validation);
+        Assert.That(pidWasPublished, Is.True);
+
+        int childPid = int.Parse(
+            File.ReadAllText(pidPath),
+            System.Globalization.CultureInfo.InvariantCulture);
+        bool childExited = false;
+        for (int attempt = 0; attempt < 20; attempt++)
+        {
+            try
+            {
+                using Process child = Process.GetProcessById(childPid);
+                if (child.HasExited)
+                {
+                    childExited = true;
+                    break;
+                }
+            }
+            catch (ArgumentException)
+            {
+                childExited = true;
+                break;
+            }
+
+            await Task.Delay(50);
+        }
+
+        Assert.That(childExited, Is.True);
     }
 
     [Test]

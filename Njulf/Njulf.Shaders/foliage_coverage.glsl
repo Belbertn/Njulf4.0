@@ -1,6 +1,8 @@
 #ifndef NJULF_FOLIAGE_COVERAGE_GLSL
 #define NJULF_FOLIAGE_COVERAGE_GLSL
 
+#include "material_alpha.glsl"
+
 // Shared by foliage depth and forward.  It intentionally owns every discard decision that
 // affects coverage so the depth buffer cannot contain foliage pixels that forward rejects.
 bool IsInsideFoliageLeafCard(vec2 uv)
@@ -65,7 +67,10 @@ bool FoliageCoverageSurvives(
         if (!IsInsideFoliageLeafCard(uv) || sampledAlbedo.a < 0.05)
             return false;
     }
-    else if (material.NormalScaleBias.y >= 0.5 && sampledAlbedo.a < material.NormalScaleBias.z)
+    else if (!MaterialAlphaSurvivesRasterCoverage(
+                 material.Albedo.a * sampledAlbedo.a,
+                 material.NormalScaleBias.y,
+                 material.NormalScaleBias.z))
     {
         return false;
     }

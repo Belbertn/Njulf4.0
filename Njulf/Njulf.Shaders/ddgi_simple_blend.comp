@@ -11,6 +11,10 @@ const uint SIMPLE_DDGI_BLEND_FLAG_SHARED_RAY_CACHE = 1u << 3;
 const uint SIMPLE_DDGI_BLEND_FLAG_REDUCED_COMPLEXITY = 1u << 5;
 const float SIMPLE_DDGI_BOOTSTRAP_VISIBILITY_MEAN_SPACING = 1.0;
 const float SIMPLE_DDGI_BOOTSTRAP_VISIBILITY_STDDEV_SPACING = 0.5;
+// Small absolute fixed-point tolerance used only close to black. Unlike the
+// legacy 0.02 subtraction, it does not erase visible low-energy bounce.
+const float SIMPLE_DDGI_TRANSPORT_ABSOLUTE_RESIDUAL_TOLERANCE = 0.0001;
+const float SIMPLE_DDGI_TRANSPORT_RESIDUAL_ENVELOPE_DECAY = 0.25;
 
 shared vec4 SharedSimpleRayRadianceDistance[256];
 shared vec4 SharedSimpleRayDirectionHit[256];
@@ -74,6 +78,26 @@ float SimpleDdgiStableRelativeDelta(float current, float previous, float absolut
     // to accept almost every fresh estimate.
     float meaningfulDelta = max(absoluteDelta - absoluteNoiseFloor, 0.0);
     return meaningfulDelta / max(max(abs(current), abs(previous)), absoluteNoiseFloor);
+}
+
+float SimpleDdgiTransportConvergenceResidual(
+    SimpleDdgiParams params,
+    vec3 current,
+    vec3 previous)
+{
+    // This is a fixed-point defect, evaluated before Jacobi relaxation. The
+    // mixed scale accepts a tiny absolute error near black or the authored
+    // relative error at normal signal levels without subtracting either one
+    // from real low-energy bounce.
+    float relativeThreshold = max(params.transportResidualThreshold, 0.001);
+    float absoluteScale =
+        SIMPLE_DDGI_TRANSPORT_ABSOLUTE_RESIDUAL_TOLERANCE / relativeThreshold;
+    vec3 difference = abs(current - previous);
+    vec3 magnitude = max(abs(current), abs(previous));
+    vec3 residual = difference / max(magnitude, vec3(absoluteScale));
+    if (any(isnan(residual)) || any(isinf(residual)))
+        return 1.0;
+    return clamp(max(residual.x, max(residual.y, residual.z)), 0.0, 1.0);
 }
 
 float SimpleDdgiAdaptiveIrradianceHysteresis(SimpleDdgiParams params, vec4 previous, vec3 irradiance, float probeHysteresis, bool maintenanceUpdate)
@@ -251,9 +275,14 @@ float BlendIrradianceTexel(SimpleDdgiParams params, uint probeIndex, uint localP
     if (probeHysteresis > 0.0001 && previous.w > 0.0001)
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_PREVIOUS_ATLAS_USED_COUNTER, 1u);
     WriteSimpleDdgiAtlasTexel(irradianceWriteBuffer, probeIndex, texel, params.irradianceTexels, blended);
-    return previous.w > 0.0001
-        ? SimpleDdgiStableRelativeDelta(SimpleDdgiLuminance(irradiance), SimpleDdgiLuminance(previous.rgb), 0.02)
-        : 1.0;
+    if (previous.w <= 0.0001)
+        return 1.0;
+    return (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u
+        ? SimpleDdgiTransportConvergenceResidual(params, irradiance, previous.rgb)
+        : SimpleDdgiStableRelativeDelta(
+            SimpleDdgiLuminance(irradiance),
+            SimpleDdgiLuminance(previous.rgb),
+            0.02);
 }
 
 void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint probeIndex, uint localProbeOffset, uint texel, float probeHysteresis, bool sharedRayCacheEnabled, uint activeRayCount, bool maintenanceUpdate, bool freshUpdate)
@@ -391,9 +420,14 @@ float BlendReducedIrradianceTexel(SimpleDdgiParams params, uint probeIndex, uint
     if (probeHysteresis > 0.0001 && previous.w > 0.0001)
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_PREVIOUS_ATLAS_USED_COUNTER, 1u);
     WriteSimpleDdgiAtlasTexel(irradianceWriteBuffer, probeIndex, texel, params.irradianceTexels, blended);
-    return previous.w > 0.0001
-        ? SimpleDdgiStableRelativeDelta(SimpleDdgiLuminance(irradiance), SimpleDdgiLuminance(previous.rgb), 0.02)
-        : 1.0;
+    if (previous.w <= 0.0001)
+        return 1.0;
+    return (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u
+        ? SimpleDdgiTransportConvergenceResidual(params, irradiance, previous.rgb)
+        : SimpleDdgiStableRelativeDelta(
+            SimpleDdgiLuminance(irradiance),
+            SimpleDdgiLuminance(previous.rgb),
+            0.02);
 }
 
 void main()
@@ -504,13 +538,56 @@ void main()
     {
         float aggregateIrradianceDelta = 0.0;
         uint irradianceTexelCount = min(params.irradianceTexels * params.irradianceTexels, 64u);
+        bool transportV2Active =
+            (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u;
         for (uint texel = 0u; texel < irradianceTexelCount; texel++)
-            aggregateIrradianceDelta += SharedSimpleIrradianceDelta[texel];
-        aggregateIrradianceDelta /= max(float(irradianceTexelCount), 1.0);
+        {
+            if (transportV2Active)
+            {
+                aggregateIrradianceDelta = max(
+                    aggregateIrradianceDelta,
+                    SharedSimpleIrradianceDelta[texel]);
+            }
+            else
+            {
+                aggregateIrradianceDelta +=
+                    SharedSimpleIrradianceDelta[texel];
+            }
+        }
+        if (!transportV2Active)
+        {
+            aggregateIrradianceDelta /=
+                max(float(irradianceTexelCount), 1.0);
+        }
         SimpleDdgiProbeState state = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
         if (SimpleDdgiUpdateMatchesProbeGeneration(update, state))
         {
-            state.luminanceChangeEma = mix(max(state.luminanceChangeEma, 0.0), clamp(aggregateIrradianceDelta, 0.0, 8.0), 0.20);
+            // Fast attack prevents a newly arrived bounce from hiding below the
+            // three-sample stability window. The decaying peak retains bounded
+            // noise rejection while never understating the current defect.
+            if (transportV2Active)
+            {
+                float previousResidualEnvelope =
+                    isnan(state.luminanceChangeEma) ||
+                    isinf(state.luminanceChangeEma) ||
+                    state.luminanceChangeEma < 0.0
+                        ? 1.0
+                        : clamp(state.luminanceChangeEma, 0.0, 1.0);
+                state.luminanceChangeEma = mix(
+                    0.0,
+                    previousResidualEnvelope,
+                    SIMPLE_DDGI_TRANSPORT_RESIDUAL_ENVELOPE_DECAY);
+                state.luminanceChangeEma = max(
+                    clamp(aggregateIrradianceDelta, 0.0, 1.0),
+                    state.luminanceChangeEma);
+            }
+            else
+            {
+                state.luminanceChangeEma = mix(
+                    max(state.luminanceChangeEma, 0.0),
+                    clamp(aggregateIrradianceDelta, 0.0, 8.0),
+                    0.20);
+            }
             if (freshUpdate)
                 state.flags &= ~SIMPLE_DDGI_PROBE_FLAG_FRESH;
             WriteSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex, state);

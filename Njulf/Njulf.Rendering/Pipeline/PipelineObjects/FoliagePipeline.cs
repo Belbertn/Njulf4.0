@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Resources;
 using Njulf.Rendering.Utilities;
 using Silk.NET.Core.Native;
 using Silk.NET.Vulkan;
@@ -64,6 +65,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline AuthoredShadowPipeline => _authoredShadowPipeline;
         public VkPipeline AuthoredMotionVectorPipeline => _authoredMotionVectorPipeline;
         public RenderSettings Settings { get; }
+        public bool MaterialTransportProvenanceAttachmentEnabled { get; private set; }
 
         public void Recreate(Format colorFormat, Format motionVectorFormat, Format depthFormat)
         {
@@ -145,10 +147,21 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private void CreatePipelines(Format colorFormat, Format motionVectorFormat, Format depthFormat)
         {
             bool ssgiEnabled = Settings.GlobalIllumination.EffectiveUseSsgi;
+            bool materialTransportProvenanceEnabled =
+                Settings.GlobalIllumination.DebugView ==
+                GlobalIlluminationDebugView.MaterialTransportHitProvenance;
+            MaterialTransportProvenanceAttachmentEnabled =
+                materialTransportProvenanceEnabled;
+            string provenanceSuffix =
+                materialTransportProvenanceEnabled ? "_provenance" : string.Empty;
             string foliageForwardFragmentShaderName = ssgiEnabled
-                ? "foliage_forward_ssgi.frag.spv"
-                : "foliage_forward_ddgi.frag.spv";
+                ? $"foliage_forward_ssgi{provenanceSuffix}.frag.spv"
+                : $"foliage_forward_ddgi{provenanceSuffix}.frag.spv";
             Format? foliageSecondaryColorFormat = ssgiEnabled ? colorFormat : null;
+            Format? materialTransportProvenanceFormat =
+                materialTransportProvenanceEnabled
+                    ? RenderTargetManager.MaterialTransportProvenanceFormat
+                    : null;
 
             _cullPipeline = CreateComputePipeline("foliage_cull.comp.spv");
             _context.SetDebugName(_cullPipeline.Handle, ObjectType.Pipeline, "Foliage Cull Compute Pipeline");
@@ -182,7 +195,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthFormat,
                 hasColorAttachment: true,
                 depthWriteEnable: false,
-                secondaryColorFormat: foliageSecondaryColorFormat);
+                secondaryColorFormat: foliageSecondaryColorFormat,
+                materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_forwardPipeline.Handle, ObjectType.Pipeline, "Foliage Grass Forward Pipeline");
 
             _authoredDepthPipeline = CreateGraphicsPipeline(
@@ -214,7 +228,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthFormat,
                 hasColorAttachment: true,
                 depthWriteEnable: false,
-                secondaryColorFormat: foliageSecondaryColorFormat);
+                secondaryColorFormat: foliageSecondaryColorFormat,
+                materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_authoredForwardPipeline.Handle, ObjectType.Pipeline, "Foliage Authored Meshlet Forward Pipeline");
 
             _authoredMotionVectorPipeline = CreateGraphicsPipeline(
@@ -279,7 +294,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             bool hasColorAttachment,
             bool depthWriteEnable,
             bool depthBiasEnable = false,
-            Format? secondaryColorFormat = null)
+            Format? secondaryColorFormat = null,
+            Format? materialTransportProvenanceFormat = null)
         {
             ShaderModule taskModule = default;
             ShaderModule meshModule = default;
@@ -354,12 +370,16 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                                      ColorComponentFlags.BBit |
                                      ColorComponentFlags.ABit
                 };
-                uint colorAttachmentCount = hasColorAttachment
-                    ? secondaryColorFormat.HasValue ? 2u : 1u
-                    : 0u;
-                var colorBlendAttachments = stackalloc PipelineColorBlendAttachmentState[2];
+                uint colorAttachmentCount =
+                    ForwardDynamicRenderingContract.ResolveColorAttachmentCount(
+                        hasColorAttachment,
+                        secondaryColorFormat.HasValue,
+                        materialTransportProvenanceFormat.HasValue);
+                var colorBlendAttachments = stackalloc PipelineColorBlendAttachmentState[4];
                 colorBlendAttachments[0] = colorBlendAttachment;
                 colorBlendAttachments[1] = colorBlendAttachment;
+                colorBlendAttachments[2] = colorBlendAttachment;
+                colorBlendAttachments[3] = colorBlendAttachment;
                 var colorBlendInfo = new PipelineColorBlendStateCreateInfo
                 {
                     SType = StructureType.PipelineColorBlendStateCreateInfo,
@@ -377,9 +397,17 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     DynamicStateCount = depthBiasEnable ? 3u : 2u,
                     PDynamicStates = dynamicStates
                 };
-                var renderingColorFormats = stackalloc Format[2];
+                var renderingColorFormats = stackalloc Format[4];
                 renderingColorFormats[0] = colorFormat;
-                renderingColorFormats[1] = secondaryColorFormat ?? colorFormat;
+                renderingColorFormats[1] =
+                    secondaryColorFormat ??
+                    materialTransportProvenanceFormat ??
+                    colorFormat;
+                renderingColorFormats[2] = secondaryColorFormat.HasValue
+                    ? RenderTargetManager.GiFinalDiffuseFormat
+                    : colorFormat;
+                renderingColorFormats[3] =
+                    materialTransportProvenanceFormat ?? colorFormat;
                 var renderingInfo = new PipelineRenderingCreateInfo
                 {
                     SType = StructureType.PipelineRenderingCreateInfo,

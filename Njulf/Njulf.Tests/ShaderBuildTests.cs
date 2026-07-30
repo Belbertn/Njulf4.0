@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Njulf.Rendering.Pipeline.PipelineObjects;
 using Njulf.Rendering.Resources;
 using Njulf.Shaders;
 using NUnit.Framework;
@@ -34,6 +35,12 @@ public sealed class ShaderBuildTests
         "forward_opaque_simple_ddgi.frag",
         "forward_opaque_simple_full_input.frag",
         "forward_opaque_simple_full_input_ddgi.frag",
+        "forward_opaque_provenance.frag",
+        "forward_opaque_ddgi_provenance.frag",
+        "forward_opaque_simple_provenance.frag",
+        "forward_opaque_simple_ddgi_provenance.frag",
+        "forward_opaque_simple_full_input_provenance.frag",
+        "forward_opaque_simple_full_input_ddgi_provenance.frag",
         "particle.vert",
         "particle.frag",
         "skinning.comp",
@@ -52,6 +59,7 @@ public sealed class ShaderBuildTests
         "ddgi_simple_trace.comp",
         "ddgi_simple_transport.comp",
         "ddgi_simple_blend.comp",
+        "gi_material_conformance.comp",
         "farfield_voxelize.comp",
         "farfield_jumpflood.comp",
         "auto_exposure.comp",
@@ -76,6 +84,8 @@ public sealed class ShaderBuildTests
         "foliage_forward.frag",
         "foliage_forward_ssgi.frag",
         "foliage_forward_ddgi.frag",
+        "foliage_forward_ssgi_provenance.frag",
+        "foliage_forward_ddgi_provenance.frag",
         "foliage_motion.task",
         "foliage_motion.mesh",
         "foliage_motion.frag",
@@ -103,6 +113,51 @@ public sealed class ShaderBuildTests
             uint magic = BinaryPrimitives.ReadUInt32LittleEndian(magicBytes);
             Assert.That(magic, Is.EqualTo(0x07230203), $"Shader resource '{resourceName}' is not SPIR-V bytecode.");
         }
+    }
+
+    [Test]
+    public void ShaderModuleLoader_UsesBuildPinnedResourceWithoutCrossConfigurationSearch()
+    {
+        const string shaderFileName = "forward_opaque.frag.spv";
+        const string resourceName = "Njulf.Shaders.forward_opaque.frag";
+        byte[] actual = ShaderModuleLoader.LoadBytes(shaderFileName);
+        using Stream stream = typeof(ShaderLibrary).Assembly.GetManifestResourceStream(resourceName)
+            ?? throw new AssertionException($"Missing shader resource '{resourceName}'.");
+        using var memory = new MemoryStream();
+        stream.CopyTo(memory);
+
+        string loader = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "PipelineObjects",
+            "ShaderModuleLoader.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(actual, Is.EqualTo(memory.ToArray()));
+            Assert.That(loader, Does.Contain("The build-pinned embedded bundle is authoritative."));
+            Assert.That(loader, Does.Not.Contain("\"bin\", \"Debug\""));
+            Assert.That(loader, Does.Not.Contain("\"bin\", \"Release\""));
+        });
+    }
+
+    [Test]
+    public void ShaderModuleLoader_BoundedSnapshotRejectsEmptyAndOversizedInput()
+    {
+        using var empty = new MemoryStream();
+        Assert.That(
+            () => ShaderModuleLoader.ReadBoundedSnapshot(empty, "empty shader"),
+            Throws.TypeOf<InvalidDataException>());
+
+        using var oversized = new MemoryStream(
+            new byte[
+                ShaderModuleLoader.MaximumShaderModuleBytes + 1],
+            writable: false);
+        Assert.That(
+            () => ShaderModuleLoader.ReadBoundedSnapshot(
+                oversized,
+                "oversized shader"),
+            Throws.TypeOf<InvalidDataException>());
     }
 
     [Test]
@@ -183,7 +238,8 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("SampleScreenSpaceAoDepthAware"));
             Assert.That(shader, Does.Contain("AO_FORWARD_SAMPLING_DIRECT"));
             Assert.That(shader, Does.Contain("AO_FORWARD_SAMPLING_DEPTH_AWARE_UPSAMPLE"));
-            Assert.That(shader, Does.Contain("float ddgiIndirectAo = ambientOcclusion;"));
+            Assert.That(shader, Does.Contain("float ddgiIndirectAo = 1.0;"));
+            Assert.That(shader, Does.Contain("ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, diffuseReflectance, ambientOcclusion);"));
         });
     }
 
@@ -200,7 +256,7 @@ public sealed class ShaderBuildTests
         Assert.Multiple(() =>
         {
             Assert.That(materialManager, Does.Contain("EmissiveTextureIndex = BindlessIndex.DefaultWhiteTexture"));
-            Assert.That(modelUpload, Does.Contain("_textureManager.DefaultWhiteTexture,"));
+            Assert.That(modelUpload, Does.Contain("_backend.DefaultWhiteTexture,"));
             Assert.That(forward, Does.Contain("vec4 emissiveSample = SampleMaterialTexture("));
             Assert.That(forward, Does.Not.Contain("useEmissiveTexture"));
             Assert.That(common, Does.Contain("mat3 BuildOrthonormalTbn("));
@@ -410,7 +466,7 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("vec3 geometricNormal = normalize(fragNormal) * (gl_FrontFacing ? 1.0 : -1.0);"));
             Assert.That(shader, Does.Contain("vec3 ddgiNormal = geometricNormal;"));
             Assert.That(shader, Does.Contain("ddgiSample = SampleDdgiIrradiance(fragWorldPosition, ddgiNormal, ddgiIndirectAo);"));
-            Assert.That(shader, Does.Contain("ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic);"));
+            Assert.That(shader, Does.Contain("ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, diffuseReflectance, ambientOcclusion);"));
             Assert.That(shader, Does.Contain("ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo, ddgiEnvironmentFallbackIntensity, debugViewMode)"));
             Assert.That(shader, Does.Not.Contain("DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, normal, indirectAo);"));
             Assert.That(shader, Does.Not.Contain("DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, ddgiNormal, indirectAo);"));
@@ -784,6 +840,7 @@ public sealed class ShaderBuildTests
     {
         string shader = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
         string hitShading = ReadRepoText("Njulf.Shaders", "ddgi_hit_shading.glsl");
+        string materialTransport = ReadRepoText("Njulf.Shaders", "gi_material_transport.glsl");
         string common = ReadRepoText("Njulf.Shaders", "common.glsl");
         string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
         string pass = ReadRepoText("Njulf.Rendering", "Pipeline", "DdgiPipelinePasses.cs");
@@ -812,6 +869,10 @@ public sealed class ShaderBuildTests
             Assert.That(common, Does.Contain("float ShadowStrength;"));
             Assert.That(common, Does.Contain("light.ShadowFlags = int(ReadStorageWord(uint(LIGHT_BUFFER_INDEX), baseWord + 13u));"));
             Assert.That(common, Does.Contain("light.ShadowStrength = ReadStorageFloat(uint(LIGHT_BUFFER_INDEX), baseWord + 14u);"));
+            Assert.That(common, Does.Contain("float EvaluateNjulfPunctualRangeAttenuation("));
+            Assert.That(common, Does.Contain("float EvaluateNjulfSpotAttenuation("));
+            Assert.That(forward, Does.Contain("attenuation = EvaluateNjulfPunctualRangeAttenuation(distanceToLight, light.Range);"));
+            Assert.That(hitShading, Does.Contain("attenuation = EvaluateNjulfPunctualRangeAttenuation(distanceToLight, light.Range);"));
             Assert.That(hitShading, Does.Contain("(uint(light.ShadowFlags) & GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS) == 0u"));
             Assert.That(hitShading, Does.Contain("return noShadowDiffuse * tracedVisibility;"));
             Assert.That(hitShading, Does.Not.Contain("mix(1.0, tracedVisibility, shadowStrength)"));
@@ -820,26 +881,43 @@ public sealed class ShaderBuildTests
             Assert.That(hitShading, Does.Contain("uint selectedLightCapacity = min(DDGI_HIT_MAX_SHADED_LIGHTS, DDGI_MAX_SELECTED_HIT_LIGHTS);"));
             Assert.That(hitShading, Does.Contain("attenuation *= max(pc.SelectedLocalLightEnergyScale, 0.0);"));
             Assert.That(hitShading, Does.Contain("bool ShouldUseCompactDdgiMaterial(uint volumeCascadeIndex)"));
-            Assert.That(hitShading, Does.Contain("vec3 ResolveCompactDdgiAlbedo(GPUMaterialData material)"));
-            Assert.That(hitShading, Does.Contain("DDGI_MATERIAL_POLICY_COMPACT_ALBEDO_VALID"));
-            Assert.That(hitShading, Does.Contain("DDGI_MATERIAL_POLICY_HAS_BASE_COLOR_TEXTURE"));
-            Assert.That(hitShading, Does.Contain("vec4 terminalMip = SampleDdgiMaterialTexture("));
-            Assert.That(hitShading, Does.Contain("1000.0"));
-            Assert.That(hitShading, Does.Contain("material.Albedo.rgb * albedoSample.rgb * vertexColor"));
-            Assert.That(hitShading, Does.Not.Contain("ResolveCompactDdgiAlbedo(material) * albedoSample.rgb"));
-            Assert.That(hitShading, Does.Contain("vec3 ResolveCompactDdgiEmissive(GPUMaterialData material)"));
-            Assert.That(hitShading, Does.Contain("float ResolveDdgiMaterialTextureLod(GPUMaterialData material, uint volumeCascadeIndex)"));
+            Assert.That(hitShading, Does.Contain("#include \"gi_material_transport.glsl\""));
+            Assert.That(materialTransport, Does.Contain("GiSurfaceSample EvaluateGiCompactSurface("));
+            Assert.That(materialTransport, Does.Contain("GI_MATERIAL_DIFFUSE_PROFILE_VALID"));
+            Assert.That(materialTransport, Does.Contain("GI_MATERIAL_EMISSION_PROFILE_VALID"));
+            Assert.That(hitShading, Does.Not.Contain("terminalMip"));
+            Assert.That(hitShading, Does.Not.Contain("1000.0"));
+            Assert.That(hitShading, Does.Contain("albedoSample = SampleDdgiMaterialTexture("));
+            Assert.That(hitShading, Does.Contain("float ResolveDdgiMaterialTextureLod("));
+            Assert.That(hitShading, Does.Contain("float DdgiTriangleUvDensity("));
+            Assert.That(hitShading, Does.Contain("float probeSpacing,"));
+            Assert.That(hitShading, Does.Contain("float rayAngularRadius,"));
+            Assert.That(hitShading, Does.Contain("textureSize("));
+            Assert.That(hitShading, Does.Contain("float worldFootprint = max(latticeRadius, coneRadius);"));
+            Assert.That(shader, Does.Contain("sqrt(max(raySolidAngle / PI, 0.0))"));
+            Assert.That(common, Does.Contain("MATERIAL_GI_COUNTER_BASE = FAR_FIELD_MATERIAL_V2_COUNTER_BASE + 2u"));
+            Assert.That(common, Does.Contain("MATERIAL_GI_ALPHA_CANDIDATE_REJECT_COUNTER = MATERIAL_GI_COUNTER_BASE + 1u"));
+            Assert.That(common, Does.Contain("MATERIAL_GI_ALPHA_CANDIDATE_LIMIT_COUNTER = MATERIAL_GI_COUNTER_BASE + 4u"));
+            Assert.That(hitShading, Does.Contain("DDGI_MATERIAL_ALPHA_DIAGNOSTIC_SAMPLE_WEIGHT = 64u"));
+            Assert.That(hitShading, Does.Contain("RecordDdgiAlphaCandidateDiagnostics(instanceIndex, primitiveIndex, !covered);"));
+            Assert.That(hitShading, Does.Contain("RecordAndSanitizeDdgiMaterialSurface(material, surface);"));
             Assert.That(hitShading, Does.Contain("vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit("));
             Assert.That(hitShading, Does.Contain("for (uint sourceIndex = 0u; sourceIndex < sourceCount; sourceIndex++)"));
             Assert.That(hitShading, Does.Contain("GPUDdgiEmissiveSource source = ReadDdgiEmissiveSource(sourceIndex);"));
-            Assert.That(hitShading, Does.Not.Contain("ReadDdgiEmissiveSource(0u)"));
+            Assert.That(hitShading, Does.Contain("GPUDdgiEmissiveSource firstSource = ReadDdgiEmissiveSource(0u);"));
+            Assert.That(hitShading, Does.Contain("GPUDdgiEmissiveSource columnSource = ReadDdgiEmissiveSource(column);"));
+            Assert.That(hitShading, Does.Contain("GPUDdgiEmissiveSource source = ReadDdgiEmissiveSource(selectedIndex);"));
             Assert.That(shader, Does.Contain("uint ResolveDdgiRequestRayCount(DdgiProbeUpdateRequest request, vec4 updateParams)"));
             Assert.That(shader, Does.Contain("uint requestRaysPerProbe = request.RayCount > 0u"));
             Assert.That(shader, Does.Contain("uint raysPerProbe = ResolveDdgiRequestRayCount(request, updateParams);"));
             Assert.That(hitShading, Does.Contain("bool ShouldSampleDdgiMaterialTextures(uint volumeCascadeIndex)"));
             Assert.That(hitShading, Does.Contain("#define DDGI_HIT_MATERIAL_TEXTURE_MAX_CASCADE pc.MaterialTextureMaxCascade"));
             Assert.That(hitShading, Does.Contain("volumeCascadeIndex <= DDGI_HIT_MATERIAL_TEXTURE_MAX_CASCADE"));
-            Assert.That(shader, Does.Contain("float materialTextureLod = DdgiMaterialTextureLod(volumeCascadeIndex);"));
+            Assert.That(hitShading, Does.Contain("float albedoLod = ResolveDdgiMaterialTextureLod("));
+            Assert.That(hitShading, Does.Contain("float metallicRoughnessLod = ResolveDdgiMaterialTextureLod("));
+            Assert.That(hitShading, Does.Contain("float occlusionLod = ResolveDdgiMaterialTextureLod("));
+            Assert.That(hitShading, Does.Contain("float emissiveLod = ResolveDdgiMaterialTextureLod("));
+            Assert.That(hitShading, Does.Contain("float normalLod = ResolveDdgiMaterialTextureLod("));
             Assert.That(shader, Does.Not.Contain("DDGI_HARD_MAX_SHADED_LIGHTS"));
             Assert.That(shader, Does.Not.Contain("uint lightCount = min(pc.LightCount, min(pc.MaxShadedLights"));
             Assert.That(shader, Does.Not.Contain("uint raysPerProbe = clamp(pc.RaysPerProbe"));
@@ -991,7 +1069,9 @@ public sealed class ShaderBuildTests
             Assert.That(pass, Does.Not.Contain("float environmentIntensity = _settings.Environment.Enabled ? _settings.Environment.DiffuseIntensity : 0.0f;"));
             Assert.That(simpleManager, Does.Contain("float environmentIntensity = _settings.Environment.Enabled ? _settings.Environment.SkyIntensity : 0.0f;"));
             Assert.That(simpleManager, Does.Not.Contain("float environmentIntensity = _settings.Environment.Enabled ? _settings.Environment.DiffuseIntensity : 0.0f;"));
-            Assert.That(forward, Does.Contain("diffuseIbl = diffuseWeight * (albedo / PI) * irradiance * environment.DiffuseIntensity;"));
+            Assert.That(forward, Does.Contain("diffuseIbl = EvaluateGiDiffuseFromIrradiance("));
+            Assert.That(forward, Does.Contain("irradiance * environment.DiffuseIntensity,"));
+            Assert.That(forward, Does.Contain("diffuseReflectance);"));
             Assert.That(shader, Does.Contain("float variance = max(mean2 - mean * mean, 0.005);"));
         });
     }
@@ -1159,16 +1239,18 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("uint RayResultScratchBufferIndex;"));
             Assert.That(shader, Does.Contain("void WriteDdgiRayResult(uint updateIndex, uint rayIndex, DdgiRayResult result)"));
             Assert.That(shader, Does.Contain("DdgiRayResult ReadDdgiRayResult(uint updateIndex, uint rayIndex)"));
-            Assert.That(shader, Does.Contain("vec3 stableDiffuse = EvaluateStableDdgiDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo);"));
-            Assert.That(shader, Does.Contain("vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo);"));
-            Assert.That(shader, Does.Contain("radiance = surfaceEmissive + emissiveProxyDiffuse + directDiffuse + stableDiffuse;"));
+            Assert.That(shader, Does.Contain("vec3 stableDiffuse = EvaluateStableDdgiDiffuseRadianceAtHit(hitPosition, surface);"));
+            Assert.That(shader, Does.Contain("vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit("));
+            Assert.That(shader, Does.Contain("surface.EmissiveRadiance + emissiveProxyDiffuse"));
+            Assert.That(shader, Does.Contain("radiance = surface.EmissiveRadiance + emissiveProxyDiffuse + directDiffuse + stableDiffuse;"));
             Assert.That(shader, Does.Contain("ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase);"));
             Assert.That(shader, Does.Contain("ReadPackedHalf4(pc.IrradianceAtlasBufferIndex"));
             Assert.That(shader, Does.Contain("DecodeDdgiIrradianceAtlasSqrtSample(ReadPackedHalf4(pc.IrradianceAtlasBufferIndex"));
             Assert.That(shader, Does.Contain("return ResolveDdgiIrradianceAtlasSqrtBlend(mix(mix(s00, s10, fraction.x), mix(s01, s11, fraction.x), fraction.y));"));
             Assert.That(shader, Does.Contain("ReadPackedHalf2(pc.VisibilityAtlasBufferIndex"));
             Assert.That(shader, Does.Contain("vec3 sampledIrradiance = blendedIrradiance / blendedCoverage;"));
-            Assert.That(shader, Does.Contain("return clamp(sampledIrradiance, vec3(0.0), vec3(64.0));"));
+            Assert.That(shader, Does.Contain("vec3(GI_MATERIAL_MAXIMUM_FINITE_RADIANCE)"));
+            Assert.That(shader, Does.Not.Contain("return clamp(sampledIrradiance, vec3(0.0), vec3(64.0));"));
             Assert.That(shader, Does.Not.Contain("rawIrradiance / globalIntensity"));
             Assert.That(schedulePass, Does.Contain("public sealed unsafe class DdgiSchedulePass"));
             Assert.That(schedulePass, Does.Contain("ddgi_schedule_reset.comp.spv"));
@@ -1494,7 +1576,7 @@ public sealed class ShaderBuildTests
         {
             Assert.That(traceShader, Does.Contain("radiance = FetchSceneColor(uv);"));
             Assert.That(traceShader, Does.Contain("accumulatedRadiance += radiance * confidence;"));
-            Assert.That(traceShader, Does.Contain("vec3 energy = accumulatedRadiance * invRayCount * intensity;"));
+            Assert.That(traceShader, Does.Contain("vec3 energy = accumulatedRadiance * invRayCount * intensity * PI;"));
             Assert.That(traceShader, Does.Not.Contain("accumulatedRadiance / accumulatedConfidence"));
             Assert.That(forwardShader, Does.Contain("vec3 nearField = vec3(0.0);"));
             Assert.That(forwardShader, Does.Not.Contain("SampleSsgiDiffuse"));
@@ -1502,13 +1584,13 @@ public sealed class ShaderBuildTests
             Assert.That(forwardShader, Does.Contain("float environmentFallbackWeight = clamp(environmentTrust * effectiveEnvironmentFallbackIntensity, 0.0, 4.0);"));
             Assert.That(forwardShader, Does.Contain("result.diffuse = SafeRadiance(ddgiLowFrequencyField + (environmentFallbackField + nearField) * indirectAoWeight);"));
             Assert.That(forwardShader, Does.Contain("fallbackWeight = hybridDiffuse.environmentFallbackWeight;"));
-            Assert.That(compositeShader, Does.Contain("vec3 receiverAlbedo = clamp(material.rgb"));
-            Assert.That(compositeShader, Does.Contain("float diffuseWeight = 1.0 - clamp(material.a, 0.0, 1.0);"));
+            Assert.That(compositeShader, Does.Contain("vec3 receiverDiffuseReflectance = clamp(material.rgb"));
+            Assert.That(compositeShader, Does.Contain("float materialOcclusion = clamp(material.a, 0.0, 1.0);"));
             Assert.That(compositeShader, Does.Contain("vec3 ComposeScreenSpaceContactGi(vec4 gi, vec4 material)"));
             Assert.That(compositeShader, Does.Not.Contain("float screenSpaceDetailWeight = smoothstep(0.08, 0.75, support);"));
-            Assert.That(compositeShader, Does.Contain("return ssgiDiffuse * receiverAlbedo * diffuseWeight;"));
-            Assert.That(compositeShader, Does.Not.Contain("return ssgiDiffuse * receiverAlbedo * diffuseWeight * screenSpaceDetailWeight;"));
-            Assert.That(compositeShader, Does.Contain("vec3 indirect = ComposeScreenSpaceContactGi(gi, material);"));
+            Assert.That(compositeShader, Does.Contain("EvaluateGiDiffuseFromIrradiance(incidentIrradiance, receiverDiffuseReflectance)"));
+            Assert.That(compositeShader, Does.Contain("ApplyGiMaterialOcclusion("));
+            Assert.That(compositeShader, Does.Contain("vec3 ssgiIndirect = ComposeScreenSpaceContactGi(gi, material);"));
             Assert.That(compositePass, Does.Contain("_renderTargets.GiFinalDiffuse.TransitionToShaderRead(cmd);"));
             Assert.That(compositePass, Does.Contain("_renderTargets.SceneColor.TransitionToColorAttachment(cmd);"));
         });
@@ -1538,11 +1620,18 @@ public sealed class ShaderBuildTests
             Assert.That(forwardShader, Does.Contain("NJULF_SSGI_TRACE_OUTPUT"));
             Assert.That(forwardShader, Does.Contain("FORWARD_SSGI_TRACE_SOURCE_OUTPUT"));
             Assert.That(forwardShader, Does.Contain("layout(location = 1) out vec4 outSsgiTraceSource;"));
-            Assert.That(forwardShader, Does.Contain("WriteSsgiTraceSource(vec4(clamp(directLighting + emissive, vec3(0.0), vec3(64.0)), 1.0));"));
+            Assert.That(forwardShader, Does.Contain("vec3 directDiffuseSource = vec3(0.0);"));
+            Assert.That(forwardShader, Does.Contain("vec3 ssgiDiffuseSource = max(directDiffuseSource, vec3(0.0));"));
+            Assert.That(forwardShader, Does.Contain("vec3 ssgiEmissionSource = max(emissive, vec3(0.0));"));
+            Assert.That(forwardShader, Does.Contain("ssgiDiffuseSource + ssgiEmissionSource"));
             Assert.That(forwardPass, Does.Contain("_renderTargets.SsgiTraceSource.TransitionToColorAttachment(cmd);"));
-            Assert.That(forwardPass, Does.Contain("ColorAttachmentCount = ssgiEnabled ? 2u : 1u"));
+            Assert.That(
+                forwardPass,
+                Does.Contain("ForwardDynamicRenderingContract.ResolveColorAttachmentCount("));
             Assert.That(tracePass, Does.Contain("_renderTargets.SsgiTraceSource.TransitionToShaderRead(cmd);"));
-            Assert.That(meshPipeline, Does.Contain("\"forward_opaque.frag.spv\""));
+            Assert.That(
+                meshPipeline,
+                Does.Contain("$\"forward_opaque{provenanceSuffix}.frag.spv\""));
             Assert.That(meshPipeline, Does.Contain("secondaryColorFormat: forwardSecondaryColorFormat"));
         });
     }
@@ -1572,17 +1661,29 @@ public sealed class ShaderBuildTests
             Assert.That(forwardShader, Does.Contain("#if FORWARD_SSGI_TRACE_SOURCE_OUTPUT"));
             Assert.That(foliageShader, Does.Contain("#if NJULF_SSGI_TRACE_OUTPUT"));
             Assert.That(meshPipeline, Does.Contain("Settings.GlobalIllumination.EffectiveUseSsgi"));
-            Assert.That(meshPipeline, Does.Contain("\"forward_opaque_ddgi.frag.spv\""));
-            Assert.That(meshPipeline, Does.Contain("\"forward_opaque_simple_ddgi.frag.spv\""));
-            Assert.That(meshPipeline, Does.Contain("\"forward_opaque_simple_full_input_ddgi.frag.spv\""));
+            Assert.That(
+                meshPipeline,
+                Does.Contain("$\"forward_opaque_ddgi{provenanceSuffix}.frag.spv\""));
+            Assert.That(
+                meshPipeline,
+                Does.Contain("$\"forward_opaque_simple_ddgi{provenanceSuffix}.frag.spv\""));
+            Assert.That(
+                meshPipeline,
+                Does.Contain("$\"forward_opaque_simple_full_input_ddgi{provenanceSuffix}.frag.spv\""));
             Assert.That(meshPipeline, Does.Contain("Format? forwardSecondaryColorFormat = ssgiEnabled ? colorFormat : null;"));
             Assert.That(foliagePipeline, Does.Contain("Settings.GlobalIllumination.EffectiveUseSsgi"));
-            Assert.That(foliagePipeline, Does.Contain("\"foliage_forward_ssgi.frag.spv\""));
-            Assert.That(foliagePipeline, Does.Contain("\"foliage_forward_ddgi.frag.spv\""));
+            Assert.That(
+                foliagePipeline,
+                Does.Contain("$\"foliage_forward_ssgi{provenanceSuffix}.frag.spv\""));
+            Assert.That(
+                foliagePipeline,
+                Does.Contain("$\"foliage_forward_ddgi{provenanceSuffix}.frag.spv\""));
             Assert.That(foliagePipeline, Does.Contain("Format? foliageSecondaryColorFormat = ssgiEnabled ? colorFormat : null;"));
             Assert.That(foliagePipeline, Does.Contain("secondaryColorFormat: foliageSecondaryColorFormat"));
             Assert.That(forwardPass, Does.Contain("if (ssgiEnabled)"));
-            Assert.That(forwardPass, Does.Contain("ColorAttachmentCount = ssgiEnabled ? 2u : 1u"));
+            Assert.That(
+                forwardPass,
+                Does.Contain("ForwardDynamicRenderingContract.ResolveColorAttachmentCount("));
         });
     }
 
@@ -1618,7 +1719,7 @@ public sealed class ShaderBuildTests
             StringComparison.Ordinal);
         int materialDebugBranch = forwardShader.IndexOf("if (IsMaterialDebugView(debugViewMode))", StringComparison.Ordinal);
         int canonicalTraceSource = forwardShader.IndexOf(
-            "WriteSsgiTraceSource(vec4(clamp(directLighting + emissive, vec3(0.0), vec3(64.0)), 1.0));",
+            "ssgiDiffuseSource + ssgiEmissionSource",
             StringComparison.Ordinal);
         int firstGiDebugReturn = forwardShader.IndexOf(
             "if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT)",
@@ -1652,7 +1753,8 @@ public sealed class ShaderBuildTests
             Assert.That(writeSsgiTraceSource, Does.Contain("outSsgiTraceSource = color;"));
             Assert.That(writeSsgiTraceSource, Does.Contain("#if NJULF_SSGI_TRACE_OUTPUT"));
             Assert.That(foliageShader, Does.Contain("WriteFoliageSsgiTraceSource(vec4(0.0, 0.0, 0.0, 1.0));"));
-            Assert.That(foliageShader, Does.Contain("WriteFoliageSsgiTraceSource(vec4(clamp(foliageLighting, vec3(0.0), vec3(64.0)), 1.0));"));
+            Assert.That(foliageShader, Does.Contain("clamp(foliageDirectLighting + foliageEmission, vec3(0.0), vec3(64.0))"));
+            Assert.That(foliageShader, Does.Not.Contain("clamp(foliageLighting, vec3(0.0), vec3(64.0))"));
         });
     }
 
@@ -1886,6 +1988,46 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float sampledDepth = texture(BindlessTextures[nonuniformEXT(SPOT_SHADOW_ATLAS_TEXTURE_INDEX)], atlasUv).r;"));
             Assert.That(shader, Does.Contain("radius > 0 && PointShadowFaceEdgeDistance(faceUv) <= seamWidth"));
             Assert.That(shader, Does.Contain("shadow.BiasStrengthTexelSize.z <= 0.0"));
+        });
+    }
+
+    [Test]
+    public void ForwardDynamicRendering_PassAndAllOpaqueVariantsShareAttachmentContract()
+    {
+        string forwardPass = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "ForwardPlusPass.cs");
+        string meshPipeline = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "PipelineObjects",
+            "MeshPipeline.cs");
+        string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
+        int sharedForwardProfileUses = meshPipeline.Split(
+            "secondaryColorFormat: forwardSecondaryColorFormat",
+            StringSplitOptions.None).Length - 1;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                forwardPass,
+                Does.Contain("ForwardDynamicRenderingContract.ResolveColorAttachmentCount("));
+            Assert.That(
+                meshPipeline,
+                Does.Contain("ForwardDynamicRenderingContract.ResolveColorAttachmentCount("));
+            Assert.That(sharedForwardProfileUses, Is.EqualTo(6));
+            Assert.That(meshPipeline, Does.Contain("_forwardCompactedPipeline = CreateGraphicsPipeline("));
+            Assert.That(meshPipeline, Does.Contain("_forwardCompactedSimplePipeline = CreateGraphicsPipeline("));
+            Assert.That(meshPipeline, Does.Contain("_forwardCompactedSimpleFullInputPipeline = CreateGraphicsPipeline("));
+            Assert.That(renderer, Does.Contain("bool forwardAttachmentProfileChanged ="));
+            Assert.That(renderer, Does.Contain("if (forwardAttachmentProfileChanged)"));
+            Assert.That(
+                renderer,
+                Does.Contain("_meshPipeline?.Recreate("));
+            Assert.That(
+                renderer,
+                Does.Contain("_foliagePipeline?.Recreate("));
         });
     }
 
@@ -2284,8 +2426,12 @@ public sealed class ShaderBuildTests
             Assert.That(pipeline, Does.Contain("ForwardSimpleGlobalIblPipeline"));
             Assert.That(pipeline, Does.Contain("ForwardCompactedSimpleGlobalIblPipeline"));
             Assert.That(pipeline, Does.Contain("ForwardCompactedSimpleFullInputGlobalIblPipeline"));
-            Assert.That(pipeline, Does.Contain("forward_opaque.frag.spv"));
-            Assert.That(pipeline, Does.Contain("forward_opaque_simple_full_input.frag.spv"));
+            Assert.That(
+                pipeline,
+                Does.Contain("$\"forward_opaque{provenanceSuffix}.frag.spv\""));
+            Assert.That(
+                pipeline,
+                Does.Contain("$\"forward_opaque_simple_full_input{provenanceSuffix}.frag.spv\""));
             Assert.That(taskShader, Does.Contain("SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX"));
             Assert.That(taskShader, Does.Contain("PACKED_SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX"));
             Assert.That(taskShader, Does.Contain("SCENE_SIMPLE_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX"));
@@ -2305,6 +2451,161 @@ public sealed class ShaderBuildTests
         {
             Assert.That(skybox, Does.Contain("sceneData.AnimationDebugView == AnimationDebugView.None"));
             Assert.That(fog, Does.Contain("sceneData.AnimationDebugView == AnimationDebugView.None"));
+        });
+    }
+
+    [Test]
+    public void MaterialAlphaDecision_IsSharedAcrossRasterShadowSsgiDdgiAndFarField()
+    {
+        string alpha = ReadRepoText("Njulf.Shaders", "material_alpha.glsl");
+        string coverage = ReadRepoText("Njulf.Shaders", "material_coverage.glsl");
+        string transport = ReadRepoText("Njulf.Shaders", "gi_material_transport.glsl");
+        string depth = ReadRepoText("Njulf.Shaders", "depth_alpha.frag");
+        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string sceneSurface = ReadRepoText("Njulf.Shaders", "scene_surface.frag");
+        string ddgi = ReadRepoText("Njulf.Shaders", "ddgi_hit_shading.glsl");
+        string ddgiAlpha = ReadRepoText("Njulf.Shaders", "ddgi_alpha_coverage.glsl");
+        string farField = ReadRepoText("Njulf.Shaders", "farfield_voxelize.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(alpha, Does.Contain("alpha >= alphaCutoff"));
+            Assert.That(alpha, Does.Not.Contain("max(alphaCutoff"));
+            Assert.That(alpha, Does.Contain("if (mode == MATERIAL_ALPHA_MODE_BLEND)"));
+            Assert.That(alpha, Does.Contain("return false;"));
+            Assert.That(
+                coverage,
+                Does.Contain("return MaterialAlphaSurvivesRasterCoverage("));
+            Assert.That(
+                transport,
+                Does.Contain("return MaterialAlphaSurvivesRasterCoverage(alpha, alphaMode, alphaCutoff);"));
+            Assert.That(depth, Does.Contain("#include \"material_coverage.glsl\""));
+            Assert.That(forward, Does.Contain("#include \"material_coverage.glsl\""));
+            Assert.That(sceneSurface, Does.Contain("#include \"material_coverage.glsl\""));
+            Assert.That(ddgi, Does.Contain("#include \"ddgi_alpha_coverage.glsl\""));
+            Assert.That(ddgi, Does.Contain("DdgiAlphaCandidateOccupiesOpaqueTransport("));
+            Assert.That(
+                ddgiAlpha,
+                Does.Contain("return MaterialAlphaOccupiesOpaqueTransport("));
+            Assert.That(farField, Does.Contain("MaterialAlphaOccupiesOpaqueTransport("));
+            Assert.That(farField, Does.Not.Contain("FarFieldMaterialSurvivesAlpha"));
+            Assert.That(coverage, Does.Not.Contain("coverage.Alpha >="));
+        });
+    }
+
+    [Test]
+    public void DirectionalGiDiffuse_UsesAngularFresnelWhileIrradianceKeepsHemisphericalResponse()
+    {
+        string transport = ReadRepoText("Njulf.Shaders", "gi_material_transport.glsl");
+        string hitShading = ReadRepoText("Njulf.Shaders", "ddgi_hit_shading.glsl");
+        string direct = ExtractFunction(
+            hitShading,
+            "vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(");
+        string irradiance = ExtractFunction(
+            transport,
+            "vec3 EvaluateGiDiffuseFromIrradiance(");
+        string hemispherical = ExtractFunction(
+            transport,
+            "vec3 EvaluateGiHemisphericalDiffuseReflectance(");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(transport, Does.Contain("vec3 DirectionalDiffuseBase;"));
+            Assert.That(transport, Does.Contain("vec3 DielectricF0;"));
+            Assert.That(transport, Does.Contain("vec3 incomingEnergy ="));
+            Assert.That(transport, Does.Contain("vec3 outgoingEnergy ="));
+            Assert.That(
+                transport,
+                Does.Contain("EvaluateGiFresnelSchlick(dielectricF0, nDotL)"));
+            Assert.That(
+                transport,
+                Does.Contain("EvaluateGiFresnelSchlick(dielectricF0, nDotV)"));
+            Assert.That(direct, Does.Contain("surface.DirectionalDiffuseBase"));
+            Assert.That(direct, Does.Contain("surface.DielectricF0"));
+            Assert.That(
+                transport,
+                Does.Contain(
+                    "const float GI_MATERIAL_SCHLICK_COSINE_WEIGHTED_TRANSMISSION = 20.0 / 21.0;"));
+            Assert.That(
+                hemispherical,
+                Does.Contain("vec3 incomingHemisphericalEnergy ="));
+            Assert.That(
+                hemispherical,
+                Does.Contain("(vec3(1.0) - dielectricF0) *"));
+            Assert.That(
+                hemispherical,
+                Does.Contain("GI_MATERIAL_SCHLICK_COSINE_WEIGHTED_TRANSMISSION"));
+            Assert.That(
+                hemispherical,
+                Does.Contain("incomingHemisphericalEnergy *"));
+            Assert.That(hemispherical, Does.Contain("outgoingEnergy,"));
+            Assert.That(
+                irradiance,
+                Does.Contain("clamp(diffuseReflectance, vec3(0.0), vec3(1.0)) / GI_MATERIAL_PI"));
+        });
+    }
+
+    [Test]
+    public void DdgiDetailedEmission_DiagnosesRawOverflowAndNonFiniteBeforeStorageClamp()
+    {
+        string transport = ReadRepoText(
+            "Njulf.Shaders",
+            "gi_material_transport.glsl").ReplaceLineEndings("\n");
+        string hitShading = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_hit_shading.glsl").ReplaceLineEndings("\n");
+        string evaluate = ExtractFunction(
+            transport,
+            "GiSurfaceSample EvaluateGiTexturedSurface(");
+        string sanitize = ExtractFunction(
+            hitShading,
+            "void RecordAndSanitizeDdgiMaterialSurface(");
+
+        int rawProduct = evaluate.IndexOf(
+            "vec3 rawEmissiveRadiance =",
+            StringComparison.Ordinal);
+        int diagnosticRetention = evaluate.IndexOf(
+            "retainRawEmissionForDiagnostics",
+            StringComparison.Ordinal);
+        int nanCheck = sanitize.IndexOf(
+            "any(isnan(surface.EmissiveRadiance))",
+            StringComparison.Ordinal);
+        int infinityCheck = sanitize.IndexOf(
+            "any(isinf(surface.EmissiveRadiance))",
+            StringComparison.Ordinal);
+        int overflowCheck = sanitize.IndexOf(
+            "any(greaterThan(surface.EmissiveRadiance, vec3(GI_MATERIAL_MAXIMUM_FINITE_RADIANCE)))",
+            StringComparison.Ordinal);
+        int nonFiniteDiagnostic = sanitize.IndexOf(
+            "MATERIAL_GI_NONFINITE_VALUE_COUNTER",
+            StringComparison.Ordinal);
+        int clampedDiagnostic = sanitize.IndexOf(
+            "MATERIAL_GI_CLAMPED_VALUE_COUNTER",
+            StringComparison.Ordinal);
+        int storageClamp = sanitize.IndexOf(
+            "surface.EmissiveRadiance = clamp(",
+            StringComparison.Ordinal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rawProduct, Is.GreaterThanOrEqualTo(0));
+            Assert.That(diagnosticRetention, Is.GreaterThanOrEqualTo(0));
+            Assert.That(diagnosticRetention, Is.LessThan(rawProduct));
+            Assert.That(
+                hitShading,
+                Does.Contain(
+                    "normalize(-rayDirection),\n        true);"));
+            Assert.That(nanCheck, Is.GreaterThanOrEqualTo(0));
+            Assert.That(infinityCheck, Is.GreaterThan(nanCheck));
+            Assert.That(overflowCheck, Is.GreaterThan(infinityCheck));
+            Assert.That(nonFiniteDiagnostic, Is.GreaterThan(overflowCheck));
+            Assert.That(clampedDiagnostic, Is.GreaterThan(nonFiniteDiagnostic));
+            Assert.That(storageClamp, Is.GreaterThan(clampedDiagnostic));
+            Assert.That(
+                sanitize,
+                Does.Contain(
+                    "surface = EmptyGiSurfaceSample("),
+                "NaN/Inf must be replaced with a finite zero-energy surface.");
         });
     }
 

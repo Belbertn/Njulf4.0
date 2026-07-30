@@ -100,6 +100,9 @@ public sealed record CookedMaterialTable(IReadOnlyList<ModelMaterial> Materials)
 {
     public IReadOnlyList<CookedMaterialPipeline> Pipelines { get; init; } = Array.Empty<CookedMaterialPipeline>();
     public IReadOnlyList<CookedMaterialFallback> Fallbacks { get; init; } = Array.Empty<CookedMaterialFallback>();
+    public IReadOnlyList<GiPrimitiveTransportProfile> PrimitiveTransportProfiles { get; init; } = Array.Empty<GiPrimitiveTransportProfile>();
+    public uint PrimitiveTransportAlgorithmVersion { get; init; }
+    public bool HasCompleteTransportMetadata { get; init; }
 }
 public sealed record CookedAnimationPayload(
     IReadOnlyList<Skeleton> Skeletons,
@@ -119,7 +122,32 @@ public sealed record CookedTextureMeta(
     int CookedHeight,
     int MipCount,
     uint VulkanFormat,
-    long EncodedBytes);
+    long EncodedBytes)
+{
+    /// <summary>
+    /// Whole-file identity of the encoded KTX2 payload. SourceHash identifies
+    /// the original authored image; both identities are required so runtime
+    /// transport statistics cannot be paired with substituted cooked pixels.
+    /// </summary>
+    public ulong Ktx2ContentHash { get; init; }
+
+    /// <summary>
+    /// Defaults remain explicitly invalid when older JSON metadata is read.
+    /// Shipping code must never interpret a missing V1 statistic as a valid
+    /// zero-valued profile.
+    /// </summary>
+    public TextureTransportStatistics TransportStatistics { get; init; } =
+        TextureTransportStatistics.Invalid(
+            TextureTransportStatisticsStatus.LegacyMissing,
+            "Legacy cooked texture metadata contains no transport statistics.",
+            0,
+            TextureSemantic.Data,
+            TextureColorSpace.Linear);
+
+    public TextureSemantic Semantic { get; init; } = TextureSemantic.Data;
+    public bool AlphaCoveragePreserved { get; init; }
+    public float? AlphaCoverageCutoff { get; init; }
+}
 
 public sealed record CookedModelAsset(
     CookedModelManifest Manifest,
@@ -134,10 +162,11 @@ internal static class CookedJson
     public static JsonSerializerOptions Options { get; } = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        PropertyNameCaseInsensitive = true,
+        PropertyNameCaseInsensitive = false,
         WriteIndented = false,
         IncludeFields = true,
-        NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals
+        NumberHandling = JsonNumberHandling.Strict,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
     };
 
     public static byte[] Serialize<T>(T value) => JsonSerializer.SerializeToUtf8Bytes(value, Options);
@@ -145,6 +174,7 @@ internal static class CookedJson
     {
         try
         {
+            ValidateUniquePropertyNames(value);
             return JsonSerializer.Deserialize<T>(value, Options)
                 ?? throw new CookedAssetFormatException(path, $"{section} section deserialized to null");
         }
@@ -153,5 +183,57 @@ internal static class CookedJson
         {
             throw new CookedAssetFormatException(path, $"{section} section contains invalid metadata ({ex.Message})");
         }
+    }
+
+    private static void ValidateUniquePropertyNames(
+        ReadOnlySpan<byte> value)
+    {
+        var reader = new Utf8JsonReader(
+            value,
+            new JsonReaderOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+                MaxDepth = Options.MaxDepth == 0 ? 64 : Options.MaxDepth
+            });
+        var scopes = new Stack<HashSet<string>?>();
+        while (reader.Read())
+        {
+            switch (reader.TokenType)
+            {
+                case JsonTokenType.StartObject:
+                    scopes.Push(new HashSet<string>(StringComparer.Ordinal));
+                    break;
+                case JsonTokenType.StartArray:
+                    scopes.Push(null);
+                    break;
+                case JsonTokenType.EndObject:
+                case JsonTokenType.EndArray:
+                    if (scopes.Count == 0)
+                        throw new JsonException("JSON scope ended without a matching start token.");
+                    _ = scopes.Pop();
+                    break;
+                case JsonTokenType.PropertyName:
+                    if (scopes.Count == 0 ||
+                        scopes.Peek() is not HashSet<string> properties)
+                    {
+                        throw new JsonException(
+                            "A JSON property appeared outside an object.");
+                    }
+
+                    string propertyName = reader.GetString() ??
+                        throw new JsonException(
+                            "A JSON property name cannot be null.");
+                    if (!properties.Add(propertyName))
+                    {
+                        throw new JsonException(
+                            $"Duplicate JSON property '{propertyName}' is not allowed.");
+                    }
+                    break;
+            }
+        }
+
+        if (scopes.Count != 0)
+            throw new JsonException("JSON ended before every scope was closed.");
     }
 }

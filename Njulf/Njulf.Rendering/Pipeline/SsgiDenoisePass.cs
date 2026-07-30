@@ -66,8 +66,8 @@ namespace Njulf.Rendering.Pipeline
             if (!execute)
             {
                 _bindlessHeap.RegisterTexture(
-                    BindlessIndex.GiFinalDiffuseTexture,
-                    _renderTargets.GiFinalDiffuse.View,
+                    BindlessIndex.SsgiTraceSourceTexture,
+                    _renderTargets.SsgiTraceSource.View,
                     _bindlessHeap.ScreenSampler,
                     ImageLayout.ShaderReadOnlyOptimal);
             }
@@ -86,7 +86,10 @@ namespace Njulf.Rendering.Pipeline
             _renderTargets.SsgiMomentsB.TransitionToShaderRead(cmd);
             _renderTargets.SsgiHistoryLengthA.TransitionToShaderRead(cmd);
             _renderTargets.SsgiHistoryLengthB.TransitionToShaderRead(cmd);
-            _renderTargets.GiFinalDiffuse.TransitionToStorageWrite(cmd);
+            // SsgiTracePass has finished consuming the forward direct-lighting
+            // source, so phase-reuse that full-resolution image as the denoised
+            // SSGI estimator. GiFinalDiffuse remains the forward GI baseline.
+            _renderTargets.SsgiTraceSource.TransitionToStorageWrite(cmd);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
 
@@ -106,13 +109,13 @@ namespace Njulf.Rendering.Pipeline
                 (uint)Marshal.SizeOf<GPUSsgiDenoisePushConstants>(),
                 &pushConstants);
 
-            Extent2D extent = _renderTargets.GiFinalDiffuse.Extent;
+            Extent2D extent = _renderTargets.SsgiTraceSource.Extent;
             _context.Api.CmdDispatch(cmd, (extent.Width + 7u) / 8u, (extent.Height + 7u) / 8u, 1);
 
-            _renderTargets.GiFinalDiffuse.TransitionToShaderRead(cmd);
+            _renderTargets.SsgiTraceSource.TransitionToShaderRead(cmd);
             _bindlessHeap.RegisterTexture(
-                BindlessIndex.GiFinalDiffuseTexture,
-                _renderTargets.GiFinalDiffuse.View,
+                BindlessIndex.SsgiTraceSourceTexture,
+                _renderTargets.SsgiTraceSource.View,
                 _bindlessHeap.ScreenSampler,
                 ImageLayout.ShaderReadOnlyOptimal);
         }
@@ -163,7 +166,7 @@ namespace Njulf.Rendering.Pipeline
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             Extent2D source = _renderTargets.SsgiFiltered.Extent;
-            Extent2D destination = _renderTargets.GiFinalDiffuse.Extent;
+            Extent2D destination = _renderTargets.SsgiTraceSource.Extent;
             return new GPUSsgiDenoisePushConstants
             {
                 SourceDimensions = new Vector4(
@@ -345,7 +348,7 @@ namespace Njulf.Rendering.Pipeline
 
             var outputInfo = new DescriptorImageInfo
             {
-                ImageView = _renderTargets.GiFinalDiffuse.View,
+                ImageView = _renderTargets.SsgiTraceSource.View,
                 ImageLayout = ImageLayout.General
             };
 

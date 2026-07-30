@@ -9,6 +9,8 @@ public static class CookedPackageSigner
 {
     public const string PublicKeyEnvironmentVariable = "NJULF_COOKED_ASSET_PUBLIC_KEY";
     public const string Algorithm = "ECDSA-P256-SHA256";
+    public const int MaximumDetachedSignatureBytes = 64 * 1024;
+    public const int MaximumPemFileBytes = 1024 * 1024;
 
     public static string SignaturePath(string assetPath) => Path.GetFullPath(assetPath) + ".sig";
 
@@ -40,6 +42,31 @@ public static class CookedPackageSigner
     public static void VerifyRequired(string assetPath, string? publicKeyPathOrPem = null)
     {
         assetPath = Path.GetFullPath(assetPath);
+        VerifyRequiredHash(assetPath, HashFile(assetPath), publicKeyPathOrPem);
+    }
+
+    /// <summary>
+    /// Verifies a detached signature against an exact caller-owned content
+    /// snapshot. The path is used only to locate the signature and report
+    /// diagnostics; the asset path is never reopened for hashing.
+    /// </summary>
+    public static void VerifyRequired(
+        string assetPath,
+        ReadOnlySpan<byte> assetContent,
+        string? publicKeyPathOrPem = null)
+    {
+        assetPath = Path.GetFullPath(assetPath);
+        VerifyRequiredHash(
+            assetPath,
+            SHA256.HashData(assetContent),
+            publicKeyPathOrPem);
+    }
+
+    private static void VerifyRequiredHash(
+        string assetPath,
+        byte[] contentHash,
+        string? publicKeyPathOrPem)
+    {
         string signaturePath = SignaturePath(assetPath);
         if (!File.Exists(signaturePath))
             throw new CookedAssetHashException(assetPath, $"required detached signature '{Path.GetFileName(signaturePath)}' is missing");
@@ -49,7 +76,10 @@ public static class CookedPackageSigner
         CookedDetachedSignature signature;
         try
         {
-            signature = JsonSerializer.Deserialize<CookedDetachedSignature>(File.ReadAllBytes(signaturePath), CookedJson.Options)
+            byte[] signatureContent = ReadBoundedSignature(signaturePath);
+            signature = JsonSerializer.Deserialize<CookedDetachedSignature>(
+                    signatureContent,
+                    CookedJson.Options)
                 ?? throw new JsonException("Signature object is empty.");
         }
         catch (JsonException ex)
@@ -60,17 +90,25 @@ public static class CookedPackageSigner
             throw new CookedAssetHashException(assetPath, $"unsupported signature algorithm '{signature.Algorithm}'");
         try
         {
-            byte[] hash = HashFile(assetPath);
-            if (!CryptographicOperations.FixedTimeEquals(hash, Convert.FromHexString(signature.Sha256)))
+            if (!CryptographicOperations.FixedTimeEquals(
+                    contentHash,
+                    Convert.FromHexString(signature.Sha256)))
+            {
                 throw new CookedAssetHashException(assetPath, "detached signature content hash does not match the file");
+            }
             using ECDsa key = ECDsa.Create();
             key.ImportFromPem(ReadPem(publicKeyPathOrPem));
             byte[] exported = key.ExportSubjectPublicKeyInfo();
             string fingerprint = Convert.ToHexStringLower(SHA256.HashData(exported));
             if (!string.Equals(fingerprint, signature.PublicKeyFingerprint, StringComparison.OrdinalIgnoreCase))
                 throw new CookedAssetHashException(assetPath, "detached signature public-key fingerprint does not match");
-            if (!key.VerifyHash(hash, Convert.FromBase64String(signature.Signature), DSASignatureFormat.Rfc3279DerSequence))
+            if (!key.VerifyHash(
+                    contentHash,
+                    Convert.FromBase64String(signature.Signature),
+                    DSASignatureFormat.Rfc3279DerSequence))
+            {
                 throw new CookedAssetHashException(assetPath, "detached signature verification failed");
+            }
         }
         catch (CookedAssetHashException)
         {
@@ -88,7 +126,61 @@ public static class CookedPackageSigner
         return SHA256.HashData(stream);
     }
 
-    private static string ReadPem(string pathOrPem) => File.Exists(pathOrPem) ? File.ReadAllText(Path.GetFullPath(pathOrPem)) : pathOrPem;
+    private static string ReadPem(string pathOrPem)
+    {
+        if (!File.Exists(pathOrPem))
+            return pathOrPem;
+
+        byte[] snapshot = AssetArtifactFileIo.ReadBoundedSnapshot(
+            Path.GetFullPath(pathOrPem),
+            MaximumPemFileBytes,
+            "Cooked signing key");
+        return System.Text.Encoding.UTF8.GetString(snapshot);
+    }
+
+    private static byte[] ReadBoundedSignature(string signaturePath)
+    {
+        try
+        {
+            using var stream = new FileStream(
+                signaturePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                4096,
+                FileOptions.SequentialScan);
+            if (stream.Length > MaximumDetachedSignatureBytes)
+            {
+                throw new CookedAssetHashException(
+                    signaturePath,
+                    $"detached signature contains {stream.Length} bytes; the runtime " +
+                    $"limit is {MaximumDetachedSignatureBytes} bytes");
+            }
+
+            var content = GC.AllocateUninitializedArray<byte>(
+                checked((int)stream.Length));
+            stream.ReadExactly(content);
+            if (stream.ReadByte() != -1)
+            {
+                throw new CookedAssetHashException(
+                    signaturePath,
+                    "detached signature changed while its immutable snapshot was read");
+            }
+
+            return content;
+        }
+        catch (CookedAssetHashException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+            when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new CookedAssetHashException(
+                signaturePath,
+                $"detached signature could not be read ({exception.Message})");
+        }
+    }
 
     private static void WriteTextAtomic(string path, string text) => WriteBytesAtomic(path, System.Text.Encoding.UTF8.GetBytes(text));
 
@@ -96,12 +188,25 @@ public static class CookedPackageSigner
     {
         string fullPath = Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-        string temporary = fullPath + $".{Environment.ProcessId}.tmp";
-        using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
+        string temporary = fullPath + $".{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+        try
         {
-            stream.Write(bytes);
-            stream.Flush(flushToDisk: true);
+            using (var stream = new FileStream(
+                       temporary,
+                       FileMode.CreateNew,
+                       FileAccess.Write,
+                       FileShare.None))
+            {
+                stream.Write(bytes);
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.Move(temporary, fullPath, overwrite: true);
         }
-        File.Move(temporary, fullPath, overwrite: true);
+        finally
+        {
+            if (File.Exists(temporary))
+                File.Delete(temporary);
+        }
     }
 }

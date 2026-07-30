@@ -154,7 +154,9 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadGraphicsStorage(RenderGraphResourceId.FullDdgiState),
                 ReadWriteGraphicsStorage(RenderGraphResourceId.RendererDiagnosticsBuffer),
                 WriteColorAttachment(RenderGraphResourceId.SceneColor),
-                WriteColorAttachment(RenderGraphResourceId.SsgiTraceSource))
+                WriteColorAttachment(RenderGraphResourceId.SsgiTraceSource),
+                WriteColorAttachment(RenderGraphResourceId.GiFinalDiffuse),
+                WriteColorAttachment(RenderGraphResourceId.MaterialTransportProvenance))
             : Pass("ForwardPlusPass",
                 ReadDepthAttachment(RenderGraphResourceId.SceneDepth),
                 Read(RenderGraphResourceId.SceneSubmissionBuffers),
@@ -178,7 +180,8 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadGraphicsStorage(RenderGraphResourceId.FullDdgiAtlases),
                 ReadGraphicsStorage(RenderGraphResourceId.FullDdgiState),
                 ReadWriteGraphicsStorage(RenderGraphResourceId.RendererDiagnosticsBuffer),
-                WriteColorAttachment(RenderGraphResourceId.SceneColor)));
+                WriteColorAttachment(RenderGraphResourceId.SceneColor),
+                WriteColorAttachment(RenderGraphResourceId.MaterialTransportProvenance)));
 
         if (includeSsgi)
         {
@@ -210,12 +213,25 @@ internal sealed class ProductionRenderPipelineDeclaration
                     ReadComputeSampled(RenderGraphResourceId.SceneNormal),
                     ReadComputeSampled(RenderGraphResourceId.SsgiMoments),
                     ReadComputeSampled(RenderGraphResourceId.SsgiHistoryLength),
-                    WriteComputeStorage(RenderGraphResourceId.GiFinalDiffuse, ImageLayout.ShaderReadOnlyOptimal)),
+                    // SsgiTraceSource is dead after tracing and is deliberately
+                    // phase-reused for the full-resolution denoised estimator.
+                    WriteComputeStorage(RenderGraphResourceId.SsgiTraceSource, ImageLayout.ShaderReadOnlyOptimal)),
             Pass("SsgiCompositePass",
                 ReadFragmentSampled(RenderGraphResourceId.GiFinalDiffuse),
+                ReadFragmentSampled(RenderGraphResourceId.SsgiTraceSource),
                 ReadFragmentSampled(RenderGraphResourceId.SceneMaterial),
+                ReadFragmentSampled(RenderGraphResourceId.MaterialTransportProvenance),
                 ReadWriteColorAttachment(RenderGraphResourceId.SceneColor))
             ]);
+        }
+        else
+        {
+            // The compact provenance diagnostic is emitted directly by the
+            // forward pass and remains available in DDGI-only configurations.
+            declarations.Add(
+                Pass("SsgiCompositePass",
+                    ReadFragmentSampled(RenderGraphResourceId.MaterialTransportProvenance),
+                    ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)));
         }
 
         // DDGI update runs after ForwardPlusPass and publishes cache data for subsequent frames.
@@ -446,6 +462,11 @@ internal sealed class ProductionRenderPipelineDeclaration
             OwnedImageResource(RenderGraphResourceId.AmbientOcclusionBlurred, "Ambient occlusion blurred", RenderTargetManager.AmbientOcclusionFormat, RenderGraphResourceSizePolicy.HalfResolution),
             OwnedImageResource(RenderGraphResourceId.AmbientOcclusionScratch, "Ambient occlusion scratch", RenderTargetManager.AmbientOcclusionFormat, RenderGraphResourceSizePolicy.HalfResolution),
             .. CreateSsgiResourceDescriptors(includeSsgi),
+            OwnedImageResource(
+                RenderGraphResourceId.MaterialTransportProvenance,
+                "Material transport provenance",
+                RenderTargetManager.MaterialTransportProvenanceFormat,
+                RenderGraphResourceSizePolicy.SceneResolution),
             BufferSetResource(RenderGraphResourceId.DdgiProbeResources, "DDGI probe resources"),
             BufferSetResource(RenderGraphResourceId.TlasStorage, "TLAS storage"),
             BufferSetResource(RenderGraphResourceId.RayQueryInstanceMetadata, "Ray-query instance metadata"),
@@ -666,8 +687,7 @@ internal sealed class ProductionRenderPipelineDeclaration
             "SceneSurfacePass" or
             "SsgiTracePass" or
             "SsgiTemporalPass" or
-            "SsgiDenoisePass" or
-            "SsgiCompositePass";
+            "SsgiDenoisePass";
     }
 
     private static RenderGraphPassResourceDeclaration Pass(string passName, params RenderGraphResourceUsage[] usages)

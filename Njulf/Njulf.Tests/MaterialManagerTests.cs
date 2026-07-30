@@ -1,5 +1,7 @@
 using System.Linq;
+using Njulf.Assets.Scenes;
 using Njulf.Core.Math;
+using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Resources;
@@ -10,6 +12,27 @@ namespace Njulf.Tests
     [TestFixture]
     public class MaterialManagerTests
     {
+        [Test]
+        public void Constructor_DefaultsCanonicalMaterialsToLegacyTransport()
+        {
+            using var manager = new MaterialManager();
+
+            GPUMaterialData material =
+                manager.GetMaterialData(manager.DefaultMaterialHandle);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(manager.TransportV2Enabled, Is.False);
+                Assert.That(
+                    ((GiMaterialTransportFlags)material.TransportFlags)
+                    .HasFlag(GiMaterialTransportFlags.LegacyV1Fallback),
+                    Is.True);
+                Assert.That(
+                    manager.Diagnostics.ActiveLegacyV1FallbackCount,
+                    Is.EqualTo(1));
+            });
+        }
+
         [Test]
         public void UpdateMaterial_InvalidatesDeduplicationAndMarksContentDirty()
         {
@@ -157,6 +180,8 @@ namespace Njulf.Tests
             MaterialHandle firstHandle = manager.RegisterMaterial(first);
             MaterialHandle secondHandle = manager.RegisterMaterial(second);
             GPUMaterialData[] snapshot = manager.GetMaterialDataSnapshot();
+            first.TransportFlags |= (uint)GiMaterialTransportFlags.LegacyV1Fallback;
+            second.TransportFlags |= (uint)GiMaterialTransportFlags.LegacyV1Fallback;
 
             Assert.Multiple(() =>
             {
@@ -193,6 +218,71 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ExtensionStorage_IsReusedAcrossAuthoredTogglesAndSlotDestruction()
+        {
+            using var manager = new MaterialManager();
+            var extensionDefinition = new MaterialDefinition
+            {
+                Name = "ExtensionChurn",
+                FeatureFlags = MaterialFeatureFlags.Clearcoat,
+                Extensions = new MaterialExtensionDefinition
+                {
+                    ClearcoatFactor = 0.5f,
+                    ClearcoatRoughness = 0.25f
+                }
+            };
+            MaterialHandle handle =
+                manager.RegisterMaterialDefinition(extensionDefinition);
+            int originalExtensionIndex =
+                manager.GetMaterialData(handle).ExtensionDataIndex;
+
+            for (int iteration = 0; iteration < 32; iteration++)
+            {
+                manager.UpdateMaterialDefinition(
+                    handle,
+                    extensionDefinition with
+                    {
+                        FeatureFlags = MaterialFeatureFlags.None,
+                        Extensions = MaterialExtensionDefinition.None
+                    });
+                Assert.That(
+                    manager.GetMaterialData(handle).ExtensionDataIndex,
+                    Is.EqualTo(-1),
+                    $"extension removal {iteration}");
+
+                manager.UpdateMaterialDefinition(
+                    handle,
+                    extensionDefinition with
+                    {
+                        Extensions = extensionDefinition.Extensions with
+                        {
+                            ClearcoatFactor = 0.25f + iteration * 0.01f
+                        }
+                    });
+                Assert.That(
+                    manager.GetMaterialData(handle).ExtensionDataIndex,
+                    Is.EqualTo(originalExtensionIndex),
+                    $"extension recreation {iteration}");
+            }
+
+            manager.DestroyMaterial(handle);
+            MaterialHandle replacement =
+                manager.RegisterMaterialDefinition(extensionDefinition with
+                {
+                    Name = "ExtensionReplacement"
+                });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(originalExtensionIndex, Is.GreaterThanOrEqualTo(0));
+                Assert.That(
+                    manager.GetMaterialData(replacement).ExtensionDataIndex,
+                    Is.EqualTo(originalExtensionIndex));
+                Assert.That(manager.MaterialExtensionDataCount, Is.EqualTo(1));
+            });
+        }
+
+        [Test]
         public void InvalidExtensionTextureIndex_IsRejectedWithFieldName()
         {
             using var manager = new MaterialManager();
@@ -225,6 +315,72 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void Diagnostics_ReportCurrentFallbackAndInvalidProfileGauges()
+        {
+            using var manager = new MaterialManager();
+            manager.SetTransportV2Enabled(true);
+            MaterialHandle authored = manager.RegisterMaterialDefinition(
+                new MaterialDefinition { Name = "Authored" });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(manager.Diagnostics.ActiveLegacyV1FallbackCount, Is.Zero);
+                Assert.That(manager.Diagnostics.ActiveInvalidProfileCount, Is.Zero);
+            });
+
+            manager.SetTransportV2Enabled(false);
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    manager.Diagnostics.ActiveLegacyV1FallbackCount,
+                    Is.EqualTo(2),
+                    "The permanent default and the authored material are both active rollback payloads.");
+                Assert.That(manager.Diagnostics.ActiveInvalidProfileCount, Is.Zero);
+            });
+
+            manager.SetTransportV2Enabled(true);
+            MaterialHandle legacy = manager.RegisterMaterial(
+                CreateGpuMaterial(8, 9, 10, 11));
+            Assert.Multiple(() =>
+            {
+                Assert.That(manager.Diagnostics.ActiveLegacyV1FallbackCount, Is.EqualTo(1));
+                Assert.That(manager.Diagnostics.ActiveInvalidProfileCount, Is.EqualTo(1));
+                Assert.That(manager.Diagnostics.LegacyV1FallbackCount, Is.EqualTo(1));
+            });
+
+            manager.DestroyMaterial(legacy);
+            Assert.Multiple(() =>
+            {
+                Assert.That(manager.Diagnostics.ActiveLegacyV1FallbackCount, Is.Zero);
+                Assert.That(manager.Diagnostics.ActiveInvalidProfileCount, Is.Zero);
+            });
+            manager.DestroyMaterial(authored);
+        }
+
+        [Test]
+        public void RawEditOfAuthoredMaterial_IsReclassifiedAsActiveV1Fallback()
+        {
+            using var manager = new MaterialManager();
+            manager.SetTransportV2Enabled(true);
+            MaterialHandle handle = manager.RegisterMaterialDefinition(
+                new MaterialDefinition { Name = "AuthoredThenRawEdited" });
+            GPUMaterialData raw = manager.GetMaterialData(handle);
+            raw.Albedo.X = 0.25f;
+
+            manager.UpdateMaterial(handle, raw);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(manager.Diagnostics.ActiveLegacyV1FallbackCount, Is.EqualTo(1));
+                Assert.That(manager.Diagnostics.ActiveInvalidProfileCount, Is.EqualTo(1));
+                Assert.That(
+                    ((GiMaterialTransportFlags)manager.GetMaterialData(handle).TransportFlags)
+                        .HasFlag(GiMaterialTransportFlags.LegacyV1Fallback),
+                    Is.True);
+            });
+        }
+
+        [Test]
         public void ContentRevision_IsStableForDeduplicationAndChangesWhenASlotIsReused()
         {
             using var manager = new MaterialManager();
@@ -243,6 +399,55 @@ namespace Njulf.Tests
                 Assert.That(manager.GetMaterialContentRevision(-1), Is.EqualTo(0u));
                 Assert.That(replacement.Index, Is.EqualTo(first.Index));
                 Assert.That(replacementRevision, Is.Not.EqualTo(firstRevision));
+            });
+        }
+
+        [Test]
+        public void SceneOverride_RejectsInvalidAlphaBeforeCopyOnWriteAndPreservesCutoffAboveOne()
+        {
+            using var manager = new MaterialManager();
+            MaterialHandle original = manager.RegisterMaterialDefinition(
+                new MaterialDefinition
+                {
+                    Name = "Scene alpha override",
+                    AlphaMode = MaterialAlphaMode.Mask,
+                    AlphaCutoff = 0.5f
+                });
+            var renderObject = new RenderObject { Name = "Masked card", Material = original };
+            var store = new MaterialManagerSceneMaterialOverrideStore(manager);
+            int materialCountBeforeInvalidEdit = manager.RegisteredMaterialCount;
+
+            Assert.That(
+                () => store.Apply(
+                    renderObject,
+                    new SceneMaterialOverrideDocument { AlphaCutoff = -0.01f }),
+                Throws.InstanceOf<ArgumentOutOfRangeException>());
+            Assert.That(
+                () => store.Apply(
+                    renderObject,
+                    new SceneMaterialOverrideDocument { Metallic = float.NaN }),
+                Throws.InstanceOf<ArgumentOutOfRangeException>());
+            Assert.That(
+                () => store.Apply(
+                    renderObject,
+                    new SceneMaterialOverrideDocument { ShadingModel = "future-unknown-model" }),
+                Throws.InstanceOf<ArgumentOutOfRangeException>());
+            Assert.Multiple(() =>
+            {
+                Assert.That(renderObject.Material, Is.EqualTo(original));
+                Assert.That(manager.RegisteredMaterialCount, Is.EqualTo(materialCountBeforeInvalidEdit));
+                Assert.That(manager.GetMaterialDefinition(original).AlphaCutoff, Is.EqualTo(0.5f));
+            });
+
+            store.Apply(
+                renderObject,
+                new SceneMaterialOverrideDocument { AlphaCutoff = 1.25f });
+            MaterialHandle edited = (MaterialHandle)renderObject.Material!;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(manager.GetMaterialDefinition(edited).AlphaCutoff, Is.EqualTo(1.25f));
+                Assert.That(store.Capture(renderObject)!.AlphaCutoff, Is.EqualTo(1.25f));
             });
         }
 

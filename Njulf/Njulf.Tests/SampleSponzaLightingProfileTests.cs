@@ -70,8 +70,8 @@ public sealed class SampleSponzaLightingProfileTests
 
     private static SourceSun ReadSourceSun()
     {
-        string path = Path.Combine(
-            TestContext.CurrentContext.TestDirectory,
+        string path = ResolveRepositoryFile(
+            "NjulfHelloGame",
             "NewSponza_Main_glTF_003.gltf");
         using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
         JsonElement root = document.RootElement;
@@ -95,6 +95,22 @@ public sealed class SampleSponzaLightingProfileTests
             Vector3.Normalize(target - sun),
             sourceLight.GetProperty("type").GetString() ?? string.Empty,
             sourceLight.GetProperty("intensity").GetSingle());
+    }
+
+    private static string ResolveRepositoryFile(params string[] relativeParts)
+    {
+        DirectoryInfo? directory = new(TestContext.CurrentContext.TestDirectory);
+        while (directory is not null)
+        {
+            string candidate = Path.Combine(
+                new[] { directory.FullName }.Concat(relativeParts).ToArray());
+            if (File.Exists(candidate))
+                return candidate;
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException(
+            $"Could not locate repository file '{Path.Combine(relativeParts)}'.");
     }
 
     private static Vector3 ReadNodeTranslation(JsonElement nodes, string name)

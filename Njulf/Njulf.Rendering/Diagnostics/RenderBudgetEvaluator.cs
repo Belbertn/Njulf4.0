@@ -10,6 +10,28 @@ namespace Njulf.Rendering.Diagnostics
         public const double WarningRatio = 0.85;
         public const double MaxDefaultSsgiResolutionScale = 0.5;
         public const int MaxDefaultSsgiRayCount = 8;
+        public const string MaterialGiQualificationMetricName =
+            "Material GI release qualification";
+        public const string MaterialGiActiveV1FallbackMetricName =
+            "Material GI active V1 fallbacks";
+        public const string MaterialGiActiveInvalidProfileMetricName =
+            "Material GI active invalid profiles";
+        public const string MaterialGiCompileP95MetricName =
+            "Material GI compile P95";
+        public const string MaterialGiUploadP95MetricName =
+            "Material GI upload P95";
+        public const string MaterialGiPipelineP95MetricName =
+            "Material GI compile/upload P95";
+        public const string MaterialGiPrimitiveProfileMemoryMetricName =
+            "Material GI primitive profile memory";
+        public const string DdgiEmissiveTruncatedSourceMetricName =
+            "DDGI emissive truncated sources";
+        public const string DdgiEmissiveSkippedEnergyMetricName =
+            "DDGI emissive skipped energy";
+        public const string DdgiEmissiveUnsupportedSkinnedObjectMetricName =
+            "DDGI emissive unsupported skinned objects";
+        public const string DdgiEmissiveUnsupportedSkinnedImportanceMetricName =
+            "DDGI emissive unsupported skinned importance";
         // "GPU memory" remains the compatibility metric consumed by renderer diagnostics:
         // driver heap usage when available, otherwise tracked allocations. When the driver
         // reports a heap budget, the tracked allocation budget is emitted separately.
@@ -30,6 +52,17 @@ namespace Njulf.Rendering.Diagnostics
                 return RenderBudgetStatus.Warning;
             return RenderBudgetStatus.WithinBudget;
         }
+
+        public static ulong ResolvePrimitiveProfileMemoryBudgetBytes(
+            RenderQualityPreset qualityPreset) => qualityPreset switch
+            {
+                RenderQualityPreset.Low => 1UL * 1024UL * 1024UL,
+                RenderQualityPreset.Medium => 4UL * 1024UL * 1024UL,
+                RenderQualityPreset.High => 12UL * 1024UL * 1024UL,
+                RenderQualityPreset.DdgiHigh => 16UL * 1024UL * 1024UL,
+                RenderQualityPreset.Ultra => MaterialManager.MaximumPrimitiveProfileGpuBytes,
+                _ => throw new ArgumentOutOfRangeException(nameof(qualityPreset))
+            };
 
         public RenderBudgetSnapshot Evaluate(
             RenderBudgetProfile profile,
@@ -54,7 +87,8 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.FoliageClusterBufferBytes +
                 diagnostics.FoliageDrawBufferBytes +
                 diagnostics.FoliageImpostorAtlasBytes;
-            GiResidencySnapshot giResidency = GiResidencyReporter.Create(diagnostics, memory);
+            GiResidencySnapshot giResidency =
+                GiResidencyReporter.Create(diagnostics, memory, profile);
             // The historical aggregate includes manager counters that can overlap tracked
             // allocations. Keep the legacy metric below for compatibility, but do not use it as
             // a release gate. Unique residency is reported from disjoint sources instead.
@@ -86,6 +120,26 @@ namespace Njulf.Rendering.Diagnostics
                 (hasForwardGiIncrementalTiming ? diagnostics.GpuForwardGiIncrementalMicroseconds : 0);
             bool giGpuTimingComplete = diagnostics.GpuTimingValid != 0 &&
                 (!forwardGiRequired || hasForwardGiIncrementalTiming);
+            bool materialGiV2Active =
+                diagnostics.MaterialGiV2ActiveFeatures != MaterialGiV2Feature.None;
+            bool materialTransportV2Active =
+                (diagnostics.MaterialGiV2ActiveFeatures &
+                 MaterialGiV2Feature.MaterialTransport) != 0;
+            bool emissiveMeshSamplingV2Active =
+                (diagnostics.MaterialGiV2ActiveFeatures &
+                 MaterialGiV2Feature.EmissiveMeshSampling) != 0;
+            bool materialGiTimingApplicable =
+                diagnostics.GlobalIlluminationEnabled != 0 &&
+                materialTransportV2Active;
+            RenderBudgetStatus? emissiveMeshSamplingGateStatus =
+                diagnostics.GlobalIlluminationEnabled == 0 ||
+                !emissiveMeshSamplingV2Active
+                    ? RenderBudgetStatus.Unavailable
+                    : null;
+            double ddgiEmissiveTruncatedSourceCount = Math.Max(
+                0.0,
+                (double)diagnostics.DdgiEmissiveTriangleCandidateCount -
+                Math.Max(diagnostics.DdgiEmissiveTriangleBudget, 0));
             int ddgiFullUpdateFailureThreshold = diagnostics.DdgiActiveProbeCount > 0
                 ? Math.Max(0, diagnostics.DdgiActiveProbeCount - 1)
                 : 0;
@@ -103,7 +157,7 @@ namespace Njulf.Rendering.Diagnostics
                         profile.DdgiProbeBudget,
                         "count",
                         diagnostics.GlobalIlluminationEnabled == 0 ? RenderBudgetStatus.Unavailable : null);
-            var metrics = new List<BudgetMetric>(hasActualGpuMemoryBudget ? 32 : 31)
+            var metrics = new List<BudgetMetric>(hasActualGpuMemoryBudget ? 40 : 39)
             {
                 CreateMetric("CPU renderer", diagnostics.CpuTotalDrawSceneMicroseconds / 1000.0, profile.CpuFrameBudgetMilliseconds, "ms"),
                 CreateMetric("GPU frame", diagnostics.GpuFrameMicroseconds / 1000.0, profile.GpuFrameBudgetMilliseconds, "ms",
@@ -117,6 +171,92 @@ namespace Njulf.Rendering.Diagnostics
                 CreateMetric("Foliage grass blades", diagnostics.FoliageGrassBladeEstimate, profile.FoliageGrassBladeBudget, "count"),
                 CreateMetric("Foliage memory", foliageMemoryBytes, profile.FoliageMemoryBudgetBytes, "bytes"),
                 CreateMetric("Materials", diagnostics.MaterialCount, profile.MaterialBudget, "count"),
+                CreateMetric(
+                    MaterialGiPrimitiveProfileMemoryMetricName,
+                    diagnostics.MaterialPrimitiveProfileGpuBytes,
+                    ResolvePrimitiveProfileMemoryBudgetBytes(diagnostics.ActiveQualityPreset),
+                    "bytes",
+                    !materialTransportV2Active ? RenderBudgetStatus.Unavailable : null),
+                CreateHardLimitMetric("Material GI non-finite values", diagnostics.MaterialNonFiniteValueCount, 0, "count",
+                    diagnostics.GlobalIlluminationEnabled == 0 ? RenderBudgetStatus.Unavailable : null),
+                CreateHardLimitMetric("Material GI clamped values", diagnostics.MaterialClampedValueCount, 0, "count",
+                    diagnostics.GlobalIlluminationEnabled == 0 ? RenderBudgetStatus.Unavailable : null),
+                CreateHardLimitMetric("Material alpha candidate limit", diagnostics.MaterialAlphaCandidateLimitReachedCount, 0, "rays",
+                    diagnostics.GlobalIlluminationEnabled == 0 ? RenderBudgetStatus.Unavailable : null),
+                CreateHardLimitMetric(
+                    MaterialGiQualificationMetricName,
+                    diagnostics.MaterialGiReleaseQualificationFailureCount,
+                    0,
+                    "failures",
+                    !materialGiV2Active ||
+                    diagnostics.MaterialGiReleaseQualificationRequired == 0
+                        ? RenderBudgetStatus.Unavailable
+                        : null),
+                CreateHardLimitMetric(
+                    MaterialGiActiveV1FallbackMetricName,
+                    diagnostics.MaterialActiveLegacyV1FallbackCount,
+                    0,
+                    "materials",
+                    !materialTransportV2Active
+                        ? RenderBudgetStatus.Unavailable
+                        : null),
+                CreateHardLimitMetric(
+                    MaterialGiActiveInvalidProfileMetricName,
+                    diagnostics.MaterialActiveInvalidProfileCount,
+                    0,
+                    "materials",
+                    !materialTransportV2Active
+                        ? RenderBudgetStatus.Unavailable
+                        : null),
+                CreateZeroGateMetric(
+                    DdgiEmissiveTruncatedSourceMetricName,
+                    ddgiEmissiveTruncatedSourceCount,
+                    "sources",
+                    emissiveMeshSamplingGateStatus),
+                CreateZeroGateMetric(
+                    DdgiEmissiveSkippedEnergyMetricName,
+                    diagnostics.DdgiEmissiveSkippedEnergyFraction,
+                    "fraction",
+                    emissiveMeshSamplingGateStatus),
+                CreateZeroGateMetric(
+                    DdgiEmissiveUnsupportedSkinnedObjectMetricName,
+                    diagnostics.DdgiEmissiveSkippedSkinnedObjectCount,
+                    "objects",
+                    emissiveMeshSamplingGateStatus),
+                CreateZeroGateMetric(
+                    DdgiEmissiveUnsupportedSkinnedImportanceMetricName,
+                    diagnostics.DdgiEmissiveSkippedSkinnedImportance,
+                    "importance",
+                    emissiveMeshSamplingGateStatus),
+                CreateMetric(
+                    MaterialGiCompileP95MetricName,
+                    diagnostics.MaterialCompileP95Microseconds / 1000.0,
+                    profile.GlobalIlluminationCpuBudgetMilliseconds,
+                    "ms",
+                    !materialGiTimingApplicable ||
+                    diagnostics.MaterialCompileTimingSampleCount <= 0
+                        ? RenderBudgetStatus.Unavailable
+                        : null),
+                CreateMetric(
+                    MaterialGiUploadP95MetricName,
+                    diagnostics.MaterialUploadP95Microseconds / 1000.0,
+                    profile.GlobalIlluminationCpuBudgetMilliseconds,
+                    "ms",
+                    !materialGiTimingApplicable ||
+                    diagnostics.MaterialUploadTimingSampleCount <= 0
+                        ? RenderBudgetStatus.Unavailable
+                        : null),
+                CreateMetric(
+                    MaterialGiPipelineP95MetricName,
+                    (diagnostics.MaterialCompileP95Microseconds +
+                     diagnostics.MaterialUploadP95Microseconds) / 1000.0,
+                    profile.GlobalIlluminationCpuBudgetMilliseconds,
+                    "ms",
+                    !materialGiTimingApplicable ||
+                    diagnostics.MaterialCompileTimingSampleCount <= 0 ||
+                    diagnostics.MaterialUploadTimingSampleCount <= 0
+                        ? RenderBudgetStatus.Unavailable
+                        : null),
                 CreateMetric("Textures", diagnostics.TextureCount, profile.TextureBudget, "count"),
                 CreateMetric("Lights", diagnostics.LightCount, profile.LightBudget, "count"),
                 CreateMetric("Shadowed lights", diagnostics.SpotShadowSelectedCount + diagnostics.PointShadowSelectedCount + (diagnostics.ShadowedDirectionalLightIndex >= 0 ? 1 : 0), profile.ShadowedLightBudget, "count"),
@@ -226,6 +366,19 @@ namespace Njulf.Rendering.Diagnostics
                 failureThreshold,
                 unit,
                 forcedStatus ?? ClassifyHardLimit(value, failureThreshold));
+        }
+
+        private static BudgetMetric CreateZeroGateMetric(
+            string name,
+            double value,
+            string unit,
+            RenderBudgetStatus? forcedStatus = null)
+        {
+            RenderBudgetStatus status = forcedStatus ??
+                (double.IsFinite(value) && value == 0.0
+                    ? RenderBudgetStatus.WithinBudget
+                    : RenderBudgetStatus.OverBudget);
+            return new BudgetMetric(name, value, 0.0, 0.0, unit, status);
         }
 
         private static RenderBudgetStatus ClassifyHardLimit(double value, double failureThreshold)

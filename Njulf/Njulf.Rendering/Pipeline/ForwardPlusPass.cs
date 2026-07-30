@@ -30,7 +30,7 @@ namespace Njulf.Rendering.Pipeline
         private bool _lastGlobalIlluminationEnabled;
         private GlobalIlluminationMode _lastGlobalIlluminationMode = GlobalIlluminationMode.Disabled;
         private float _lastGlobalIlluminationResolutionScale = -1.0f;
-        
+
         public ForwardPlusPass(
             VulkanContext context,
             SwapchainManager swapchain,
@@ -50,11 +50,11 @@ namespace Njulf.Rendering.Pipeline
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         }
-        
+
         public override void Initialize()
         {
         }
-        
+
         public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
         {
             if (!sceneData.HasCurrentDepthPrePass)
@@ -72,14 +72,21 @@ namespace Njulf.Rendering.Pipeline
             ResetGlobalIlluminationHistoryIfInputsChanged();
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             bool ssgiEnabled = ShouldApplySsgi(sceneData);
+            bool materialTransportProvenanceEnabled =
+                ShouldWriteMaterialTransportProvenance();
             SetFullViewportAndScissor(cmd, renderExtent);
             BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
-            
+
             _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
             if (ssgiEnabled)
+            {
                 _renderTargets.SsgiTraceSource.TransitionToColorAttachment(cmd);
+                _renderTargets.GiFinalDiffuse.TransitionToColorAttachment(cmd);
+            }
+            if (materialTransportProvenanceEnabled)
+                _renderTargets.MaterialTransportProvenance.TransitionToColorAttachment(cmd);
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
-            
+
             var colorAttachment = ColorAttachment(
                 _renderTargets.SceneColor.View,
                 ImageLayout.ColorAttachmentOptimal,
@@ -90,16 +97,34 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.ClearColor.Y,
                     sceneData.ClearColor.Z,
                     sceneData.ClearColor.W)));
-            var colorAttachments = stackalloc RenderingAttachmentInfo[2];
+            var colorAttachments = stackalloc RenderingAttachmentInfo[4];
             colorAttachments[0] = colorAttachment;
+            int nextColorAttachment = 1;
             if (ssgiEnabled)
             {
-                colorAttachments[1] = ColorAttachment(
+                colorAttachments[nextColorAttachment++] = ColorAttachment(
                     _renderTargets.SsgiTraceSource.View,
                     ImageLayout.ColorAttachmentOptimal,
                     AttachmentLoadOp.Clear,
                     AttachmentStoreOp.Store,
                     new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f)));
+                colorAttachments[nextColorAttachment++] = ColorAttachment(
+                    _renderTargets.GiFinalDiffuse.View,
+                    ImageLayout.ColorAttachmentOptimal,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)));
+            }
+            if (materialTransportProvenanceEnabled)
+            {
+                // Zero is the stable background/no-geometry code. Rasterized
+                // pixels overwrite it with a categorical source-path byte.
+                colorAttachments[nextColorAttachment] = ColorAttachment(
+                    _renderTargets.MaterialTransportProvenance.View,
+                    ImageLayout.ColorAttachmentOptimal,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)));
             }
             var depthAttachment = DepthAttachment(
                 _renderTargets.SceneDepth.View,
@@ -107,20 +132,24 @@ namespace Njulf.Rendering.Pipeline
                 AttachmentLoadOp.Load,
                 AttachmentStoreOp.Store,
                 new ClearValue(null, new ClearDepthStencilValue(0.0f, 0)));
-            
+
             var renderingInfo = new RenderingInfo
             {
                 SType = StructureType.RenderingInfo,
                 RenderArea = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = renderExtent },
                 LayerCount = 1,
-                ColorAttachmentCount = ssgiEnabled ? 2u : 1u,
+                ColorAttachmentCount =
+                    ForwardDynamicRenderingContract.ResolveColorAttachmentCount(
+                        hasColorAttachment: true,
+                        ssgiEnabled,
+                        materialTransportProvenanceEnabled),
                 PColorAttachments = colorAttachments,
                 PDepthAttachment = &depthAttachment,
                 PStencilAttachment = null
             };
-            
+
             _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
-            
+
             sceneData.ForwardTaskInvocations = 0;
             sceneData.ForwardSimpleMeshletCount = 0;
             sceneData.ForwardFullMaterialMeshletCount = 0;
@@ -225,7 +254,7 @@ namespace Njulf.Rendering.Pipeline
                     BindlessIndex.FullOpaqueMeshletDrawBufferBase);
             }
             DrawFoliageForward(cmd, sceneData);
-            
+
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
         }
 
@@ -387,7 +416,9 @@ namespace Njulf.Rendering.Pipeline
                     ShouldCollectDdgiForwardEstimateCounters(sceneData),
                     ShouldCollectDdgiClipmapCoverageCounters(sceneData),
                     ShouldCollectDirectionalShadowReceiverCounters(sceneData),
-                    (uint)sceneData.DirectionalShadowPreviewCascade)
+                    (uint)sceneData.DirectionalShadowPreviewCascade,
+                    materialTransportProvenanceEnabled:
+                        ShouldWriteMaterialTransportProvenance())
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -545,7 +576,9 @@ namespace Njulf.Rendering.Pipeline
                     ShouldCollectDdgiForwardEstimateCounters(sceneData),
                     ShouldCollectDdgiClipmapCoverageCounters(sceneData),
                     ShouldCollectDirectionalShadowReceiverCounters(sceneData),
-                    (uint)sceneData.DirectionalShadowPreviewCascade)
+                    (uint)sceneData.DirectionalShadowPreviewCascade,
+                    materialTransportProvenanceEnabled:
+                        ShouldWriteMaterialTransportProvenance())
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -648,6 +681,10 @@ namespace Njulf.Rendering.Pipeline
         private bool ShouldApplySsgi(Data.SceneRenderingData sceneData) =>
             ShouldApplySsgi(sceneData, _settings.GlobalIllumination);
 
+        private bool ShouldWriteMaterialTransportProvenance() =>
+            _settings.GlobalIllumination.DebugView ==
+            GlobalIlluminationDebugView.MaterialTransportHitProvenance;
+
         internal static bool ShouldApplySsgi(
             Data.SceneRenderingData sceneData,
             GlobalIlluminationSettings gi)
@@ -696,7 +733,7 @@ namespace Njulf.Rendering.Pipeline
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
                 ClusterDrawCount = checked((uint)sceneData.FoliageClusterCount),
                 VisibleClusterBufferBaseIndex = (uint)BindlessIndex.FoliageVisibleClusterBufferBase,
-                Flags = 0u,
+                Flags = ShouldWriteMaterialTransportProvenance() ? 1u << 2 : 0u,
                 DebugView = sceneData.FoliageDebugView,
                 ShadowDensityScale = 1.0f
             };
@@ -735,7 +772,7 @@ namespace Njulf.Rendering.Pipeline
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
                 ClusterDrawCount = checked((uint)buffers.MeshletDrawCapacity),
                 VisibleClusterBufferBaseIndex = (uint)BindlessIndex.FoliageVisibleClusterBufferBase,
-                Flags = 0u,
+                Flags = ShouldWriteMaterialTransportProvenance() ? 1u << 2 : 0u,
                 DebugView = sceneData.FoliageDebugView,
                 ShadowDensityScale = 1.0f
             };
@@ -788,19 +825,19 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 null);
         }
-        
+
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
         {
             yield break;
         }
-        
+
         public override void OnSwapchainRecreated()
         {
         }
-        
+
         public override void Cleanup()
         {
         }
     }
-    
+
 }

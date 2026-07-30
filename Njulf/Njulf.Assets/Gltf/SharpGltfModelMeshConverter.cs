@@ -142,6 +142,9 @@ internal static class SharpGltfModelMeshConverter
     {
         foreach (Material material in root.LogicalMaterials)
         {
+            float alphaCutoff = ValidateAlphaCutoff(
+                material.AlphaCutoff,
+                material.LogicalIndex);
             var imported = new ModelMaterial
             {
                 Name = string.IsNullOrWhiteSpace(material.Name) ? $"Material_{material.LogicalIndex}" : material.Name,
@@ -151,7 +154,7 @@ internal static class SharpGltfModelMeshConverter
                     AlphaMode.BLEND => ModelAlphaMode.Blend,
                     _ => ModelAlphaMode.Opaque
                 },
-                AlphaCutoff = material.AlphaCutoff,
+                AlphaCutoff = alphaCutoff,
                 DoubleSided = material.DoubleSided,
                 Unlit = material.Unlit,
                 Ior = material.IndexOfRefraction,
@@ -204,11 +207,30 @@ internal static class SharpGltfModelMeshConverter
 
             if (imported.Dispersion > 0f)
                 imported.FeatureFlags |= ModelMaterialFeatureBits.Dispersion;
+            if (material.Extensions.Any(static extension =>
+                    string.Equals(
+                        extension.GetType().Name,
+                        "MaterialIOR",
+                        StringComparison.Ordinal)))
+            {
+                imported.FeatureFlags |= ModelMaterialFeatureBits.Ior;
+            }
 
             ApplyMaterialExtensions(imported, material, assetPath, diagnostics, imageSourceHints);
 
             yield return imported;
         }
+    }
+
+    private static float ValidateAlphaCutoff(float alphaCutoff, int materialIndex)
+    {
+        if (!float.IsFinite(alphaCutoff) || alphaCutoff < 0f)
+        {
+            throw new InvalidDataException(
+                $"glTF material {materialIndex} alphaCutoff must be finite and non-negative.");
+        }
+
+        return alphaCutoff;
     }
 
     private static void ApplyMaterialExtensions(
@@ -551,7 +573,10 @@ internal static class SharpGltfModelMeshConverter
             }
             else
             {
-                jsonBytes = File.ReadAllBytes(assetPath);
+                jsonBytes = AssetArtifactFileIo.ReadBoundedSnapshot(
+                    assetPath,
+                    AssetArtifactFileIo.DefaultMaximumJsonBytes,
+                    "glTF image-source manifest");
             }
 
             using JsonDocument document = JsonDocument.Parse(jsonBytes, new JsonDocumentOptions
@@ -666,7 +691,10 @@ internal static class SharpGltfModelMeshConverter
 
     private static byte[] ReadGlbJson(string assetPath)
     {
-        byte[] data = File.ReadAllBytes(assetPath);
+        byte[] data = AssetArtifactFileIo.ReadBoundedSnapshot(
+            assetPath,
+            AssetArtifactFileIo.MaximumCookSourceBytes,
+            "GLB image-source manifest");
         if (data.Length < 20)
             throw new InvalidDataException($"glB asset '{assetPath}' is too small to contain a valid header.");
 
@@ -761,7 +789,12 @@ internal static class SharpGltfModelMeshConverter
 
     private static TextureContainerKind ToTextureContainerKind(SharpGLTF.Memory.MemoryImage image)
     {
-        return image.IsKtx2 ? TextureContainerKind.Ktx2 : TextureContainerKind.StandardImage;
+        if (image.IsKtx2)
+            return TextureContainerKind.Ktx2;
+        return image.IsWebp ||
+               string.Equals(image.MimeType, "image/webp", StringComparison.OrdinalIgnoreCase)
+            ? TextureContainerKind.WebP
+            : TextureContainerKind.StandardImage;
     }
 
     private static float GetFactorOrDefault(MaterialChannel channel, string name, float fallback)

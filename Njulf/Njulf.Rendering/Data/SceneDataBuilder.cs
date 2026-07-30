@@ -710,6 +710,7 @@ namespace Njulf.Rendering.Data
                     TransparentSortMicroseconds = _transparentSortMicroseconds,
                     TransparentOverflowCount = _transparentOverflowCount,
                     MaterialCount = _materialManager.RegisteredMaterialCount,
+                    SsgiMaterialRevision = _materialManager.SsgiInputRevision,
                     LightCount = 0,
                     TextureCount = _textureManager?.TextureCount ?? 0,
                     AnimationEnabled = animationStats.SkinnedObjectCount > 0,
@@ -2952,6 +2953,8 @@ namespace Njulf.Rendering.Data
                 {
                     hash.Add(RuntimeHelpers.GetHashCode(renderObject));
                     hash.Add(renderObject.Visible);
+                    hash.Add(renderObject.Enabled);
+                    hash.Add(renderObject.IsStatic);
                     hash.Add(renderObject.WorldMatrix);
                     hash.Add(renderObject.Mesh);
                     hash.Add(renderObject.Material);
@@ -3067,6 +3070,8 @@ namespace Njulf.Rendering.Data
                 {
                     hash.Add(RuntimeHelpers.GetHashCode(renderObject));
                     hash.Add(renderObject.Visible);
+                    hash.Add(renderObject.Enabled);
+                    hash.Add(renderObject.IsStatic);
                     hash.Add(renderObject.WorldMatrix);
                     hash.Add(renderObject.Mesh);
                     hash.Add(renderObject.Material);

@@ -36,6 +36,10 @@ namespace Njulf.Rendering.Resources
         private const int DiffuseIrradianceSampleCount = 128;
         private const int SpecularPrefilterSampleCount = 128;
         private const int ProceduralSkyCalibrationSampleCount = 256;
+        internal const long MaximumEncodedHdrBytes = 256L * 1024 * 1024;
+        internal const long MaximumHdrPixels = 8192L * 4096;
+        private const int MaximumHdrHeaderLineBytes = 4096;
+        private const int MaximumHdrHeaderLines = 256;
         private const float Pi = MathF.PI;
         private const float TwoPi = MathF.PI * 2.0f;
 
@@ -92,14 +96,37 @@ namespace Njulf.Rendering.Resources
             if (string.IsNullOrWhiteSpace(path))
                 throw new ArgumentException("HDR path cannot be null or empty.", nameof(path));
 
-            using var stream = File.OpenRead(path);
+            string fullPath = Path.GetFullPath(path);
+            using var stream = new FileStream(
+                fullPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 64 * 1024,
+                options: FileOptions.SequentialScan);
+            long admittedLength = stream.Length;
+            if (admittedLength <= 0)
+                throw new InvalidDataException($"Radiance HDR file '{fullPath}' is empty.");
+            if (admittedLength > MaximumEncodedHdrBytes)
+            {
+                throw new InvalidDataException(
+                    $"Radiance HDR file '{fullPath}' contains {admittedLength} bytes, exceeding " +
+                    $"the {MaximumEncodedHdrBytes}-byte input limit.");
+            }
+
             string signature = ReadAsciiLine(stream);
             if (!signature.StartsWith("#?", StringComparison.Ordinal))
                 throw new InvalidDataException("Radiance HDR file is missing the signature line.");
 
             bool hasRgbEFormat = false;
-            while (true)
+            for (int headerLine = 0; ; headerLine++)
             {
+                if (headerLine >= MaximumHdrHeaderLines)
+                {
+                    throw new InvalidDataException(
+                        $"Radiance HDR header exceeds the {MaximumHdrHeaderLines}-line limit.");
+                }
+
                 string line = ReadAsciiLine(stream);
                 if (line.Length == 0)
                     break;
@@ -113,8 +140,21 @@ namespace Njulf.Rendering.Resources
 
             string resolution = ReadAsciiLine(stream);
             (uint width, uint height) = ParseResolution(resolution);
-            float[] pixels = new float[checked((int)(width * height * 3u))];
+            long pixelCount = checked((long)width * height);
+            if (pixelCount > MaximumHdrPixels)
+            {
+                throw new InvalidDataException(
+                    $"Radiance HDR dimensions {width}x{height} contain {pixelCount} pixels, " +
+                    $"exceeding the {MaximumHdrPixels}-pixel decode limit.");
+            }
+
+            float[] pixels = new float[checked((int)(pixelCount * 3L))];
             DecodeRgbE(stream, width, height, pixels);
+            if (stream.Length != admittedLength)
+            {
+                throw new IOException(
+                    $"Radiance HDR file '{fullPath}' changed length during its bounded decode.");
+            }
             return new HdrEquirectangularImage(width, height, pixels);
         }
 
@@ -616,26 +656,30 @@ namespace Njulf.Rendering.Resources
         private static (uint Width, uint Height) ParseResolution(string resolution)
         {
             string[] parts = resolution.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length != 4)
-                throw new InvalidDataException($"Unsupported HDR resolution line '{resolution}'.");
-
-            uint? width = null;
-            uint? height = null;
-            for (int i = 0; i < parts.Length - 1; i += 2)
+            if (parts.Length != 4 ||
+                !string.Equals(parts[0], "-Y", StringComparison.Ordinal) ||
+                !string.Equals(parts[2], "+X", StringComparison.Ordinal))
             {
-                if (!uint.TryParse(parts[i + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out uint value) || value == 0)
-                    throw new InvalidDataException($"Invalid HDR resolution value in '{resolution}'.");
-
-                if (parts[i].EndsWith("X", StringComparison.Ordinal))
-                    width = value;
-                else if (parts[i].EndsWith("Y", StringComparison.Ordinal))
-                    height = value;
+                throw new InvalidDataException($"Unsupported HDR resolution line '{resolution}'.");
             }
 
-            if (width == null || height == null)
-                throw new InvalidDataException($"Unsupported HDR resolution line '{resolution}'.");
+            if (!uint.TryParse(
+                    parts[1],
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out uint height) ||
+                height == 0 ||
+                !uint.TryParse(
+                    parts[3],
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out uint width) ||
+                width == 0)
+            {
+                throw new InvalidDataException($"Invalid HDR resolution value in '{resolution}'.");
+            }
 
-            return (width.Value, height.Value);
+            return (width, height);
         }
 
         private static string ReadAsciiLine(Stream stream)
@@ -654,7 +698,17 @@ namespace Njulf.Rendering.Resources
                 if (value == '\n')
                     break;
                 if (value != '\r')
+                {
+                    if (value > 0x7F)
+                        throw new InvalidDataException("Radiance HDR header contains non-ASCII data.");
+                    if (builder.Length >= MaximumHdrHeaderLineBytes)
+                    {
+                        throw new InvalidDataException(
+                            $"Radiance HDR header line exceeds the " +
+                            $"{MaximumHdrHeaderLineBytes}-byte limit.");
+                    }
                     builder.Append((char)value);
+                }
             }
 
             return builder.ToString();

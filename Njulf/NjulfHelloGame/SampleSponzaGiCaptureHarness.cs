@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -563,9 +564,10 @@ public sealed class SampleSponzaGiCaptureContract
     }
 
     /// <summary>
-    /// Hashes and validates an artifact inside the capture directory. PNG
-    /// artifacts must include a complete PNG signature, so a zero-byte or
-    /// partially-created renderer target cannot satisfy the completion gate.
+    /// Reads, hashes, and validates a bounded artifact through one stable handle
+    /// inside the capture directory. PNG artifacts must include a complete
+    /// IHDR/IDAT/IEND structure, so a zero-byte or partially-created renderer
+    /// target cannot satisfy the completion gate.
     /// </summary>
     public bool TryVerifyArtifact(
         string outputDirectory,
@@ -615,73 +617,63 @@ public sealed class SampleSponzaGiCaptureContract
             failureReason = $"Artifact '{relativePath}' resolves outside the capture directory.";
             return false;
         }
-        if (!File.Exists(fullPath))
+        bool isPng = string.Equals(
+            Path.GetExtension(fullPath),
+            ".png",
+            StringComparison.OrdinalIgnoreCase);
+        SampleEvidenceFileContent content;
+        try
+        {
+            content = SampleEvidenceFileIo.Read(
+                fullPath,
+                isPng
+                    ? SampleEvidenceFileIo.MaximumLinearFloatImageBytes
+                    : SampleEvidenceFileIo.MaximumJsonBytes,
+                "Sponza GI capture artifact");
+        }
+        catch (FileNotFoundException)
         {
             failureReason = $"Artifact '{relativePath}' does not exist yet.";
             return false;
         }
-
-        FileInfo fileInfo;
-        try
+        catch (DirectoryNotFoundException)
         {
-            fileInfo = new FileInfo(fullPath);
-        }
-        catch (ArgumentException ex)
-        {
-            failureReason = $"Artifact '{relativePath}' could not be inspected: {ex.Message}";
+            failureReason = $"Artifact '{relativePath}' does not exist yet.";
             return false;
         }
-        long byteLength;
-        try
+        catch (InvalidDataException ex)
         {
-            byteLength = fileInfo.Length;
+            failureReason =
+                $"Artifact '{relativePath}' could not be authenticated: {ex.Message}";
+            return false;
         }
         catch (IOException ex)
         {
-            failureReason = $"Artifact '{relativePath}' could not be inspected: {ex.Message}";
+            failureReason = $"Artifact '{relativePath}' could not be authenticated: {ex.Message}";
             return false;
         }
         catch (UnauthorizedAccessException ex)
         {
-            failureReason = $"Artifact '{relativePath}' could not be inspected: {ex.Message}";
+            failureReason = $"Artifact '{relativePath}' could not be authenticated: {ex.Message}";
             return false;
         }
-        if (byteLength <= 0)
-        {
-            failureReason = $"Artifact '{relativePath}' is empty.";
-            return false;
-        }
-        if (string.Equals(Path.GetExtension(fullPath), ".png", StringComparison.OrdinalIgnoreCase) &&
-            !HasPngSignature(fullPath))
+        if (isPng && !HasCompletePng(content.Bytes))
         {
             failureReason = $"Artifact '{relativePath}' is not a complete PNG file.";
             return false;
         }
 
-        string sha256;
-        try
-        {
-            using FileStream stream = File.OpenRead(fullPath);
-            sha256 = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-        }
-        catch (IOException ex)
-        {
-            failureReason = $"Artifact '{relativePath}' could not be read for hashing: {ex.Message}";
-            return false;
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            failureReason = $"Artifact '{relativePath}' could not be read for hashing: {ex.Message}";
-            return false;
-        }
-
         if (!string.IsNullOrWhiteSpace(artifact.Sha256) &&
-            !string.Equals(artifact.Sha256, sha256, StringComparison.OrdinalIgnoreCase))
+            !string.Equals(
+                artifact.Sha256,
+                content.Sha256,
+                StringComparison.OrdinalIgnoreCase))
         {
             failureReason = $"Artifact '{relativePath}' changed after it was hashed.";
             return false;
         }
-        if (artifact.ByteLength > 0 && artifact.ByteLength != byteLength)
+        if (artifact.ByteLength > 0 &&
+            artifact.ByteLength != content.Bytes.LongLength)
         {
             failureReason = $"Artifact '{relativePath}' changed size after it was hashed.";
             return false;
@@ -690,8 +682,8 @@ public sealed class SampleSponzaGiCaptureContract
         verifiedArtifact = artifact with
         {
             RelativePath = relativePath,
-            Sha256 = sha256,
-            ByteLength = byteLength,
+            Sha256 = content.Sha256,
+            ByteLength = content.Bytes.LongLength,
             VerificationStatus = "verified"
         };
         failureReason = string.Empty;
@@ -1158,80 +1150,60 @@ public sealed class SampleSponzaGiCaptureContract
         _ => throw new ArgumentOutOfRangeException(nameof(captureMode))
     };
 
-    private static bool HasPngSignature(string path)
+    private static bool HasCompletePng(ReadOnlySpan<byte> bytes)
     {
         ReadOnlySpan<byte> expectedSignature = [137, 80, 78, 71, 13, 10, 26, 10];
-        Span<byte> signature = stackalloc byte[8];
-        Span<byte> chunkHeader = stackalloc byte[8];
-        try
+        if (bytes.Length < expectedSignature.Length ||
+            !bytes[..expectedSignature.Length].SequenceEqual(expectedSignature))
+            return false;
+
+        int offset = expectedSignature.Length;
+        bool sawHeader = false;
+        bool sawImageData = false;
+        while (offset < bytes.Length)
         {
-            using FileStream stream = File.OpenRead(path);
-            if (stream.Read(signature) != signature.Length || !signature.SequenceEqual(expectedSignature))
+            if (bytes.Length - offset < 8)
                 return false;
-
-            bool sawHeader = false;
-            bool sawImageData = false;
-            while (stream.Position < stream.Length)
+            uint payloadLength = BinaryPrimitives.ReadUInt32BigEndian(
+                bytes.Slice(offset, sizeof(uint)));
+            ReadOnlySpan<byte> chunkType =
+                bytes.Slice(offset + sizeof(uint), sizeof(uint));
+            offset += 8;
+            int remainingIncludingCrc = bytes.Length - offset;
+            if (remainingIncludingCrc < sizeof(uint) ||
+                payloadLength >
+                    (uint)(remainingIncludingCrc - sizeof(uint)))
             {
-                if (!TryReadExactly(stream, chunkHeader))
+                return false;
+            }
+
+            bool isIhdr = chunkType.SequenceEqual("IHDR"u8);
+            bool isIdat = chunkType.SequenceEqual("IDAT"u8);
+            bool isIend = chunkType.SequenceEqual("IEND"u8);
+            if (!sawHeader)
+            {
+                if (!isIhdr || payloadLength != 13)
                     return false;
+                sawHeader = true;
+            }
+            else if (isIhdr)
+            {
+                return false;
+            }
 
-                uint payloadLength =
-                    ((uint)chunkHeader[0] << 24) |
-                    ((uint)chunkHeader[1] << 16) |
-                    ((uint)chunkHeader[2] << 8) |
-                    chunkHeader[3];
-                ReadOnlySpan<byte> chunkType = chunkHeader[4..];
-                long remainingIncludingCrc = stream.Length - stream.Position;
-                if (payloadLength > remainingIncludingCrc - sizeof(uint))
-                    return false;
-
-                bool isIhdr = chunkType.SequenceEqual("IHDR"u8);
-                bool isIdat = chunkType.SequenceEqual("IDAT"u8);
-                bool isIend = chunkType.SequenceEqual("IEND"u8);
-                if (!sawHeader)
-                {
-                    if (!isIhdr || payloadLength != 13)
-                        return false;
-                    sawHeader = true;
-                }
-                else if (isIhdr)
-                {
-                    return false;
-                }
-
-                if (isIdat)
-                    sawImageData = true;
-
-                stream.Seek(checked((long)payloadLength + sizeof(uint)), SeekOrigin.Current);
-                if (isIend)
-                    return sawHeader && sawImageData && payloadLength == 0 && stream.Position == stream.Length;
+            if (isIdat)
+                sawImageData = true;
+            offset = checked(
+                offset + (int)payloadLength + sizeof(uint));
+            if (isIend)
+            {
+                return sawHeader &&
+                       sawImageData &&
+                       payloadLength == 0 &&
+                       offset == bytes.Length;
             }
         }
-        catch (IOException)
-        {
-            return false;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return false;
-        }
-
         return false;
-    }
-
-    private static bool TryReadExactly(Stream stream, Span<byte> destination)
-    {
-        int offset = 0;
-        while (offset < destination.Length)
-        {
-            int read = stream.Read(destination[offset..]);
-            if (read == 0)
-                return false;
-            offset += read;
-        }
-
-        return true;
     }
 
     private static void AppendBookmark(StringBuilder builder, SampleSponzaGiCameraBookmark bookmark)
@@ -1344,10 +1316,14 @@ public sealed class SampleSponzaGiCaptureContract
 
     private static void WriteJsonAtomically(string path, object value)
     {
-        string json = JsonSerializer.Serialize(value, ContractJsonOptions);
-        string temporaryPath = path + ".tmp";
-        File.WriteAllText(temporaryPath, json + Environment.NewLine, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        File.Move(temporaryPath, path, overwrite: true);
+        byte[] payload = JsonSerializer.SerializeToUtf8Bytes(
+            value,
+            ContractJsonOptions);
+        SampleEvidenceFileIo.WriteAtomic(
+            path,
+            payload,
+            SampleEvidenceFileIo.MaximumJsonBytes,
+            "Sponza material/GI capture report");
     }
 
     private static bool NearlyEqual(float left, float right) => MathF.Abs(left - right) <= 0.0001f;

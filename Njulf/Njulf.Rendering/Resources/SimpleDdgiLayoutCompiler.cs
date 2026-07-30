@@ -28,13 +28,22 @@ namespace Njulf.Rendering.Resources
         SimpleDdgiLayoutDecision Decision,
         int AcceptedProbeCount,
         ulong EstimatedPersistentBytes,
-        string Reason);
+        string Reason)
+    {
+        /// <summary>
+        /// Incremental live bytes contributed by this request in the original
+        /// deterministic request stream. This remains populated for rejected
+        /// requests so persisted admission evidence never has to reconstruct a
+        /// potentially different capacity plan.
+        /// </summary>
+        public ulong RequestedPersistentBytes { get; init; }
+    }
 
     /// <summary>
-    /// Hard per-tier layout budget.  Persistent bytes include the canonical
-    /// atlas, optional sampled mirror, V2 private transport target and source
-    /// cache, state, queue, and classification storage.  Transient ray scratch
-    /// remains separately bounded by the scheduled update quota.
+    /// Hard per-tier layout budget. Despite the compatibility name on
+    /// <see cref="PersistentMemoryBudgetBytes"/>, admission charges every live
+    /// manager allocation: persistent probe data, bounded work buffers, feedback
+    /// readbacks, and the optional sampled mirror.
     /// </summary>
     public readonly record struct SimpleDdgiLayoutBudget(
         DdgiQualityTier Tier,
@@ -66,6 +75,182 @@ namespace Njulf.Rendering.Resources
         }
     }
 
+    /// <summary>
+    /// Pure byte-for-byte capacity plan shared by pre-allocation admission and
+    /// the Vulkan manager. Work buffers contain transient data, but their
+    /// allocations remain resident and therefore consume the same hard component
+    /// budget while the manager is alive.
+    /// </summary>
+    public readonly record struct SimpleDdgiMemoryPlan(
+        int ProbeCount,
+        int UpdateRequestCapacity,
+        int RayCapacity,
+        int ReadbackBufferCount,
+        int SampledAtlasProbeCapacity,
+        ulong ParamsBytes,
+        ulong IrradianceAtlasBytes,
+        ulong VisibilityAtlasBytes,
+        ulong TransportIrradianceBytes,
+        ulong TransportSourceCacheBytes,
+        ulong ProbeStateBytes,
+        ulong UpdateQueueBytes,
+        ulong RelocationClassificationBytes,
+        ulong ProbeStateReadbackBytes,
+        ulong RayScratchBytes,
+        ulong SampledAtlasImageBytes)
+    {
+        public const int SampledAtlasCapacityQuantum = 256;
+        public const ulong ParamsHeaderBytes = 208;
+        public const ulong VolumeBytes = 96;
+        public const ulong IrradianceBytesPerProbe =
+            (ulong)(SimpleDdgiVolumeManager.IrradianceTexelsPerProbe *
+                SimpleDdgiVolumeManager.IrradianceTexelsPerProbe) * 8UL;
+        public const ulong VisibilityBytesPerProbe =
+            (ulong)(SimpleDdgiVolumeManager.VisibilityTexelsPerProbe *
+                SimpleDdgiVolumeManager.VisibilityTexelsPerProbe) * 8UL;
+        public const ulong RayResultBytes = 32;
+        public const ulong TransportRayCacheBytes = 32;
+        public const ulong ProbeStateBytesPerProbe = 32;
+        public const ulong ProbeUpdateBytes = 32;
+        public const ulong RelocationClassificationBytesPerProbe = 48;
+
+        public ulong CanonicalAtlasBytes =>
+            checked(IrradianceAtlasBytes + VisibilityAtlasBytes);
+
+        public ulong PersistentBytes => checked(
+            ParamsBytes +
+            IrradianceAtlasBytes +
+            VisibilityAtlasBytes +
+            TransportIrradianceBytes +
+            TransportSourceCacheBytes +
+            ProbeStateBytes +
+            RelocationClassificationBytes +
+            ProbeStateReadbackBytes +
+            SampledAtlasImageBytes);
+
+        public ulong WorkBytes => checked(UpdateQueueBytes + RayScratchBytes);
+
+        public ulong LiveBytes => checked(PersistentBytes + WorkBytes);
+
+        public static SimpleDdgiMemoryPlan Empty { get; } = new();
+
+        public static SimpleDdgiMemoryPlan Create(
+            int probeCount,
+            int updateRequestCapacity,
+            int rayCapacity,
+            bool sampledAtlasRequested,
+            bool concreteTransportBuffers,
+            int readbackBufferCount)
+        {
+            int probes = Math.Clamp(
+                probeCount,
+                0,
+                GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount);
+            int updates = Math.Clamp(updateRequestCapacity, 0, probes);
+            int rays = Math.Clamp(
+                rayCapacity,
+                1,
+                GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe);
+            int readbacks = Math.Clamp(
+                readbackBufferCount,
+                0,
+                RenderingConstants.FramesInFlight);
+            int sampledCapacity = sampledAtlasRequested
+                ? ResolveSampledAtlasProbeCapacity(probes)
+                : 0;
+
+            ulong probeCount64 = checked((ulong)probes);
+            ulong updateCount64 = checked((ulong)updates);
+            ulong rayCount64 = checked((ulong)rays);
+            ulong paramsBytes = checked(
+                ParamsHeaderBytes +
+                (ulong)GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount *
+                VolumeBytes);
+            ulong irradianceBytes = AtLeastOneAllocation(
+                checked(probeCount64 * IrradianceBytesPerProbe));
+            ulong visibilityBytes = AtLeastOneAllocation(
+                checked(probeCount64 * VisibilityBytesPerProbe));
+            ulong transportIrradianceBytes = concreteTransportBuffers
+                ? AtLeastOneAllocation(checked(probeCount64 * IrradianceBytesPerProbe))
+                : 0UL;
+            ulong transportSourceCacheBytes = concreteTransportBuffers
+                ? AtLeastOneAllocation(checked(
+                    probeCount64 * rayCount64 * TransportRayCacheBytes))
+                : 0UL;
+            ulong stateBytes = AtLeastOneAllocation(
+                checked(probeCount64 * ProbeStateBytesPerProbe));
+            ulong queueBytes = AtLeastOneAllocation(
+                checked(updateCount64 * ProbeUpdateBytes));
+            ulong relocationBytes = AtLeastOneAllocation(
+                checked(probeCount64 * RelocationClassificationBytesPerProbe));
+            ulong readbackBytes = readbacks == 0
+                ? 0UL
+                : checked(
+                    (ulong)readbacks *
+                    AtLeastOneAllocation(checked(
+                        probeCount64 * ProbeStateBytesPerProbe)));
+            ulong rayScratchBytes = AtLeastOneAllocation(checked(
+                updateCount64 * rayCount64 * RayResultBytes));
+            ulong sampledImageBytes = checked(
+                (ulong)sampledCapacity *
+                (IrradianceBytesPerProbe + VisibilityBytesPerProbe));
+
+            return new SimpleDdgiMemoryPlan(
+                probes,
+                updates,
+                rays,
+                readbacks,
+                sampledCapacity,
+                paramsBytes,
+                irradianceBytes,
+                visibilityBytes,
+                transportIrradianceBytes,
+                transportSourceCacheBytes,
+                stateBytes,
+                queueBytes,
+                relocationBytes,
+                readbackBytes,
+                rayScratchBytes,
+                sampledImageBytes);
+        }
+
+        public static int ResolveUpdateRequestCapacity(
+            int probeCount,
+            int configuredProbeUpdatesPerFrame,
+            bool lightingDirtyBoostEnabled)
+        {
+            int probes = Math.Clamp(
+                probeCount,
+                0,
+                GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount);
+            int baseCapacity = configuredProbeUpdatesPerFrame <= 0
+                ? probes
+                : Math.Min(probes, configuredProbeUpdatesPerFrame);
+            if (!lightingDirtyBoostEnabled || baseCapacity <= 0)
+                return baseCapacity;
+
+            return (int)Math.Min((long)probes, (long)baseCapacity * 2L);
+        }
+
+        public static int ResolveSampledAtlasProbeCapacity(int probeCount)
+        {
+            int probes = Math.Clamp(
+                probeCount,
+                0,
+                GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount);
+            if (probes == 0)
+                return 0;
+
+            return checked(
+                ((probes + SampledAtlasCapacityQuantum - 1) /
+                    SampledAtlasCapacityQuantum) *
+                SampledAtlasCapacityQuantum);
+        }
+
+        private static ulong AtLeastOneAllocation(ulong bytes) =>
+            Math.Max(16UL, bytes);
+    }
+
     public sealed record SimpleDdgiLayoutReport(
         SimpleDdgiLayoutBudget Budget,
         SimpleDdgiLayoutAdmissionMode AdmissionMode,
@@ -75,6 +260,9 @@ namespace Njulf.Rendering.Resources
         ulong AcceptedPersistentBytes,
         IReadOnlyList<SimpleDdgiLayoutVolumeDecision> Volumes)
     {
+        public SimpleDdgiMemoryPlan RequestedMemoryPlan { get; init; }
+        public SimpleDdgiMemoryPlan AcceptedMemoryPlan { get; init; }
+
         public bool IsWithinBudget => RequestedProbeCount <= Budget.ProbeBudget &&
             RequestedPersistentBytes <= Budget.PersistentMemoryBudgetBytes &&
             Volumes.Count <= Budget.VolumeBudget;
@@ -99,44 +287,41 @@ namespace Njulf.Rendering.Resources
     /// </summary>
     public static class SimpleDdgiLayoutCompiler
     {
-        // RGBA16F atlas texels: 8x8 irradiance + 16x16 visibility. State,
-        // update queue, and relocation/classification are 32, 32, and 48 bytes.
-        // The sampled mirror reserves a second atlas so an admitted layout can
-        // enable it without violating its tier cache cap.
+        // Compatibility aliases retained for capture readers and existing tools.
         public const ulong CanonicalAtlasBytesPerProbe =
-            (ulong)(SimpleDdgiVolumeManager.IrradianceTexelsPerProbe * SimpleDdgiVolumeManager.IrradianceTexelsPerProbe +
-                SimpleDdgiVolumeManager.VisibilityTexelsPerProbe * SimpleDdgiVolumeManager.VisibilityTexelsPerProbe) * 8UL;
-        public const ulong StateBytesPerProbe = 32UL;
-        public const ulong UpdateQueueBytesPerProbe = 32UL;
-        public const ulong RelocationClassificationBytesPerProbe = 48UL;
+            SimpleDdgiMemoryPlan.IrradianceBytesPerProbe +
+            SimpleDdgiMemoryPlan.VisibilityBytesPerProbe;
+        public const ulong StateBytesPerProbe =
+            SimpleDdgiMemoryPlan.ProbeStateBytesPerProbe;
+        public const ulong UpdateQueueBytesPerProbe =
+            SimpleDdgiMemoryPlan.ProbeUpdateBytes;
+        public const ulong RelocationClassificationBytesPerProbe =
+            SimpleDdgiMemoryPlan.RelocationClassificationBytesPerProbe;
         public const ulong TransportIrradianceBytesPerProbe =
-            (ulong)(SimpleDdgiVolumeManager.IrradianceTexelsPerProbe *
-                SimpleDdgiVolumeManager.IrradianceTexelsPerProbe) * 8UL;
-        public const ulong TransportSourceRayCacheBytes = 32UL;
+            SimpleDdgiMemoryPlan.IrradianceBytesPerProbe;
+        public const ulong TransportSourceRayCacheBytes =
+            SimpleDdgiMemoryPlan.TransportRayCacheBytes;
 
         public static ulong EstimatePersistentBytes(
             int probeCount,
             bool sampledAtlasRequested,
             bool transportV2Enabled = false,
-            int transportRayCapacity = 0)
+            int transportRayCapacity = 0,
+            int configuredProbeUpdatesPerFrame = 0,
+            bool lightingDirtyBoostEnabled = false,
+            int readbackBufferCount = 0)
         {
-            ulong probes = checked((ulong)Math.Max(probeCount, 0));
-            ulong atlasBytes = checked(probes * CanonicalAtlasBytesPerProbe);
-            if (sampledAtlasRequested)
-                atlasBytes = checked(atlasBytes * 2UL);
-            ulong transportBytes = 0UL;
-            if (transportV2Enabled)
-            {
-                ulong rays = checked((ulong)Math.Clamp(
-                    transportRayCapacity,
-                    1,
-                    GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe));
-                transportBytes = checked(probes * (TransportIrradianceBytesPerProbe +
-                    rays * TransportSourceRayCacheBytes));
-            }
-            return checked(atlasBytes + probes *
-                (StateBytesPerProbe + UpdateQueueBytesPerProbe + RelocationClassificationBytesPerProbe) +
-                transportBytes);
+            int updates = SimpleDdgiMemoryPlan.ResolveUpdateRequestCapacity(
+                probeCount,
+                configuredProbeUpdatesPerFrame,
+                lightingDirtyBoostEnabled);
+            return SimpleDdgiMemoryPlan.Create(
+                probeCount,
+                updates,
+                transportRayCapacity,
+                sampledAtlasRequested,
+                transportV2Enabled,
+                readbackBufferCount).LiveBytes;
         }
 
         public static SimpleDdgiLayoutReport Compile(
@@ -145,46 +330,62 @@ namespace Njulf.Rendering.Resources
             bool sampledAtlasRequested,
             SimpleDdgiLayoutAdmissionMode admissionMode,
             bool transportV2Enabled = false,
-            int transportRayCapacity = 0)
+            int transportRayCapacity = 0,
+            int configuredProbeUpdatesPerFrame = 0,
+            bool lightingDirtyBoostEnabled = false,
+            int readbackBufferCount = 0)
         {
             if (requests == null)
                 throw new ArgumentNullException(nameof(requests));
 
             var decisions = new List<SimpleDdgiLayoutVolumeDecision>(requests.Count);
             int requestedProbes = 0;
-            ulong requestedBytes = 0;
             int acceptedProbes = 0;
-            ulong acceptedBytes = 0;
             int acceptedVolumes = 0;
+            SimpleDdgiMemoryPlan requestedPlan = CreateMemoryPlan(0);
+            SimpleDdgiMemoryPlan acceptedPlan = CreateMemoryPlan(0);
+            ulong previousRequestedLiveBytes = 0UL;
 
             for (int index = 0; index < requests.Count; index++)
             {
                 SimpleDdgiLayoutVolumeRequest request = requests[index] ??
                     throw new ArgumentException("A simple-DDGI layout request cannot be null.", nameof(requests));
                 int probes = Math.Max(request.ProbeCount, 0);
-                ulong persistentBytes = EstimatePersistentBytes(
-                    probes,
-                    sampledAtlasRequested,
-                    transportV2Enabled,
-                    transportRayCapacity);
                 requestedProbes = checked(requestedProbes + probes);
-                requestedBytes = checked(requestedBytes + persistentBytes);
+                SimpleDdgiMemoryPlan nextRequestedPlan =
+                    CreateMemoryPlan(requestedProbes);
+                ulong requestedIncrementalBytes = checked(
+                    nextRequestedPlan.LiveBytes - previousRequestedLiveBytes);
+                requestedPlan = nextRequestedPlan;
+                previousRequestedLiveBytes = requestedPlan.LiveBytes;
+
+                int nextAcceptedProbeCount = checked(acceptedProbes + probes);
+                SimpleDdgiMemoryPlan nextAcceptedPlan =
+                    CreateMemoryPlan(nextAcceptedProbeCount);
+                ulong incrementalBytes = acceptedVolumes == 0
+                    ? nextAcceptedPlan.LiveBytes
+                    : checked(nextAcceptedPlan.LiveBytes - acceptedPlan.LiveBytes);
 
                 bool exceedsVolumeBudget = acceptedVolumes >= budget.VolumeBudget;
-                bool exceedsProbeBudget = acceptedProbes > budget.ProbeBudget - probes;
-                bool exceedsMemoryBudget = persistentBytes > budget.PersistentMemoryBudgetBytes ||
-                    acceptedBytes > budget.PersistentMemoryBudgetBytes - persistentBytes;
+                bool exceedsProbeBudget =
+                    probes > budget.ProbeBudget ||
+                    acceptedProbes > budget.ProbeBudget - probes;
+                bool exceedsMemoryBudget =
+                    nextAcceptedPlan.LiveBytes > budget.PersistentMemoryBudgetBytes;
                 if (!exceedsVolumeBudget && !exceedsProbeBudget && !exceedsMemoryBudget)
                 {
                     decisions.Add(new SimpleDdgiLayoutVolumeDecision(
                         request,
                         SimpleDdgiLayoutDecision.Accepted,
                         probes,
-                        persistentBytes,
-                        "accepted"));
+                        incrementalBytes,
+                        "accepted")
+                    {
+                        RequestedPersistentBytes = requestedIncrementalBytes
+                    });
                     acceptedVolumes++;
-                    acceptedProbes = checked(acceptedProbes + probes);
-                    acceptedBytes = checked(acceptedBytes + persistentBytes);
+                    acceptedProbes = nextAcceptedProbeCount;
+                    acceptedPlan = nextAcceptedPlan;
                     continue;
                 }
 
@@ -198,7 +399,15 @@ namespace Njulf.Rendering.Resources
                         : exceedsProbeBudget
                             ? "probe-budget"
                             : "persistent-memory-budget";
-                decisions.Add(new SimpleDdgiLayoutVolumeDecision(request, decision, 0, 0, reason));
+                decisions.Add(new SimpleDdgiLayoutVolumeDecision(
+                    request,
+                    decision,
+                    0,
+                    0,
+                    reason)
+                {
+                    RequestedPersistentBytes = requestedIncrementalBytes
+                });
             }
 
             return new SimpleDdgiLayoutReport(
@@ -206,9 +415,29 @@ namespace Njulf.Rendering.Resources
                 admissionMode,
                 requestedProbes,
                 acceptedProbes,
-                requestedBytes,
-                acceptedBytes,
-                decisions);
+                requestedPlan.LiveBytes,
+                acceptedPlan.LiveBytes,
+                decisions)
+            {
+                RequestedMemoryPlan = requestedPlan,
+                AcceptedMemoryPlan = acceptedPlan
+            };
+
+            SimpleDdgiMemoryPlan CreateMemoryPlan(int totalProbeCount)
+            {
+                int updateCapacity =
+                    SimpleDdgiMemoryPlan.ResolveUpdateRequestCapacity(
+                        totalProbeCount,
+                        configuredProbeUpdatesPerFrame,
+                        lightingDirtyBoostEnabled);
+                return SimpleDdgiMemoryPlan.Create(
+                    totalProbeCount,
+                    updateCapacity,
+                    transportRayCapacity,
+                    sampledAtlasRequested,
+                    transportV2Enabled,
+                    readbackBufferCount);
+            }
         }
     }
 }

@@ -17,7 +17,9 @@ namespace Njulf.Rendering.Resources
     public sealed class FarFieldClipmapManager : IDisposable
     {
         private const ulong MinBufferSize = 16;
-        private const ulong VoxelStride = 4;
+        private const ulong LegacyVoxelStride = sizeof(uint);
+        private const ulong MaterialV2VoxelStride =
+            FarFieldMaterialPayloadV2.VoxelStrideWords * sizeof(uint);
         // The far-field cache owns a fixed share of the tier cap while static
         // page-bake input has its own bounded reserve. Keeping this reserve out
         // of page-pool admission prevents large scene input from turning a hard
@@ -84,6 +86,10 @@ namespace Njulf.Rendering.Resources
         private ulong _staticInstanceSceneContentRevision;
         private bool _hasStaticInstanceSnapshot;
         private bool _hasPagedSceneSignature;
+        // Latched at the start of Upload so allocation, shader parameters, and
+        // bake dispatches cannot observe different ABIs if settings are edited
+        // while a frame is being assembled.
+        private bool _materialV2Enabled;
         private int _lastPageRequestCount;
         private int _lastPageMissCount;
         private int _lastPageRebuildCount;
@@ -104,6 +110,8 @@ namespace Njulf.Rendering.Resources
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _accelerationStructureManager = accelerationStructureManager ?? throw new ArgumentNullException(nameof(accelerationStructureManager));
             _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
+            _materialV2Enabled =
+                settings.GlobalIllumination.EffectiveGiFarFieldMaterialV2;
 
             _paramsBuffer = _bufferManager.CreateDeviceBuffer(
                 Math.Max(MinBufferSize, ParamsSize),
@@ -146,7 +154,15 @@ namespace Njulf.Rendering.Resources
         public int PageRebuildCount => _lastPageRebuildCount;
         public int PageEvictionsThisFrame => _lastPageEvictionCount;
         public int ScheduledPageBakeCount => _lastScheduledPageBakeCount;
+        public int StalePublicationRejectCount => _pageCache.StalePublicationRejectCount;
         public long LastUploadMicroseconds => _lastUploadMicroseconds;
+        public bool MaterialV2Enabled => _materialV2Enabled;
+        public uint MaterialPayloadVersion => MaterialV2Enabled
+            ? FarFieldMaterialPayloadV2.PayloadVersion
+            : 1u;
+        public uint MaterialPayloadStrideWords => MaterialV2Enabled
+            ? FarFieldMaterialPayloadV2.VoxelStrideWords
+            : 1u;
         public int BakeVoxelBufferIndex => _pagedMode ? BindlessIndex.FarFieldClipmapVoxelBuffer : _bakeVoxelBufferIndex;
         public int DistanceBufferIndex => BindlessIndex.FarFieldClipmapDistanceBuffer;
         public int JumpFloodScratch0BufferIndex => BindlessIndex.FarFieldClipmapJumpFloodScratch0Buffer;
@@ -154,7 +170,13 @@ namespace Njulf.Rendering.Resources
         public int PageTableBufferIndex => BindlessIndex.FarFieldClipmapPageTableBuffer;
         public GPUFarFieldClipmapParams LastParams => _lastParams;
         public ulong BufferBytes => ParamsSize + _voxelBufferBytes + _bakeVoxelBufferBytes + _distanceBufferBytes + _jumpFloodScratch0BufferBytes + _jumpFloodScratch1BufferBytes + _instanceBufferBytes + _pageTableBufferBytes;
-        public ulong PageCacheBytes => _voxelBufferBytes + _distanceBufferBytes + _jumpFloodScratch0BufferBytes + _jumpFloodScratch1BufferBytes + _pageTableBufferBytes;
+        public ulong PageCacheBytes =>
+            _voxelBufferBytes +
+            _bakeVoxelBufferBytes +
+            _distanceBufferBytes +
+            _jumpFloodScratch0BufferBytes +
+            _jumpFloodScratch1BufferBytes +
+            _pageTableBufferBytes;
         public ulong InstanceBufferBytes => _instanceBufferBytes;
         public ulong PageTableBufferBytes => _pageTableBufferBytes;
         // Allocation-level accessors used by the render graph. The active/bake indices are
@@ -313,80 +335,83 @@ namespace Njulf.Rendering.Resources
             long uploadStart = Stopwatch.GetTimestamp();
             try
             {
-            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
-            ResetPageFrameStats();
-            if (gi.FarFieldPagedEnabled)
-            {
-                UploadPaged(scene, cameraPosition, stagingRing, commandBuffer, gi, sceneContentRevision);
-                return;
-            }
+                GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+                _materialV2Enabled = gi.EffectiveGiFarFieldMaterialV2;
+                ResetPageFrameStats();
+                if (gi.FarFieldPagedEnabled)
+                {
+                    UploadPaged(scene, cameraPosition, stagingRing, commandBuffer, gi, sceneContentRevision);
+                    return;
+                }
 
-            if (!gi.FarFieldClipmapEnabled)
-            {
-                // A disabled legacy clipmap must not allocate/rebuild a scene-sized
-                // cache merely because Simple DDGI remains active. Publish an
-                // explicit disabled parameter block so old valid pages cannot be
-                // sampled after a runtime toggle.
+                if (!gi.FarFieldClipmapEnabled)
+                {
+                    // A disabled legacy clipmap must not allocate/rebuild a scene-sized
+                    // cache merely because Simple DDGI remains active. Publish an
+                    // explicit disabled parameter block so old valid pages cannot be
+                    // sampled after a runtime toggle.
+                    _pagedMode = false;
+                    _bakePending = false;
+                    _distanceFieldValid = false;
+                    _hasClipmapOrigin = false;
+                    _lastSignature = 0;
+                    _legacyResolution = 1;
+                    _lastParams = CreateDisabledLegacyParams(gi, cameraPosition);
+                    UploadParams(stagingRing, commandBuffer);
+                    return;
+                }
+
                 _pagedMode = false;
-                _bakePending = false;
-                _distanceFieldValid = false;
-                _hasClipmapOrigin = false;
-                _lastSignature = 0;
-                _legacyResolution = 1;
-                _lastParams = CreateDisabledLegacyParams(gi, cameraPosition);
-                UploadParams(stagingRing, commandBuffer);
-                return;
-            }
+                int resolution = ResolveLegacyClipmapResolution(gi);
+                _legacyResolution = resolution;
+                EnsureVoxelCapacity(resolution);
 
-            _pagedMode = false;
-            int resolution = ResolveLegacyClipmapResolution(gi);
-            _legacyResolution = resolution;
-            EnsureVoxelCapacity(resolution);
+                EnsureStaticInstances(scene, sceneContentRevision, stagingRing, commandBuffer);
 
-            EnsureStaticInstances(scene, sceneContentRevision, stagingRing, commandBuffer);
+                BoundingBox bounds = ExpandBounds(DdgiFrameLayoutBuilder.EstimateSceneProbeBounds(scene), gi.SimpleDdgiProbeSpacing * 2.0f);
+                Vector3 extent = bounds.Max - bounds.Min;
+                float maxExtent = MathF.Max(MathF.Max(extent.X, extent.Y), extent.Z);
+                float voxelSize = MathF.Max(maxExtent / Math.Max(1, resolution), 0.001f);
+                float cubicExtent = voxelSize * resolution;
+                _clipmapOrigin = ResolveSceneClampedOrigin(bounds.Min, bounds.Max, cubicExtent, voxelSize, cameraPosition, _clipmapOrigin, ref _hasClipmapOrigin, out bool recentered);
+                if (recentered)
+                {
+                    _bakePending = true;
+                    _distanceFieldValid = false;
+                }
 
-            BoundingBox bounds = ExpandBounds(DdgiFrameLayoutBuilder.EstimateSceneProbeBounds(scene), gi.SimpleDdgiProbeSpacing * 2.0f);
-            Vector3 extent = bounds.Max - bounds.Min;
-            float maxExtent = MathF.Max(MathF.Max(extent.X, extent.Y), extent.Z);
-            float voxelSize = MathF.Max(maxExtent / Math.Max(1, resolution), 0.001f);
-            float cubicExtent = voxelSize * resolution;
-            _clipmapOrigin = ResolveSceneClampedOrigin(bounds.Min, bounds.Max, cubicExtent, voxelSize, cameraPosition, _clipmapOrigin, ref _hasClipmapOrigin, out bool recentered);
-            if (recentered)
-            {
-                _bakePending = true;
-                _distanceFieldValid = false;
-            }
+                ulong signature = CreateSignature(
+                    resolution,
+                    new BoundingBox(_clipmapOrigin, _clipmapOrigin + new Vector3(cubicExtent)),
+                    _gpuInstances,
+                    _instanceSourceRevisions,
+                    MaterialPayloadVersion);
+                if (signature != _lastSignature)
+                {
+                    _lastSignature = signature;
+                    _bakePending = true;
+                    _distanceFieldValid = false;
+                }
 
-            ulong signature = CreateSignature(
-                resolution,
-                new BoundingBox(_clipmapOrigin, _clipmapOrigin + new Vector3(cubicExtent)),
-                _gpuInstances,
-                _instanceSourceRevisions);
-            if (signature != _lastSignature)
-            {
-                _lastSignature = signature;
-                _bakePending = true;
-                _distanceFieldValid = false;
-            }
+                _lastParams = new GPUFarFieldClipmapParams
+                {
+                    OriginAndVoxelSize = new Vector4(_clipmapOrigin.X, _clipmapOrigin.Y, _clipmapOrigin.Z, voxelSize),
+                    ResolutionAndExtent = new Vector4(resolution, resolution, resolution, cubicExtent),
+                    TraceParams = new Vector4(gi.FarFieldStartDistance, gi.FarFieldMaxTraceSteps, gi.FarFieldClipmapEnabled ? 1.0f : 0.0f, gi.FarFieldForceAll ? 1.0f : 0.0f),
+                    BakeParams = new Vector4(_gpuInstances.Count, 0.0f, 0.0f, 0.0f),
+                    Diagnostics = new Vector4(_activeVoxelBufferIndex, _bakeVoxelBufferIndex, _bakePending ? 1.0f : 0.0f, 0.0f),
+                    Reserved0 = new Vector4(DistanceBufferIndex, JumpFloodScratch0BufferIndex, JumpFloodScratch1BufferIndex, _distanceFieldValid ? 1.0f : 0.0f),
+                    MaterialPayload = CreateMaterialPayloadParams()
+                };
 
-            _lastParams = new GPUFarFieldClipmapParams
-            {
-                OriginAndVoxelSize = new Vector4(_clipmapOrigin.X, _clipmapOrigin.Y, _clipmapOrigin.Z, voxelSize),
-                ResolutionAndExtent = new Vector4(resolution, resolution, resolution, cubicExtent),
-                TraceParams = new Vector4(gi.FarFieldStartDistance, gi.FarFieldMaxTraceSteps, gi.FarFieldClipmapEnabled ? 1.0f : 0.0f, gi.FarFieldForceAll ? 1.0f : 0.0f),
-                BakeParams = new Vector4(_gpuInstances.Count, 0.0f, 0.0f, 0.0f),
-                Diagnostics = new Vector4(_activeVoxelBufferIndex, _bakeVoxelBufferIndex, _bakePending ? 1.0f : 0.0f, 0.0f),
-                Reserved0 = new Vector4(DistanceBufferIndex, JumpFloodScratch0BufferIndex, JumpFloodScratch1BufferIndex, _distanceFieldValid ? 1.0f : 0.0f)
-            };
-
-            GpuBufferUploader.UploadValueToBuffer(
-                _context,
-                _bufferManager,
-                stagingRing,
-                commandBuffer,
-                _paramsBuffer,
-                _lastParams,
-                barrierDescription: new UploadBarrierDescription(PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit));
+                GpuBufferUploader.UploadValueToBuffer(
+                    _context,
+                    _bufferManager,
+                    stagingRing,
+                    commandBuffer,
+                    _paramsBuffer,
+                    _lastParams,
+                    barrierDescription: new UploadBarrierDescription(PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit));
             }
             finally
             {
@@ -462,20 +487,18 @@ namespace Njulf.Rendering.Resources
                 sceneContentRevision,
                 stagingRing,
                 commandBuffer);
-            bool sceneContentChanged = false;
             if (staticInstancesChanged || !_hasPagedSceneSignature)
             {
                 ulong sceneSignature = CreatePagedSceneSignature(
                     _gpuInstances,
                     _instanceBounds,
                     _instanceSourceRevisions);
-                sceneContentChanged = _hasPagedSceneSignature && sceneSignature != _lastPagedSceneSignature;
                 _lastPagedSceneSignature = sceneSignature;
                 _hasPagedSceneSignature = true;
             }
 
             int evictionCountBeforeRequests = _pageCache.EvictionCount;
-            RequestCameraPages(cameraPosition, gi, settingsSignature, sceneContentChanged);
+            RequestCameraPages(cameraPosition, gi, settingsSignature);
             _lastPageEvictionCount = Math.Max(0, _pageCache.EvictionCount - evictionCountBeforeRequests);
             // Bake selection happens after every request is resident in the CPU
             // cache.  The table is built twice: first to establish stable
@@ -516,11 +539,12 @@ namespace Njulf.Rendering.Resources
             CommandBuffer commandBuffer)
         {
             bool sameScene = ReferenceEquals(scene, _staticInstanceScene);
-            if (!ShouldRefreshStaticInstanceSnapshot(
-                    _hasStaticInstanceSnapshot,
-                    sameScene,
-                    _staticInstanceSceneContentRevision,
-                    sceneContentRevision))
+            bool snapshotRefreshRequired = ShouldRefreshStaticInstanceSnapshot(
+                _hasStaticInstanceSnapshot,
+                sameScene,
+                _staticInstanceSceneContentRevision,
+                sceneContentRevision);
+            if (!snapshotRefreshRequired && !HasStaticMaterialRevisionChanges())
             {
                 return false;
             }
@@ -529,6 +553,7 @@ namespace Njulf.Rendering.Resources
             _gpuInstances.Clear();
             _instanceBounds.Clear();
             _instanceSourceRevisions.Clear();
+            ulong primitiveKeyBase = 0;
             foreach (AccelerationStructureManager.StaticOpaqueInstance instance in _staticInstances)
             {
                 // The paged far field is a static streamed representation. Dynamic
@@ -538,15 +563,37 @@ namespace Njulf.Rendering.Resources
                 if (instance.Domain != AccelerationStructureGeometryDomain.Static)
                     continue;
 
+                uint triangleCount = instance.MeshInfo.IndexCount / 3u;
+                if (primitiveKeyBase + triangleCount > uint.MaxValue)
+                {
+                    throw new InvalidOperationException(
+                        "The far-field V2 primitive-key domain exceeded its 32-bit deterministic resolve capacity.");
+                }
+
+                MaterialAspectRevisions materialRevisions =
+                    _materialManager.GetMaterialAspectRevisions(
+                        unchecked((int)instance.MaterialIndex));
+                uint transportProfileRevision =
+                    _materialManager.GetMaterialTransportProfileRevision(
+                        unchecked((int)instance.MaterialIndex));
                 _gpuInstances.Add(new GPUFarFieldInstance
                 {
                     VertexOffset = instance.MeshInfo.VertexOffset,
                     IndexOffset = instance.MeshInfo.IndexOffset,
                     IndexCount = instance.MeshInfo.IndexCount,
                     MaterialIndex = instance.MaterialIndex,
-                    World = instance.WorldMatrix
+                    World = instance.WorldMatrix,
+                    PrimitiveKeyBase = checked((uint)primitiveKeyBase),
+                    MaterialRevision = materialRevisions.Material,
+                    FarFieldRevision = materialRevisions.FarField,
+                    Reserved0 = transportProfileRevision
                 });
-                _instanceSourceRevisions.Add(CreateInstanceSourceRevision(instance));
+                _instanceSourceRevisions.Add(
+                    CreateInstanceSourceRevision(
+                        instance,
+                        materialRevisions,
+                        transportProfileRevision));
+                primitiveKeyBase += triangleCount;
 
                 BoundingBox localBounds = new(
                     new Vector3(instance.MeshInfo.BoundingBoxMin.X, instance.MeshInfo.BoundingBoxMin.Y, instance.MeshInfo.BoundingBoxMin.Z),
@@ -573,6 +620,28 @@ namespace Njulf.Rendering.Resources
             return true;
         }
 
+        private bool HasStaticMaterialRevisionChanges()
+        {
+            for (int i = 0; i < _gpuInstances.Count; i++)
+            {
+                GPUFarFieldInstance instance = _gpuInstances[i];
+                MaterialAspectRevisions current =
+                    _materialManager.GetMaterialAspectRevisions(
+                        unchecked((int)instance.MaterialIndex));
+                uint currentTransportProfileRevision =
+                    _materialManager.GetMaterialTransportProfileRevision(
+                        unchecked((int)instance.MaterialIndex));
+                // MaterialRevision is bake-time provenance. Only the far-field
+                // aspect is a semantic invalidation gate; raster-only edits must
+                // not fan out into page rebuilds.
+                if (current.FarField != instance.FarFieldRevision ||
+                    currentTransportProfileRevision != instance.Reserved0)
+                    return true;
+            }
+
+            return false;
+        }
+
         internal static bool ShouldRefreshStaticInstanceSnapshot(
             bool hasSnapshot,
             bool sameScene,
@@ -588,8 +657,7 @@ namespace Njulf.Rendering.Resources
         private void RequestCameraPages(
             Vector3 cameraPosition,
             GlobalIlluminationSettings gi,
-            ulong settingsSignature,
-            bool sceneContentChanged)
+            ulong settingsSignature)
         {
             int radius = gi.FarFieldPageRequestRadius;
             for (int cascade = 0; cascade < gi.FarFieldCascadeCount; cascade++)
@@ -602,35 +670,42 @@ namespace Njulf.Rendering.Resources
                 int cascadePriority = (gi.FarFieldCascadeCount - cascade) * 1_000_000;
 
                 for (int z = -radius; z <= radius; z++)
-                for (int y = -radius; y <= radius; y++)
-                for (int x = -radius; x <= radius; x++)
-                {
-                    int manhattan = Math.Abs(x) + Math.Abs(y) + Math.Abs(z);
-                    FarFieldPageKey key = new(cascade, centerX + x, centerY + y, centerZ + z);
-                    _lastPageRequestCount++;
-                    bool wasResident = _pageCache.IsResident(key);
-                    bool hasCachedRevision = _pageCache.TryGetSourceRevision(key, out ulong cachedRevision);
-                    ulong sourceRevision;
-                    if (!sceneContentChanged && hasCachedRevision)
-                    {
-                        sourceRevision = cachedRevision;
-                    }
-                    else
-                    {
-                        sourceRevision = CreatePagedPageSignature(key, gi, settingsSignature);
-                    }
+                    for (int y = -radius; y <= radius; y++)
+                        for (int x = -radius; x <= radius; x++)
+                        {
+                            int manhattan = Math.Abs(x) + Math.Abs(y) + Math.Abs(z);
+                            FarFieldPageKey key = new(cascade, centerX + x, centerY + y, centerZ + z);
+                            _lastPageRequestCount++;
+                            bool wasResident = _pageCache.IsResident(key);
+                            bool hasCachedRevision = _pageCache.TryGetSourceRevision(key, out ulong cachedRevision);
+                            bool validationCurrent =
+                                _pageCache.TryGetValidationRevision(key, out ulong validationRevision) &&
+                                validationRevision == _lastPagedSceneSignature;
+                            ulong sourceRevision;
+                            if (hasCachedRevision && validationCurrent)
+                            {
+                                sourceRevision = cachedRevision;
+                            }
+                            else
+                            {
+                                sourceRevision = CreatePagedPageSignature(key, gi, settingsSignature);
+                            }
 
-                    if (!wasResident)
-                        _lastPageMissCount++;
-                    if (!hasCachedRevision || cachedRevision != sourceRevision)
-                        _lastPageRebuildCount++;
+                            if (!wasResident)
+                                _lastPageMissCount++;
+                            if (!hasCachedRevision || cachedRevision != sourceRevision)
+                                _lastPageRebuildCount++;
 
-                    // Near cascades win first, then pages closest to the camera.
-                    // The stable coordinate tie-break in FarFieldPageCache prevents
-                    // allocation order from changing the selected working set.
-                    int priority = cascadePriority + Math.Max(0, radius * 3 - manhattan) * 1_000;
-                    _pageCache.Request(key, sourceRevision, priority);
-                }
+                            // Near cascades win first, then pages closest to the camera.
+                            // The stable coordinate tie-break in FarFieldPageCache prevents
+                            // allocation order from changing the selected working set.
+                            int priority = cascadePriority + Math.Max(0, radius * 3 - manhattan) * 1_000;
+                            _pageCache.Request(
+                                key,
+                                sourceRevision,
+                                priority,
+                                validationRevision: _lastPagedSceneSignature);
+                        }
             }
         }
 
@@ -700,7 +775,8 @@ namespace Njulf.Rendering.Resources
                 Reserved0 = new Vector4(DistanceBufferIndex, JumpFloodScratch0BufferIndex, JumpFloodScratch1BufferIndex, 0.0f),
                 PagingParams = new Vector4(PageTableBufferIndex, _pageTableCapacity, _pagePoolCapacity, gi.FarFieldCascadeCount),
                 PagingLayout = new Vector4(_pageResolution, gi.FarFieldBaseVoxelSize, gi.FarFieldCascadeVoxelScale, 1.0f),
-                CameraAndBakePage = new Vector4(cameraPosition.X, cameraPosition.Y, cameraPosition.Z, -1.0f)
+                CameraAndBakePage = new Vector4(cameraPosition.X, cameraPosition.Y, cameraPosition.Z, -1.0f),
+                MaterialPayload = CreateMaterialPayloadParams()
             };
         }
 
@@ -717,7 +793,8 @@ namespace Njulf.Rendering.Resources
                 Reserved0 = new Vector4(DistanceBufferIndex, JumpFloodScratch0BufferIndex, JumpFloodScratch1BufferIndex, 0.0f),
                 PagingParams = new Vector4(PageTableBufferIndex, _pageTableCapacity, _pagePoolCapacity, gi.FarFieldCascadeCount),
                 PagingLayout = new Vector4(resolution, gi.FarFieldBaseVoxelSize, gi.FarFieldCascadeVoxelScale, 1.0f),
-                CameraAndBakePage = new Vector4(cameraPosition.X, cameraPosition.Y, cameraPosition.Z, -1.0f)
+                CameraAndBakePage = new Vector4(cameraPosition.X, cameraPosition.Y, cameraPosition.Z, -1.0f),
+                MaterialPayload = CreateMaterialPayloadParams()
             };
         }
 
@@ -734,9 +811,13 @@ namespace Njulf.Rendering.Resources
                 Reserved0 = new Vector4(DistanceBufferIndex, JumpFloodScratch0BufferIndex, JumpFloodScratch1BufferIndex, 0.0f),
                 PagingParams = Vector4.Zero,
                 PagingLayout = Vector4.Zero,
-                CameraAndBakePage = new Vector4(cameraPosition.X, cameraPosition.Y, cameraPosition.Z, -1.0f)
+                CameraAndBakePage = new Vector4(cameraPosition.X, cameraPosition.Y, cameraPosition.Z, -1.0f),
+                MaterialPayload = CreateMaterialPayloadParams()
             };
         }
+
+        private Vector4 CreateMaterialPayloadParams() =>
+            new(MaterialPayloadVersion, MaterialPayloadStrideWords, 0.0f, 0.0f);
 
         private void UploadParams(StagingRing stagingRing, CommandBuffer commandBuffer)
         {
@@ -773,7 +854,7 @@ namespace Njulf.Rendering.Resources
         {
             ulong pageCacheBudgetBytes = ResolveFarFieldPageCacheBudgetBytes(
                 _settings.GlobalIllumination.FarFieldMemoryBudgetBytes);
-            if (CalculatePagedCacheBytes(resolution, pagePoolCapacity) > pageCacheBudgetBytes)
+            if (CalculatePagedCacheBytes(resolution, pagePoolCapacity, MaterialV2Enabled) > pageCacheBudgetBytes)
             {
                 throw new InvalidOperationException(
                     "The resolved far-field page pool exceeds its tier cache budget before allocation.");
@@ -781,7 +862,9 @@ namespace Njulf.Rendering.Resources
 
             ulong pageVoxelCount = GetPageVoxelCount(resolution);
             ulong poolVoxelCount = checked(pageVoxelCount * (ulong)pagePoolCapacity);
-            ulong voxelBytes = Math.Max(MinBufferSize, checked(poolVoxelCount * VoxelStride));
+            ulong voxelBytes = Math.Max(
+                MinBufferSize,
+                checked(poolVoxelCount * GetVoxelStrideBytes(MaterialV2Enabled)));
             ulong distanceBytes = Math.Max(MinBufferSize, checked(((poolVoxelCount + 1UL) / 2UL) * sizeof(uint)));
             // Jump-flood scratch is deliberately one page, not one allocation per
             // resident page: page bakes execute serially inside the bounded update
@@ -813,7 +896,11 @@ namespace Njulf.Rendering.Resources
 
             ulong pageCacheBudgetBytes = ResolveFarFieldPageCacheBudgetBytes(gi.FarFieldMemoryBudgetBytes);
             int resolution = gi.FarFieldClipmapResolution;
-            while (resolution > 16 && CalculateLegacyCacheBytes(resolution) > pageCacheBudgetBytes)
+            while (resolution > 16 &&
+                   CalculateLegacyCacheBytes(
+                       resolution,
+                       gi.EffectiveGiFarFieldMaterialV2) >
+                   pageCacheBudgetBytes)
                 resolution = Math.Max(16, resolution / 2);
             return resolution;
         }
@@ -825,7 +912,12 @@ namespace Njulf.Rendering.Resources
 
             ulong pageCacheBudgetBytes = ResolveFarFieldPageCacheBudgetBytes(gi.FarFieldMemoryBudgetBytes);
             int resolution = gi.FarFieldPageResolution;
-            while (resolution > 16 && CalculatePagedCacheBytes(resolution, 1) > pageCacheBudgetBytes)
+            while (resolution > 16 &&
+                   CalculatePagedCacheBytes(
+                       resolution,
+                       1,
+                       gi.EffectiveGiFarFieldMaterialV2) >
+                   pageCacheBudgetBytes)
                 resolution = Math.Max(16, resolution / 2);
             return resolution;
         }
@@ -836,11 +928,20 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentNullException(nameof(gi));
 
             ulong pageCacheBudgetBytes = ResolveFarFieldPageCacheBudgetBytes(gi.FarFieldMemoryBudgetBytes);
-            if (CalculatePagedCacheBytes(resolution, 1) > pageCacheBudgetBytes)
+            if (CalculatePagedCacheBytes(
+                    resolution,
+                    1,
+                    gi.EffectiveGiFarFieldMaterialV2) >
+                pageCacheBudgetBytes)
                 return 0;
 
             int capacity = gi.FarFieldResidentPageBudget;
-            while (capacity > 1 && CalculatePagedCacheBytes(resolution, capacity) > pageCacheBudgetBytes)
+            while (capacity > 1 &&
+                   CalculatePagedCacheBytes(
+                       resolution,
+                       capacity,
+                       gi.EffectiveGiFarFieldMaterialV2) >
+                   pageCacheBudgetBytes)
                 capacity--;
             return capacity;
         }
@@ -874,9 +975,17 @@ namespace Njulf.Rendering.Resources
         /// </summary>
         internal static ulong CalculatePagedCacheBytes(int resolution, int capacity)
         {
+            return CalculatePagedCacheBytes(resolution, capacity, materialV2Enabled: false);
+        }
+
+        internal static ulong CalculatePagedCacheBytes(
+            int resolution,
+            int capacity,
+            bool materialV2Enabled)
+        {
             ulong pageVoxelCount = GetPageVoxelCount(resolution);
             ulong poolVoxelCount = checked(pageVoxelCount * (ulong)Math.Max(capacity, 1));
-            ulong voxelBytes = checked(poolVoxelCount * VoxelStride);
+            ulong voxelBytes = checked(poolVoxelCount * GetVoxelStrideBytes(materialV2Enabled));
             ulong distanceBytes = checked(((poolVoxelCount + 1UL) / 2UL) * sizeof(uint));
             ulong scratchBytes = checked(pageVoxelCount * sizeof(uint) * 2UL);
             ulong tableBytes = checked((ulong)NextPowerOfTwo(Math.Max(2, capacity * 2)) * PageTableEntryStride);
@@ -890,12 +999,22 @@ namespace Njulf.Rendering.Resources
         /// </summary>
         internal static ulong CalculateLegacyCacheBytes(int resolution)
         {
+            return CalculateLegacyCacheBytes(resolution, materialV2Enabled: false);
+        }
+
+        internal static ulong CalculateLegacyCacheBytes(int resolution, bool materialV2Enabled)
+        {
             ulong voxelCount = GetPageVoxelCount(resolution);
-            ulong voxelBytes = Math.Max(MinBufferSize, checked(voxelCount * VoxelStride));
+            ulong voxelBytes = Math.Max(
+                MinBufferSize,
+                checked(voxelCount * GetVoxelStrideBytes(materialV2Enabled)));
             ulong distanceBytes = Math.Max(MinBufferSize, checked(((voxelCount + 1UL) / 2UL) * sizeof(uint)));
             ulong scratchBytes = Math.Max(MinBufferSize, checked(voxelCount * sizeof(uint)));
             return checked(voxelBytes * 2UL + distanceBytes + scratchBytes * 2UL);
         }
+
+        internal static ulong GetVoxelStrideBytes(bool materialV2Enabled) =>
+            materialV2Enabled ? MaterialV2VoxelStride : LegacyVoxelStride;
 
         private static ulong GetPageVoxelCount(int resolution)
         {
@@ -946,6 +1065,9 @@ namespace Njulf.Rendering.Resources
                 hash = HashAdd(hash, instance.IndexCount);
                 hash = HashAdd(hash, instance.MaterialIndex);
                 hash = HashAdd(hash, instance.World);
+                hash = HashAdd(hash, instance.PrimitiveKeyBase);
+                hash = HashAdd(hash, instance.FarFieldRevision);
+                hash = HashAdd(hash, instance.Reserved0);
                 hash = HashAdd(hash, GetInstanceSourceRevision(i));
             }
 
@@ -960,6 +1082,11 @@ namespace Njulf.Rendering.Resources
             hash = HashAdd(hash, (uint)gi.FarFieldCascadeCount);
             hash = HashAdd(hash, BitConverter.SingleToUInt32Bits(gi.FarFieldBaseVoxelSize));
             hash = HashAdd(hash, BitConverter.SingleToUInt32Bits(gi.FarFieldCascadeVoxelScale));
+            hash = HashAdd(
+                hash,
+                gi.EffectiveGiFarFieldMaterialV2
+                    ? FarFieldMaterialPayloadV2.PayloadVersion
+                    : 1u);
             return hash;
         }
 
@@ -978,6 +1105,9 @@ namespace Njulf.Rendering.Resources
                 hash = HashAdd(hash, instance.IndexCount);
                 hash = HashAdd(hash, instance.MaterialIndex);
                 hash = HashAdd(hash, instance.World);
+                hash = HashAdd(hash, instance.PrimitiveKeyBase);
+                hash = HashAdd(hash, instance.FarFieldRevision);
+                hash = HashAdd(hash, instance.Reserved0);
                 if ((uint)i < (uint)sourceRevisions.Count)
                     hash = HashAdd(hash, sourceRevisions[i]);
                 if ((uint)i < (uint)bounds.Count)
@@ -1012,14 +1142,16 @@ namespace Njulf.Rendering.Resources
         {
             ulong pageCacheBudgetBytes = ResolveFarFieldPageCacheBudgetBytes(
                 _settings.GlobalIllumination.FarFieldMemoryBudgetBytes);
-            if (CalculateLegacyCacheBytes(resolution) > pageCacheBudgetBytes)
+            if (CalculateLegacyCacheBytes(resolution, MaterialV2Enabled) > pageCacheBudgetBytes)
             {
                 throw new InvalidOperationException(
                     "The resolved legacy far-field clipmap exceeds its tier cache budget before allocation.");
             }
 
             ulong voxelCount = checked((ulong)Math.Max(1, resolution) * (ulong)Math.Max(1, resolution) * (ulong)Math.Max(1, resolution));
-            ulong requiredBytes = Math.Max(MinBufferSize, checked(voxelCount * VoxelStride));
+            ulong requiredBytes = Math.Max(
+                MinBufferSize,
+                checked(voxelCount * GetVoxelStrideBytes(MaterialV2Enabled)));
             ulong packedDistanceBytes = Math.Max(MinBufferSize, checked(((voxelCount + 1UL) / 2UL) * sizeof(uint)));
             ulong seedBytes = Math.Max(MinBufferSize, checked(voxelCount * sizeof(uint)));
             EnsureBuffer(ref _voxelBuffer, ref _voxelBufferBytes, requiredBytes, "Far Field Clipmap Voxels");
@@ -1178,12 +1310,14 @@ namespace Njulf.Rendering.Resources
             int resolution,
             BoundingBox bounds,
             IReadOnlyList<GPUFarFieldInstance> instances,
-            IReadOnlyList<ulong> sourceRevisions)
+            IReadOnlyList<ulong> sourceRevisions,
+            uint payloadVersion)
         {
             ulong hash = 14695981039346656037UL;
             hash = HashAdd(hash, (uint)resolution);
             hash = HashAdd(hash, bounds.Min);
             hash = HashAdd(hash, bounds.Max);
+            hash = HashAdd(hash, payloadVersion);
             hash = HashAdd(hash, (uint)instances.Count);
             for (int i = 0; i < instances.Count; i++)
             {
@@ -1196,17 +1330,24 @@ namespace Njulf.Rendering.Resources
                 // world transform changes.  Omitting this made the baked field
                 // silently stale until an unrelated scene change forced a bake.
                 hash = HashAdd(hash, instance.World);
+                hash = HashAdd(hash, instance.PrimitiveKeyBase);
+                hash = HashAdd(hash, instance.FarFieldRevision);
+                hash = HashAdd(hash, instance.Reserved0);
                 if ((uint)i < (uint)sourceRevisions.Count)
                     hash = HashAdd(hash, sourceRevisions[i]);
             }
             return hash;
         }
 
-        private ulong CreateInstanceSourceRevision(AccelerationStructureManager.StaticOpaqueInstance instance)
+        private static ulong CreateInstanceSourceRevision(
+            AccelerationStructureManager.StaticOpaqueInstance instance,
+            MaterialAspectRevisions materialRevisions,
+            uint transportProfileRevision)
         {
             return CreateStaticInstanceSourceRevision(
                 instance.Mesh,
-                _materialManager.GetMaterialContentRevision(unchecked((int)instance.MaterialIndex)));
+                materialRevisions.FarField,
+                transportProfileRevision);
         }
 
         internal static ulong CreateStaticInstanceSourceRevision(MeshHandle mesh, uint materialContentRevision)
@@ -1216,6 +1357,15 @@ namespace Njulf.Rendering.Resources
             hash = HashAdd(hash, mesh.Generation);
             hash = HashAdd(hash, materialContentRevision);
             return hash;
+        }
+
+        internal static ulong CreateStaticInstanceSourceRevision(
+            MeshHandle mesh,
+            uint farFieldRevision,
+            uint transportProfileRevision)
+        {
+            ulong hash = CreateStaticInstanceSourceRevision(mesh, farFieldRevision);
+            return HashAdd(hash, transportProfileRevision);
         }
 
         private ulong GetInstanceSourceRevision(int index)

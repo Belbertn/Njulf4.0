@@ -2,5 +2,14 @@
   <PropertyGroup>
     <!-- GpuMemoryAllocator.vma ships an unused macos-arm64 asset. Njulf does not target macOS. -->
     <NoWarn>$(NoWarn);NETSDK1206</NoWarn>
+
+    <!--
+      Every project owns a checked-in NuGet dependency lock. Release and CI
+      restores are fail-closed: dependency changes must first be reviewed and
+      regenerated deliberately with a force-evaluated `dotnet restore`.
+    -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode
+      Condition="'$(RestoreLockedMode)' == '' and ('$(Configuration)' == 'Release' or '$(ContinuousIntegrationBuild)' == 'true')">true</RestoreLockedMode>
   </PropertyGroup>
 </Project>

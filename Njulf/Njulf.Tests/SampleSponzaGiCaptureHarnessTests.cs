@@ -298,6 +298,54 @@ public sealed class SampleSponzaGiCaptureHarnessTests
     }
 
     [Test]
+    public void ArtifactVerification_RejectsOversizedPngBeforeReadingPayload()
+    {
+        string directory = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            $"sponza-gi-artifact-bound-{Guid.NewGuid():N}");
+        string relativePath = "captures/oversized.png";
+        string fullPath = Path.Combine(directory, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        try
+        {
+            using (var output = new FileStream(
+                       fullPath,
+                       FileMode.CreateNew,
+                       FileAccess.Write,
+                       FileShare.None))
+            {
+                output.SetLength(
+                    SampleEvidenceFileIo.MaximumLinearFloatImageBytes + 1);
+            }
+            var artifact = new SampleSponzaGiCapturedArtifact(
+                string.Empty,
+                string.Empty,
+                "renderer-screenshot-request",
+                relativePath);
+
+            bool verified =
+                SampleSponzaGiCaptureContract.Default.TryVerifyArtifact(
+                    directory,
+                    artifact,
+                    out _,
+                    out string failureReason);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(verified, Is.False);
+                Assert.That(
+                    failureReason,
+                    Does.Contain("bounded limit"));
+            });
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
     public void CompletedManifest_RequiresAndRecordsHashVerifiedRendererArtifacts()
     {
         string directory = Path.Combine(TestContext.CurrentContext.WorkDirectory, $"sponza-gi-capture-{Guid.NewGuid():N}");

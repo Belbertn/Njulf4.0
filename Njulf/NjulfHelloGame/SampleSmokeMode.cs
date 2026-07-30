@@ -10,5 +10,7 @@ public enum SampleSmokeMode
     SceneReload,
     MissingAssets,
     LongRun,
+    QualitySwitch,
+    TextureHotReload,
     All
 }

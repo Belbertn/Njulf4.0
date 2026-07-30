@@ -26,12 +26,36 @@ struct FarFieldClipmapParams
     float cascadeVoxelScale;
     bool pagedEnabled;
     vec3 cameraPosition;
+    uint materialPayloadVersion;
+    uint voxelStrideWords;
 };
 
 const uint FAR_FIELD_PAGE_TABLE_ENTRY_WORDS = 8u;
 const uint FAR_FIELD_PAGE_CASCADE_MASK = 0xffu;
 const uint FAR_FIELD_PAGE_ALLOCATED_FLAG = 1u << 8u;
 const uint FAR_FIELD_PAGE_VALID_FLAG = 1u << 9u;
+const uint FAR_FIELD_MATERIAL_V2_VERSION = 2u;
+const uint FAR_FIELD_MATERIAL_SIDEDNESS_CONE_VERSION = 3u;
+const uint FAR_FIELD_MATERIAL_OCCLUSION_VERSION = 4u;
+const uint FAR_FIELD_MATERIAL_V2_STRIDE_WORDS = 8u;
+const uint FAR_FIELD_MATERIAL_V2_EMPTY_KEY = 0xffffffffu;
+const uint FAR_FIELD_MATERIAL_V2_OCCUPIED_BIT = 1u << 31u;
+const uint FAR_FIELD_MATERIAL_V2_STORED_FLAG_MASK = 0x7fffu;
+const uint FAR_FIELD_MATERIAL_DOUBLE_SIDED_FLAG = 1u << 6u;
+const float FAR_FIELD_INVERSE_PI = 0.3183098861837907;
+
+struct FarFieldVoxelMaterial
+{
+    vec3 diffuseReflectance;
+    vec3 emissiveRadiance;
+    vec3 geometricNormal;
+    float materialOcclusion;
+    float coverage;
+    float normalCone;
+    uint materialFlags;
+    uint materialRevision;
+    uint transportProfileRevision;
+};
 
 struct FarFieldPageReference
 {
@@ -55,6 +79,7 @@ FarFieldClipmapParams ReadFarFieldClipmapParams(uint bufferIndex)
     vec4 paging = ReadStorageVec4(bufferIndex, 24u);
     vec4 pagingLayout = ReadStorageVec4(bufferIndex, 28u);
     vec4 camera = ReadStorageVec4(bufferIndex, 32u);
+    vec4 materialPayload = ReadStorageVec4(bufferIndex, 36u);
     p.origin = origin.xyz;
     p.voxelSize = max(origin.w, 0.0001);
     p.resolution = uvec3(max(resolution.xyz, vec3(1.0)));
@@ -75,6 +100,8 @@ FarFieldClipmapParams ReadFarFieldClipmapParams(uint bufferIndex)
     p.cascadeVoxelScale = max(pagingLayout.z, 1.0001);
     p.pagedEnabled = pagingLayout.w > 0.5;
     p.cameraPosition = camera.xyz;
+    p.materialPayloadVersion = max(uint(max(materialPayload.x, 0.0)), 1u);
+    p.voxelStrideWords = max(uint(max(materialPayload.y, 0.0)), 1u);
     return p;
 }
 
@@ -82,6 +109,156 @@ uint FarFieldVoxelIndex(ivec3 voxel, FarFieldClipmapParams p)
 {
     uvec3 v = uvec3(voxel);
     return v.x + v.y * p.resolution.x + v.z * p.resolution.x * p.resolution.y;
+}
+
+uint FarFieldVoxelPayloadWordOffset(uint logicalVoxelIndex, FarFieldClipmapParams p)
+{
+    return logicalVoxelIndex * max(p.voxelStrideWords, 1u);
+}
+
+vec3 DecodeFarFieldOctahedralNormal(uint packed)
+{
+    vec2 encoded = unpackSnorm2x16(packed);
+    vec3 normal = vec3(encoded, 1.0 - abs(encoded.x) - abs(encoded.y));
+    if (normal.z < 0.0)
+    {
+        vec2 signs = vec2(normal.x >= 0.0 ? 1.0 : -1.0, normal.y >= 0.0 ? 1.0 : -1.0);
+        normal.xy = (vec2(1.0) - abs(normal.yx)) * signs;
+    }
+    return normalize(normal);
+}
+
+vec3 DecodeFarFieldDiffuseRgb10(uint packed)
+{
+    return vec3(
+        float(packed & 0x3ffu),
+        float((packed >> 10u) & 0x3ffu),
+        float((packed >> 20u) & 0x3ffu)) / 1023.0;
+}
+
+FarFieldVoxelMaterial EmptyFarFieldVoxelMaterial()
+{
+    FarFieldVoxelMaterial material;
+    material.diffuseReflectance = vec3(0.0);
+    material.emissiveRadiance = vec3(0.0);
+    material.geometricNormal = vec3(0.0);
+    material.materialOcclusion = 1.0;
+    material.coverage = 0.0;
+    material.normalCone = 0.0;
+    material.materialFlags = 0u;
+    material.materialRevision = 0u;
+    material.transportProfileRevision = 0u;
+    return material;
+}
+
+bool ReadFarFieldVoxelMaterial(
+    uint bufferIndex,
+    uint logicalVoxelIndex,
+    FarFieldClipmapParams p,
+    out FarFieldVoxelMaterial material)
+{
+    material = EmptyFarFieldVoxelMaterial();
+    uint wordOffset = FarFieldVoxelPayloadWordOffset(logicalVoxelIndex, p);
+    if (p.materialPayloadVersion < FAR_FIELD_MATERIAL_V2_VERSION)
+    {
+        uint packed = ReadStorageWord(bufferIndex, wordOffset);
+        if ((packed & 0x80000000u) == 0u)
+            return false;
+
+        material.diffuseReflectance = vec3(
+            float((packed >> 0u) & 0xffu),
+            float((packed >> 8u) & 0xffu),
+            float((packed >> 16u) & 0xffu)) / 255.0;
+        // V1 had no sidedness metadata and historically behaved as a
+        // conservative two-sided volume.
+        material.materialFlags = FAR_FIELD_MATERIAL_DOUBLE_SIDED_FLAG;
+        material.coverage = 1.0;
+        return true;
+    }
+
+    uint winnerKey = ReadStorageWord(bufferIndex, wordOffset + 0u);
+    uint metadata = ReadStorageWord(bufferIndex, wordOffset + 1u);
+    if (winnerKey == FAR_FIELD_MATERIAL_V2_EMPTY_KEY ||
+        (metadata & FAR_FIELD_MATERIAL_V2_OCCUPIED_BIT) == 0u)
+    {
+        return false;
+    }
+
+    uint emissionRg = ReadStorageWord(bufferIndex, wordOffset + 3u);
+    uint emissionBAndOcclusion = ReadStorageWord(bufferIndex, wordOffset + 4u);
+    material.diffuseReflectance = DecodeFarFieldDiffuseRgb10(
+        ReadStorageWord(bufferIndex, wordOffset + 2u));
+    material.emissiveRadiance = vec3(
+        unpackHalf2x16(emissionRg),
+        unpackHalf2x16(emissionBAndOcclusion).x);
+    material.materialOcclusion =
+        p.materialPayloadVersion >= FAR_FIELD_MATERIAL_OCCLUSION_VERSION
+            ? clamp(unpackHalf2x16(emissionBAndOcclusion).y, 0.0, 1.0)
+            : 1.0;
+    material.geometricNormal = DecodeFarFieldOctahedralNormal(
+        ReadStorageWord(bufferIndex, wordOffset + 5u));
+    material.coverage = float(metadata & 0xffu) / 255.0;
+    material.normalCone = float((metadata >> 8u) & 0xffu) / 255.0;
+    material.materialFlags = (metadata >> 16u) & FAR_FIELD_MATERIAL_V2_STORED_FLAG_MASK;
+    material.materialRevision = ReadStorageWord(bufferIndex, wordOffset + 6u);
+    material.transportProfileRevision = ReadStorageWord(bufferIndex, wordOffset + 7u);
+    return true;
+}
+
+bool FarFieldVoxelOccupied(
+    uint bufferIndex,
+    uint logicalVoxelIndex,
+    FarFieldClipmapParams p)
+{
+    uint wordOffset = FarFieldVoxelPayloadWordOffset(logicalVoxelIndex, p);
+    uint firstWord = ReadStorageWord(bufferIndex, wordOffset);
+    if (p.materialPayloadVersion < FAR_FIELD_MATERIAL_V2_VERSION)
+        return (firstWord & 0x80000000u) != 0u;
+
+    uint metadata = ReadStorageWord(bufferIndex, wordOffset + 1u);
+    return firstWord != FAR_FIELD_MATERIAL_V2_EMPTY_KEY &&
+        (metadata & FAR_FIELD_MATERIAL_V2_OCCUPIED_BIT) != 0u;
+}
+
+bool ResolveFarFieldMaterialFacing(
+    FarFieldClipmapParams p,
+    vec3 rayDirection,
+    inout FarFieldVoxelMaterial material)
+{
+    if (p.materialPayloadVersion < FAR_FIELD_MATERIAL_V2_VERSION)
+        return true;
+
+    bool doubleSided =
+        (material.materialFlags & FAR_FIELD_MATERIAL_DOUBLE_SIDED_FLAG) != 0u;
+    float facing = dot(material.geometricNormal, rayDirection);
+    if (!doubleSided)
+    {
+        if (p.materialPayloadVersion >= FAR_FIELD_MATERIAL_SIDEDNESS_CONE_VERSION)
+        {
+            // V3's cone is the conservative maximum angular deviation from
+            // the selected normal, normalized by PI. It is accumulated across
+            // every alpha-surviving surface in the voxel after winner
+            // publication, so an opposed contender cannot be hidden merely by
+            // the selected surface facing away from this trace.
+            float rayAngleNormalized =
+                acos(clamp(facing, -1.0, 1.0)) * FAR_FIELD_INVERSE_PI;
+            if (rayAngleNormalized + material.normalCone <= 0.5)
+                return false;
+
+            // The compact payload has one representative normal. Flip it only
+            // when the conservative overlap cone, rather than that primary
+            // normal, made the single-sided hit valid.
+            if (facing >= 0.0)
+                material.geometricNormal = -material.geometricNormal;
+            return true;
+        }
+
+        if (facing >= 0.0)
+            return false;
+    }
+    if (doubleSided && facing > 0.0)
+        material.geometricNormal = -material.geometricNormal;
+    return true;
 }
 
 bool FarFieldInside(ivec3 voxel, FarFieldClipmapParams p)
@@ -247,6 +424,20 @@ bool TraceFarFieldClipmapDetailed(
     out float hitT,
     out vec3 faceNormal,
     out vec3 albedo,
+    out vec3 emission,
+    out float materialOcclusion,
+    out bool stepExhausted,
+    out uint visitedSteps);
+
+bool TraceFarFieldClipmapDetailed(
+    vec3 origin,
+    vec3 dir,
+    float tMin,
+    float tMax,
+    out float hitT,
+    out vec3 faceNormal,
+    out vec3 albedo,
+    out vec3 emission,
     out bool stepExhausted,
     out uint visitedSteps);
 
@@ -259,9 +450,20 @@ bool TraceFarFieldClipmap(
     out vec3 faceNormal,
     out vec3 albedo)
 {
+    vec3 emission;
     bool stepExhausted;
     uint visitedSteps;
-    return TraceFarFieldClipmapDetailed(origin, dir, tMin, tMax, hitT, faceNormal, albedo, stepExhausted, visitedSteps);
+    return TraceFarFieldClipmapDetailed(
+        origin,
+        dir,
+        tMin,
+        tMax,
+        hitT,
+        faceNormal,
+        albedo,
+        emission,
+        stepExhausted,
+        visitedSteps);
 }
 
 float FarFieldAdvanceToPageBoundary(vec3 origin, vec3 dir, float t, vec3 pageOrigin, float pageExtent)
@@ -287,16 +489,20 @@ bool TraceFarFieldPaged(
     out float hitT,
     out vec3 faceNormal,
     out vec3 albedo,
+    out vec3 emission,
+    out float materialOcclusion,
     out bool stepExhausted,
     out uint visitedSteps)
 {
     hitT = tMax;
     faceNormal = vec3(0.0);
     albedo = vec3(0.0);
+    emission = vec3(0.0);
+    materialOcclusion = 1.0;
     stepExhausted = false;
     visitedSteps = 0u;
-    float t = max(tMin, 0.0);
     vec3 safeDirection = normalize(dir);
+    float t = max(tMin, 0.0);
 
     for (uint stepIndex = 0u; stepIndex < p.maxTraceSteps && t <= tMax; stepIndex++)
     {
@@ -323,15 +529,23 @@ bool TraceFarFieldPaged(
             continue;
         }
 
-        uint packed = ReadStorageWord(p.voxelBufferIndex, FarFieldPageVoxelOffset(p, page) + FarFieldVoxelIndex(voxel, p));
-        if ((packed & 0x80000000u) != 0u)
+        uint logicalVoxelIndex =
+            FarFieldPageVoxelOffset(p, page) + FarFieldVoxelIndex(voxel, p);
+        FarFieldVoxelMaterial voxelMaterial;
+        if (ReadFarFieldVoxelMaterial(
+                p.voxelBufferIndex,
+                logicalVoxelIndex,
+                p,
+                voxelMaterial) &&
+            ResolveFarFieldMaterialFacing(p, safeDirection, voxelMaterial))
         {
-            albedo = vec3(
-                float((packed >> 0u) & 0xffu),
-                float((packed >> 8u) & 0xffu),
-                float((packed >> 16u) & 0xffu)) / 255.0;
+            albedo = voxelMaterial.diffuseReflectance;
+            emission = voxelMaterial.emissiveRadiance;
+            materialOcclusion = voxelMaterial.materialOcclusion;
             hitT = t;
-            faceNormal = EstimateFarFieldPagedNormal(voxel, p, page, -safeDirection);
+            faceNormal = p.materialPayloadVersion >= FAR_FIELD_MATERIAL_V2_VERSION
+                ? voxelMaterial.geometricNormal
+                : EstimateFarFieldPagedNormal(voxel, p, page, -safeDirection);
             return true;
         }
 
@@ -358,14 +572,19 @@ bool TraceFarFieldClipmapDda(
     out float hitT,
     out vec3 faceNormal,
     out vec3 albedo,
+    out vec3 emission,
+    out float materialOcclusion,
     out bool stepExhausted,
     out uint visitedSteps)
 {
     hitT = tMax;
     faceNormal = vec3(0.0);
     albedo = vec3(0.0);
+    emission = vec3(0.0);
+    materialOcclusion = 1.0;
     stepExhausted = false;
     visitedSteps = 0u;
+    vec3 safeDirection = normalize(dir);
 
     vec3 invDir = vec3(
         abs(dir.x) > 0.000001 ? 1.0 / dir.x : 1.0e30,
@@ -399,13 +618,19 @@ bool TraceFarFieldClipmapDda(
         if (!FarFieldInside(voxel, p))
             break;
 
-        uint packed = ReadStorageWord(p.voxelBufferIndex, FarFieldVoxelIndex(voxel, p));
-        if ((packed & 0x80000000u) != 0u)
+        FarFieldVoxelMaterial voxelMaterial;
+        if (ReadFarFieldVoxelMaterial(
+                p.voxelBufferIndex,
+                FarFieldVoxelIndex(voxel, p),
+                p,
+                voxelMaterial) &&
+            ResolveFarFieldMaterialFacing(p, safeDirection, voxelMaterial))
         {
-            albedo = vec3(
-                float((packed >> 0u) & 0xffu),
-                float((packed >> 8u) & 0xffu),
-                float((packed >> 16u) & 0xffu)) / 255.0;
+            albedo = voxelMaterial.diffuseReflectance;
+            emission = voxelMaterial.emissiveRadiance;
+            materialOcclusion = voxelMaterial.materialOcclusion;
+            if (p.materialPayloadVersion >= FAR_FIELD_MATERIAL_V2_VERSION)
+                faceNormal = voxelMaterial.geometricNormal;
             hitT = t;
             return true;
         }
@@ -446,12 +671,16 @@ bool TraceFarFieldClipmapSphereMarch(
     out float hitT,
     out vec3 faceNormal,
     out vec3 albedo,
+    out vec3 emission,
+    out float materialOcclusion,
     out bool stepExhausted,
     out uint visitedSteps)
 {
     hitT = tMax;
     faceNormal = vec3(0.0);
     albedo = vec3(0.0);
+    emission = vec3(0.0);
+    materialOcclusion = 1.0;
     stepExhausted = false;
     visitedSteps = 0u;
 
@@ -480,15 +709,21 @@ bool TraceFarFieldClipmapSphereMarch(
         if (!FarFieldInside(voxel, p))
             break;
 
-        uint packed = ReadStorageWord(p.voxelBufferIndex, FarFieldVoxelIndex(voxel, p));
-        if ((packed & 0x80000000u) != 0u)
+        FarFieldVoxelMaterial voxelMaterial;
+        if (ReadFarFieldVoxelMaterial(
+                p.voxelBufferIndex,
+                FarFieldVoxelIndex(voxel, p),
+                p,
+                voxelMaterial) &&
+            ResolveFarFieldMaterialFacing(p, -fallbackNormal, voxelMaterial))
         {
-            albedo = vec3(
-                float((packed >> 0u) & 0xffu),
-                float((packed >> 8u) & 0xffu),
-                float((packed >> 16u) & 0xffu)) / 255.0;
+            albedo = voxelMaterial.diffuseReflectance;
+            emission = voxelMaterial.emissiveRadiance;
+            materialOcclusion = voxelMaterial.materialOcclusion;
             hitT = t;
-            faceNormal = EstimateFarFieldNormal(voxel, p, fallbackNormal);
+            faceNormal = p.materialPayloadVersion >= FAR_FIELD_MATERIAL_V2_VERSION
+                ? voxelMaterial.geometricNormal
+                : EstimateFarFieldNormal(voxel, p, fallbackNormal);
             return true;
         }
 
@@ -510,6 +745,8 @@ bool TraceFarFieldClipmapDetailed(
     out float hitT,
     out vec3 faceNormal,
     out vec3 albedo,
+    out vec3 emission,
+    out float materialOcclusion,
     out bool stepExhausted,
     out uint visitedSteps)
 {
@@ -517,18 +754,97 @@ bool TraceFarFieldClipmapDetailed(
     hitT = tMax;
     faceNormal = vec3(0.0);
     albedo = vec3(0.0);
+    emission = vec3(0.0);
+    materialOcclusion = 1.0;
     stepExhausted = false;
     visitedSteps = 0u;
     if (!p.enabled)
         return false;
 
     if (p.pagedEnabled)
-        return TraceFarFieldPaged(origin, dir, tMin, tMax, p, hitT, faceNormal, albedo, stepExhausted, visitedSteps);
+        return TraceFarFieldPaged(origin, dir, tMin, tMax, p, hitT, faceNormal, albedo, emission, materialOcclusion, stepExhausted, visitedSteps);
 
     if (p.distanceFieldValid)
-        return TraceFarFieldClipmapSphereMarch(origin, dir, tMin, tMax, p, hitT, faceNormal, albedo, stepExhausted, visitedSteps);
+        return TraceFarFieldClipmapSphereMarch(origin, dir, tMin, tMax, p, hitT, faceNormal, albedo, emission, materialOcclusion, stepExhausted, visitedSteps);
 
-    return TraceFarFieldClipmapDda(origin, dir, tMin, tMax, p, hitT, faceNormal, albedo, stepExhausted, visitedSteps);
+    return TraceFarFieldClipmapDda(origin, dir, tMin, tMax, p, hitT, faceNormal, albedo, emission, materialOcclusion, stepExhausted, visitedSteps);
+}
+
+bool TraceFarFieldClipmapDetailed(
+    vec3 origin,
+    vec3 dir,
+    float tMin,
+    float tMax,
+    out float hitT,
+    out vec3 faceNormal,
+    out vec3 albedo,
+    out vec3 emission,
+    out bool stepExhausted,
+    out uint visitedSteps)
+{
+    float materialOcclusion;
+    return TraceFarFieldClipmapDetailed(
+        origin,
+        dir,
+        tMin,
+        tMax,
+        hitT,
+        faceNormal,
+        albedo,
+        emission,
+        materialOcclusion,
+        stepExhausted,
+        visitedSteps);
+}
+
+bool TraceFarFieldClipmapDetailed(
+    vec3 origin,
+    vec3 dir,
+    float tMin,
+    float tMax,
+    out float hitT,
+    out vec3 faceNormal,
+    out vec3 albedo,
+    out bool stepExhausted,
+    out uint visitedSteps)
+{
+    vec3 emission;
+    return TraceFarFieldClipmapDetailed(
+        origin,
+        dir,
+        tMin,
+        tMax,
+        hitT,
+        faceNormal,
+        albedo,
+        emission,
+        stepExhausted,
+        visitedSteps);
+}
+
+uint ReadFarFieldDebugPackedVoxel(
+    FarFieldClipmapParams p,
+    uint logicalVoxelIndex)
+{
+    if (p.materialPayloadVersion < FAR_FIELD_MATERIAL_V2_VERSION)
+    {
+        return ReadStorageWord(
+            p.voxelBufferIndex,
+            FarFieldVoxelPayloadWordOffset(logicalVoxelIndex, p));
+    }
+
+    FarFieldVoxelMaterial material;
+    if (!ReadFarFieldVoxelMaterial(
+            p.voxelBufferIndex,
+            logicalVoxelIndex,
+            p,
+            material))
+    {
+        return 0u;
+    }
+
+    uvec3 rgb = uvec3(round(clamp(material.diffuseReflectance, vec3(0.0), vec3(1.0)) * 255.0));
+    return 0x80000000u | rgb.r | (rgb.g << 8u) | (rgb.b << 16u);
 }
 
 bool ReadFarFieldDebugVoxel(FarFieldClipmapParams p, vec2 uv, out uint packed, out bool missing)
@@ -539,7 +855,7 @@ bool ReadFarFieldDebugVoxel(FarFieldClipmapParams p, vec2 uv, out uint packed, o
     {
         uvec2 xy = min(uvec2(floor(uv * vec2(p.resolution.xy))), p.resolution.xy - uvec2(1u));
         ivec3 voxel = ivec3(int(xy.x), int(xy.y), int(p.resolution.z / 2u));
-        packed = ReadStorageWord(p.voxelBufferIndex, FarFieldVoxelIndex(voxel, p));
+        packed = ReadFarFieldDebugPackedVoxel(p, FarFieldVoxelIndex(voxel, p));
         return true;
     }
 
@@ -555,7 +871,9 @@ bool ReadFarFieldDebugVoxel(FarFieldClipmapParams p, vec2 uv, out uint packed, o
 
     uvec2 xy = min(uvec2(floor(uv * vec2(p.resolution.xy))), p.resolution.xy - uvec2(1u));
     ivec3 voxel = ivec3(int(xy.x), int(xy.y), int(p.resolution.z / 2u));
-    packed = ReadStorageWord(p.voxelBufferIndex, FarFieldPageVoxelOffset(p, page) + FarFieldVoxelIndex(voxel, p));
+    packed = ReadFarFieldDebugPackedVoxel(
+        p,
+        FarFieldPageVoxelOffset(p, page) + FarFieldVoxelIndex(voxel, p));
     return true;
 }
 

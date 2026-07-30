@@ -25,5 +25,12 @@ namespace Njulf.Assets
         int DefaultWhiteSubstitutions,
         int DefaultNormalSubstitutions,
         int DefaultBlackSubstitutions,
-        int BlendMaterialCount);
+        int BlendMaterialCount,
+        int CompletePrimitiveProfileCount = 0,
+        int InvalidPrimitiveProfileCount = 0,
+        int PrimitiveProfileCacheHitCount = 0,
+        int PrimitiveProfileCacheMissCount = 0,
+        int PrimitiveTextureAnalysisFailureCount = 0,
+        int OmittedEmissiveTriangleRecordCount = 0,
+        string PrimitiveProfileDiagnostic = "");
 }

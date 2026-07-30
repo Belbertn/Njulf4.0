@@ -1,9 +1,11 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
@@ -146,6 +148,9 @@ public sealed record AssetTextureBudget(
 
 public sealed class AssetValidationOptions
 {
+    public const int MaximumChildProcessOutputLimitBytes =
+        16 * 1024 * 1024;
+
     public ImporterOptions ImporterOptions { get; init; } = ImporterOptions.Default;
     public AssetValidationPolicy Policy { get; init; } = AssetValidationPolicy.GameDefault;
     public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(30);
@@ -162,6 +167,8 @@ public sealed class AssetValidationOptions
         "--json",
         "-"
     ];
+    public int MaximumChildProcessOutputBytes { get; init; } =
+        1024 * 1024;
     public Func<ModelTextureSource, AssetTextureBudget?>? TextureBudgetInspector { get; init; }
 }
 
@@ -184,6 +191,7 @@ public sealed class AssetValidator
             throw new ArgumentException("Validation path cannot be empty.", nameof(path));
 
         options ??= new AssetValidationOptions();
+        ValidateOptions(options);
         string fullPath = Path.GetFullPath(path);
         string rootPath = File.Exists(fullPath)
             ? Path.GetDirectoryName(fullPath) ?? fullPath
@@ -349,7 +357,7 @@ public sealed class AssetValidator
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(options.Timeout);
 
-        var process = new Process
+        using var process = new Process
         {
             StartInfo = new ProcessStartInfo
             {
@@ -366,12 +374,34 @@ public sealed class AssetValidator
             process.StartInfo.ArgumentList.Add(ExpandChildArgument(argument, fullPath, backend));
 
         var stopwatch = Stopwatch.StartNew();
+        Task<string>? stdoutTask = null;
+        Task<string>? stderrTask = null;
         try
         {
             process.Start();
-            Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
-            Task<string> stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
-            await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+            stdoutTask = ReadBoundedOutputAsync(
+                process.StandardOutput.BaseStream,
+                process.StandardOutput.CurrentEncoding,
+                options.MaximumChildProcessOutputBytes,
+                "stdout",
+                timeoutCts.Token);
+            stderrTask = ReadBoundedOutputAsync(
+                process.StandardError.BaseStream,
+                process.StandardError.CurrentEncoding,
+                options.MaximumChildProcessOutputBytes,
+                "stderr",
+                timeoutCts.Token);
+            Task exitTask = process.WaitForExitAsync(timeoutCts.Token);
+            Task first = await Task.WhenAny(
+                exitTask,
+                stdoutTask,
+                stderrTask).ConfigureAwait(false);
+            if (first.IsFaulted)
+                await first.ConfigureAwait(false);
+            await Task.WhenAll(
+                exitTask,
+                stdoutTask,
+                stderrTask).ConfigureAwait(false);
             stopwatch.Stop();
 
             string stdout = await stdoutTask.ConfigureAwait(false);
@@ -411,7 +441,10 @@ public sealed class AssetValidator
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
-            TryKill(process);
+            await TerminateAndObserveAsync(
+                process,
+                stdoutTask,
+                stderrTask).ConfigureAwait(false);
             return CreateFailureEntry(
                 fullPath,
                 rootPath,
@@ -424,6 +457,58 @@ public sealed class AssetValidator
                 $"Child process validation exceeded {options.Timeout.TotalMilliseconds.ToString("0", CultureInfo.InvariantCulture)} ms.",
                 process.HasExited ? process.ExitCode : null,
                 timedOut: true,
+                crashed: true);
+        }
+        catch (OperationCanceledException)
+        {
+            stopwatch.Stop();
+            await TerminateAndObserveAsync(
+                process,
+                stdoutTask,
+                stderrTask).ConfigureAwait(false);
+            throw;
+        }
+        catch (ChildProcessOutputLimitException outputFailure)
+        {
+            stopwatch.Stop();
+            await TerminateAndObserveAsync(
+                process,
+                stdoutTask,
+                stderrTask).ConfigureAwait(false);
+            return CreateFailureEntry(
+                fullPath,
+                rootPath,
+                backend,
+                AssetValidationProcessKind.ChildProcess,
+                stopwatch.ElapsedMilliseconds,
+                fileSize,
+                AssetValidationStatus.RejectedInvalid,
+                "ChildProcessOutputLimit",
+                outputFailure.Message,
+                TryGetExitCode(process),
+                timedOut: false,
+                crashed: true);
+        }
+        catch (Exception childFailure)
+        {
+            stopwatch.Stop();
+            await TerminateAndObserveAsync(
+                process,
+                stdoutTask,
+                stderrTask).ConfigureAwait(false);
+            return CreateFailureEntry(
+                fullPath,
+                rootPath,
+                backend,
+                AssetValidationProcessKind.ChildProcess,
+                stopwatch.ElapsedMilliseconds,
+                fileSize,
+                AssetValidationStatus.RejectedCrashed,
+                childFailure.GetType().FullName ??
+                childFailure.GetType().Name,
+                childFailure.Message,
+                TryGetExitCode(process),
+                timedOut: false,
                 crashed: true);
         }
     }
@@ -888,6 +973,94 @@ public sealed class AssetValidator
         }
     }
 
+    private static async Task<string> ReadBoundedOutputAsync(
+        Stream stream,
+        Encoding encoding,
+        int maximumBytes,
+        string streamName,
+        CancellationToken cancellationToken)
+    {
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
+        try
+        {
+            using var output = new MemoryStream(
+                Math.Min(maximumBytes, 64 * 1024));
+            while (true)
+            {
+                int read = await stream.ReadAsync(
+                    buffer.AsMemory(0, buffer.Length),
+                    cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                    break;
+                if (output.Length + read > maximumBytes)
+                {
+                    throw new ChildProcessOutputLimitException(
+                        $"Child-process validation {streamName} exceeded the " +
+                        $"{maximumBytes.ToString(CultureInfo.InvariantCulture)}-byte limit.");
+                }
+
+                output.Write(buffer, 0, read);
+            }
+
+            return encoding.GetString(
+                output.GetBuffer(),
+                0,
+                checked((int)output.Length));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private static async Task TerminateAndObserveAsync(
+        Process process,
+        Task<string>? stdoutTask,
+        Task<string>? stderrTask)
+    {
+        TryKill(process);
+        try
+        {
+            using var waitCts =
+                new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await process.WaitForExitAsync(waitCts.Token)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+
+        await ObserveAsync(stdoutTask).ConfigureAwait(false);
+        await ObserveAsync(stderrTask).ConfigureAwait(false);
+    }
+
+    private static async Task ObserveAsync(Task? task)
+    {
+        if (task == null)
+            return;
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+    }
+
+    private static int? TryGetExitCode(Process process)
+    {
+        try
+        {
+            return process.HasExited
+                ? process.ExitCode
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static void TryKill(Process process)
     {
         try
@@ -899,6 +1072,38 @@ public sealed class AssetValidator
         {
         }
     }
+
+    private static void ValidateOptions(
+        AssetValidationOptions options)
+    {
+        if (options.Timeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                options.Timeout,
+                "Asset validation timeout must be positive.");
+        }
+        if (options.MaxAssetBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                options.MaxAssetBytes,
+                "Asset validation maximum asset bytes must be positive.");
+        }
+        if (options.MaximumChildProcessOutputBytes is <= 0 or
+            > AssetValidationOptions.MaximumChildProcessOutputLimitBytes)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                options.MaximumChildProcessOutputBytes,
+                $"Child-process output limit must be in (0, " +
+                $"{AssetValidationOptions.MaximumChildProcessOutputLimitBytes}].");
+        }
+    }
+
+    private sealed class ChildProcessOutputLimitException(
+        string message)
+        : IOException(message);
 
     private static string CreateRelativePath(string? rootPath, string fullPath)
     {
@@ -936,27 +1141,132 @@ public sealed class AssetValidator
 
 public static class AssetValidationJson
 {
-    public static JsonSerializerOptions Options { get; } = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true
-    };
+    public const int CurrentSchemaVersion = 1;
+    public const int MaximumReportBytes =
+        AssetArtifactFileIo.DefaultMaximumJsonBytes;
 
-    static AssetValidationJson()
+    private static readonly JsonSerializerOptions SerializerOptions =
+        CreateSerializerOptions();
+
+    /// <summary>
+    /// Returns an isolated copy for command-line serialization. Mutating a
+    /// caller's copy cannot weaken the strict report reader.
+    /// </summary>
+    public static JsonSerializerOptions Options => new(SerializerOptions);
+
+    private static JsonSerializerOptions CreateSerializerOptions()
     {
-        Options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        var options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            PropertyNameCaseInsensitive = false,
+            WriteIndented = true,
+            NumberHandling = JsonNumberHandling.Strict,
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
+        };
+        options.Converters.Add(
+            new JsonStringEnumConverter(
+                JsonNamingPolicy.CamelCase,
+                allowIntegerValues: false));
+        return options;
     }
 
     public static void WriteReport(string path, AssetValidationReport report)
     {
-        string fullPath = Path.GetFullPath(path);
-        Directory.CreateDirectory(Path.GetDirectoryName(fullPath) ?? ".");
-        File.WriteAllText(fullPath, JsonSerializer.Serialize(report, Options));
+        ArgumentNullException.ThrowIfNull(report);
+        ValidateReport(path, report);
+        byte[] payload = JsonSerializer.SerializeToUtf8Bytes(
+            report,
+            SerializerOptions);
+        AssetArtifactFileIo.WriteAtomic(
+            path,
+            payload,
+            MaximumReportBytes,
+            "Asset validation report");
     }
 
     public static AssetValidationReport ReadReport(string path)
     {
-        return JsonSerializer.Deserialize<AssetValidationReport>(File.ReadAllText(path), Options)
-            ?? throw new InvalidDataException($"Asset validation report '{path}' could not be read.");
+        byte[] snapshot = AssetArtifactFileIo.ReadBoundedSnapshot(
+            path,
+            MaximumReportBytes,
+            "Asset validation report");
+        AssetArtifactFileIo.ValidateUniqueJsonPropertyNames(
+            snapshot,
+            $"Asset validation report '{Path.GetFullPath(path)}'");
+        try
+        {
+            AssetValidationReport report =
+                JsonSerializer.Deserialize<AssetValidationReport>(
+                    snapshot,
+                    SerializerOptions)
+                ?? throw new InvalidDataException(
+                    $"Asset validation report '{path}' deserialized to null.");
+            ValidateReport(path, report);
+            return report;
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException(
+                $"Asset validation report '{path}' is invalid.",
+                exception);
+        }
+    }
+
+    private static void ValidateReport(
+        string path,
+        AssetValidationReport report)
+    {
+        if (report.SchemaVersion != CurrentSchemaVersion ||
+            report.Entries is null ||
+            report.Summary is null ||
+            string.IsNullOrWhiteSpace(report.RootPath))
+        {
+            throw new InvalidDataException(
+                $"Asset validation report '{path}' has an unsupported schema " +
+                "or incomplete required fields.");
+        }
+
+        if (report.Entries.Any(static entry => entry is null))
+        {
+            throw new InvalidDataException(
+                $"Asset validation report '{path}' contains a null entry.");
+        }
+
+        AssetValidationSummary expected = new(
+            TotalCount: report.Entries.Count,
+            AcceptedCount: report.Entries.Count(
+                static entry =>
+                    entry.Status == AssetValidationStatus.Accepted),
+            AcceptedWithWarningsCount: report.Entries.Count(
+                static entry =>
+                    entry.Status ==
+                    AssetValidationStatus.AcceptedWithWarnings),
+            RejectedUnsupportedCount: report.Entries.Count(
+                static entry =>
+                    entry.Status ==
+                    AssetValidationStatus.RejectedUnsupported),
+            RejectedInvalidCount: report.Entries.Count(
+                static entry =>
+                    entry.Status ==
+                    AssetValidationStatus.RejectedInvalid),
+            RejectedCrashedCount: report.Entries.Count(
+                static entry =>
+                    entry.Status ==
+                    AssetValidationStatus.RejectedCrashed),
+            RejectedTimeoutCount: report.Entries.Count(
+                static entry =>
+                    entry.Status ==
+                    AssetValidationStatus.RejectedTimeout),
+            RejectedTooLargeCount: report.Entries.Count(
+                static entry =>
+                    entry.Status ==
+                    AssetValidationStatus.RejectedTooLarge));
+        if (report.Summary != expected)
+        {
+            throw new InvalidDataException(
+                $"Asset validation report '{path}' summary does not match " +
+                "its entries.");
+        }
     }
 }

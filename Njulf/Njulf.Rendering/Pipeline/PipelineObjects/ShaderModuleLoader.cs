@@ -12,6 +12,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
     internal static unsafe class ShaderModuleLoader
     {
         private const string EmbeddedResourcePrefix = "Njulf.Shaders.";
+        internal const int MaximumShaderModuleBytes = 16 * 1024 * 1024;
 
         public static ShaderModule Load(VulkanContext context, string shaderFileName)
         {
@@ -19,6 +20,16 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 throw new ArgumentNullException(nameof(context));
             if (string.IsNullOrWhiteSpace(shaderFileName))
                 throw new ArgumentException("Shader file name is required.", nameof(shaderFileName));
+            if (Path.IsPathFullyQualified(shaderFileName) ||
+                !string.Equals(
+                    shaderFileName,
+                    Path.GetFileName(shaderFileName),
+                    StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    "Shader names must be unqualified file names.",
+                    nameof(shaderFileName));
+            }
 
             byte[] spirv = LoadBytes(shaderFileName);
             if (spirv.Length == 0 || spirv.Length % sizeof(uint) != 0)
@@ -46,31 +57,102 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             }
         }
 
-        private static byte[] LoadBytes(string shaderFileName)
+        internal static byte[] LoadBytes(string shaderFileName)
         {
-            foreach (string candidate in GetFileCandidates(shaderFileName))
-            {
-                if (File.Exists(candidate))
-                    return File.ReadAllBytes(candidate);
-            }
-
             Assembly assembly = typeof(ShaderLibrary).Assembly;
             string resourceName = EmbeddedResourcePrefix + shaderFileName;
             using Stream? stream = assembly.GetManifestResourceStream(resourceName) ??
                                    assembly.GetManifestResourceStream(EmbeddedResourcePrefix + Path.GetFileNameWithoutExtension(shaderFileName));
             if (stream != null)
+                return ReadBoundedSnapshot(
+                    stream,
+                    $"embedded shader '{resourceName}'");
+
+            // The build-pinned embedded bundle is authoritative. A deployment may
+            // provide a local file only when a resource is genuinely absent; never
+            // walk parent directories or mix Debug and Release outputs from a
+            // developer workspace.
+            string[] fileCandidates = GetFileCandidates(shaderFileName).ToArray();
+            foreach (string candidate in fileCandidates)
             {
-                using var memory = new MemoryStream();
-                stream.CopyTo(memory);
-                return memory.ToArray();
+                try
+                {
+                    using var input = new FileStream(
+                        candidate,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.Read,
+                        64 * 1024,
+                        FileOptions.SequentialScan);
+                    return ReadBoundedSnapshot(
+                        input,
+                        $"shader file '{candidate}'");
+                }
+                catch (FileNotFoundException)
+                {
+                    // A deployment may omit individual fallback files. Keep
+                    // searching the fixed, same-directory candidate set.
+                }
+                catch (DirectoryNotFoundException)
+                {
+                    // The candidate directory is optional.
+                }
             }
 
-            string searchedFiles = string.Join(Environment.NewLine, GetFileCandidates(shaderFileName).Select(path => "  " + path));
+            string searchedFiles = string.Join(
+                Environment.NewLine,
+                fileCandidates.Select(path => "  " + path));
             string resources = string.Join(Environment.NewLine, assembly.GetManifestResourceNames().Select(name => "  " + name));
 
             throw new FileNotFoundException(
                 $"Required shader '{shaderFileName}' was not found. Searched files:{Environment.NewLine}{searchedFiles}{Environment.NewLine}" +
                 $"Searched embedded resource '{resourceName}'. Available shader resources:{Environment.NewLine}{resources}");
+        }
+
+        internal static byte[] ReadBoundedSnapshot(
+            Stream stream,
+            string description)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+            ArgumentException.ThrowIfNullOrWhiteSpace(description);
+            if (!stream.CanRead || !stream.CanSeek)
+            {
+                throw new InvalidDataException(
+                    $"{description} must be a readable, seekable snapshot.");
+            }
+
+            long start = stream.Position;
+            long admittedLength = checked(stream.Length - start);
+            if (admittedLength <= 0 ||
+                admittedLength > MaximumShaderModuleBytes)
+            {
+                throw new InvalidDataException(
+                    $"{description} contains {admittedLength} bytes; expected " +
+                    $"a size in (0, {MaximumShaderModuleBytes}].");
+            }
+
+            byte[] snapshot =
+                GC.AllocateUninitializedArray<byte>(
+                    checked((int)admittedLength));
+            try
+            {
+                stream.ReadExactly(snapshot);
+            }
+            catch (EndOfStreamException exception)
+            {
+                throw new InvalidDataException(
+                    $"{description} became shorter while it was read.",
+                    exception);
+            }
+
+            if (stream.ReadByte() != -1 ||
+                stream.Length - start != admittedLength)
+            {
+                throw new InvalidDataException(
+                    $"{description} changed length while it was read.");
+            }
+
+            return snapshot;
         }
 
         private static IEnumerable<string> GetFileCandidates(string shaderFileName)
@@ -79,14 +161,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             yield return Path.Combine(baseDirectory, "Shaders", shaderFileName);
             yield return Path.Combine(baseDirectory, shaderFileName);
-
-            DirectoryInfo? directory = new DirectoryInfo(baseDirectory);
-            while (directory != null)
-            {
-                yield return Path.Combine(directory.FullName, "Njulf.Shaders", "bin", "Debug", "net10.0", "Shaders", shaderFileName);
-                yield return Path.Combine(directory.FullName, "Njulf.Shaders", "bin", "Release", "net10.0", "Shaders", shaderFileName);
-                directory = directory.Parent;
-            }
         }
     }
 }

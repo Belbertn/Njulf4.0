@@ -23,6 +23,7 @@ namespace Njulf.Rendering.Resources
         public const Format SsgiMomentsFormat = Format.R16G16Sfloat;
         public const Format SsgiHistoryLengthFormat = Format.R16Sfloat;
         public const Format GiFinalDiffuseFormat = Format.R16G16B16A16Sfloat;
+        public const Format MaterialTransportProvenanceFormat = Format.R8Unorm;
         public const Format LdrSceneColorFormat = Format.R16G16B16A16Sfloat;
         public const Format SmaaEdgesFormat = Format.R8G8Unorm;
         public const Format SmaaBlendWeightsFormat = Format.R8G8B8A8Unorm;
@@ -54,6 +55,9 @@ namespace Njulf.Rendering.Resources
         private static readonly RenderTargetDescriptor HdrSceneColorDescriptor = new(
             colorAttachment: true,
             sampled: true,
+            // SceneColor is the sole linear evidence source. No other
+            // production render target pays the transfer-source usage cost.
+            transferSource: true,
             allowDriverCompression: true);
 
         private static readonly RenderTargetDescriptor SceneDepthDescriptor = new(
@@ -85,6 +89,15 @@ namespace Njulf.Rendering.Resources
         private static readonly RenderTargetDescriptor ColorSampledDescriptor = new(
             colorAttachment: true,
             sampled: true);
+
+        // The two full-resolution hybrid-GI work images deliberately change
+        // roles between passes: forward MRT -> sampled trace input/baseline ->
+        // denoiser storage output. One allocation per role avoids another HDR
+        // composition target and its lifetime/bandwidth cost.
+        private static readonly RenderTargetDescriptor ColorStorageSampledDescriptor = new(
+            colorAttachment: true,
+            sampled: true,
+            storage: true);
 
         private static readonly RenderTargetDescriptor WeightedOitAccumulationDescriptor = new(
             colorAttachment: true,
@@ -118,7 +131,8 @@ namespace Njulf.Rendering.Resources
             bool motionVectorsEnabled = false,
             bool fogEnabled = true,
             bool weightedOitEnabled = false,
-            RenderGraph? renderGraph = null)
+            RenderGraph? renderGraph = null,
+            bool materialTransportProvenanceEnabled = false)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _renderGraph = renderGraph;
@@ -153,6 +167,12 @@ namespace Njulf.Rendering.Resources
                 StorageSampledDescriptor);
             RecreateSceneSurfaceTargets(extent, globalIlluminationSsgiEnabled);
             RecreateGlobalIlluminationTargets(extent, globalIlluminationResolutionScale, globalIlluminationSsgiEnabled);
+            MaterialTransportProvenance = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.MaterialTransportProvenance,
+                "Material Transport Provenance",
+                MaterialTransportProvenanceFormat,
+                materialTransportProvenanceEnabled ? extent : PlaceholderExtent,
+                ColorSampledDescriptor);
             LdrSceneColor = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.LdrSceneColor,
                 "LDR Scene Color",
@@ -227,6 +247,7 @@ namespace Njulf.Rendering.Resources
         public RenderTarget SsgiHistoryLengthA => RequireTarget(_ssgiHistoryLengthA, nameof(SsgiHistoryLengthA));
         public RenderTarget SsgiHistoryLengthB => RequireTarget(_ssgiHistoryLengthB, nameof(SsgiHistoryLengthB));
         public RenderTarget GiFinalDiffuse => RequireTarget(_giFinalDiffuse, nameof(GiFinalDiffuse));
+        public RenderTarget MaterialTransportProvenance { get; }
         public RenderTarget LdrSceneColor { get; }
         public RenderTarget SmaaEdges { get; }
         public RenderTarget SmaaBlendWeights { get; }
@@ -239,7 +260,7 @@ namespace Njulf.Rendering.Resources
         public int BloomMipCount => _bloomMipChain.Count;
         public Extent2D BloomBaseExtent => _bloomMipChain.Count == 0 ? default : _bloomMipChain[0].Extent;
         public int ResizeCount { get; private set; }
-        public int RenderTargetCount => 14 + OptionalRenderTargetCount + _bloomMipChain.Count;
+        public int RenderTargetCount => 15 + OptionalRenderTargetCount + _bloomMipChain.Count;
         public ulong TotalEstimatedBytes =>
             SceneColor.EstimatedByteSize +
             SceneDepth.EstimatedByteSize +
@@ -247,6 +268,7 @@ namespace Njulf.Rendering.Resources
             AmbientOcclusionRenderTargetBytes +
             SceneSurfaceRenderTargetBytes +
             GlobalIlluminationRenderTargetBytes +
+            MaterialTransportProvenanceRenderTargetBytes +
             AntiAliasingRenderTargetBytes +
             WeightedOitRenderTargetBytes +
             BloomRenderTargetBytes;
@@ -267,6 +289,8 @@ namespace Njulf.Rendering.Resources
             _ssgiHistoryLengthA,
             _ssgiHistoryLengthB,
             _giFinalDiffuse);
+        public ulong MaterialTransportProvenanceRenderTargetBytes =>
+            SumEnabledBytes(MaterialTransportProvenance);
         public ulong AntiAliasingRenderTargetBytes => SumEnabledBytes(LdrSceneColor, SmaaEdges, SmaaBlendWeights, MotionVectors, TaaHistoryA, TaaHistoryB);
         public ulong WeightedOitRenderTargetBytes => SumEnabledBytes(WeightedOitAccumulation, WeightedOitRevealage);
         public ulong BloomRenderTargetBytes => SumTargetBytes(_bloomMipChain);
@@ -305,7 +329,8 @@ namespace Njulf.Rendering.Resources
             AntiAliasingMode antiAliasingMode = AntiAliasingMode.SmaaMedium,
             bool motionVectorsEnabled = false,
             bool fogEnabled = true,
-            bool weightedOitEnabled = false)
+            bool weightedOitEnabled = false,
+            bool materialTransportProvenanceEnabled = false)
         {
             ulong before = TotalEstimatedBytes;
             RecreateIfDifferent(SceneColor, extent);
@@ -314,6 +339,10 @@ namespace Njulf.Rendering.Resources
             RecreateAmbientOcclusionTargets(extent, ambientOcclusionResolutionScale, ambientOcclusionEnabled);
             RecreateSceneSurfaceTargets(extent, globalIlluminationSsgiEnabled);
             RecreateGlobalIlluminationTargets(extent, globalIlluminationResolutionScale, globalIlluminationSsgiEnabled);
+            RecreateGraphOwnedTarget(
+                RenderGraphResourceId.MaterialTransportProvenance,
+                MaterialTransportProvenance,
+                materialTransportProvenanceEnabled ? extent : PlaceholderExtent);
             RecreateAntiAliasingTargets(extent, outputExtent, antiAliasingMode, motionVectorsEnabled);
             RecreateWeightedOitTargets(extent, weightedOitEnabled);
             RecreateBloomTargets(extent, bloomMipCount);
@@ -376,7 +405,7 @@ namespace Njulf.Rendering.Resources
                 "SSGI Trace Source",
                 SsgiTraceSourceFormat,
                 extent,
-                ColorSampledDescriptor);
+                ColorStorageSampledDescriptor);
         }
 
         public void RecreateGlobalIlluminationTargets(Extent2D swapchainExtent, float resolutionScale, bool enabled)
@@ -414,7 +443,7 @@ namespace Njulf.Rendering.Resources
             CreateOrRecreateOptionalTarget(ref _ssgiMomentsB, RenderGraphResourceId.SsgiMoments, "SSGI Moments B", SsgiMomentsFormat, ssgiExtent, StorageSampledDescriptor);
             CreateOrRecreateOptionalTarget(ref _ssgiHistoryLengthA, RenderGraphResourceId.SsgiHistoryLength, "SSGI History Length A", SsgiHistoryLengthFormat, ssgiExtent, StorageSampledDescriptor);
             CreateOrRecreateOptionalTarget(ref _ssgiHistoryLengthB, RenderGraphResourceId.SsgiHistoryLength, "SSGI History Length B", SsgiHistoryLengthFormat, ssgiExtent, StorageSampledDescriptor);
-            CreateOrRecreateOptionalTarget(ref _giFinalDiffuse, RenderGraphResourceId.GiFinalDiffuse, "GI Final Diffuse", GiFinalDiffuseFormat, swapchainExtent, StorageSampledDescriptor);
+            CreateOrRecreateOptionalTarget(ref _giFinalDiffuse, RenderGraphResourceId.GiFinalDiffuse, "GI Composition Baseline", GiFinalDiffuseFormat, swapchainExtent, ColorStorageSampledDescriptor);
         }
 
         public static Extent2D CalculateAmbientOcclusionExtent(Extent2D swapchainExtent, float resolutionScale)
@@ -713,6 +742,9 @@ namespace Njulf.Rendering.Resources
             DisposeIfManagerOwned(RenderGraphResourceId.SsgiHistoryLength, _ssgiHistoryLengthA);
             DisposeIfManagerOwned(RenderGraphResourceId.SsgiHistoryLength, _ssgiHistoryLengthB);
             DisposeIfManagerOwned(RenderGraphResourceId.GiFinalDiffuse, _giFinalDiffuse);
+            DisposeIfManagerOwned(
+                RenderGraphResourceId.MaterialTransportProvenance,
+                MaterialTransportProvenance);
             DisposeIfManagerOwned(RenderGraphResourceId.LdrSceneColor, LdrSceneColor);
             DisposeIfManagerOwned(RenderGraphResourceId.SmaaEdges, SmaaEdges);
             DisposeIfManagerOwned(RenderGraphResourceId.SmaaBlendWeights, SmaaBlendWeights);

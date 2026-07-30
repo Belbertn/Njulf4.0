@@ -26,7 +26,11 @@ namespace Njulf.Core.Scene
         private readonly ReadOnlyCollection<FoliagePrototype> _readOnlyFoliagePrototypes;
         private readonly ReadOnlyCollection<FoliagePatch> _readOnlyFoliagePatches;
         private readonly Dictionary<IDisposable, int> _ownedDisposableReferences = new();
-        
+        private bool _disposeRequested;
+        private bool _clearDisposalPending;
+        private bool _disposeInProgress;
+        private bool _disposed;
+
         public Scene()
         {
             _readOnlyRenderObjects = _renderObjects.AsReadOnly();
@@ -42,7 +46,7 @@ namespace Njulf.Core.Scene
         public Guid Id { get; set; } = Guid.NewGuid();
         public string Name { get; set; } = "DefaultScene";
         public Color AmbientLight { get; set; } = new(0.2f, 0.2f, 0.2f, 1f);
-        
+
         public IReadOnlyList<RenderObject> RenderObjects => _readOnlyRenderObjects;
         public IReadOnlyList<IUpdateable> Updateables => _readOnlyUpdateables;
         public IReadOnlyList<ReflectionProbe> ReflectionProbes => _readOnlyReflectionProbes;
@@ -62,6 +66,8 @@ namespace Njulf.Core.Scene
 
         public void Add(IUpdateable updateable)
         {
+            EnsureMutable();
+            ArgumentNullException.ThrowIfNull(updateable);
             _updateables.Add(updateable);
             if (updateable is IDisposable disposable)
                 AddDisposableReference(disposable);
@@ -101,6 +107,7 @@ namespace Njulf.Core.Scene
 
             EnsureCanAdd(staticInstanceBatch);
             _staticInstanceBatches.Add(staticInstanceBatch);
+            AddDisposableReference(staticInstanceBatch);
         }
 
         public void Add(FoliagePrototype foliagePrototype)
@@ -112,6 +119,7 @@ namespace Njulf.Core.Scene
             {
                 EnsureCanAdd(foliagePrototype);
                 _foliagePrototypes.Add(foliagePrototype);
+                AddDisposableReference(foliagePrototype);
             }
         }
 
@@ -127,46 +135,63 @@ namespace Njulf.Core.Scene
 
         public void Remove(RenderObject renderObject)
         {
+            EnsureMutable();
+            if (!_renderObjects.Contains(renderObject))
+                return;
+            RemoveDisposableReference(renderObject);
             _renderObjects.Remove(renderObject);
-            if (renderObject is IDisposable disposable)
-                RemoveDisposableReference(disposable);
         }
 
         public void Remove(IUpdateable updateable)
         {
-            _updateables.Remove(updateable);
+            EnsureMutable();
+            if (!_updateables.Contains(updateable))
+                return;
             if (updateable is IDisposable disposable)
                 RemoveDisposableReference(disposable);
+            _updateables.Remove(updateable);
         }
 
         public void Remove(ReflectionProbe reflectionProbe)
         {
+            EnsureMutable();
             _reflectionProbes.Remove(reflectionProbe);
         }
 
         public void Remove(GlobalIlluminationProbeVolume probeVolume)
         {
+            EnsureMutable();
             _globalIlluminationProbeVolumes.Remove(probeVolume);
         }
 
         public void Remove(ParticleEffectInstance particleEffect)
         {
+            EnsureMutable();
             _particleEffects.Remove(particleEffect);
         }
 
         public void Remove(StaticInstanceBatch staticInstanceBatch)
         {
+            EnsureMutable();
+            if (!_staticInstanceBatches.Contains(staticInstanceBatch))
+                return;
+            RemoveDisposableReference(staticInstanceBatch);
             _staticInstanceBatches.Remove(staticInstanceBatch);
         }
 
         public void Remove(FoliagePrototype foliagePrototype)
         {
+            EnsureMutable();
+            if (!_foliagePrototypes.Contains(foliagePrototype))
+                return;
+            RemoveDisposableReference(foliagePrototype);
             _foliagePrototypes.Remove(foliagePrototype);
             _foliagePatches.RemoveAll(patch => ReferenceEquals(patch.Prototype, foliagePrototype));
         }
 
         public void Remove(FoliagePatch foliagePatch)
         {
+            EnsureMutable();
             _foliagePatches.Remove(foliagePatch);
         }
 
@@ -199,7 +224,22 @@ namespace Njulf.Core.Scene
             }
         }
 
+        /// <summary>
+        /// Removes all entities and relinquishes their ownership without disposing them.
+        /// </summary>
         public void Clear()
+        {
+            EnsureMutable();
+            ClearCollections();
+        }
+
+        private void ClearCollections()
+        {
+            ClearEntityCollections();
+            _ownedDisposableReferences.Clear();
+        }
+
+        private void ClearEntityCollections()
         {
             _renderObjects.Clear();
             _updateables.Clear();
@@ -209,7 +249,6 @@ namespace Njulf.Core.Scene
             _staticInstanceBatches.Clear();
             _foliagePrototypes.Clear();
             _foliagePatches.Clear();
-            _ownedDisposableReferences.Clear();
         }
 
         /// <summary>Finds a scene-owned entity by its stable identifier.</summary>
@@ -227,16 +266,38 @@ namespace Njulf.Core.Scene
                 ?? Find(_foliagePatches, id);
         }
 
+        /// <summary>
+        /// Disposes all scene-owned entities and clears the scene for reuse.
+        /// </summary>
         public void ClearAndDispose()
         {
-            foreach (var disposable in _ownedDisposableReferences.Keys)
-                disposable.Dispose();
+            if (_disposed || _disposeRequested || _disposeInProgress)
+                throw new ObjectDisposedException(nameof(Scene));
 
-            Clear();
+            _clearDisposalPending = true;
+            _disposeInProgress = true;
+            List<Exception>? failures = null;
+            try
+            {
+                failures = DisposeOwnedEntities();
+                ClearEntityCollections();
+                if (failures is null)
+                {
+                    _ownedDisposableReferences.Clear();
+                    _clearDisposalPending = false;
+                }
+            }
+            finally
+            {
+                _disposeInProgress = false;
+            }
+
+            ThrowIfDisposalFailed(failures);
         }
 
         public void Update(float deltaTime)
         {
+            EnsureMutable();
             _updateables.Sort((a, b) => a.UpdateOrder.CompareTo(b.UpdateOrder));
             foreach (var updateable in _updateables)
             {
@@ -247,7 +308,60 @@ namespace Njulf.Core.Scene
 
         public void Dispose()
         {
-            ClearAndDispose();
+            if (_disposed || _disposeInProgress)
+                return;
+
+            _disposeRequested = true;
+            _disposeInProgress = true;
+            List<Exception>? failures = null;
+            try
+            {
+                failures = DisposeOwnedEntities();
+                ClearEntityCollections();
+                if (failures is null)
+                {
+                    _ownedDisposableReferences.Clear();
+                    _clearDisposalPending = false;
+                    _disposed = true;
+                }
+            }
+            finally
+            {
+                _disposeInProgress = false;
+            }
+
+            ThrowIfDisposalFailed(failures);
+        }
+
+        private List<Exception>? DisposeOwnedEntities()
+        {
+            List<Exception>? failures = null;
+            foreach (IDisposable disposable in
+                     _ownedDisposableReferences.Keys.ToArray())
+            {
+                try
+                {
+                    disposable.Dispose();
+                    _ownedDisposableReferences.Remove(disposable);
+                }
+                catch (Exception disposeFailure)
+                {
+                    (failures ??= new List<Exception>())
+                        .Add(disposeFailure);
+                }
+            }
+
+            return failures;
+        }
+
+        private static void ThrowIfDisposalFailed(List<Exception>? failures)
+        {
+            if (failures != null)
+            {
+                throw new AggregateException(
+                    "One or more scene-owned resources could not be disposed.",
+                    failures);
+            }
         }
 
         private void AddDisposableReference(IDisposable disposable)
@@ -262,7 +376,10 @@ namespace Njulf.Core.Scene
                 return;
 
             if (references <= 1)
+            {
+                disposable.Dispose();
                 _ownedDisposableReferences.Remove(disposable);
+            }
             else
                 _ownedDisposableReferences[disposable] = references - 1;
         }
@@ -279,11 +396,24 @@ namespace Njulf.Core.Scene
 
         private void EnsureCanAdd(IIdentifiedSceneEntity entity)
         {
+            EnsureMutable();
             ArgumentNullException.ThrowIfNull(entity);
             if (entity.Id == Guid.Empty)
                 throw new ArgumentException("Scene entity IDs must not be empty.", nameof(entity));
             if (FindById(entity.Id) != null)
                 throw new InvalidOperationException($"The scene already contains an entity with ID '{entity.Id}'.");
+        }
+
+        private void EnsureMutable()
+        {
+            if (_disposeRequested ||
+                _clearDisposalPending ||
+                _disposeInProgress ||
+                _disposed)
+            {
+                throw new ObjectDisposedException(
+                    nameof(Scene));
+            }
         }
     }
 }

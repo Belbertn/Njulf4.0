@@ -1,6 +1,8 @@
 #ifndef NJULF_MATERIAL_COVERAGE_GLSL
 #define NJULF_MATERIAL_COVERAGE_GLSL
 
+#include "material_alpha.glsl"
+
 // The depth, shadow, and forward passes must use this exact alpha contract.  Keeping the
 // sampling and alpha-mode decisions here prevents a depth prepass hole from drifting from
 // the corresponding shaded pixel when a material feature changes.
@@ -54,11 +56,10 @@ MaterialAlphaCoverage EvaluateMaterialAlphaCoverage(
 
 bool MaterialCoverageSurvivesForward(MaterialAlphaCoverage coverage)
 {
-    if (coverage.AlphaMode > 0.5 && coverage.AlphaMode < 1.5)
-        return coverage.Alpha > coverage.AlphaCutoff;
-    if (coverage.AlphaMode > 1.5)
-        return coverage.Alpha > 0.001;
-    return true;
+    return MaterialAlphaSurvivesRasterCoverage(
+        coverage.Alpha,
+        coverage.AlphaMode,
+        coverage.AlphaCutoff);
 }
 
 #endif // NJULF_MATERIAL_COVERAGE_GLSL

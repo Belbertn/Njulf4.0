@@ -1,4 +1,5 @@
 using System.Linq;
+using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
@@ -236,6 +237,8 @@ public sealed class GiFeatureStateFactoryTests
     [Test]
     public void LayoutTelemetryFactory_RetainsRejectedRequestedBytesIncludingSampledAtlasReservation()
     {
+        const int configuredUpdates = 4;
+        const int rays = 8;
         var request = new SimpleDdgiLayoutVolumeRequest(
             "rejected-hero",
             0,
@@ -248,19 +251,34 @@ public sealed class GiFeatureStateFactoryTests
             [request],
             new SimpleDdgiLayoutBudget(DdgiQualityTier.DdgiLow, 0, 0, 0),
             sampledAtlasRequested: true,
-            SimpleDdgiLayoutAdmissionMode.Degrade);
+            SimpleDdgiLayoutAdmissionMode.Degrade,
+            transportV2Enabled: true,
+            transportRayCapacity: rays,
+            configuredProbeUpdatesPerFrame: configuredUpdates,
+            lightingDirtyBoostEnabled: true,
+            readbackBufferCount: RenderingConstants.FramesInFlight);
 
-        SimpleDdgiLayoutTelemetry telemetry = SimpleDdgiLayoutTelemetryFactory.Create(
-            report,
-            sampledAtlasRequested: true);
+        // Deliberately omit allocation settings here. The capture factory must
+        // persist the compiler's exact evidence rather than reconstructing it.
+        SimpleDdgiLayoutTelemetry telemetry =
+            SimpleDdgiLayoutTelemetryFactory.Create(report);
         SimpleDdgiLayoutVolumeTelemetry rejected = telemetry.Volumes.Single();
+        ulong expectedBytes = SimpleDdgiMemoryPlan.Create(
+            probeCount: 16,
+            updateRequestCapacity: configuredUpdates * 2,
+            rayCapacity: rays,
+            sampledAtlasRequested: true,
+            concreteTransportBuffers: true,
+            readbackBufferCount: RenderingConstants.FramesInFlight).LiveBytes;
 
         Assert.Multiple(() =>
         {
             Assert.That(rejected.Decision, Is.EqualTo(SimpleDdgiLayoutDecision.RejectedVolumeLimit));
             Assert.That(rejected.AcceptedProbeCount, Is.Zero);
-            Assert.That(rejected.RequestedPersistentBytes, Is.EqualTo(
-                SimpleDdgiLayoutCompiler.EstimatePersistentBytes(16, sampledAtlasRequested: true)));
+            Assert.That(rejected.RequestedPersistentBytes, Is.EqualTo(expectedBytes));
+            Assert.That(
+                rejected.RequestedPersistentBytes,
+                Is.EqualTo(report.Volumes.Single().RequestedPersistentBytes));
         });
     }
 

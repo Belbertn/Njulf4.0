@@ -274,7 +274,7 @@ namespace Njulf.Rendering.Data
         public uint Padding2;
         public uint Padding3;
     }
-    
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUMeshlet
     {
@@ -289,7 +289,7 @@ namespace Njulf.Rendering.Data
         public uint LocalTriangleOffset;
         public uint LocalTriangleCount;
     }
-    
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUObjectData
     {
@@ -309,7 +309,7 @@ namespace Njulf.Rendering.Data
         public float Padding0;
         public Vector4 Color;
     }
-    
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUMaterialData
     {
@@ -320,20 +320,76 @@ namespace Njulf.Rendering.Data
         public Vector4 BaseColorOffsetScale;
         public Vector4 NormalOffsetScale;
         public Vector4 MetallicRoughnessOffsetScale;
+        public Vector4 OcclusionOffsetScale;
         public Vector4 EmissiveOffsetScale;
         public Vector4 TextureRotations;
         public Vector4 TextureTexCoordSets;
+        // x = occlusion rotation, y = occlusion UV set, z/w reserved.
+        public Vector4 OcclusionBinding;
         public int AlbedoTextureIndex;
         public int NormalTextureIndex;
         public int MetallicRoughnessTextureIndex;
+        public int OcclusionTextureIndex;
         public int EmissiveTextureIndex;
         public uint FeatureFlags;
         public int ExtensionDataIndex;
-        public uint Reserved0;
-        public uint Reserved1;
+        public uint TransportFlags;
+        public uint TransportProfileRevision;
+        // IEEE-754 half2: low 16 bits mean metallic, high 16 bits mean roughness.
+        public uint PackedMeanMetallicRoughness;
+        public uint TransportProfileQuality;
+        /// <summary>
+        /// Monotonic material publication revision. This remains the
+        /// authoritative invalidation key for consumers that need to rebuild
+        /// whenever any shader-visible material state changes.
+        /// </summary>
+        public uint MaterialRevision;
+        /// <summary>
+        /// Monotonic texture-content publication revision. A value of zero is
+        /// the registered baseline; only runtime texture-content changes
+        /// advance it. Keeping it separate from <see cref="MaterialRevision"/>
+        /// makes a stale texture recompile distinguishable from an authored
+        /// material edit and from <see cref="TransportProfileRevision"/>.
+        /// </summary>
+        public uint TextureContentRevision;
+        // Six binary16 transport values occupy the existing 12-byte std430
+        // alignment region before the following vec4. Low/high half order:
+        // diffuse base R/G, diffuse base B/F0 R, and F0 G/B. Reusing this
+        // region preserves the measured 304-byte CPU/GPU material ABI.
+        public uint PackedMeanGiDirectionalDiffuseBaseRg;
+        public uint PackedMeanGiDirectionalDiffuseBaseBAndF0R;
+        public uint PackedMeanGiDielectricF0Gb;
         public Vector4 DdgiAverageAlbedo;
         public Vector4 DdgiAverageEmissive;
         public Vector4 DdgiMaterialPolicy;
+
+        [Obsolete("Use TransportFlags. This compatibility alias has no GPU storage of its own.")]
+        public uint Reserved0
+        {
+            readonly get => TransportFlags;
+            set => TransportFlags = value;
+        }
+
+        [Obsolete("Use TransportProfileRevision. This compatibility alias has no GPU storage of its own.")]
+        public uint Reserved1
+        {
+            readonly get => TransportProfileRevision;
+            set => TransportProfileRevision = value;
+        }
+
+        [Obsolete("Use PackedMeanMetallicRoughness. This compatibility alias has no GPU storage of its own.")]
+        public uint Reserved2
+        {
+            readonly get => PackedMeanMetallicRoughness;
+            set => PackedMeanMetallicRoughness = value;
+        }
+
+        [Obsolete("Use TransportProfileQuality. This compatibility alias has no GPU storage of its own.")]
+        public uint Reserved3
+        {
+            readonly get => TransportProfileQuality;
+            set => TransportProfileQuality = value;
+        }
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -387,7 +443,7 @@ namespace Njulf.Rendering.Data
         public int Padding2;
         public int Padding3;
     }
-    
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPULight
     {
@@ -404,7 +460,7 @@ namespace Njulf.Rendering.Data
         public float ShadowStrength;
         public int Padding0;
     }
-    
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSceneData
     {
@@ -423,7 +479,7 @@ namespace Njulf.Rendering.Data
         public int Padding1;
         public int Padding2;
     }
-    
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUMeshletDrawCommand
     {
@@ -756,7 +812,7 @@ namespace Njulf.Rendering.Data
         public uint Padding1;
         public uint Padding2;
     }
-    
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUTiledLightHeader
     {
@@ -766,13 +822,13 @@ namespace Njulf.Rendering.Data
         public uint OverflowCount;
         public uint Padding1;
     }
-    
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPULightIndex
     {
         public uint LightIndex;
     }
-    
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUScreenToViewParams
     {
@@ -781,7 +837,7 @@ namespace Njulf.Rendering.Data
         public Vector2 TileSize;
         public Vector2 InvTileSize;
     }
-    
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPULightCullingParams
     {
@@ -824,6 +880,7 @@ namespace Njulf.Rendering.Data
         private const uint DdgiForwardEstimateCountersEnabledFlag = 1u << 0;
         private const uint DdgiClipmapCoverageCountersEnabledFlag = 1u << 1;
         private const uint DirectionalShadowReceiverCountersEnabledFlag = 1u << 2;
+        private const uint MaterialTransportProvenanceEnabledFlag = 1u << 3;
         private const int DirectionalShadowPreviewCascadeShift = 8;
         private const uint DirectionalShadowPreviewCascadeMask = 0x03u;
 
@@ -868,11 +925,13 @@ namespace Njulf.Rendering.Data
             bool ddgiForwardEstimateCountersEnabled,
             bool ddgiClipmapCoverageCountersEnabled = false,
             bool directionalShadowReceiverCountersEnabled = false,
-            uint directionalShadowPreviewCascade = 0u)
+            uint directionalShadowPreviewCascade = 0u,
+            bool materialTransportProvenanceEnabled = false)
         {
             return (ddgiForwardEstimateCountersEnabled ? DdgiForwardEstimateCountersEnabledFlag : 0u) |
                    (ddgiClipmapCoverageCountersEnabled ? DdgiClipmapCoverageCountersEnabledFlag : 0u) |
                    (directionalShadowReceiverCountersEnabled ? DirectionalShadowReceiverCountersEnabledFlag : 0u) |
+                   (materialTransportProvenanceEnabled ? MaterialTransportProvenanceEnabledFlag : 0u) |
                    ((directionalShadowPreviewCascade & DirectionalShadowPreviewCascadeMask) <<
                     DirectionalShadowPreviewCascadeShift);
         }
@@ -1100,10 +1159,12 @@ namespace Njulf.Rendering.Data
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUDdgiEmissiveSource
     {
-        public Vector4 CenterRadius;
-        public Vector4 RadianceImportance;
-        public Vector4 BoundsMinRevision;
-        public Vector4 BoundsMaxFlags;
+        // Triangle representation: v0.xyz + area, edge1.xyz + alias threshold,
+        // edge2.xyz + uintBits(alias index | flags), radiance + selection PDF.
+        public Vector4 Vertex0Area;
+        public Vector4 Edge1AliasProbability;
+        public Vector4 Edge2AliasFlags;
+        public Vector4 RadianceSelectionProbability;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1329,10 +1390,10 @@ namespace Njulf.Rendering.Data
         public Vector4 Statistics;
     }
 
-    // 144 bytes. Coarse far-field parameters, mirrored by farfield_clipmap.glsl.
+    // 160 bytes. Coarse far-field parameters, mirrored by farfield_clipmap.glsl.
     // The first six vectors retain the legacy single-clipmap layout.  The final
-    // three vectors describe the bounded virtual-page cache used by production
-    // far-field tracing and incremental page baking.
+    // four vectors describe the bounded virtual-page cache and the independently
+    // versioned material payload used by production tracing and page baking.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUFarFieldClipmapParams
     {
@@ -1345,6 +1406,8 @@ namespace Njulf.Rendering.Data
         public Vector4 PagingParams;
         public Vector4 PagingLayout;
         public Vector4 CameraAndBakePage;
+        // x = payload version, y = words per logical voxel, z/w reserved.
+        public Vector4 MaterialPayload;
     }
 
     // 32 bytes. Open-addressed virtual far-field page-table entry.  The world
@@ -1363,7 +1426,7 @@ namespace Njulf.Rendering.Data
         public uint Reserved1;
     }
 
-    // 80 bytes. Static opaque instance metadata for far-field voxelization.
+    // 96 bytes. Static opaque instance metadata for far-field voxelization.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUFarFieldInstance
     {
@@ -1372,6 +1435,30 @@ namespace Njulf.Rendering.Data
         public uint IndexCount;
         public uint MaterialIndex;
         public Matrix4x4 World;
+        // Stable, dense primitive key range used by V2's final tie-break pass.
+        // UInt32.MaxValue remains the empty-voxel sentinel.
+        public uint PrimitiveKeyBase;
+        public uint MaterialRevision;
+        public uint FarFieldRevision;
+        // Transport-profile revision captured with the page source.
+        public uint Reserved0;
+    }
+
+    // 32 bytes / eight uint words. The V2 far-field payload is deliberately a
+    // separate ABI from the one-word V1 occupancy/RGB8 encoding.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFarFieldMaterialVoxelV2
+    {
+        public uint WinnerKey;
+        public uint CoverageConeAndFlags;
+        public uint DiffuseRgb10;
+        public uint EmissionRg16;
+        // Low half = emissive B. High half = material AO in payload v4+;
+        // versions 2-3 leave the high half reserved and decode it as neutral.
+        public uint EmissionBAndOcclusion16;
+        public uint GeometricNormalOct16;
+        public uint MaterialRevision;
+        public uint TransportProfileRevision;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1411,7 +1498,9 @@ namespace Njulf.Rendering.Data
         public uint InstanceIndex;
         public uint Mode;
         public uint TriangleCount;
-        public uint MaterialTextureMaxCascade;
+        // Pass-specific auxiliary descriptor: voxel material dominance scratch
+        // during voxelization, packed distance output during jump flooding.
+        public uint AuxiliaryBufferIndex;
         public uint CurrentFrameIndex;
         public uint PageVoxelOffset;
         public uint PageDistanceWordOffset;
@@ -1419,6 +1508,8 @@ namespace Njulf.Rendering.Data
         public uint PageTableEntryIndex;
         public uint PageGeneration;
         public uint DiagnosticFlags;
+        public uint PageSourceRevisionLow;
+        public uint PageSourceRevisionHigh;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1482,13 +1573,27 @@ namespace Njulf.Rendering.Data
         public uint Padding0;
     }
 
+    [Flags]
+    public enum SsgiCompositionFlags : uint
+    {
+        None = 0,
+        HybridV2 = 1u << 0,
+        EnvironmentFallback = 1u << 1,
+        MaterialTransportV2 = 1u << 2,
+        FarFieldTransport = 1u << 3
+    }
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSsgiCompositePushConstants
     {
         public uint GiFinalDiffuseTextureIndex;
         public uint SceneMaterialTextureIndex;
+        public uint MaterialTransportProvenanceTextureIndex;
         public uint DebugView;
+        public uint CompositionFlags;
         public uint Padding0;
+        public uint Padding1;
+        public uint Padding2;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

@@ -2446,7 +2446,7 @@ internal sealed class SampleInputController
             or GlobalIlluminationMode.RayQueryHybrid;
     }
 
-    private static GlobalIlluminationDebugView NextGlobalIlluminationDebugView(GlobalIlluminationDebugView mode)
+    internal static GlobalIlluminationDebugView NextGlobalIlluminationDebugView(GlobalIlluminationDebugView mode)
     {
         return mode switch
         {
@@ -2491,6 +2491,15 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight => GlobalIlluminationDebugView.DdgiGatherBlendWeight,
             GlobalIlluminationDebugView.DdgiGatherBlendWeight => GlobalIlluminationDebugView.DdgiGatherFallback,
             GlobalIlluminationDebugView.DdgiGatherFallback => GlobalIlluminationDebugView.RayQueryCost,
+            GlobalIlluminationDebugView.RayQueryCost => GlobalIlluminationDebugView.FarFieldOccupancySlice,
+            GlobalIlluminationDebugView.FarFieldOccupancySlice => GlobalIlluminationDebugView.FarFieldTraceResult,
+            GlobalIlluminationDebugView.FarFieldTraceResult => GlobalIlluminationDebugView.FarFieldSkyVisibility,
+            GlobalIlluminationDebugView.FarFieldSkyVisibility => GlobalIlluminationDebugView.FarFieldSunShadow,
+            GlobalIlluminationDebugView.FarFieldSunShadow => GlobalIlluminationDebugView.MaterialTransportSourceOwnership,
+            GlobalIlluminationDebugView.MaterialTransportSourceOwnership => GlobalIlluminationDebugView.HybridEstimatorOwnership,
+            GlobalIlluminationDebugView.HybridEstimatorOwnership => GlobalIlluminationDebugView.HybridFinalComposition,
+            GlobalIlluminationDebugView.HybridFinalComposition => GlobalIlluminationDebugView.MaterialTransportHitProvenance,
+            GlobalIlluminationDebugView.MaterialTransportHitProvenance => GlobalIlluminationDebugView.None,
             _ => GlobalIlluminationDebugView.None
         };
     }
@@ -3026,7 +3035,7 @@ internal sealed class SampleInputController
             DebugOverlayMode.MaterialInspection;
     }
 
-    private static MaterialDebugView NextMaterialDebugView(MaterialDebugView mode)
+    internal static MaterialDebugView NextMaterialDebugView(MaterialDebugView mode)
     {
         return mode switch
         {
@@ -3053,6 +3062,16 @@ internal sealed class SampleInputController
             MaterialDebugView.SpecularColor => MaterialDebugView.IridescenceFactor,
             MaterialDebugView.IridescenceFactor => MaterialDebugView.IridescenceThickness,
             MaterialDebugView.IridescenceThickness => MaterialDebugView.Dispersion,
+            MaterialDebugView.Dispersion => MaterialDebugView.MaterialOcclusion,
+            MaterialDebugView.MaterialOcclusion => MaterialDebugView.CanonicalDiffuseReflectance,
+            MaterialDebugView.CanonicalDiffuseReflectance => MaterialDebugView.CompiledEmission,
+            MaterialDebugView.CompiledEmission => MaterialDebugView.GeometricNormal,
+            MaterialDebugView.GeometricNormal => MaterialDebugView.Opacity,
+            MaterialDebugView.Opacity => MaterialDebugView.Sidedness,
+            MaterialDebugView.Sidedness => MaterialDebugView.ShadingModel,
+            MaterialDebugView.ShadingModel => MaterialDebugView.TransportProfile,
+            MaterialDebugView.TransportProfile => MaterialDebugView.MaterialRevisions,
+            MaterialDebugView.MaterialRevisions => MaterialDebugView.None,
             _ => MaterialDebugView.None
         };
     }

@@ -9,9 +9,10 @@ using CoreVector4 = Njulf.Core.Math.Vector4;
 
 namespace Njulf.Editor;
 
-/// <summary>Dockable v1 editor shell: save/add tools, hierarchy, and live inspectors.</summary>
+/// <summary>Dockable editor shell: save/add tools, hierarchy, and live inspectors.</summary>
 public sealed class EditorImGuiPanels
 {
+    private const float MaximumEditableEmissionStrength = 65_504f;
     private string _filter = string.Empty;
     private string _saveAsPath = string.Empty;
     private string? _lastError;
@@ -303,10 +304,11 @@ public sealed class EditorImGuiPanels
                 ToCore(scale));
         }
 
-        if (editor.TryGetSelectedMaterial(out GPUMaterialData material))
+        if (editor.TryGetSelectedMaterialInspection(out EditorMaterialInspection? inspection) &&
+            inspection != null)
         {
             ImGui.SeparatorText("Material");
-            RenderMaterialInspector(editor, material);
+            RenderMaterialInspector(editor, inspection);
         }
     }
 
@@ -372,34 +374,215 @@ public sealed class EditorImGuiPanels
         }
     }
 
-    private void RenderMaterialInspector(EditorController editor, GPUMaterialData material)
+    private void RenderMaterialInspector(EditorController editor, EditorMaterialInspection inspection)
     {
-        NumericsVector3 albedo = new(material.Albedo.X, material.Albedo.Y, material.Albedo.Z);
-        NumericsVector3 emissive = new(material.Emissive.X, material.Emissive.Y, material.Emissive.Z);
-        float emissiveStrength = Math.Max(emissive.X, Math.Max(emissive.Y, emissive.Z));
-        NumericsVector3 emissiveColor = emissiveStrength > 0.00001f ? emissive / emissiveStrength : NumericsVector3.Zero;
-        float metallic = material.MetallicRoughnessAO.X;
-        float roughness = material.MetallicRoughnessAO.Y;
-        float normalScale = material.NormalScaleBias.X;
-        float alphaCutoff = material.NormalScaleBias.Z;
-        bool changed = ImGui.ColorEdit3("Albedo", ref albedo);
-        bool emissiveColorChanged = ImGui.ColorEdit3("Emissive", ref emissiveColor);
-        bool emissiveStrengthChanged = ImGui.DragFloat("Emissive strength", ref emissiveStrength, 0.01f, 0f, 100000f);
-        changed |= emissiveColorChanged || emissiveStrengthChanged;
+        MaterialDefinition material = inspection.Definition;
+        string name = material.Name;
+        NumericsVector3 baseColor = new(
+            material.BaseColorFactor.X,
+            material.BaseColorFactor.Y,
+            material.BaseColorFactor.Z);
+        float baseOpacity = material.BaseColorFactor.W;
+        NumericsVector3 emissiveColor = new(
+            material.EmissiveFactor.X,
+            material.EmissiveFactor.Y,
+            material.EmissiveFactor.Z);
+        float emissiveStrength = material.EmissiveStrength;
+        float metallic = material.MetallicFactor;
+        float roughness = material.RoughnessFactor;
+        float occlusion = material.OcclusionStrength;
+        float normalScale = material.NormalScale;
+        MaterialAlphaMode alphaMode = material.AlphaMode;
+        float alphaCutoff = material.AlphaCutoff;
+        bool doubleSided = material.DoubleSided;
+        bool receivesShadows = material.ReceivesShadows;
+        MaterialBlendMode? blendOverride = material.RenderBlendModeOverride;
+        MaterialShadingModel shadingModel = material.ShadingModel;
+        GiParticipationOverride diffuseGi = material.DiffuseGiParticipation;
+        GiParticipationOverride emissionGi = material.EmissionGiParticipation;
+
+        bool changed = ImGui.InputText("Name##material", ref name, (nuint)256);
+        changed |= ImGui.ColorEdit3("Base color", ref baseColor);
+        changed |= ImGui.DragFloat("Base opacity", ref baseOpacity, 0.01f, 0f, 1f);
+        changed |= ImGui.ColorEdit3("Emission color", ref emissiveColor);
+        changed |= ImGui.DragFloat(
+            "Emission strength",
+            ref emissiveStrength,
+            0.01f,
+            0f,
+            MaximumEditableEmissionStrength);
         changed |= ImGui.DragFloat("Metallic", ref metallic, 0.01f, 0f, 1f);
-        changed |= ImGui.DragFloat("Roughness", ref roughness, 0.01f, 0.04f, 1f);
+        changed |= ImGui.DragFloat(
+            "Roughness",
+            ref roughness,
+            0.01f,
+            0f,
+            1f);
+        changed |= ImGui.DragFloat("Occlusion strength", ref occlusion, 0.01f, 0f, 1f);
         changed |= ImGui.DragFloat("Normal scale", ref normalScale, 0.01f, 0f, 4f);
-        changed |= ImGui.DragFloat("Alpha cutoff", ref alphaCutoff, 0.01f, 0f, 1f);
-        ImGui.TextDisabled($"Textures: albedo {material.AlbedoTextureIndex}, normal {material.NormalTextureIndex}, MR {material.MetallicRoughnessTextureIndex}, emissive {material.EmissiveTextureIndex}");
-        if (!changed) return;
-        material.Albedo = new CoreVector4(albedo.X, albedo.Y, albedo.Z, material.Albedo.W);
-        emissive = emissiveColor * Math.Max(0f, emissiveStrength);
-        material.Emissive = new CoreVector4(emissive.X, emissive.Y, emissive.Z, material.Emissive.W);
-        material.MetallicRoughnessAO.X = Math.Clamp(metallic, 0f, 1f);
-        material.MetallicRoughnessAO.Y = Math.Clamp(roughness, 0.04f, 1f);
-        material.NormalScaleBias.X = Math.Max(0f, normalScale);
-        material.NormalScaleBias.Z = Math.Clamp(alphaCutoff, 0f, 1f);
-        Run(() => editor.UpdateSelectedMaterial(material));
+
+        ImGui.SeparatorText("Surface policy");
+        changed |= RenderEnumCombo("Shading model", ref shadingModel);
+        changed |= RenderEnumCombo("Alpha mode", ref alphaMode);
+        changed |= ImGui.DragFloat(
+            "Alpha cutoff",
+            ref alphaCutoff,
+            0.01f,
+            0f,
+            float.MaxValue);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Mask comparison is alpha >= cutoff. Values above 1 are valid and reject all normalized alpha.");
+        changed |= ImGui.Checkbox("Double sided", ref doubleSided);
+        ImGui.SameLine();
+        changed |= ImGui.Checkbox("Receives shadows", ref receivesShadows);
+        changed |= RenderOptionalBlendModeCombo("Blend policy", ref blendOverride);
+
+        ImGui.SeparatorText("GI participation");
+        changed |= RenderEnumCombo("Diffuse GI", ref diffuseGi);
+        changed |= RenderEnumCombo("Emission GI", ref emissionGi);
+
+        RenderMaterialTextureBindings(material);
+        RenderMaterialTransportState(inspection);
+
+        if (!changed)
+            return;
+
+        var updated = material with
+        {
+            Name = name,
+            BaseColorFactor = new CoreVector4(
+                baseColor.X,
+                baseColor.Y,
+                baseColor.Z,
+                baseOpacity),
+            EmissiveFactor = new CoreVector3(
+                emissiveColor.X,
+                emissiveColor.Y,
+                emissiveColor.Z),
+            EmissiveStrength = emissiveStrength,
+            MetallicFactor = metallic,
+            RoughnessFactor = roughness,
+            OcclusionStrength = occlusion,
+            NormalScale = normalScale,
+            AlphaMode = alphaMode,
+            AlphaCutoff = alphaCutoff,
+            DoubleSided = doubleSided,
+            ReceivesShadows = receivesShadows,
+            RenderBlendModeOverride = blendOverride,
+            ShadingModel = shadingModel,
+            DiffuseGiParticipation = diffuseGi,
+            EmissionGiParticipation = emissionGi
+        };
+        Run(() => editor.UpdateSelectedMaterialDefinition(updated));
+    }
+
+    private static bool RenderEnumCombo<T>(string label, ref T value)
+        where T : struct, Enum
+    {
+        bool changed = false;
+        if (!ImGui.BeginCombo(label, value.ToString()))
+            return false;
+
+        foreach (T candidate in Enum.GetValues<T>())
+        {
+            if (ImGui.Selectable(candidate.ToString(), EqualityComparer<T>.Default.Equals(candidate, value)))
+            {
+                value = candidate;
+                changed = true;
+            }
+        }
+        ImGui.EndCombo();
+        return changed;
+    }
+
+    private static bool RenderOptionalBlendModeCombo(
+        string label,
+        ref MaterialBlendMode? value)
+    {
+        bool changed = false;
+        if (!ImGui.BeginCombo(label, value?.ToString() ?? "Automatic"))
+            return false;
+
+        if (ImGui.Selectable("Automatic", value == null))
+        {
+            value = null;
+            changed = true;
+        }
+        foreach (MaterialBlendMode candidate in Enum.GetValues<MaterialBlendMode>())
+        {
+            if (ImGui.Selectable(candidate.ToString(), value == candidate))
+            {
+                value = candidate;
+                changed = true;
+            }
+        }
+        ImGui.EndCombo();
+        return changed;
+    }
+
+    private static void RenderMaterialTextureBindings(MaterialDefinition material)
+    {
+        if (!ImGui.CollapsingHeader("Texture bindings"))
+            return;
+
+        RenderTextureBinding("Base color", material.BaseColor);
+        RenderTextureBinding("Normal", material.Normal);
+        RenderTextureBinding("Metallic/roughness", material.MetallicRoughness);
+        RenderTextureBinding("Occlusion", material.Occlusion);
+        RenderTextureBinding("Emission", material.Emissive);
+    }
+
+    private static void RenderTextureBinding(string label, MaterialTextureBinding binding)
+    {
+        if (!binding.IsBound)
+        {
+            ImGui.TextDisabled($"{label}: none");
+            return;
+        }
+
+        ImGui.TextDisabled(
+            $"{label}: texture {binding.Texture.Index}:{binding.Texture.Generation}, " +
+            $"UV{binding.TexCoordSet}, offset {binding.Offset.X:0.###},{binding.Offset.Y:0.###}, " +
+            $"scale {binding.Scale.X:0.###},{binding.Scale.Y:0.###}, rotation {binding.RotationRadians:0.###} rad");
+    }
+
+    private static void RenderMaterialTransportState(EditorMaterialInspection inspection)
+    {
+        if (!ImGui.CollapsingHeader("Derived GI transport (read-only)"))
+            return;
+
+        GiMaterialTransportProfile profile = inspection.TransportProfile;
+        MaterialAspectRevisions revisions = inspection.AspectRevisions;
+        ImGui.TextDisabled(
+            $"Quality: {profile.Quality}  Algorithm: {profile.AlgorithmVersion}  " +
+            $"Flags: {profile.Flags}");
+        ImGui.TextDisabled(
+            $"Diffuse mean: {profile.MeanDiffuseReflectance.X:0.####}, " +
+            $"{profile.MeanDiffuseReflectance.Y:0.####}, {profile.MeanDiffuseReflectance.Z:0.####}");
+        ImGui.TextDisabled(
+            $"Emission mean: {profile.MeanEmissiveRadiance.X:0.####}, " +
+            $"{profile.MeanEmissiveRadiance.Y:0.####}, {profile.MeanEmissiveRadiance.Z:0.####}  " +
+            $"importance {profile.EmissiveImportance:0.####}");
+        ImGui.TextDisabled(
+            $"AO mean: {profile.MeanMaterialOcclusion:0.####}  " +
+            $"alpha coverage: {profile.AlphaCoverage:0.####}  " +
+            $"normal variance: {profile.NormalVariance:0.####}");
+        ImGui.TextDisabled(
+            $"Source hash: {profile.SourceContentHash:X16}  Primitive hash: {profile.PrimitiveContentHash:X16}");
+        ImGui.TextDisabled(
+            $"Revisions M:{revisions.Material} D:{revisions.DiffuseTransport} " +
+            $"E:{revisions.Emission} A:{revisions.AlphaCoverage} " +
+            $"S:{revisions.Sidedness} SM:{revisions.ShadingModel} FF:{revisions.FarField}");
+
+        if (inspection.CompileDiagnostics.Count == 0)
+        {
+            ImGui.TextDisabled("Compiler diagnostics: none");
+            return;
+        }
+
+        ImGui.TextDisabled($"Compiler diagnostics ({inspection.CompileDiagnostics.Count}):");
+        foreach (string diagnostic in inspection.CompileDiagnostics)
+            ImGui.TextWrapped($"- {diagnostic}");
     }
 
     private bool MatchesFilter(string name, Guid id) => string.IsNullOrWhiteSpace(_filter) ||

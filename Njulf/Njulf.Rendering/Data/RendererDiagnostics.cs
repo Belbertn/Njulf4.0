@@ -344,6 +344,47 @@ namespace Njulf.Rendering.Data
         public ulong MaterialExtensionUploadBytes { get; init; }
         public int MaterialExtensionDataCount { get; init; }
         public MaterialDebugView MaterialDebugView { get; init; } = MaterialDebugView.None;
+        public long MaterialCompileCount { get; init; }
+        public long MaterialLastCompileMicroseconds { get; init; }
+        public long MaterialTotalCompileMicroseconds { get; init; }
+        public long MaterialCompileP95Microseconds { get; init; }
+        public int MaterialCompileTimingSampleCount { get; init; }
+        public long MaterialUploadP95Microseconds { get; init; }
+        public int MaterialUploadTimingSampleCount { get; init; }
+        public long MaterialLegacyV1FallbackCount { get; init; }
+        public long MaterialInvalidStatisticsCompileCount { get; init; }
+        public int MaterialActiveLegacyV1FallbackCount { get; init; }
+        public int MaterialActiveInvalidProfileCount { get; init; }
+        public int MaterialActivePrimitiveProfileCount { get; init; }
+        public ulong MaterialPrimitiveProfileGpuBytes { get; init; }
+        public ulong MaterialPrimitiveProfileAbsoluteBudgetBytes { get; init; }
+        public uint MaterialRevision { get; init; }
+        public uint MaterialTextureContentRevision { get; init; }
+        public uint MaterialMaximumTransportProfileRevision { get; init; }
+        public MaterialGiV2Feature MaterialGiV2ActiveFeatures { get; init; }
+        public MaterialGiRolloutMode MaterialGiRolloutMode { get; init; } =
+            MaterialGiRolloutMode.LegacyUnqualified;
+        public int MaterialGiReleaseQualificationRequired { get; init; }
+        public int MaterialGiReleaseQualified { get; init; }
+        public int MaterialGiReleaseQualificationFailureCount { get; init; }
+        public string MaterialGiReleaseQualificationSummary { get; init; } = string.Empty;
+        public string MaterialGiReleaseApprovalId { get; init; } = string.Empty;
+        public string MaterialGiReleaseEvidenceSha256 { get; init; } = string.Empty;
+        public int MaterialGiQualifiedDeviceCount { get; init; }
+        public string MaterialGiV1RemovalOwner { get; init; } = string.Empty;
+        public string MaterialGiV1RemovalTargetDate { get; init; } = string.Empty;
+        public int MaterialTrackedTextureDependencyCount { get; init; }
+        public uint MaterialEstimatedAlphaCandidateTestCount { get; init; }
+        public uint MaterialEstimatedAlphaCandidateRejectCount { get; init; }
+        public uint MaterialNonFiniteValueCount { get; init; }
+        public uint MaterialClampedValueCount { get; init; }
+        public uint MaterialAlphaCandidateLimitReachedCount { get; init; }
+        public uint MaterialEstimatedDetailedTransportHitCount { get; init; }
+        public uint MaterialEstimatedCompactTransportHitCount { get; init; }
+        public uint MaterialEstimatedCorrectnessFallbackHitCount { get; init; }
+        public uint MaterialEstimatedFarFieldTransportHitCount { get; init; }
+        public uint FarFieldMaterialConflictCount { get; init; }
+        public uint FarFieldStalePublicationRejectCount { get; init; }
         public int AutoExposureEnabled { get; init; }
         public float AutoExposureAverageLuminance { get; init; }
         public float AutoExposureTargetExposure { get; init; }
@@ -438,6 +479,8 @@ namespace Njulf.Rendering.Data
         public int FoliageCulledClusterCount { get; init; }
         public int FoliageVisibleMeshletDrawCount { get; init; }
         public int FoliageDdgiSampleCount { get; init; }
+        public int FoliageDdgiTransportExcludedClusterCount { get; init; }
+        public string FoliageDdgiTransportExclusionReason { get; init; } = string.Empty;
         public int FoliageGrassBladeEstimate { get; init; }
         public int FoliageLod0VisibleCount { get; init; }
         public int FoliageLod1VisibleCount { get; init; }
@@ -712,6 +755,48 @@ namespace Njulf.Rendering.Data
         public float MeshBufferUtilization { get; init; }
         public int MeshBufferCompactionCount { get; init; }
         public ulong MeshBufferCompactedBytesSaved { get; init; }
+        public ulong MeshRetainedDeadBytes { get; init; }
+        public ulong MeshRetainedDeadByteBudget { get; init; }
+        public long MeshRetainedDeadByteBudgetRejectionCount
+        {
+            get;
+            init;
+        }
+        public long MeshPostCommitCleanupFailureCount
+        {
+            get;
+            init;
+        }
+        public int PendingMaterialTextureFanoutCount
+        {
+            get;
+            init;
+        }
+        public long MaterialTextureFanoutFailureCount
+        {
+            get;
+            init;
+        }
+        public int PendingRetiredMaterialBufferCount
+        {
+            get;
+            init;
+        }
+        public int QuarantinedMaterialBufferCount
+        {
+            get;
+            init;
+        }
+        public long MaterialRetiredBufferCleanupFailureCount
+        {
+            get;
+            init;
+        }
+        public int MaterialBindingRepairPending
+        {
+            get;
+            init;
+        }
         public int PointShadowSkippedFaceCount { get; init; }
         public ulong SceneBufferAllocatedBytes { get; init; }
         public ulong SceneBufferPeakBytes { get; init; }
@@ -1097,6 +1182,19 @@ namespace Njulf.Rendering.Data
         public string DdgiLightSelectionMode { get; init; } = string.Empty;
         public int DdgiEmissiveSourceCount { get; init; }
         public uint DdgiEmissiveSourceRevision { get; init; }
+        public string DdgiEmissiveSamplingMode { get; init; } = string.Empty;
+        public int DdgiEmissiveTriangleCandidateCount { get; init; }
+        public int DdgiEmissiveTriangleBudget { get; init; }
+        public float DdgiEmissiveSkippedEnergyFraction { get; init; }
+        public int DdgiEmissiveSkippedSkinnedObjectCount { get; init; }
+        public double DdgiEmissiveSkippedSkinnedImportance { get; init; }
+        public uint DdgiEmissiveSamplingInvocationCount { get; init; }
+        public int DdgiEmissiveTableCacheHit { get; init; }
+        public ulong DdgiEmissiveTableCacheHitCount { get; init; }
+        public ulong DdgiEmissiveTableCacheMissCount { get; init; }
+        public ulong DdgiEmissiveTableRebuildCount { get; init; }
+        public ulong DdgiEmissiveTableInvalidationCount { get; init; }
+        public ulong DdgiEmissiveTableUploadCount { get; init; }
         public ulong DdgiProbeVolumeBufferBytes { get; init; }
         public ulong DdgiProbeStateBufferBytes { get; init; }
         public ulong DdgiProbeUpdateQueueBytes { get; init; }
@@ -1305,6 +1403,10 @@ namespace Njulf.Rendering.Data
         public int ValidationInfoMessageCount { get; init; }
         public int ValidationWarningMessageCount { get; init; }
         public int ValidationErrorMessageCount { get; init; }
+        public string ValidationFirstWarningMessage { get; init; } = string.Empty;
+        public string ValidationLastWarningMessage { get; init; } = string.Empty;
+        public string ValidationFirstErrorMessage { get; init; } = string.Empty;
+        public string ValidationLastErrorMessage { get; init; } = string.Empty;
         public DdgiRuntimeSnapshot DdgiRuntimeSnapshot { get; init; } = DdgiRuntimeSnapshot.Empty;
         public IReadOnlyList<string> DdgiDiagnosticWarnings { get; init; } = [];
         public IReadOnlyList<DdgiVolumeDiagnosticsEntry> DdgiVolumes { get; init; } = [];

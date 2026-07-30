@@ -3,6 +3,7 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 
 #include "common.glsl"
+#include "gi_material_transport.glsl"
 #include "farfield_clipmap.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
@@ -15,7 +16,7 @@ layout(push_constant) uniform FarFieldVoxelizePushBlock
     uint InstanceIndex;
     uint Mode;
     uint TriangleCount;
-    uint MaterialTextureMaxCascade;
+    uint SelectionScratchBufferIndex;
     uint CurrentFrameIndex;
     uint PageVoxelOffset;
     uint PageDistanceWordOffset;
@@ -23,13 +24,23 @@ layout(push_constant) uniform FarFieldVoxelizePushBlock
     uint PageTableEntryIndex;
     uint PageGeneration;
     uint DiagnosticFlags;
+    uint PageSourceRevisionLow;
+    uint PageSourceRevisionHigh;
 } pc;
 
 const uint FARFIELD_VOXELIZE_MODE_CLEAR = 0u;
 const uint FARFIELD_VOXELIZE_MODE_TRIANGLES = 1u;
 const uint FARFIELD_VOXELIZE_MODE_PUBLISH = 2u;
-const uint FARFIELD_INSTANCE_STRIDE_WORDS = 20u;
+const uint FARFIELD_VOXELIZE_MODE_MATERIAL_V2_DOMINANCE_KEY = 3u;
+const uint FARFIELD_VOXELIZE_MODE_MATERIAL_V2_STABLE_TIE_BREAK = 4u;
+const uint FARFIELD_VOXELIZE_MODE_MATERIAL_V2_PAYLOAD = 5u;
+const uint FARFIELD_VOXELIZE_MODE_MATERIAL_V3_SIDEDNESS_CONE = 6u;
+const uint FARFIELD_INSTANCE_STRIDE_WORDS = 24u;
 const uint FARFIELD_DIAGNOSTIC_FLAG_DETAILED = 1u << 0;
+const uint FARFIELD_EMPTY_WINNER_KEY = 0xffffffffu;
+const uint FARFIELD_MATERIAL_V2_OCCUPIED_BIT = 1u << 31u;
+const uint FARFIELD_MATERIAL_V2_STORED_FLAG_MASK = 0x7fffu;
+const uint FARFIELD_GI_DOUBLE_SIDED = GI_MATERIAL_DOUBLE_SIDED;
 
 void AddFarFieldDiagnostic(uint counterIndex, uint value)
 {
@@ -43,7 +54,17 @@ uint PackFarFieldVoxel(vec3 albedo)
     return 0x80000000u | (rgb.r << 0u) | (rgb.g << 8u) | (rgb.b << 16u);
 }
 
-void ReadFarFieldInstance(uint instanceIndex, out uint vertexOffset, out uint indexOffset, out uint indexCount, out uint materialIndex, out mat4 world)
+void ReadFarFieldInstance(
+    uint instanceIndex,
+    out uint vertexOffset,
+    out uint indexOffset,
+    out uint indexCount,
+    out uint materialIndex,
+    out mat4 world,
+    out uint primitiveKeyBase,
+    out uint materialRevision,
+    out uint farFieldRevision,
+    out uint transportProfileRevision)
 {
     uint base = instanceIndex * FARFIELD_INSTANCE_STRIDE_WORDS;
     vertexOffset = ReadStorageWord(pc.InstanceBufferIndex, base + 0u);
@@ -51,6 +72,10 @@ void ReadFarFieldInstance(uint instanceIndex, out uint vertexOffset, out uint in
     indexCount = ReadStorageWord(pc.InstanceBufferIndex, base + 2u);
     materialIndex = ReadStorageWord(pc.InstanceBufferIndex, base + 3u);
     world = ReadStorageMat4(pc.InstanceBufferIndex, base + 4u);
+    primitiveKeyBase = ReadStorageWord(pc.InstanceBufferIndex, base + 20u);
+    materialRevision = ReadStorageWord(pc.InstanceBufferIndex, base + 21u);
+    farFieldRevision = ReadStorageWord(pc.InstanceBufferIndex, base + 22u);
+    transportProfileRevision = ReadStorageWord(pc.InstanceBufferIndex, base + 23u);
 }
 
 ivec3 WorldToVoxel(vec3 worldPosition, FarFieldClipmapParams params)
@@ -111,6 +136,464 @@ bool FarFieldTriangleBoxOverlap(vec3 boxCenter, vec3 halfSize, vec3 p0, vec3 p1,
     return true;
 }
 
+vec3 FarFieldClosestTriangleBarycentrics(vec3 point, vec3 a, vec3 b, vec3 c)
+{
+    vec3 ab = b - a;
+    vec3 ac = c - a;
+    vec3 ap = point - a;
+    float d1 = dot(ab, ap);
+    float d2 = dot(ac, ap);
+    if (d1 <= 0.0 && d2 <= 0.0)
+        return vec3(1.0, 0.0, 0.0);
+
+    vec3 bp = point - b;
+    float d3 = dot(ab, bp);
+    float d4 = dot(ac, bp);
+    if (d3 >= 0.0 && d4 <= d3)
+        return vec3(0.0, 1.0, 0.0);
+
+    float vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0)
+    {
+        float v = d1 / max(d1 - d3, 0.0000001);
+        return vec3(1.0 - v, v, 0.0);
+    }
+
+    vec3 cp = point - c;
+    float d5 = dot(ab, cp);
+    float d6 = dot(ac, cp);
+    if (d6 >= 0.0 && d5 <= d6)
+        return vec3(0.0, 0.0, 1.0);
+
+    float vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0)
+    {
+        float w = d2 / max(d2 - d6, 0.0000001);
+        return vec3(1.0 - w, 0.0, w);
+    }
+
+    float va = d3 * d6 - d5 * d4;
+    if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0)
+    {
+        float w = (d4 - d3) / max((d4 - d3) + (d5 - d6), 0.0000001);
+        return vec3(0.0, 1.0 - w, w);
+    }
+
+    float inverseDenominator = 1.0 / max(va + vb + vc, 0.0000001);
+    float v = vb * inverseDenominator;
+    float w = vc * inverseDenominator;
+    return vec3(1.0 - v - w, v, w);
+}
+
+vec2 FarFieldMaterialUv(
+    vec2 texCoord0,
+    vec2 texCoord1,
+    float texCoordSet,
+    vec4 offsetScale,
+    float rotationRadians)
+{
+    vec2 uv = int(round(texCoordSet)) == 1 ? texCoord1 : texCoord0;
+    vec2 scaled = uv * offsetScale.zw;
+    float sine = sin(rotationRadians);
+    float cosine = cos(rotationRadians);
+    return offsetScale.xy + vec2(
+        scaled.x * cosine - scaled.y * sine,
+        scaled.x * sine + scaled.y * cosine);
+}
+
+bool IsFarFieldTextureBindingValid(int textureIndex)
+{
+    return textureIndex >= FIRST_TEXTURE_INDEX &&
+        textureIndex < FIRST_TEXTURE_INDEX + MAX_TEXTURES;
+}
+
+bool IsFiniteFarFieldTextureSample(vec4 sampleValue)
+{
+    return !any(isnan(sampleValue)) && !any(isinf(sampleValue));
+}
+
+bool TrySampleFarFieldTexture(
+    int textureIndex,
+    vec2 uv,
+    float lod,
+    vec4 fallback,
+    out vec4 sampleValue)
+{
+    sampleValue = fallback;
+    if (!IsFarFieldTextureBindingValid(textureIndex))
+        return false;
+
+    sampleValue = textureLod(
+        BindlessTextures[nonuniformEXT(textureIndex)],
+        uv,
+        max(lod, 0.0));
+    return IsFiniteFarFieldTextureSample(sampleValue);
+}
+
+bool TrySampleFarFieldBaseColor(
+    GPUMaterialData material,
+    vec2 texCoord0,
+    vec2 texCoord1,
+    out vec4 sampleValue)
+{
+    sampleValue = vec4(1.0);
+    if (!GiMaterialHasFlag(
+            material.TransportFlags,
+            GI_MATERIAL_HAS_BASE_COLOR_TEXTURE))
+    {
+        return true;
+    }
+
+    vec2 uv = FarFieldMaterialUv(
+        texCoord0,
+        texCoord1,
+        material.TextureTexCoordSets.x,
+        material.BaseColorOffsetScale,
+        material.TextureRotations.x);
+    return TrySampleFarFieldTexture(
+        material.AlbedoTextureIndex,
+        uv,
+        material.DdgiMaterialPolicy.y,
+        vec4(1.0),
+        sampleValue);
+}
+
+bool IsFarFieldCompactProfileValid(GPUMaterialData material)
+{
+    uint flags = material.TransportFlags;
+    bool diffuseValid =
+        !GiMaterialHasFlag(flags, GI_MATERIAL_REFLECTS_INDIRECT_DIFFUSE) ||
+        GiMaterialHasFlag(flags, GI_MATERIAL_DIFFUSE_PROFILE_VALID);
+    bool emissionValid =
+        !GiMaterialHasFlag(flags, GI_MATERIAL_EMITS_INTO_GI) ||
+        GiMaterialHasFlag(flags, GI_MATERIAL_EMISSION_PROFILE_VALID);
+    bool masked =
+        DecodeMaterialAlphaMode(material.NormalScaleBias.y) ==
+        MATERIAL_ALPHA_MODE_MASK;
+    bool alphaValid =
+        !masked ||
+        GiMaterialHasFlag(flags, GI_MATERIAL_ALPHA_PROFILE_VALID);
+    bool occlusionValid =
+        !GiMaterialHasFlag(flags, GI_MATERIAL_HAS_OCCLUSION_TEXTURE) ||
+        GiMaterialHasFlag(flags, GI_MATERIAL_BASE_STATISTICS_VALID);
+    return diffuseValid && emissionValid && alphaValid && occlusionValid;
+}
+
+bool ValidateFarFieldDetailedBindings(
+    GPUMaterialData material,
+    bool hasExtensionData,
+    GPUMaterialExtensionData extensionData)
+{
+    uint flags = material.TransportFlags;
+    if (GiMaterialHasFlag(flags, GI_MATERIAL_HAS_BASE_COLOR_TEXTURE) &&
+        !IsFarFieldTextureBindingValid(material.AlbedoTextureIndex))
+    {
+        return false;
+    }
+    if (GiMaterialHasFlag(flags, GI_MATERIAL_HAS_METALLIC_ROUGHNESS_TEXTURE) &&
+        !IsFarFieldTextureBindingValid(material.MetallicRoughnessTextureIndex))
+    {
+        return false;
+    }
+    if (GiMaterialHasFlag(flags, GI_MATERIAL_HAS_OCCLUSION_TEXTURE) &&
+        !IsFarFieldTextureBindingValid(material.OcclusionTextureIndex))
+    {
+        return false;
+    }
+    if (GiMaterialHasFlag(flags, GI_MATERIAL_HAS_EMISSIVE_TEXTURE) &&
+        !IsFarFieldTextureBindingValid(material.EmissiveTextureIndex))
+    {
+        return false;
+    }
+
+    const uint energyExtensionMask =
+        MATERIAL_FEATURE_CLEARCOAT |
+        MATERIAL_FEATURE_CLEARCOAT_TEXTURE |
+        MATERIAL_FEATURE_SHEEN |
+        MATERIAL_FEATURE_SHEEN_COLOR_TEXTURE |
+        MATERIAL_FEATURE_TRANSMISSION |
+        MATERIAL_FEATURE_TRANSMISSION_TEXTURE |
+        MATERIAL_FEATURE_EMISSIVE_STRENGTH |
+        MATERIAL_FEATURE_SPECULAR |
+        MATERIAL_FEATURE_SPECULAR_TEXTURE |
+        MATERIAL_FEATURE_SPECULAR_COLOR_TEXTURE |
+        MATERIAL_FEATURE_IOR;
+    if ((material.FeatureFlags & energyExtensionMask) != 0u &&
+        !hasExtensionData)
+    {
+        return false;
+    }
+    if (!hasExtensionData)
+        return true;
+
+    return
+        ((material.FeatureFlags & MATERIAL_FEATURE_CLEARCOAT_TEXTURE) == 0u ||
+         IsFarFieldTextureBindingValid(extensionData.ClearcoatTextureIndex)) &&
+        ((material.FeatureFlags & MATERIAL_FEATURE_SHEEN_COLOR_TEXTURE) == 0u ||
+         IsFarFieldTextureBindingValid(extensionData.SheenColorTextureIndex)) &&
+        ((material.FeatureFlags & MATERIAL_FEATURE_TRANSMISSION_TEXTURE) == 0u ||
+         IsFarFieldTextureBindingValid(extensionData.TransmissionTextureIndex)) &&
+        ((material.FeatureFlags & MATERIAL_FEATURE_SPECULAR_TEXTURE) == 0u ||
+         IsFarFieldTextureBindingValid(extensionData.SpecularTextureIndex)) &&
+        ((material.FeatureFlags & MATERIAL_FEATURE_SPECULAR_COLOR_TEXTURE) == 0u ||
+         IsFarFieldTextureBindingValid(extensionData.SpecularColorTextureIndex));
+}
+
+bool TrySampleFarFieldDetailedSurface(
+    GPUMaterialData material,
+    GPUMaterialExtensionData sourceExtensionData,
+    bool hasExtensionData,
+    vec2 texCoord0,
+    vec2 texCoord1,
+    vec4 baseColorSample,
+    vec4 vertexColor,
+    vec3 geometricNormal,
+    out GiSurfaceSample surface)
+{
+    vec4 metallicRoughnessSample = vec4(1.0);
+    vec4 sampledTexture;
+    if (GiMaterialHasFlag(
+            material.TransportFlags,
+            GI_MATERIAL_HAS_METALLIC_ROUGHNESS_TEXTURE))
+    {
+        vec2 uv = FarFieldMaterialUv(
+            texCoord0,
+            texCoord1,
+            material.TextureTexCoordSets.z,
+            material.MetallicRoughnessOffsetScale,
+            material.TextureRotations.z);
+        if (!TrySampleFarFieldTexture(
+                material.MetallicRoughnessTextureIndex,
+                uv,
+                material.DdgiMaterialPolicy.y,
+                vec4(1.0),
+                metallicRoughnessSample))
+        {
+            return false;
+        }
+    }
+
+    float occlusionSample = 1.0;
+    if (GiMaterialHasFlag(
+            material.TransportFlags,
+            GI_MATERIAL_HAS_OCCLUSION_TEXTURE))
+    {
+        vec2 uv = FarFieldMaterialUv(
+            texCoord0,
+            texCoord1,
+            material.OcclusionBinding.y,
+            material.OcclusionOffsetScale,
+            material.OcclusionBinding.x);
+        if (!TrySampleFarFieldTexture(
+                material.OcclusionTextureIndex,
+                uv,
+                material.DdgiMaterialPolicy.y,
+                vec4(1.0),
+                sampledTexture))
+        {
+            return false;
+        }
+        occlusionSample = sampledTexture.r;
+    }
+
+    vec3 emissiveSample = vec3(1.0);
+    if (GiMaterialHasFlag(
+            material.TransportFlags,
+            GI_MATERIAL_HAS_EMISSIVE_TEXTURE))
+    {
+        vec2 uv = FarFieldMaterialUv(
+            texCoord0,
+            texCoord1,
+            material.TextureTexCoordSets.w,
+            material.EmissiveOffsetScale,
+            material.TextureRotations.w);
+        if (!TrySampleFarFieldTexture(
+                material.EmissiveTextureIndex,
+                uv,
+                material.DdgiMaterialPolicy.y,
+                vec4(1.0),
+                sampledTexture))
+        {
+            return false;
+        }
+        emissiveSample = sampledTexture.rgb;
+    }
+
+    GPUMaterialExtensionData extensionData = sourceExtensionData;
+    if (hasExtensionData)
+    {
+        if ((material.FeatureFlags & MATERIAL_FEATURE_CLEARCOAT_TEXTURE) != 0u)
+        {
+            vec2 uv = FarFieldMaterialUv(
+                texCoord0,
+                texCoord1,
+                extensionData.ExtensionTextureTexCoordSets0.x,
+                extensionData.ClearcoatOffsetScale,
+                extensionData.ExtensionTextureRotations0.x);
+            if (!TrySampleFarFieldTexture(
+                    extensionData.ClearcoatTextureIndex,
+                    uv,
+                    material.DdgiMaterialPolicy.y,
+                    vec4(1.0),
+                    sampledTexture))
+            {
+                return false;
+            }
+            extensionData.Clearcoat.x *= sampledTexture.r;
+        }
+        if ((material.FeatureFlags & MATERIAL_FEATURE_SHEEN_COLOR_TEXTURE) != 0u)
+        {
+            vec2 uv = FarFieldMaterialUv(
+                texCoord0,
+                texCoord1,
+                extensionData.ExtensionTextureTexCoordSets0.w,
+                extensionData.SheenColorOffsetScale,
+                extensionData.ExtensionTextureRotations0.w);
+            if (!TrySampleFarFieldTexture(
+                    extensionData.SheenColorTextureIndex,
+                    uv,
+                    material.DdgiMaterialPolicy.y,
+                    vec4(1.0),
+                    sampledTexture))
+            {
+                return false;
+            }
+            extensionData.SheenColor.rgb *= sampledTexture.rgb;
+        }
+        if ((material.FeatureFlags & MATERIAL_FEATURE_TRANSMISSION_TEXTURE) != 0u)
+        {
+            vec2 uv = FarFieldMaterialUv(
+                texCoord0,
+                texCoord1,
+                extensionData.ExtensionTextureTexCoordSets1.z,
+                extensionData.TransmissionOffsetScale,
+                extensionData.ExtensionTextureRotations1.z);
+            if (!TrySampleFarFieldTexture(
+                    extensionData.TransmissionTextureIndex,
+                    uv,
+                    material.DdgiMaterialPolicy.y,
+                    vec4(1.0),
+                    sampledTexture))
+            {
+                return false;
+            }
+            extensionData.Transmission.x *= sampledTexture.r;
+        }
+        if ((material.FeatureFlags & MATERIAL_FEATURE_SPECULAR_TEXTURE) != 0u)
+        {
+            vec2 uv = FarFieldMaterialUv(
+                texCoord0,
+                texCoord1,
+                extensionData.ExtensionTextureTexCoordSets2.x,
+                extensionData.SpecularOffsetScale,
+                extensionData.ExtensionTextureRotations2.x);
+            if (!TrySampleFarFieldTexture(
+                    extensionData.SpecularTextureIndex,
+                    uv,
+                    material.DdgiMaterialPolicy.y,
+                    vec4(1.0),
+                    sampledTexture))
+            {
+                return false;
+            }
+            extensionData.SpecularColor.a *= sampledTexture.a;
+        }
+        if ((material.FeatureFlags & MATERIAL_FEATURE_SPECULAR_COLOR_TEXTURE) != 0u)
+        {
+            vec2 uv = FarFieldMaterialUv(
+                texCoord0,
+                texCoord1,
+                extensionData.ExtensionTextureTexCoordSets2.y,
+                extensionData.SpecularColorOffsetScale,
+                extensionData.ExtensionTextureRotations2.y);
+            if (!TrySampleFarFieldTexture(
+                    extensionData.SpecularColorTextureIndex,
+                    uv,
+                    material.DdgiMaterialPolicy.y,
+                    vec4(1.0),
+                    sampledTexture))
+            {
+                return false;
+            }
+            extensionData.SpecularColor.rgb *= sampledTexture.rgb;
+        }
+    }
+
+    surface = EvaluateGiTexturedSurface(
+        material,
+        extensionData,
+        hasExtensionData,
+        baseColorSample,
+        metallicRoughnessSample,
+        occlusionSample,
+        emissiveSample,
+        vertexColor,
+        geometricNormal,
+        geometricNormal,
+        geometricNormal,
+        false);
+    return
+        !any(isnan(surface.DiffuseReflectance)) &&
+        !any(isinf(surface.DiffuseReflectance)) &&
+        !any(isnan(surface.EmissiveRadiance)) &&
+        !any(isinf(surface.EmissiveRadiance)) &&
+        !isnan(surface.MaterialOcclusion) &&
+        !isinf(surface.MaterialOcclusion) &&
+        !isnan(surface.Opacity) &&
+        !isinf(surface.Opacity);
+}
+
+vec2 EncodeFarFieldOctahedralNormal(vec3 normal)
+{
+    normal = normalize(normal);
+    normal /= max(abs(normal.x) + abs(normal.y) + abs(normal.z), 0.0000001);
+    vec2 encoded = normal.xy;
+    if (normal.z < 0.0)
+    {
+        vec2 signs = vec2(encoded.x >= 0.0 ? 1.0 : -1.0, encoded.y >= 0.0 ? 1.0 : -1.0);
+        encoded = (vec2(1.0) - abs(encoded.yx)) * signs;
+    }
+    return encoded;
+}
+
+uint PackFarFieldDiffuseRgb10(vec3 diffuse)
+{
+    uvec3 rgb = uvec3(round(clamp(diffuse, vec3(0.0), vec3(1.0)) * 1023.0));
+    return rgb.r | (rgb.g << 10u) | (rgb.b << 20u);
+}
+
+uint PackFarFieldMaterialMetadata(float coverage, float normalCone, uint materialFlags)
+{
+    uint coverage8 = uint(round(clamp(coverage, 0.0, 1.0) * 255.0));
+    // Cone quantization is deliberately conservative. A decoded cone must
+    // never be narrower than its represented geometric-normal set.
+    uint cone8 = uint(ceil(clamp(normalCone, 0.0, 1.0) * 255.0));
+    return FARFIELD_MATERIAL_V2_OCCUPIED_BIT |
+        ((materialFlags & FARFIELD_MATERIAL_V2_STORED_FLAG_MASK) << 16u) |
+        (cone8 << 8u) |
+        coverage8;
+}
+
+// Lexicographic dominant-surface ranking. Atomic-min operates on the inverse
+// rank so the all-ones clear value remains the unambiguous empty sentinel.
+// Coverage is primary, proximity to the voxel center is secondary, and
+// normal-facing is tertiary. The complete stable primitive key is deliberately
+// selected in a separate pass and therefore cannot outrank physical evidence.
+uint PackFarFieldDominanceSelectionKey(
+    float coverage,
+    float normalizedSurfaceDistance,
+    float normalFacing)
+{
+    uint coverage8 = uint(floor(
+        clamp(max(coverage, 1.0 / 255.0), 0.0, 1.0) * 255.0 + 0.5));
+    uint proximity16 = uint(floor(
+        (1.0 - clamp(normalizedSurfaceDistance, 0.0, 1.0)) * 65535.0 + 0.5));
+    uint facing8 = uint(floor(
+        clamp(normalFacing, 0.0, 1.0) * 255.0 + 0.5));
+    uint dominanceRank = (coverage8 << 24u) | (proximity16 << 8u) | facing8;
+    return ~dominanceRank;
+}
+
 FarFieldClipmapParams ResolveFarFieldVoxelizeParams(FarFieldClipmapParams params)
 {
     if (!params.pagedEnabled)
@@ -144,8 +627,21 @@ void main()
                 uint tableBase = pc.PageTableEntryIndex * FAR_FIELD_PAGE_TABLE_ENTRY_WORDS;
                 uint generation = ReadStorageWord(pc.PageTableBufferIndex, tableBase + 5u);
                 uint flags = ReadStorageWord(pc.PageTableBufferIndex, tableBase + 3u);
-                if (generation == pc.PageGeneration && (flags & FAR_FIELD_PAGE_ALLOCATED_FLAG) != 0u)
+                uint sourceRevisionLow = ReadStorageWord(pc.PageTableBufferIndex, tableBase + 6u);
+                uint sourceRevisionHigh = ReadStorageWord(pc.PageTableBufferIndex, tableBase + 7u);
+                bool publicationCurrent =
+                    generation == pc.PageGeneration &&
+                    sourceRevisionLow == pc.PageSourceRevisionLow &&
+                    sourceRevisionHigh == pc.PageSourceRevisionHigh &&
+                    (flags & FAR_FIELD_PAGE_ALLOCATED_FLAG) != 0u;
+                if (publicationCurrent)
+                {
                     atomicOr(BindlessStorageBuffers[nonuniformEXT(pc.PageTableBufferIndex)].Words[tableBase + 3u], FAR_FIELD_PAGE_VALID_FLAG);
+                }
+                else
+                {
+                    AddFarFieldDiagnostic(FAR_FIELD_MATERIAL_STALE_PUBLICATION_COUNTER, 1u);
+                }
             }
             else
             {
@@ -158,11 +654,43 @@ void main()
     if (pc.Mode == FARFIELD_VOXELIZE_MODE_CLEAR)
     {
         if (dispatchIndex < voxelCount)
-            WriteStorageWord(pc.VoxelBufferIndex, pc.PageVoxelOffset + dispatchIndex, 0u);
+        {
+            uint logicalVoxelIndex = pc.PageVoxelOffset + dispatchIndex;
+            uint wordOffset = FarFieldVoxelPayloadWordOffset(logicalVoxelIndex, params);
+            if (params.materialPayloadVersion >= 2u)
+            {
+                WriteStorageWord(pc.VoxelBufferIndex, wordOffset + 0u, FARFIELD_EMPTY_WINNER_KEY);
+                for (uint word = 1u; word < FAR_FIELD_MATERIAL_V2_STRIDE_WORDS; word++)
+                    WriteStorageWord(pc.VoxelBufferIndex, wordOffset + word, 0u);
+                // Jump-flood starts only after material publication and rewrites
+                // this page-local workspace, so the allocation can safely carry
+                // the dominance key without expanding the V2 payload ABI.
+                WriteStorageWord(
+                    pc.SelectionScratchBufferIndex,
+                    dispatchIndex,
+                    FARFIELD_EMPTY_WINNER_KEY);
+            }
+            else
+            {
+                WriteStorageWord(pc.VoxelBufferIndex, wordOffset, 0u);
+            }
+        }
         return;
     }
 
-    if (pc.Mode != FARFIELD_VOXELIZE_MODE_TRIANGLES || dispatchIndex >= pc.TriangleCount)
+    bool legacyTriangles = pc.Mode == FARFIELD_VOXELIZE_MODE_TRIANGLES;
+    bool materialV2DominanceKey = pc.Mode == FARFIELD_VOXELIZE_MODE_MATERIAL_V2_DOMINANCE_KEY;
+    bool materialV2StableTieBreak =
+        pc.Mode == FARFIELD_VOXELIZE_MODE_MATERIAL_V2_STABLE_TIE_BREAK;
+    bool materialV2Payload = pc.Mode == FARFIELD_VOXELIZE_MODE_MATERIAL_V2_PAYLOAD;
+    bool materialV3SidednessCone =
+        pc.Mode == FARFIELD_VOXELIZE_MODE_MATERIAL_V3_SIDEDNESS_CONE;
+    if ((!legacyTriangles &&
+         !materialV2DominanceKey &&
+         !materialV2StableTieBreak &&
+         !materialV2Payload &&
+         !materialV3SidednessCone) ||
+        dispatchIndex >= pc.TriangleCount)
         return;
 
     uint vertexOffset;
@@ -170,18 +698,49 @@ void main()
     uint indexCount;
     uint materialIndex;
     mat4 world;
-    ReadFarFieldInstance(pc.InstanceIndex, vertexOffset, indexOffset, indexCount, materialIndex, world);
+    uint primitiveKeyBase;
+    uint materialRevision;
+    uint farFieldRevision;
+    uint transportProfileRevision;
+    ReadFarFieldInstance(
+        pc.InstanceIndex,
+        vertexOffset,
+        indexOffset,
+        indexCount,
+        materialIndex,
+        world,
+        primitiveKeyBase,
+        materialRevision,
+        farFieldRevision,
+        transportProfileRevision);
     uint triBase = indexOffset + dispatchIndex * 3u;
     if (triBase + 2u >= indexOffset + indexCount)
         return;
-    AddFarFieldDiagnostic(FAR_FIELD_BAKED_TRIANGLE_COUNTER, 1u);
+    if (legacyTriangles || materialV2DominanceKey)
+        AddFarFieldDiagnostic(FAR_FIELD_BAKED_TRIANGLE_COUNTER, 1u);
 
     uint i0 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triBase + 0u);
     uint i1 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triBase + 1u);
     uint i2 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triBase + 2u);
-    vec3 p0 = (world * vec4(ReadSplitVertexPosition(vertexOffset + i0), 1.0)).xyz;
-    vec3 p1 = (world * vec4(ReadSplitVertexPosition(vertexOffset + i1), 1.0)).xyz;
-    vec3 p2 = (world * vec4(ReadSplitVertexPosition(vertexOffset + i2), 1.0)).xyz;
+    // Keep the logical front face invariant under a mirrored instance transform.
+    // Raster mesh shaders perform the same parity correction before publishing
+    // primitive indices; the far-field bake must not encode the opposite normal.
+    if (determinant(mat3(world)) < 0.0)
+    {
+        uint mirroredSwap = i1;
+        i1 = i2;
+        i2 = mirroredSwap;
+    }
+    uint v0 = vertexOffset + i0;
+    uint v1 = vertexOffset + i1;
+    uint v2 = vertexOffset + i2;
+    vec3 p0 = (world * vec4(ReadSplitVertexPosition(v0), 1.0)).xyz;
+    vec3 p1 = (world * vec4(ReadSplitVertexPosition(v1), 1.0)).xyz;
+    vec3 p2 = (world * vec4(ReadSplitVertexPosition(v2), 1.0)).xyz;
+    vec3 unnormalizedGeometricNormal = cross(p1 - p0, p2 - p0);
+    if (dot(unnormalizedGeometricNormal, unnormalizedGeometricNormal) <= 0.0000001)
+        return;
+    vec3 geometricNormal = normalize(unnormalizedGeometricNormal);
 
     vec3 triMin = min(p0, min(p1, p2));
     vec3 triMax = max(p0, max(p1, p2));
@@ -189,8 +748,78 @@ void main()
     ivec3 maxVoxel = clamp(WorldToVoxel(triMax, params) + ivec3(1), ivec3(0), ivec3(params.resolution) - ivec3(1));
 
     GPUMaterialData material = ReadMaterial(materialIndex);
-    vec3 albedo = clamp(max(material.DdgiAverageAlbedo.rgb, material.Albedo.rgb), vec3(0.0), vec3(1.0));
-    uint packed = PackFarFieldVoxel(albedo);
+    vec3 legacyAlbedo = clamp(
+        max(material.DdgiAverageAlbedo.rgb, material.Albedo.rgb),
+        vec3(0.0),
+        vec3(1.0));
+    uint legacyPacked = PackFarFieldVoxel(legacyAlbedo);
+    uint materialFlags = material.TransportFlags;
+    bool doubleSided =
+        (materialFlags & FARFIELD_GI_DOUBLE_SIDED) != 0u ||
+        material.NormalScaleBias.w > 0.5;
+    materialFlags = doubleSided
+        ? (materialFlags | FARFIELD_GI_DOUBLE_SIDED)
+        : (materialFlags & ~FARFIELD_GI_DOUBLE_SIDED);
+    bool compactProfileValid = IsFarFieldCompactProfileValid(material);
+    bool compactTextureFallback =
+        !compactProfileValid &&
+        GiMaterialHasFlag(
+            material.TransportFlags,
+            GI_MATERIAL_COMPACT_TEXTURE_FALLBACK);
+    if (!legacyTriangles && !compactProfileValid && !compactTextureFallback)
+        return;
+
+    bool hasExtensionData =
+        material.FeatureFlags != 0u &&
+        material.ExtensionDataIndex >= 0;
+    GPUMaterialExtensionData extensionData;
+    if (hasExtensionData)
+        extensionData = ReadMaterialExtension(uint(material.ExtensionDataIndex));
+    if (compactTextureFallback &&
+        !ValidateFarFieldDetailedBindings(
+            material,
+            hasExtensionData,
+            extensionData))
+    {
+        // Never publish a plausible-looking black/neutral occupied payload for
+        // an invalid required binding. Excluding the material is the explicit
+        // fail-closed outcome until its transactional material update repairs it.
+        return;
+    }
+
+    GiSurfaceSample compactSurface;
+    if (compactProfileValid)
+    {
+        compactSurface = EvaluateGiCompactSurface(
+            material,
+            geometricNormal,
+            geometricNormal);
+    }
+    else
+    {
+        compactSurface = EmptyGiSurfaceSample(
+            geometricNormal,
+            geometricNormal,
+            material.TransportFlags);
+    }
+    vec3 profileDiffuse = compactSurface.DiffuseReflectance;
+    vec3 profileEmission = compactSurface.EmissiveRadiance;
+    float profileMaterialOcclusion = compactSurface.MaterialOcclusion;
+    float profileCoverage = compactSurface.Opacity;
+    // Preserve the cooked per-material normal cone. Payload V3 expands it in a
+    // separate, ordered pass after the dominant payload is visible.
+    float normalCone = clamp(material.DdgiMaterialPolicy.w, 0.0, 1.0);
+    uint packedGeometricNormal = packSnorm2x16(EncodeFarFieldOctahedralNormal(geometricNormal));
+    uint stablePrimitiveKey = primitiveKeyBase + dispatchIndex;
+    vec2 uv00 = ReadSplitVertexTexCoord(v0);
+    vec2 uv01 = ReadSplitVertexTexCoord(v1);
+    vec2 uv02 = ReadSplitVertexTexCoord(v2);
+    vec2 uv10 = ReadSplitVertexTexCoord2(v0);
+    vec2 uv11 = ReadSplitVertexTexCoord2(v1);
+    vec2 uv12 = ReadSplitVertexTexCoord2(v2);
+    vec4 color0 = ReadSplitVertexColor(v0);
+    vec4 color1 = ReadSplitVertexColor(v1);
+    vec4 color2 = ReadSplitVertexColor(v2);
     vec3 halfVoxel = vec3(params.voxelSize * 0.5);
     for (int z = minVoxel.z; z <= maxVoxel.z; z++)
     for (int y = minVoxel.y; y <= maxVoxel.y; y++)
@@ -201,7 +830,208 @@ void main()
             continue;
 
         uint voxelIndex = FarFieldVoxelIndex(ivec3(x, y, z), params);
-        atomicOr(BindlessStorageBuffers[nonuniformEXT(pc.VoxelBufferIndex)].Words[pc.PageVoxelOffset + voxelIndex], packed);
+        uint logicalVoxelIndex = pc.PageVoxelOffset + voxelIndex;
+        uint payloadWordOffset = FarFieldVoxelPayloadWordOffset(logicalVoxelIndex, params);
+        if (legacyTriangles)
+        {
+            atomicOr(
+                BindlessStorageBuffers[nonuniformEXT(pc.VoxelBufferIndex)].Words[payloadWordOffset],
+                legacyPacked);
+            AddFarFieldDiagnostic(FAR_FIELD_OCCUPIED_VOXEL_WRITE_COUNTER, 1u);
+            continue;
+        }
+
+        vec3 barycentrics = FarFieldClosestTriangleBarycentrics(voxelCenter, p0, p1, p2);
+        vec2 texCoord0 = uv00 * barycentrics.x + uv01 * barycentrics.y + uv02 * barycentrics.z;
+        vec2 texCoord1 = uv10 * barycentrics.x + uv11 * barycentrics.y + uv12 * barycentrics.z;
+        vec4 vertexColor = color0 * barycentrics.x + color1 * barycentrics.y + color2 * barycentrics.z;
+        vec4 baseColorSample = vec4(1.0);
+        bool masked =
+            DecodeMaterialAlphaMode(material.NormalScaleBias.y) ==
+            MATERIAL_ALPHA_MODE_MASK;
+        if (masked &&
+            !TrySampleFarFieldBaseColor(
+                material,
+                texCoord0,
+                texCoord1,
+                baseColorSample))
+        {
+            continue;
+        }
+        float texturedSurfaceOpacity = clamp(
+            material.Albedo.a *
+            baseColorSample.a *
+            vertexColor.a,
+            0.0,
+            1.0);
+        if (!MaterialAlphaOccupiesOpaqueTransport(
+                texturedSurfaceOpacity,
+                material.NormalScaleBias.y,
+                material.NormalScaleBias.z))
+            continue;
+
+        if (materialV3SidednessCone)
+        {
+            // Payload publication and its compute barrier happen before this
+            // pass, so every contender can compare against the same immutable
+            // winner normal. Atomic max over the cone byte makes the union
+            // independent of triangle and instance dispatch order while
+            // retaining the fixed eight-word payload.
+            uint winnerStablePrimitiveKey =
+                ReadStorageWord(pc.VoxelBufferIndex, payloadWordOffset + 0u);
+            uint winnerMetadata =
+                ReadStorageWord(pc.VoxelBufferIndex, payloadWordOffset + 1u);
+            if (winnerStablePrimitiveKey == FARFIELD_EMPTY_WINNER_KEY ||
+                (winnerMetadata & FARFIELD_MATERIAL_V2_OCCUPIED_BIT) == 0u)
+            {
+                continue;
+            }
+
+            uint winnerMaterialFlags =
+                (winnerMetadata >> 16u) & FARFIELD_MATERIAL_V2_STORED_FLAG_MASK;
+            bool winnerDoubleSided =
+                (winnerMaterialFlags & FARFIELD_GI_DOUBLE_SIDED) != 0u;
+            if (winnerDoubleSided)
+                continue;
+
+            vec3 winnerGeometricNormal = DecodeFarFieldOctahedralNormal(
+                ReadStorageWord(pc.VoxelBufferIndex, payloadWordOffset + 5u));
+            float candidateCone = doubleSided
+                ? 1.0
+                : acos(clamp(dot(winnerGeometricNormal, geometricNormal), -1.0, 1.0)) *
+                    FAR_FIELD_INVERSE_PI +
+                    normalCone;
+            uint cone8 = uint(ceil(clamp(candidateCone, 0.0, 1.0) * 255.0));
+            uint expandedMetadata =
+                (winnerMetadata & ~0x0000ff00u) | (cone8 << 8u);
+            atomicMax(
+                BindlessStorageBuffers[nonuniformEXT(pc.VoxelBufferIndex)].Words[payloadWordOffset + 1u],
+                expandedMetadata);
+            continue;
+        }
+
+        // A surviving binary alpha test still represents some coverage even
+        // when an old asset lacks authored statistics. This avoids encoding an
+        // occupied surface with an ambiguous zero-coverage payload.
+        float coverage = max(
+            compactTextureFallback
+                ? (masked ? texturedSurfaceOpacity : 1.0)
+                : profileCoverage,
+            1.0 / 255.0);
+        vec3 closestPoint =
+            p0 * barycentrics.x +
+            p1 * barycentrics.y +
+            p2 * barycentrics.z;
+        vec3 surfaceToCenter = voxelCenter - closestPoint;
+        float surfaceDistance = length(surfaceToCenter);
+        float halfVoxelDiagonal = max(params.voxelSize * 0.8660254037844386, 0.0000001);
+        float normalizedSurfaceDistance = clamp(
+            surfaceDistance / halfVoxelDiagonal,
+            0.0,
+            1.0);
+        vec3 centerDirection = surfaceDistance > 0.0000001
+            ? surfaceToCenter / surfaceDistance
+            : geometricNormal;
+        float signedFacing = dot(geometricNormal, centerDirection);
+        float normalFacing = doubleSided
+            ? abs(signedFacing)
+            : max(signedFacing, 0.0);
+        uint dominanceSelectionKey = PackFarFieldDominanceSelectionKey(
+            coverage,
+            normalizedSurfaceDistance,
+            normalFacing);
+
+        if (materialV2DominanceKey)
+        {
+            atomicMin(
+                BindlessStorageBuffers[nonuniformEXT(pc.SelectionScratchBufferIndex)].Words[voxelIndex],
+                dominanceSelectionKey);
+            continue;
+        }
+
+        uint winningDominanceKey =
+            ReadStorageWord(pc.SelectionScratchBufferIndex, voxelIndex);
+        if (materialV2StableTieBreak)
+        {
+            if (winningDominanceKey == dominanceSelectionKey)
+            {
+                atomicMin(
+                    BindlessStorageBuffers[nonuniformEXT(pc.VoxelBufferIndex)].Words[payloadWordOffset],
+                    stablePrimitiveKey);
+            }
+            continue;
+        }
+
+        uint winnerStablePrimitiveKey =
+            ReadStorageWord(pc.VoxelBufferIndex, payloadWordOffset);
+        if (winningDominanceKey != dominanceSelectionKey ||
+            winnerStablePrimitiveKey != stablePrimitiveKey)
+        {
+            AddFarFieldDiagnostic(FAR_FIELD_MATERIAL_CONFLICT_COUNTER, 1u);
+            continue;
+        }
+
+        vec3 resolvedDiffuse = profileDiffuse;
+        vec3 resolvedEmission = profileEmission;
+        float resolvedMaterialOcclusion = profileMaterialOcclusion;
+        if (compactTextureFallback)
+        {
+            // MASK already sampled this binding for visibility. OPAQUE reaches
+            // the texture only for a final winning payload, avoiding detailed
+            // texture traffic in the dominance and stable-key passes.
+            if (!masked &&
+                !TrySampleFarFieldBaseColor(
+                    material,
+                    texCoord0,
+                    texCoord1,
+                    baseColorSample))
+            {
+                continue;
+            }
+
+            GiSurfaceSample detailedSurface;
+            if (!TrySampleFarFieldDetailedSurface(
+                    material,
+                    extensionData,
+                    hasExtensionData,
+                    texCoord0,
+                    texCoord1,
+                    baseColorSample,
+                    vertexColor,
+                    geometricNormal,
+                    detailedSurface))
+            {
+                AddFarFieldDiagnostic(
+                    MATERIAL_GI_NONFINITE_VALUE_COUNTER,
+                    1u);
+                continue;
+            }
+            resolvedDiffuse = detailedSurface.DiffuseReflectance;
+            resolvedEmission = detailedSurface.EmissiveRadiance;
+            resolvedMaterialOcclusion = detailedSurface.MaterialOcclusion;
+        }
+
+        // A valid primitive transport profile is a surface-area integral of the
+        // complete compact material response, including interpolated vertex
+        // RGB. The detailed correctness fallback instead evaluates that vertex
+        // color exactly once through the same central textured evaluator.
+        vec3 diffuse = clamp(resolvedDiffuse, vec3(0.0), vec3(1.0));
+        vec3 emission = clamp(
+            resolvedEmission,
+            vec3(0.0),
+            vec3(GI_MATERIAL_MAXIMUM_FINITE_RADIANCE));
+        float materialOcclusion = clamp(
+            resolvedMaterialOcclusion,
+            0.0,
+            1.0);
+        uint metadata = PackFarFieldMaterialMetadata(coverage, normalCone, materialFlags);
+        WriteStorageWord(pc.VoxelBufferIndex, payloadWordOffset + 1u, metadata);
+        WriteStorageWord(pc.VoxelBufferIndex, payloadWordOffset + 2u, PackFarFieldDiffuseRgb10(diffuse));
+        WriteStorageWord(pc.VoxelBufferIndex, payloadWordOffset + 3u, packHalf2x16(emission.rg));
+        WriteStorageWord(pc.VoxelBufferIndex, payloadWordOffset + 4u, packHalf2x16(vec2(emission.b, materialOcclusion)));
+        WriteStorageWord(pc.VoxelBufferIndex, payloadWordOffset + 5u, packedGeometricNormal);
+        WriteStorageWord(pc.VoxelBufferIndex, payloadWordOffset + 6u, materialRevision);
+        WriteStorageWord(pc.VoxelBufferIndex, payloadWordOffset + 7u, transportProfileRevision);
         AddFarFieldDiagnostic(FAR_FIELD_OCCUPIED_VOXEL_WRITE_COUNTER, 1u);
     }
 }

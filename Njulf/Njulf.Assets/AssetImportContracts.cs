@@ -95,7 +95,8 @@ public enum TextureColorSpace
 public enum TextureContainerKind
 {
     StandardImage,
-    Ktx2
+    Ktx2,
+    WebP
 }
 
 public enum TextureSourceKind

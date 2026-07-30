@@ -25,6 +25,7 @@ namespace Njulf.Rendering.Pipeline
         SsgiMoments,
         SsgiHistoryLength,
         GiFinalDiffuse,
+        MaterialTransportProvenance,
         DdgiProbeResources,
         TlasStorage,
         RayQueryInstanceMetadata,

@@ -135,7 +135,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(graph.PassNames, Is.EqualTo(declaration.PassOrder));
             Assert.DoesNotThrow(() => declaration.ValidatePassOrder(graph.PassNames));
             Assert.DoesNotThrow(graph.ValidateResourceDeclarations);
-            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(79));
+            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(80));
             foreach (RenderGraphResourceId resource in explicitDdgiResources)
             {
                 Assert.That(
@@ -215,6 +215,10 @@ public sealed class ProductionRenderPipelineDeclarationTests
                     .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.GiFinalDiffuseFormat));
             Assert.That(
                 graph.ResourceInventory,
+                Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.MaterialTransportProvenance)
+                    .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.MaterialTransportProvenanceFormat));
+            Assert.That(
+                graph.ResourceInventory,
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.DdgiProbeResources)
                     .And.Property(nameof(RenderGraphResourceDescriptor.Kind)).EqualTo(RenderGraphResourceKind.BufferSet));
             Assert.That(
@@ -247,8 +251,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
             "SceneSurfacePass",
             "SsgiTracePass",
             "SsgiTemporalPass",
-            "SsgiDenoisePass",
-            "SsgiCompositePass"
+            "SsgiDenoisePass"
         ];
         RenderGraphResourceId[] ssgiOnlyResources =
         [
@@ -271,7 +274,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(graph.PassNames, Is.EqualTo(declaration.GetPassOrder(includeSsgi: false)));
             Assert.DoesNotThrow(() => declaration.ValidatePassOrder(graph.PassNames, includeSsgi: false));
             Assert.DoesNotThrow(graph.ValidateResourceDeclarations);
-            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(67));
+            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(68));
             foreach (string passName in ssgiOnlyPasses)
                 Assert.That(graph.PassNames, Does.Not.Contain(passName), passName);
             foreach (RenderGraphResourceId resource in ssgiOnlyResources)
@@ -287,6 +290,11 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(
                 graph.ResourceInventory,
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.DdgiProbeResources));
+            Assert.That(graph.PassNames, Does.Contain("SsgiCompositePass"));
+            Assert.That(
+                graph.PassResourceUsages["SsgiCompositePass"],
+                Has.Some.Property(nameof(RenderGraphResourceUsage.Resource)).EqualTo(RenderGraphResourceId.MaterialTransportProvenance)
+                    .And.Property(nameof(RenderGraphResourceUsage.Access)).EqualTo(RenderGraphResourceAccess.Read));
         });
     }
 

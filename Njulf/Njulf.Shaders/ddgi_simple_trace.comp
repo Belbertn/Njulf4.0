@@ -66,7 +66,6 @@ uint simpleDdgiCurrentVolumeCascade;
 #define DDGI_HIT_MAX_SHADED_LIGHTS simpleDdgiCurrentMaxShadedLights
 #define DDGI_HIT_MATERIAL_TEXTURE_MAX_CASCADE simpleDdgiCurrentMaterialTextureMaxCascade
 #define DDGI_HIT_ALPHA_MASK_TRANSPORT_ENABLED ((pc.Flags & SIMPLE_DDGI_TRACE_FLAG_ALPHA_MASK_TRANSPORT_ENABLED) != 0u)
-#define DDGI_HIT_CANDIDATE_MATERIAL_TEXTURES_ALLOWED ShouldSampleDdgiMaterialTextures(simpleDdgiCurrentVolumeCascade)
 #include "ddgi_hit_shading.glsl"
 
 void WriteSimpleRayResult(uint rayResultIndex, vec3 radiance, float distance, vec3 direction, float hitKind)
@@ -187,6 +186,7 @@ void main()
     vec3 traceSkyDiffuse = radiance;
     vec3 cacheNormal = vec3(0.0, 1.0, 0.0);
     vec3 cacheAlbedo = vec3(0.0);
+    float cacheMaterialOcclusion = 1.0;
     float hitDistance = maxDistance;
     float hitKind = 0.0;
     bool farFieldOnlyRing = volume.spacing >= 15.999;
@@ -201,15 +201,37 @@ void main()
     if (nearTlasMaxDistance > DDGI_PROBE_TRACE_EPSILON)
     {
         rayQueryEXT query;
-        rayQueryInitializeEXT(query, SceneTlas, 0u, 0xff, probePosition, DDGI_PROBE_TRACE_EPSILON, direction, nearTlasMaxDistance);
+        rayQueryInitializeEXT(
+            query,
+            SceneTlas,
+            gl_RayFlagsCullBackFacingTrianglesEXT,
+            0xff,
+            probePosition,
+            DDGI_PROBE_TRACE_EPSILON,
+            direction,
+            nearTlasMaxDistance);
+        uint alphaCandidateCount = 0u;
         while (rayQueryProceedEXT(query))
         {
             if (rayQueryGetIntersectionTypeEXT(query, false) == gl_RayQueryCandidateIntersectionTriangleEXT)
             {
+                alphaCandidateCount++;
+                if (alphaCandidateCount > DDGI_HIT_ALPHA_CANDIDATE_LIMIT)
+                {
+                    RecordDdgiAlphaCandidateLimitReached();
+                    rayQueryConfirmIntersectionEXT(query);
+                    rayQueryTerminateEXT(query);
+                    break;
+                }
                 uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(query, false);
                 uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, false);
                 vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, false);
-                if (DdgiCandidatePassesOpacity(instanceIndex, primitiveIndex, barycentrics))
+                bool candidateFrontFace = rayQueryGetIntersectionFrontFaceEXT(query, false);
+                if (DdgiCandidatePassesOpacity(
+                    instanceIndex,
+                    primitiveIndex,
+                    barycentrics,
+                    candidateFrontFace))
                     rayQueryConfirmIntersectionEXT(query);
             }
         }
@@ -222,48 +244,64 @@ void main()
             uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
             vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, true);
             vec3 hitPosition = probePosition + direction * hitDistance;
-            vec3 surfaceNormal;
-            vec3 surfaceAlbedo;
-            vec3 surfaceEmissive;
+            GiSurfaceSample surface;
             bool sampleMaterialTextures = ShouldSampleDdgiMaterialTextures(volumeCascade);
             if (ResolveCommittedHitSurface(
                 instanceIndex,
                 primitiveIndex,
                 barycentrics,
                 direction,
+                frontFace,
                 volumeCascade,
                 sampleMaterialTextures,
-                0.0,
-                surfaceNormal,
-                surfaceAlbedo,
-                surfaceEmissive))
+                hitDistance,
+                max(volume.spacing, 0.001),
+                sqrt(4.0 / max(float(params.raysPerProbe), 1.0)),
+                surface))
             {
                 vec3 bounce = vec3(0.0);
                 float bounceOwnership = 0.0;
                 if (!transportV2)
                 {
                     bounce = SampleSimpleDdgiUnifiedIrradiance(
-                        hitPosition + surfaceNormal * max(0.03, volume.spacing * 0.02),
-                        surfaceNormal,
+                        hitPosition + surface.GeometricNormal * max(0.03, volume.spacing * 0.02),
+                        surface.ShadingNormal,
                         -direction,
                         true,
-                        bounceOwnership) * surfaceAlbedo / SIMPLE_DDGI_PI;
+                        bounceOwnership);
+                    bounce = ApplyGiMaterialOcclusion(
+                        EvaluateGiDiffuseFromIrradiance(
+                            bounce,
+                            surface.DiffuseReflectance),
+                        surface.MaterialOcclusion);
                 }
                 vec3 directNoShadowDiffuse;
-                vec3 directDiffuse = EvaluateDirectDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo, directNoShadowDiffuse);
-                vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
-                vec3 emissiveDiffuse = surfaceEmissive + emissiveProxyDiffuse * (1.0 - bounceOwnership);
+                vec3 directDiffuse = EvaluateDirectDiffuseRadianceAtHit(
+                    hitPosition,
+                    surface,
+                    -direction,
+                    directNoShadowDiffuse);
+                vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
+                    hitPosition,
+                    surface,
+                    -direction);
+                // Direct emissive hits and next-event triangle sampling represent
+                // different paths. Transport-atlas ownership only gates the
+                // recursive irradiance term; applying it here biases the emitter
+                // estimator and makes energy depend on cache residency.
+                vec3 emissiveDiffuse = surface.EmissiveRadiance + emissiveProxyDiffuse;
                 radiance = emissiveDiffuse + directDiffuse + bounce;
                 traceDirectDiffuse = directDiffuse;
                 traceDirectNoShadowDiffuse = directNoShadowDiffuse;
                 traceEmissiveDiffuse = emissiveDiffuse;
                 traceBounceDiffuse = bounce;
                 traceSkyDiffuse = vec3(0.0);
-                cacheNormal = surfaceNormal;
-                cacheAlbedo = surfaceAlbedo;
+                cacheNormal = surface.GeometricNormal;
+                cacheAlbedo = surface.DiffuseReflectance;
+                cacheMaterialOcclusion = surface.MaterialOcclusion;
                 if (dot(max(directDiffuse, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) > 0.0001)
                     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_DIRECT_LIGHT_HIT_COUNTER, 1u);
-                if (dot(max(surfaceEmissive + emissiveProxyDiffuse, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) > 0.0001)
+                if (dot(max(surface.EmissiveRadiance + emissiveProxyDiffuse, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) > 0.0001)
                     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_EMISSIVE_HIT_COUNTER, 1u);
                 hitKind = frontFace ? 1.0 : 2.0;
             }
@@ -276,15 +314,44 @@ void main()
         AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_RAY_COUNTER, 1u);
         vec3 farNormal;
         vec3 farAlbedo;
+        vec3 farEmission;
+        float farMaterialOcclusion;
         bool farStepExhausted;
         uint farVisitedSteps;
-        if (TraceFarFieldClipmapDetailed(probePosition, direction, nearTlasMaxDistance, maxDistance, hitDistance, farNormal, farAlbedo, farStepExhausted, farVisitedSteps))
+        if (TraceFarFieldClipmapDetailed(probePosition, direction, nearTlasMaxDistance, maxDistance,
+                hitDistance,
+                farNormal,
+                farAlbedo,
+                farEmission,
+                farMaterialOcclusion,
+                farStepExhausted,
+                farVisitedSteps))
         {
             AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_HIT_COUNTER, 1u);
             AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_FAR_FIELD_HIT_COUNTER, 1u);
+            if ((globalRay & (DDGI_MATERIAL_PROVENANCE_DIAGNOSTIC_SAMPLE_WEIGHT - 1u)) == 0u)
+            {
+                AddRendererDiagnostic(
+                    pc.CurrentFrameIndex,
+                    MATERIAL_GI_FAR_FIELD_TRANSPORT_HIT_COUNTER,
+                    DDGI_MATERIAL_PROVENANCE_DIAGNOSTIC_SAMPLE_WEIGHT);
+            }
             vec3 hitPosition = probePosition + direction * hitDistance;
             vec3 directNoShadowDiffuse;
             vec3 safeFarNormal = normalize(farNormal);
+            GiSurfaceSample farSurface = EmptyGiSurfaceSample(
+                safeFarNormal,
+                safeFarNormal,
+                GI_MATERIAL_REFLECTS_INDIRECT_DIFFUSE);
+            // Far-field V2 stores the canonical hemispherical response but not
+            // a directional-F0 profile. Preserve its explicitly approximate
+            // Lambertian fallback instead of leaving the directional fields
+            // zero and silently dropping direct illumination.
+            farSurface.DiffuseReflectance = clamp(farAlbedo, vec3(0.0), vec3(1.0));
+            farSurface.DirectionalDiffuseBase = farSurface.DiffuseReflectance;
+            farSurface.DielectricF0 = vec3(0.0);
+            farSurface.EmissiveRadiance = clamp(farEmission, vec3(0.0), vec3(65504.0));
+            farSurface.MaterialOcclusion = clamp(farMaterialOcclusion, 0.0, 1.0);
             vec3 bounce = vec3(0.0);
             float bounceOwnership = 0.0;
             if (!transportV2)
@@ -294,25 +361,32 @@ void main()
                     safeFarNormal,
                     -direction,
                     true,
-                    bounceOwnership) * farAlbedo / SIMPLE_DDGI_PI;
+                    bounceOwnership);
+                bounce = ApplyGiMaterialOcclusion(
+                    EvaluateGiDiffuseFromIrradiance(
+                        bounce,
+                        farSurface.DiffuseReflectance),
+                    farSurface.MaterialOcclusion);
             }
             vec3 directDiffuse = EvaluateDirectDiffuseRadianceAtHit(
                 hitPosition,
-                safeFarNormal,
-                farAlbedo,
+                farSurface,
+                -direction,
                 directNoShadowDiffuse);
             vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
                 hitPosition,
-                safeFarNormal,
-                farAlbedo) * (1.0 - bounceOwnership);
-            radiance = directDiffuse + emissiveProxyDiffuse + bounce;
+                farSurface,
+                -direction);
+            vec3 farEmissiveDiffuse = farSurface.EmissiveRadiance + emissiveProxyDiffuse;
+            radiance = directDiffuse + farEmissiveDiffuse + bounce;
             traceDirectDiffuse = directDiffuse;
             traceDirectNoShadowDiffuse = directNoShadowDiffuse;
-            traceEmissiveDiffuse = emissiveProxyDiffuse;
+            traceEmissiveDiffuse = farEmissiveDiffuse;
             traceBounceDiffuse = bounce;
             traceSkyDiffuse = vec3(0.0);
             cacheNormal = safeFarNormal;
-            cacheAlbedo = farAlbedo;
+            cacheAlbedo = farSurface.DiffuseReflectance;
+            cacheMaterialOcclusion = farSurface.MaterialOcclusion;
             hitKind = dot(direction, safeFarNormal) > 0.0 ? 2.0 : 1.0;
         }
         else if (farStepExhausted)
@@ -375,6 +449,7 @@ void main()
             direction,
             cacheNormal,
             cacheAlbedo,
+            cacheMaterialOcclusion,
             hitKind,
             SimpleDdgiProbeGeneration(probeState));
     }

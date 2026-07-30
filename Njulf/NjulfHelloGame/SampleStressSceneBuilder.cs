@@ -5,7 +5,6 @@ using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
-using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Resources;
 using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
 using CoreVector3 = Njulf.Core.Math.Vector3;
@@ -131,7 +130,7 @@ internal sealed class SampleStressSceneBuilder
         int side = (int)Math.Ceiling(Math.Sqrt(count));
         for (int i = 0; i < count; i++)
         {
-            MaterialHandle material = _materialManager.RegisterMaterial(CreateMaterial(i, alpha: 1.0f));
+            MaterialHandle material = _materialManager.RegisterMaterialDefinition(CreateMaterial(i, alpha: 1.0f));
             AddObject(mesh, material, $"Perf.Material.{i}", GridTransform(i, side, 1.5f, -10.0f));
         }
 
@@ -141,12 +140,10 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildTransparentObjects(int count)
     {
         MeshHandle mesh = GetQuadMesh();
-        MaterialHandle material = _materialManager.RegisterMaterial(
-            CreateMaterial(17, alpha: 0.35f),
-            new MaterialRenderMetadata
+        MaterialHandle material = _materialManager.RegisterMaterialDefinition(
+            CreateMaterial(17, alpha: 0.35f) with
             {
-                BlendMode = MaterialBlendMode.AlphaBlend,
-                SurfaceFlags = MaterialSurfaceFlags.DoubleSided | MaterialSurfaceFlags.ReceivesShadows
+                RenderBlendModeOverride = MaterialBlendMode.AlphaBlend
             });
 
         int side = (int)Math.Ceiling(Math.Sqrt(count));
@@ -172,19 +169,13 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildFoliageLikeStaticInstances(int count)
     {
         MeshHandle mesh = GetQuadMesh();
-        GPUMaterialData materialData = CreateMaterial(97, alpha: 1.0f);
-        materialData.NormalScaleBias = new CoreVector4(
-            materialData.NormalScaleBias.X,
-            MaterialRenderMode.Mask.ToGpuAlphaModeCode(),
-            0.5f,
-            1.0f);
-        MaterialHandle material = _materialManager.RegisterMaterial(
-            materialData,
-            new MaterialRenderMetadata
+        MaterialHandle material = _materialManager.RegisterMaterialDefinition(
+            CreateMaterial(97, alpha: 1.0f) with
             {
-                BlendMode = MaterialBlendMode.Mask,
-                SurfaceFlags = MaterialSurfaceFlags.DoubleSided | MaterialSurfaceFlags.ReceivesShadows,
-                AlphaCutoff = 0.5f
+                AlphaMode = MaterialAlphaMode.Mask,
+                AlphaCutoff = 0.5f,
+                DoubleSided = true,
+                RenderBlendModeOverride = MaterialBlendMode.Mask
             });
 
         int side = (int)Math.Ceiling(Math.Sqrt(count));
@@ -283,7 +274,7 @@ internal sealed class SampleStressSceneBuilder
         HideBaseRenderObjects();
         SampleLighting.Configure(_lightManager, SampleLightingMode.DirectionalKey);
 
-        MaterialHandle groundMaterial = _materialManager.RegisterMaterial(CreateGroundMaterial());
+        MaterialHandle groundMaterial = _materialManager.RegisterMaterialDefinition(CreateGroundMaterial());
         AddObject(GetGroundPlaneMesh(), groundMaterial, "DenseGrass.Ground", CoreMatrix4x4.Identity);
 
         MeshHandle mesh = GetQuadMesh();
@@ -335,7 +326,7 @@ internal sealed class SampleStressSceneBuilder
         HideBaseRenderObjects();
         SampleLighting.Configure(_lightManager, SampleLightingMode.DirectionalKey);
 
-        MaterialHandle groundMaterial = _materialManager.RegisterMaterial(CreateGroundMaterial());
+        MaterialHandle groundMaterial = _materialManager.RegisterMaterialDefinition(CreateGroundMaterial());
         AddObject(GetGroundPlaneMesh(), groundMaterial, "Shrubs.Ground", CoreMatrix4x4.Identity);
 
         MaterialHandle shrubMaterial = RegisterMaskedFoliageMaterial(719);
@@ -386,7 +377,7 @@ internal sealed class SampleStressSceneBuilder
         else
             ConfigureUnshadowedDirectionalKey();
 
-        MaterialHandle groundMaterial = _materialManager.RegisterMaterial(CreateGroundMaterial());
+        MaterialHandle groundMaterial = _materialManager.RegisterMaterialDefinition(CreateGroundMaterial());
         AddObject(
             GetGroundPlaneMesh(),
             groundMaterial,
@@ -403,8 +394,8 @@ internal sealed class SampleStressSceneBuilder
         ];
         float[] treeScales = [1.15f, 0.95f, 1.25f, 0.9f, 1.05f];
 
-        MaterialHandle trunkMaterial = _materialManager.RegisterMaterial(CreateTrunkMaterial());
-        MaterialHandle canopyMaterial = _materialManager.RegisterMaterial(CreateCanopyMaterial());
+        MaterialHandle trunkMaterial = _materialManager.RegisterMaterialDefinition(CreateTrunkMaterial());
+        MaterialHandle canopyMaterial = _materialManager.RegisterMaterialDefinition(CreateCanopyMaterial());
         FoliagePrototype treeCanopyPrototype = CreateAuthoredFoliagePrototype(
             "Forest.TreeCanopy",
             GetTreeCanopyMesh(),
@@ -1460,51 +1451,58 @@ internal sealed class SampleStressSceneBuilder
 
     private MaterialHandle RegisterValidationMaterial(CoreVector3 albedo, float roughness, CoreVector3? emissive = null)
     {
-        GPUMaterialData material = CreateMaterial(997, alpha: 1.0f);
-        material.Albedo = new CoreVector4(albedo, 1.0f);
-        material.Emissive = new CoreVector4(emissive ?? CoreVector3.Zero, 1.0f);
-        material.MetallicRoughnessAO = new CoreVector4(0.0f, Math.Clamp(roughness, 0.04f, 1.0f), 1.0f, 0.0f);
-        return _materialManager.RegisterMaterial(material);
+        CoreVector3 emissiveRadiance = emissive ?? CoreVector3.Zero;
+        float emissiveStrength = ResolveEmissiveStrength(emissiveRadiance);
+        MaterialDefinition material = CreateMaterial(997, alpha: 1.0f) with
+        {
+            Name = "GiValidation.Opaque",
+            BaseColorFactor = new CoreVector4(albedo, 1.0f),
+            EmissiveFactor = emissiveRadiance / emissiveStrength,
+            EmissiveStrength = emissiveStrength,
+            MetallicFactor = 0.0f,
+            RoughnessFactor = Math.Clamp(roughness, 0.04f, 1.0f)
+        };
+        return _materialManager.RegisterMaterialDefinition(material);
     }
 
     private MaterialHandle RegisterValidationTransparentMaterial(CoreVector3 albedo, float roughness, float alpha)
     {
-        GPUMaterialData material = CreateMaterial(997, alpha: Math.Clamp(alpha, 0.05f, 0.95f));
-        material.Albedo = new CoreVector4(albedo, Math.Clamp(alpha, 0.05f, 0.95f));
-        material.MetallicRoughnessAO = new CoreVector4(0.0f, Math.Clamp(roughness, 0.04f, 1.0f), 1.0f, 0.0f);
-        material.NormalScaleBias = new CoreVector4(
-            material.NormalScaleBias.X,
-            MaterialRenderMode.Blend.ToGpuAlphaModeCode(),
-            material.NormalScaleBias.Z,
-            1.0f);
-        return _materialManager.RegisterMaterial(
-            material,
-            new MaterialRenderMetadata
-            {
-                BlendMode = MaterialBlendMode.AlphaBlend,
-                SurfaceFlags = MaterialSurfaceFlags.DoubleSided | MaterialSurfaceFlags.ReceivesShadows
-            });
+        float clampedAlpha = Math.Clamp(alpha, 0.05f, 0.95f);
+        MaterialDefinition material = CreateMaterial(997, alpha: clampedAlpha) with
+        {
+            Name = "GiValidation.Transparent",
+            BaseColorFactor = new CoreVector4(albedo, clampedAlpha),
+            MetallicFactor = 0.0f,
+            RoughnessFactor = Math.Clamp(roughness, 0.04f, 1.0f),
+            AlphaMode = MaterialAlphaMode.Blend,
+            DoubleSided = true,
+            RenderBlendModeOverride = MaterialBlendMode.AlphaBlend
+        };
+        return _materialManager.RegisterMaterialDefinition(material);
     }
 
     private MaterialHandle RegisterValidationLightMarkerMaterial(CoreVector3 albedo, float roughness, CoreVector3 emissive)
     {
-        GPUMaterialData material = CreateMaterial(997, alpha: 1.0f);
-        material.Albedo = new CoreVector4(albedo, 1.0f);
-        material.Emissive = new CoreVector4(emissive, 1.0f);
-        material.MetallicRoughnessAO = new CoreVector4(0.0f, Math.Clamp(roughness, 0.04f, 1.0f), 1.0f, 0.0f);
-        material.NormalScaleBias = new CoreVector4(
-            material.NormalScaleBias.X,
-            MaterialRenderMode.Blend.ToGpuAlphaModeCode(),
-            material.NormalScaleBias.Z,
-            material.NormalScaleBias.W);
+        float emissiveStrength = ResolveEmissiveStrength(emissive);
+        MaterialDefinition material = CreateMaterial(997, alpha: 1.0f) with
+        {
+            Name = "GiValidation.LightMarker",
+            BaseColorFactor = new CoreVector4(albedo, 1.0f),
+            EmissiveFactor = emissive / emissiveStrength,
+            EmissiveStrength = emissiveStrength,
+            MetallicFactor = 0.0f,
+            RoughnessFactor = Math.Clamp(roughness, 0.04f, 1.0f),
+            AlphaMode = MaterialAlphaMode.Blend,
+            ReceivesShadows = false,
+            RenderBlendModeOverride = MaterialBlendMode.Additive
+        };
 
-        return _materialManager.RegisterMaterial(
-            material,
-            new MaterialRenderMetadata
-            {
-                BlendMode = MaterialBlendMode.Additive,
-                SurfaceFlags = MaterialSurfaceFlags.None
-            });
+        return _materialManager.RegisterMaterialDefinition(material);
+    }
+
+    private static float ResolveEmissiveStrength(CoreVector3 emissiveRadiance)
+    {
+        return Math.Max(1f, Math.Max(emissiveRadiance.X, Math.Max(emissiveRadiance.Y, emissiveRadiance.Z)));
     }
 
     private void AddUpdateable(IUpdateable updateable)
@@ -1819,80 +1817,73 @@ internal sealed class SampleStressSceneBuilder
         return _authoredGrassClumpMesh;
     }
 
-    private static GPUMaterialData CreateMaterial(int seed, float alpha)
+    private static MaterialDefinition CreateMaterial(int seed, float alpha)
     {
         CoreVector3 color = new(
             0.25f + ((seed * 37) % 100) / 140.0f,
             0.2f + ((seed * 53) % 100) / 150.0f,
             0.18f + ((seed * 71) % 100) / 160.0f);
 
-        return new GPUMaterialData
+        bool isTransparent = alpha < 1f;
+        return new MaterialDefinition
         {
-            Albedo = new CoreVector4(color, alpha),
-            Emissive = CoreVector4.Zero,
-            NormalScaleBias = new CoreVector4(1f, alpha < 1f ? MaterialRenderMode.Blend.ToGpuAlphaModeCode() : MaterialRenderMode.Opaque.ToGpuAlphaModeCode(), 0.5f, alpha < 1f ? 1f : 0f),
-            MetallicRoughnessAO = new CoreVector4((seed % 5) / 4.0f, 0.08f + (seed % 17) / 18.0f, 1f, 0f),
-            BaseColorOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            NormalOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            MetallicRoughnessOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            EmissiveOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
-            TextureRotations = CoreVector4.Zero,
-            TextureTexCoordSets = CoreVector4.Zero,
-            AlbedoTextureIndex = BindlessIndex.DefaultWhiteTexture,
-            NormalTextureIndex = BindlessIndex.DefaultNormalTexture,
-            MetallicRoughnessTextureIndex = BindlessIndex.DefaultBlackTexture,
-            EmissiveTextureIndex = BindlessIndex.DefaultBlackTexture,
-            ExtensionDataIndex = -1
+            Name = $"Perf.Material.{seed}",
+            BaseColorFactor = new CoreVector4(color, alpha),
+            MetallicFactor = (seed % 5) / 4.0f,
+            RoughnessFactor = 0.08f + (seed % 17) / 18.0f,
+            AlphaMode = isTransparent ? MaterialAlphaMode.Blend : MaterialAlphaMode.Opaque,
+            DoubleSided = isTransparent
         };
     }
 
-    private static GPUMaterialData CreateGroundMaterial()
+    private static MaterialDefinition CreateGroundMaterial()
     {
-        GPUMaterialData material = CreateMaterial(641, alpha: 1.0f);
-        material.Albedo = new CoreVector4(0.18f, 0.28f, 0.12f, 1f);
-        material.MetallicRoughnessAO = new CoreVector4(0f, 0.82f, 1f, 0f);
-        return material;
+        return CreateMaterial(641, alpha: 1.0f) with
+        {
+            Name = "Foliage.Ground",
+            BaseColorFactor = new CoreVector4(0.18f, 0.28f, 0.12f, 1f),
+            MetallicFactor = 0f,
+            RoughnessFactor = 0.82f
+        };
     }
 
-    private static GPUMaterialData CreateTrunkMaterial()
+    private static MaterialDefinition CreateTrunkMaterial()
     {
-        GPUMaterialData material = CreateMaterial(811, alpha: 1.0f);
-        material.Albedo = new CoreVector4(0.26f, 0.13f, 0.07f, 1f);
-        material.MetallicRoughnessAO = new CoreVector4(0f, 0.9f, 1f, 0f);
-        return material;
+        return CreateMaterial(811, alpha: 1.0f) with
+        {
+            Name = "Foliage.Trunk",
+            BaseColorFactor = new CoreVector4(0.26f, 0.13f, 0.07f, 1f),
+            MetallicFactor = 0f,
+            RoughnessFactor = 0.9f
+        };
     }
 
-    private static GPUMaterialData CreateCanopyMaterial()
+    private static MaterialDefinition CreateCanopyMaterial()
     {
-        GPUMaterialData material = CreateMaterial(947, alpha: 1.0f);
-        material.Albedo = new CoreVector4(0.12f, 0.42f, 0.16f, 1f);
-        material.MetallicRoughnessAO = new CoreVector4(0f, 0.74f, 1f, 0f);
-        material.FeatureFlags = (uint)MaterialFeatureFlags.Foliage;
-        material.NormalScaleBias = new CoreVector4(
-            material.NormalScaleBias.X,
-            MaterialRenderMode.Mask.ToGpuAlphaModeCode(),
-            0.35f,
-            1f);
-        return material;
+        return CreateMaterial(947, alpha: 1.0f) with
+        {
+            Name = "Foliage.Canopy",
+            BaseColorFactor = new CoreVector4(0.12f, 0.42f, 0.16f, 1f),
+            MetallicFactor = 0f,
+            RoughnessFactor = 0.74f,
+            FeatureFlags = MaterialFeatureFlags.Foliage,
+            AlphaMode = MaterialAlphaMode.Mask,
+            AlphaCutoff = 0.35f,
+            DoubleSided = true
+        };
     }
 
     private MaterialHandle RegisterMaskedFoliageMaterial(int seed)
     {
-        GPUMaterialData materialData = CreateMaterial(seed, alpha: 1.0f);
-        materialData.NormalScaleBias = new CoreVector4(
-            materialData.NormalScaleBias.X,
-            MaterialRenderMode.Mask.ToGpuAlphaModeCode(),
-            0.45f,
-            1.0f);
-        materialData.FeatureFlags = (uint)MaterialFeatureFlags.Foliage;
-
-        return _materialManager.RegisterMaterial(
-            materialData,
-            new MaterialRenderMetadata
+        return _materialManager.RegisterMaterialDefinition(
+            CreateMaterial(seed, alpha: 1.0f) with
             {
-                BlendMode = MaterialBlendMode.Mask,
-                SurfaceFlags = MaterialSurfaceFlags.DoubleSided | MaterialSurfaceFlags.ReceivesShadows,
-                AlphaCutoff = 0.45f
+                Name = $"Foliage.Masked.{seed}",
+                AlphaMode = MaterialAlphaMode.Mask,
+                AlphaCutoff = 0.45f,
+                DoubleSided = true,
+                RenderBlendModeOverride = MaterialBlendMode.Mask,
+                FeatureFlags = MaterialFeatureFlags.Foliage
             });
     }
 

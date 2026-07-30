@@ -21,17 +21,26 @@ public sealed class CookedContentResolver
 
     public CookedResolution ResolveModel(string requestedPath, string sourcePath, bool strictSourceHash)
     {
-        string candidate = Path.GetExtension(requestedPath).Equals(".njmodel", StringComparison.OrdinalIgnoreCase)
+        bool packageRequestedDirectly = Path.GetExtension(requestedPath)
+            .Equals(".njmodel", StringComparison.OrdinalIgnoreCase);
+        string candidate = packageRequestedDirectly
             ? Path.GetFullPath(sourcePath)
             : ResolvePlatformCandidate(requestedPath);
         if (!File.Exists(candidate))
             return new CookedResolution(CookedResolutionStatus.Missing, candidate, $"cooked package was not found at '{candidate}'", null);
         try
         {
-            ulong? sourceHash = File.Exists(sourcePath) ? CookedHash.File(sourcePath) : null;
+            // A direct .njmodel request has no source file to compare against.
+            // Hashing the package and treating that value as its source hash
+            // makes every valid package fail strict-source validation.
+            ulong? sourceHash = !packageRequestedDirectly && File.Exists(sourcePath)
+                ? CookedHash.File(sourcePath)
+                : null;
             CookedAssetReaderFlags flags = strictSourceHash ? CookedAssetReaderFlags.StrictSourceHash : CookedAssetReaderFlags.None;
             using var reader = new CookedAssetReader(candidate, CookedAssetKind.Model, flags, sourceHash);
-            string reason = sourceHash.HasValue && reader.Header.SourceHash != sourceHash.Value
+            string reason = packageRequestedDirectly
+                ? "cooked package was explicitly requested"
+                : sourceHash.HasValue && reader.Header.SourceHash != sourceHash.Value
                 ? $"source hash differs (package 0x{reader.Header.SourceHash:x16}, source 0x{sourceHash.Value:x16}); accepted in development mode"
                 : "cooked package is current";
             return new CookedResolution(CookedResolutionStatus.Found, candidate, reason, reader.Header);

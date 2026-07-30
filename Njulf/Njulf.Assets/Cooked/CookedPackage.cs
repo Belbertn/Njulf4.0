@@ -4,9 +4,39 @@ using Njulf.Core.Geometry;
 
 namespace Njulf.Assets.Cooked;
 
+/// <summary>
+/// Immutable, bounded identity snapshot of a cooked model package. The raw
+/// bytes remain private so hashing, package parsing, and the resulting runtime
+/// upload can be tied to one read of the package path.
+/// </summary>
+public sealed class CookedModelPackageSnapshot
+{
+    private readonly byte[] _content;
+
+    internal CookedModelPackageSnapshot(string packagePath, byte[] content)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(packagePath);
+        ArgumentNullException.ThrowIfNull(content);
+
+        PackagePath = Path.GetFullPath(packagePath);
+        _content = content;
+        Sha256 = Convert.ToHexStringLower(SHA256.HashData(content));
+    }
+
+    public string PackagePath { get; }
+    public long ByteLength => _content.LongLength;
+    public string Sha256 { get; }
+
+    internal ReadOnlyMemory<byte> Content => _content;
+}
+
 public static class CookedPackage
 {
     private const CookedSectionFlags Required = CookedSectionFlags.Required;
+    public const int MaximumModelPackageSnapshotBytes =
+        512 * 1024 * 1024;
+    private const int MaximumSignedCookedAssetBytes =
+        MaximumModelPackageSnapshotBytes;
 
     public static void WriteModel(string path, CookedModelManifest manifest, uint toolVersion = 1)
     {
@@ -56,6 +86,9 @@ public static class CookedPackage
 
     public static void WriteMaterials(string path, CookedMaterialTable materials, ulong sourceHash, ulong settingsHash, ulong dependencyHash, uint toolVersion = 1)
     {
+        ArgumentNullException.ThrowIfNull(materials);
+        materials = NormalizeMaterialTransportMetadata(materials);
+        ValidateMaterialTransportMetadata(path, materials);
         using var writer = new CookedAssetWriter(path, CookedAssetKind.Material, sourceHash, settingsHash, dependencyHash, toolVersion);
         writer.WriteSection(CookedSectionIds.Materials, Required | CookedSectionFlags.Zstd, CookedJson.Serialize(materials));
         writer.Complete();
@@ -70,6 +103,15 @@ public static class CookedPackage
 
     public static void WriteTextureMeta(string path, CookedTextureMeta texture, uint toolVersion = 1)
     {
+        ArgumentNullException.ThrowIfNull(texture);
+        if (texture.Ktx2ContentHash == 0)
+        {
+            throw new ArgumentException(
+                "Current cooked texture metadata requires a non-zero KTX2 whole-file hash.",
+                nameof(texture));
+        }
+        texture = NormalizeTextureTransportMetadata(texture);
+        ValidateTextureTransportMetadata(path, texture);
         using var writer = new CookedAssetWriter(path, CookedAssetKind.Texture, texture.SourceHash, 0, 0, toolVersion);
         writer.WriteSection(CookedSectionIds.Metadata, Required | CookedSectionFlags.Zstd, CookedJson.Serialize(texture));
         writer.Complete();
@@ -78,45 +120,138 @@ public static class CookedPackage
     public static CookedModelAsset LoadModel(string modelPath, CookedAssetReaderFlags flags = CookedAssetReaderFlags.None, ulong? expectedSourceHash = null)
     {
         modelPath = Path.GetFullPath(modelPath);
-        VerifySignatureIfRequired(modelPath, flags);
-        CookedModelManifest manifest;
-        long bytesRead;
-        using (var reader = new CookedAssetReader(modelPath, CookedAssetKind.Model, flags, expectedSourceHash))
+        using CookedAssetReader reader = OpenAuthenticatedReader(
+            modelPath,
+            CookedAssetKind.Model,
+            flags,
+            expectedSourceHash);
+        return LoadModel(reader, modelPath, flags);
+    }
+
+    /// <summary>
+    /// Captures one bounded, immutable read of a cooked model package. The
+    /// returned identity remains valid even if the package path is replaced
+    /// after this method returns.
+    /// </summary>
+    public static CookedModelPackageSnapshot CaptureModelSnapshot(
+        string modelPath,
+        long maximumBytes = MaximumModelPackageSnapshotBytes)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelPath);
+        if (maximumBytes <= 0 || maximumBytes > int.MaxValue)
         {
-            manifest = CookedJson.Deserialize<CookedModelManifest>(reader.GetRequiredSection(CookedSectionIds.Manifest).Span, modelPath, "manifest");
-            bytesRead = reader.BytesRead;
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumBytes),
+                maximumBytes,
+                $"The cooked model snapshot limit must be in (0, {int.MaxValue}].");
         }
+
+        string fullPath = Path.GetFullPath(modelPath);
+        byte[] content = ReadBoundedSnapshot(
+            fullPath,
+            checked((int)maximumBytes),
+            "cooked model package");
+        return new CookedModelPackageSnapshot(fullPath, content);
+    }
+
+    /// <summary>
+    /// Decodes a model from the exact package bytes held by
+    /// <paramref name="snapshot"/>. Referenced mesh/material/animation
+    /// packages are decoded once into the returned model asset; callers can
+    /// therefore upload that asset without reopening the model package path.
+    /// </summary>
+    public static CookedModelAsset LoadModel(
+        CookedModelPackageSnapshot snapshot,
+        CookedAssetReaderFlags flags = CookedAssetReaderFlags.None,
+        ulong? expectedSourceHash = null)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (flags.HasFlag(CookedAssetReaderFlags.RequireSignature))
+        {
+            CookedPackageSigner.VerifyRequired(
+                snapshot.PackagePath,
+                snapshot.Content.Span);
+        }
+
+        using var reader = new CookedAssetReader(
+            snapshot.Content,
+            snapshot.PackagePath,
+            CookedAssetKind.Model,
+            flags,
+            expectedSourceHash);
+        return LoadModel(reader, snapshot.PackagePath, flags);
+    }
+
+    private static CookedModelAsset LoadModel(
+        CookedAssetReader reader,
+        string modelPath,
+        CookedAssetReaderFlags flags)
+    {
+        CookedModelManifest manifest = CookedJson.Deserialize<CookedModelManifest>(
+            reader.GetRequiredSection(CookedSectionIds.Manifest).Span,
+            modelPath,
+            "manifest");
+        long bytesRead = reader.BytesRead;
 
         string directory = Path.GetDirectoryName(modelPath)!;
         string packageRoot = Path.GetFullPath(Path.Combine(directory, ".."));
         bool verifyWholeFileHashes = flags.HasFlag(CookedAssetReaderFlags.StrictSourceHash);
-        string meshPath = ResolveReference(directory, packageRoot, manifest.Mesh.RelativePath, manifest.Mesh.ContentHash, verifyWholeFileHashes);
-        string materialPath = ResolveReference(directory, packageRoot, manifest.Material.RelativePath, manifest.Material.ContentHash, verifyWholeFileHashes);
-        VerifySignatureIfRequired(meshPath, flags);
-        VerifySignatureIfRequired(materialPath, flags);
-        CookedMeshPayload mesh = LoadMesh(meshPath, flags, out long meshBytes);
-        CookedMaterialTable materials = LoadMaterials(materialPath, flags, out long materialBytes);
+        string meshPath = ResolveReference(
+            directory,
+            packageRoot,
+            manifest.Mesh.RelativePath);
+        string materialPath = ResolveReference(
+            directory,
+            packageRoot,
+            manifest.Material.RelativePath);
+        CookedMeshPayload mesh = LoadMesh(
+            meshPath,
+            flags,
+            verifyWholeFileHashes ? manifest.Mesh.ContentHash : null,
+            out long meshBytes);
+        CookedMaterialTable materials = LoadMaterials(
+            materialPath,
+            flags,
+            verifyWholeFileHashes ? manifest.Material.ContentHash : null,
+            out long materialBytes);
         RebaseMaterialTexturePaths(materials, Path.GetDirectoryName(materialPath)!);
         CookedAnimationPayload animation = new(Array.Empty<Core.Animation.Skeleton>(), Array.Empty<Core.Animation.Skin>(), Array.Empty<Core.Animation.AnimationClip>());
         long animationBytes = 0;
         if (manifest.Animation is not null)
         {
-            string animationPath = ResolveReference(directory, packageRoot, manifest.Animation.RelativePath, manifest.Animation.ContentHash, verifyWholeFileHashes);
-            VerifySignatureIfRequired(animationPath, flags);
-            animation = LoadAnimation(animationPath, flags, out animationBytes);
+            string animationPath = ResolveReference(
+                directory,
+                packageRoot,
+                manifest.Animation.RelativePath);
+            animation = LoadAnimation(
+                animationPath,
+                flags,
+                verifyWholeFileHashes
+                    ? manifest.Animation.ContentHash
+                    : null,
+                out animationBytes);
         }
         return new CookedModelAsset(manifest, mesh, materials, animation, modelPath, bytesRead + meshBytes + materialBytes + animationBytes);
     }
 
-    private static void VerifySignatureIfRequired(string path, CookedAssetReaderFlags flags)
-    {
-        if (flags.HasFlag(CookedAssetReaderFlags.RequireSignature))
-            CookedPackageSigner.VerifyRequired(path);
-    }
-
     public static CookedMeshPayload LoadMesh(string path, CookedAssetReaderFlags flags, out long bytesRead)
+        => LoadMesh(
+            path,
+            flags,
+            expectedContentHash: null,
+            bytesRead: out bytesRead);
+
+    private static CookedMeshPayload LoadMesh(
+        string path,
+        CookedAssetReaderFlags flags,
+        ulong? expectedContentHash,
+        out long bytesRead)
     {
-        using var reader = new CookedAssetReader(path, CookedAssetKind.Mesh, flags);
+        using var reader = OpenAuthenticatedReader(
+            path,
+            CookedAssetKind.Mesh,
+            flags,
+            expectedContentHash: expectedContentHash);
         var subMeshes = CookedJson.Deserialize<CookedSubMeshRecord[]>(reader.GetRequiredSection(CookedSectionIds.SubMeshes).Span, path, "submesh");
         var positions = reader.ReadSection<CookedVertexPositionStream>(CookedSectionIds.VertexPositions);
         var normals = reader.ReadSection<CookedVertexNormalTangentStream>(CookedSectionIds.VertexNormals);
@@ -134,25 +269,359 @@ public static class CookedPackage
     }
 
     public static CookedMaterialTable LoadMaterials(string path, CookedAssetReaderFlags flags, out long bytesRead)
+        => LoadMaterials(
+            path,
+            flags,
+            expectedContentHash: null,
+            bytesRead: out bytesRead);
+
+    private static CookedMaterialTable LoadMaterials(
+        string path,
+        CookedAssetReaderFlags flags,
+        ulong? expectedContentHash,
+        out long bytesRead)
     {
-        using var reader = new CookedAssetReader(path, CookedAssetKind.Material, flags);
+        using var reader = OpenAuthenticatedReader(
+            path,
+            CookedAssetKind.Material,
+            flags,
+            expectedContentHash: expectedContentHash);
         CookedMaterialTable result = CookedJson.Deserialize<CookedMaterialTable>(reader.GetRequiredSection(CookedSectionIds.Materials).Span, path, "materials");
         bytesRead = reader.BytesRead;
+        result = NormalizeMaterialTransportMetadata(result);
+        ValidateMaterialTransportMetadata(path, result);
         return result;
     }
 
     public static CookedAnimationPayload LoadAnimation(string path, CookedAssetReaderFlags flags, out long bytesRead)
+        => LoadAnimation(
+            path,
+            flags,
+            expectedContentHash: null,
+            bytesRead: out bytesRead);
+
+    private static CookedAnimationPayload LoadAnimation(
+        string path,
+        CookedAssetReaderFlags flags,
+        ulong? expectedContentHash,
+        out long bytesRead)
     {
-        using var reader = new CookedAssetReader(path, CookedAssetKind.Animation, flags);
+        using var reader = OpenAuthenticatedReader(
+            path,
+            CookedAssetKind.Animation,
+            flags,
+            expectedContentHash: expectedContentHash);
         CookedAnimationPayload result = CookedJson.Deserialize<CookedAnimationPayload>(reader.GetRequiredSection(CookedSectionIds.Animation).Span, path, "animation");
         bytesRead = reader.BytesRead;
         return result;
     }
 
-    public static CookedTextureMeta LoadTextureMeta(string path, CookedAssetReaderFlags flags = CookedAssetReaderFlags.None)
+    private static CookedAssetReader OpenAuthenticatedReader(
+        string path,
+        CookedAssetKind expectedKind,
+        CookedAssetReaderFlags flags,
+        ulong? expectedSourceHash = null,
+        ulong? expectedContentHash = null)
     {
-        using var reader = new CookedAssetReader(path, CookedAssetKind.Texture, flags);
-        return CookedJson.Deserialize<CookedTextureMeta>(reader.GetRequiredSection(CookedSectionIds.Metadata).Span, path, "texture metadata");
+        path = Path.GetFullPath(path);
+        bool immutableSnapshotRequired =
+            flags.HasFlag(CookedAssetReaderFlags.RequireSignature) ||
+            expectedContentHash.HasValue;
+        if (!immutableSnapshotRequired)
+        {
+            return new CookedAssetReader(
+                path,
+                expectedKind,
+                flags,
+                expectedSourceHash);
+        }
+
+        byte[] content = ReadBoundedSnapshot(
+            path,
+            MaximumSignedCookedAssetBytes,
+            $"cooked {expectedKind} asset");
+        if (flags.HasFlag(CookedAssetReaderFlags.RequireSignature))
+            CookedPackageSigner.VerifyRequired(path, content);
+        if (expectedContentHash.HasValue)
+        {
+            ulong actualContentHash = CookedHash.Bytes(content);
+            if (actualContentHash != expectedContentHash.Value)
+            {
+                throw new CookedAssetHashException(
+                    path,
+                    $"package reference expected whole-file hash " +
+                    $"0x{expectedContentHash.Value:x16}, got " +
+                    $"0x{actualContentHash:x16}");
+            }
+        }
+
+        return new CookedAssetReader(
+            content,
+            path,
+            expectedKind,
+            flags,
+            expectedSourceHash);
+    }
+
+    public static CookedTextureMeta LoadTextureMeta(
+        string path,
+        CookedAssetReaderFlags flags = CookedAssetReaderFlags.None) =>
+        LoadTextureMeta(path, flags, out _);
+
+    public static CookedTextureMeta LoadTextureMeta(
+        string path,
+        CookedAssetReaderFlags flags,
+        out ulong contentHash)
+    {
+        path = Path.GetFullPath(path);
+        const int maxTextureMetadataBytes = 16 * 1024 * 1024;
+        byte[] content = ReadBoundedSnapshot(
+            path,
+            maxTextureMetadataBytes,
+            "cooked texture metadata");
+        if (flags.HasFlag(CookedAssetReaderFlags.RequireSignature))
+            CookedPackageSigner.VerifyRequired(path, content);
+
+        using var reader = new CookedAssetReader(
+            content,
+            path,
+            CookedAssetKind.Texture,
+            flags);
+        CookedTextureMeta texture = CookedJson.Deserialize<CookedTextureMeta>(
+            reader.GetRequiredSection(CookedSectionIds.Metadata).Span,
+            path,
+            "texture metadata");
+        texture = NormalizeTextureTransportMetadata(texture);
+        ValidateTextureTransportMetadata(path, texture);
+        contentHash = CookedHash.Bytes(content);
+        return texture;
+    }
+
+    private static byte[] ReadBoundedSnapshot(
+        string path,
+        int maximumBytes,
+        string description)
+    {
+        try
+        {
+            using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                64 * 1024,
+                FileOptions.SequentialScan);
+            if (stream.Length > maximumBytes)
+            {
+                throw new CookedAssetFormatException(
+                    path,
+                    $"{description} is {stream.Length} bytes; the runtime limit is " +
+                    $"{maximumBytes} bytes");
+            }
+
+            var content = GC.AllocateUninitializedArray<byte>(
+                checked((int)stream.Length));
+            stream.ReadExactly(content);
+            if (stream.ReadByte() != -1)
+            {
+                throw new CookedAssetFormatException(
+                    path,
+                    $"{description} changed while its immutable snapshot was read");
+            }
+
+            return content;
+        }
+        catch (CookedAssetFormatException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+            when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new CookedAssetFormatException(
+                path,
+                $"{description} could not be read ({exception.Message})");
+        }
+    }
+
+    internal static CookedMaterialTable NormalizeMaterialTransportMetadata(CookedMaterialTable table)
+    {
+        IReadOnlyList<GiPrimitiveTransportProfile> profiles =
+            table.PrimitiveTransportProfiles ?? Array.Empty<GiPrimitiveTransportProfile>();
+        IReadOnlyList<CookedMaterialPipeline> pipelines =
+            table.Pipelines ?? Array.Empty<CookedMaterialPipeline>();
+        IReadOnlyList<CookedMaterialFallback> fallbacks =
+            table.Fallbacks ?? Array.Empty<CookedMaterialFallback>();
+        return table with
+        {
+            Pipelines = pipelines,
+            Fallbacks = fallbacks,
+            PrimitiveTransportProfiles = profiles
+        };
+    }
+
+    internal static CookedTextureMeta NormalizeTextureTransportMetadata(CookedTextureMeta texture)
+    {
+        TextureTransportStatistics? statistics = texture.TransportStatistics;
+        if (texture.Ktx2ContentHash == 0)
+        {
+            statistics = TextureTransportStatistics.Invalid(
+                TextureTransportStatisticsStatus.LegacyMissing,
+                "Legacy cooked texture metadata does not authenticate its KTX2 payload.",
+                texture.SourceHash,
+                texture.Semantic,
+                texture.ColorSpace);
+        }
+        else if (statistics is null ||
+            statistics.Status == TextureTransportStatisticsStatus.LegacyMissing &&
+            statistics.SourceContentHash == 0)
+        {
+            statistics = TextureTransportStatistics.Invalid(
+                TextureTransportStatisticsStatus.LegacyMissing,
+                "Legacy cooked texture metadata contains no transport statistics.",
+                texture.SourceHash,
+                texture.Semantic,
+                texture.ColorSpace);
+        }
+        return texture with { TransportStatistics = statistics };
+    }
+
+    private static void ValidateMaterialTransportMetadata(string path, CookedMaterialTable materials)
+    {
+        if (materials.Materials is null)
+            throw new InvalidDataException($"Cooked material '{path}' contains a null material table.");
+        if (materials.PrimitiveTransportProfiles.Count == 0)
+        {
+            if (materials.HasCompleteTransportMetadata)
+                throw new InvalidDataException($"Cooked material '{path}' claims complete transport metadata but has no primitive profiles.");
+            if (materials.PrimitiveTransportAlgorithmVersion != 0)
+            {
+                throw new InvalidDataException(
+                    $"Cooked material '{path}' has no primitive profiles but " +
+                    $"declares primitive algorithm " +
+                    $"{materials.PrimitiveTransportAlgorithmVersion}; empty " +
+                    "transport metadata must use algorithm version 0.");
+            }
+            return;
+        }
+        if (materials.PrimitiveTransportAlgorithmVersion != GiPrimitiveTransportProfile.CurrentAlgorithmVersion)
+        {
+            throw new InvalidDataException(
+                $"Cooked material '{path}' declares primitive algorithm {materials.PrimitiveTransportAlgorithmVersion}, " +
+                $"expected {GiPrimitiveTransportProfile.CurrentAlgorithmVersion}.");
+        }
+        var keys = new HashSet<(int SubMesh, int Material)>();
+        long emissiveRecordCount = 0;
+        foreach (GiPrimitiveTransportProfile profile in materials.PrimitiveTransportProfiles)
+        {
+            if (profile is null)
+                throw new InvalidDataException($"Cooked material '{path}' contains a null primitive transport profile.");
+            if (profile.SchemaVersion != GiPrimitiveTransportProfile.CurrentSchemaVersion ||
+                profile.AlgorithmVersion != GiPrimitiveTransportProfile.CurrentAlgorithmVersion)
+            {
+                throw new InvalidDataException($"Cooked material '{path}' contains an unsupported primitive transport profile version.");
+            }
+            if ((uint)profile.MaterialSlot >= (uint)materials.Materials.Count)
+                throw new InvalidDataException($"Cooked material '{path}' contains an out-of-range primitive material slot.");
+            if (!keys.Add((profile.SubMeshIndex, profile.MaterialSlot)))
+                throw new InvalidDataException($"Cooked material '{path}' contains duplicate primitive/material transport keys.");
+            IReadOnlyList<string> errors = profile.Validate();
+            if (errors.Count > 0)
+            {
+                throw new InvalidDataException(
+                    $"Cooked material '{path}' contains invalid primitive transport metadata: {string.Join(" ", errors)}");
+            }
+            if (materials.HasCompleteTransportMetadata && !profile.IsComplete)
+                throw new InvalidDataException($"Cooked material '{path}' claims complete transport metadata but contains an incomplete profile.");
+            emissiveRecordCount = checked(emissiveRecordCount + profile.EmissiveTriangles.Length);
+            if (emissiveRecordCount > GiPrimitiveTransportProfile.MaximumEmissiveTriangleRecordsPerPackage)
+            {
+                throw new InvalidDataException(
+                    $"Cooked material '{path}' contains {emissiveRecordCount} emissive triangle records, " +
+                    $"exceeding the hard package cap " +
+                    $"{GiPrimitiveTransportProfile.MaximumEmissiveTriangleRecordsPerPackage}.");
+            }
+        }
+    }
+
+    private static void ValidateTextureTransportMetadata(string path, CookedTextureMeta texture)
+    {
+        if (string.IsNullOrWhiteSpace(texture.SourceIdentity))
+            throw new InvalidDataException($"Cooked texture '{path}' has no source identity.");
+        if (texture.SourceHash == 0)
+            throw new InvalidDataException($"Cooked texture '{path}' has no source-content hash.");
+        if (string.IsNullOrWhiteSpace(texture.Ktx2RelativePath) ||
+            Path.IsPathRooted(texture.Ktx2RelativePath))
+        {
+            throw new InvalidDataException(
+                $"Cooked texture '{path}' has an invalid KTX2 relative path.");
+        }
+        if (texture.Ktx2ContentHash == 0 &&
+            texture.TransportStatistics?.Status !=
+            TextureTransportStatisticsStatus.LegacyMissing)
+        {
+            throw new InvalidDataException(
+                $"Cooked texture '{path}' has no authenticated KTX2 whole-file hash.");
+        }
+        if (texture.OriginalWidth <= 0 ||
+            texture.OriginalHeight <= 0 ||
+            texture.CookedWidth <= 0 ||
+            texture.CookedHeight <= 0 ||
+            texture.MipCount <= 0 ||
+            texture.EncodedBytes <= 0)
+        {
+            throw new InvalidDataException(
+                $"Cooked texture '{path}' contains invalid dimensions, mip count, or encoded size.");
+        }
+
+        TextureTransportStatistics statistics = texture.TransportStatistics ??
+            throw new InvalidDataException($"Cooked texture '{path}' has null transport statistics.");
+        if (statistics.SourceContentHash != texture.SourceHash)
+        {
+            throw new InvalidDataException(
+                $"Cooked texture '{path}' statistics hash 0x{statistics.SourceContentHash:x16} " +
+                $"does not match metadata hash 0x{texture.SourceHash:x16}.");
+        }
+        if (statistics.Semantic != texture.Semantic)
+            throw new InvalidDataException($"Cooked texture '{path}' statistics semantic does not match metadata.");
+        if (statistics.ColorSpace != texture.ColorSpace)
+            throw new InvalidDataException($"Cooked texture '{path}' statistics color space does not match metadata.");
+        if (!Enum.IsDefined(texture.Semantic) ||
+            !Enum.IsDefined(texture.ColorSpace) ||
+            !Enum.IsDefined(texture.Sampler.WrapU) ||
+            !Enum.IsDefined(texture.Sampler.WrapV) ||
+            !Enum.IsDefined(texture.Sampler.MinFilter) ||
+            !Enum.IsDefined(texture.Sampler.MagFilter) ||
+            !Enum.IsDefined(texture.Sampler.MipFilter) ||
+            !float.IsFinite(texture.Sampler.MaxAnisotropy) ||
+            texture.Sampler.MaxAnisotropy <= 0f)
+        {
+            throw new InvalidDataException(
+                $"Cooked texture '{path}' contains invalid semantic, color-space, or sampler metadata.");
+        }
+        if (texture.AlphaCoveragePreserved &&
+            (!texture.AlphaCoverageCutoff.HasValue ||
+             !float.IsFinite(texture.AlphaCoverageCutoff.Value) ||
+             texture.AlphaCoverageCutoff.Value < 0f))
+        {
+            throw new InvalidDataException($"Cooked texture '{path}' has invalid alpha-coverage preservation metadata.");
+        }
+        if (!texture.AlphaCoveragePreserved && texture.AlphaCoverageCutoff.HasValue)
+        {
+            throw new InvalidDataException(
+                $"Cooked texture '{path}' declares an alpha cutoff without preserved coverage.");
+        }
+        if (statistics.Status == TextureTransportStatisticsStatus.Valid &&
+            (statistics.Width != texture.OriginalWidth ||
+             statistics.Height != texture.OriginalHeight))
+        {
+            throw new InvalidDataException(
+                $"Cooked texture '{path}' statistics dimensions do not match the original source dimensions.");
+        }
+        if (statistics.Status == TextureTransportStatisticsStatus.Valid)
+            statistics.EnsureValid(path);
+        else if (statistics.Validate().Count > 0)
+            throw new InvalidDataException($"Cooked texture '{path}' contains malformed invalid-statistics metadata.");
     }
 
     public static Guid StableAssetId(string canonicalSourcePath)
@@ -164,7 +633,10 @@ public static class CookedPackage
         return new Guid(digest.AsSpan(0, 16));
     }
 
-    private static string ResolveReference(string baseDirectory, string packageRoot, string relativePath, ulong expectedHash, bool verifyHash)
+    private static string ResolveReference(
+        string baseDirectory,
+        string packageRoot,
+        string relativePath)
     {
         if (Path.IsPathRooted(relativePath))
             throw new CookedAssetFormatException(baseDirectory, $"package reference '{relativePath}' must be relative");
@@ -174,12 +646,6 @@ public static class CookedPackage
             throw new CookedAssetFormatException(baseDirectory, $"package reference '{relativePath}' escapes the cooked package root");
         if (!File.Exists(path))
             throw new FileNotFoundException($"Cooked package dependency '{relativePath}' was not found for '{baseDirectory}'.", path);
-        if (verifyHash)
-        {
-            ulong actualHash = CookedHash.File(path);
-            if (actualHash != expectedHash)
-                throw new CookedAssetHashException(path, $"package reference expected 0x{expectedHash:x16}, got 0x{actualHash:x16}");
-        }
         return path;
     }
 
@@ -222,25 +688,45 @@ public static class CookedPackage
         }
     }
 
-    internal static ModelTextureSlot CloneSlot(ModelTextureSlot slot, string filePath) => new()
-    {
-        Sampler = slot.Sampler,
-        ColorSpace = slot.ColorSpace,
-        TexCoordSet = slot.TexCoordSet,
-        Offset = slot.Offset,
-        Scale = slot.Scale,
-        RotationRadians = slot.RotationRadians,
-        Source = slot.Source is null ? null : new ModelTextureSource
+    internal static ModelTextureSlot CloneSlot(
+        ModelTextureSlot slot,
+        string filePath,
+        string? authenticatedSourceIdentity = null) => new()
         {
-            DebugName = slot.Source.DebugName,
-            SourceKind = TextureSourceKind.ExternalFile,
-            FilePath = filePath,
-            CacheIdentity = slot.Source.CacheIdentity.StartsWith("cooked:", StringComparison.Ordinal)
-                ? slot.Source.CacheIdentity
-                : "cooked:" + slot.Source.CacheIdentity,
-            ContainerKind = TextureContainerKind.Ktx2,
-            EncodedByteLength = slot.Source.EncodedByteLength,
-            MimeType = "image/ktx2"
+            Sampler = slot.Sampler,
+            ColorSpace = slot.ColorSpace,
+            TexCoordSet = slot.TexCoordSet,
+            Offset = slot.Offset,
+            Scale = slot.Scale,
+            RotationRadians = slot.RotationRadians,
+            Source = slot.Source is null ? null : new ModelTextureSource
+            {
+                DebugName = slot.Source.DebugName,
+                SourceKind = TextureSourceKind.ExternalFile,
+                FilePath = filePath,
+                CacheIdentity = authenticatedSourceIdentity is not null
+                ? "cooked:" + RequireAuthenticatedTextureIdentity(
+                    authenticatedSourceIdentity)
+                : slot.Source.CacheIdentity.StartsWith(
+                    "cooked:",
+                    StringComparison.Ordinal)
+                    ? slot.Source.CacheIdentity
+                    : "cooked:" + RequireAuthenticatedTextureIdentity(
+                        slot.Source.CacheIdentity),
+                ContainerKind = TextureContainerKind.Ktx2,
+                EncodedByteLength = slot.Source.EncodedByteLength,
+                MimeType = "image/ktx2"
+            }
+        };
+
+    private static string RequireAuthenticatedTextureIdentity(string identity)
+    {
+        if (string.IsNullOrWhiteSpace(identity))
+        {
+            throw new InvalidDataException(
+                "A cooked texture slot requires a non-empty authenticated source identity.");
         }
-    };
+
+        return identity;
+    }
 }

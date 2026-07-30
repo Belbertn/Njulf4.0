@@ -290,13 +290,14 @@ const int REFLECTION_PROBE_CUBEMAP_ARRAY_TEXTURE_INDEX = 46;
 const int REFLECTION_PROBE_DEBUG_TEXTURE_INDEX = 47;
 const int WEIGHTED_OIT_ACCUMULATION_TEXTURE_INDEX = 48;
 const int WEIGHTED_OIT_REVEALAGE_TEXTURE_INDEX = 49;
+const int MATERIAL_TRANSPORT_PROVENANCE_TEXTURE_INDEX = 50;
 // Optional sampled-image Simple-DDGI atlas migration. The two bounded ranges
 // stay fixed so the runtime can use device-safe 2D-array groups without
 // consuming dynamically allocated material texture slots.
 const int SIMPLE_DDGI_SAMPLED_ATLAS_TEXTURE_GROUP_COUNT = 128;
-const int SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX = 50;
-const int SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX = 178;
-const int FIRST_DYNAMIC_TEXTURE_INDEX = 306;
+const int SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX = 51;
+const int SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX = 179;
+const int FIRST_DYNAMIC_TEXTURE_INDEX = 307;
 
 // ============================================
 // GPU STRUCT DEFINITIONS
@@ -597,17 +598,31 @@ struct GPUMaterialData
     vec4 BaseColorOffsetScale;
     vec4 NormalOffsetScale;
     vec4 MetallicRoughnessOffsetScale;
+    vec4 OcclusionOffsetScale;
     vec4 EmissiveOffsetScale;
     vec4 TextureRotations;
     vec4 TextureTexCoordSets;
+    // x = occlusion rotation, y = occlusion texcoord set, z/w reserved.
+    vec4 OcclusionBinding;
     int AlbedoTextureIndex;
     int NormalTextureIndex;
     int MetallicRoughnessTextureIndex;
+    int OcclusionTextureIndex;
     int EmissiveTextureIndex;
     uint FeatureFlags;
     int ExtensionDataIndex;
-    uint Reserved0;
-    uint Reserved1;
+    uint TransportFlags;
+    uint TransportProfileRevision;
+    uint PackedMeanMetallicRoughness;
+    uint TransportProfileQuality;
+    uint MaterialRevision;
+    uint TextureContentRevision;
+    // Six binary16 transport values packed into the existing 12-byte
+    // std430 alignment region: directional diffuse base RGB followed by
+    // dielectric F0 RGB. This preserves the measured 304-byte material ABI.
+    uint PackedMeanGiDirectionalDiffuseBaseRg;
+    uint PackedMeanGiDirectionalDiffuseBaseBAndF0R;
+    uint PackedMeanGiDielectricF0Gb;
     vec4 DdgiAverageAlbedo;
     vec4 DdgiAverageEmissive;
     vec4 DdgiMaterialPolicy;
@@ -1195,10 +1210,10 @@ struct GPUDdgiRayQueryInstance
 
 struct GPUDdgiEmissiveSource
 {
-    vec4 CenterRadius;
-    vec4 RadianceImportance;
-    vec4 BoundsMinRevision;
-    vec4 BoundsMaxFlags;
+    vec4 Vertex0Area;
+    vec4 Edge1AliasProbability;
+    vec4 Edge2AliasFlags;
+    vec4 RadianceSelectionProbability;
 };
 
 struct GPUFogPushConstants
@@ -1259,7 +1274,7 @@ const int SIZEOF_GPU_PARTICLE_SORT_PUSH_CONSTANTS = 32;
 const int SIZEOF_GPU_MESHLET = 48;
 const int SIZEOF_GPU_OBJECT_DATA = 208;
 const int SIZEOF_GPU_DEBUG_LINE_VERTEX = 32;
-const int SIZEOF_GPU_MATERIAL_DATA = 240;
+const int SIZEOF_GPU_MATERIAL_DATA = 304;
 const int SIZEOF_GPU_MATERIAL_EXTENSION_DATA = 548;
 const int SIZEOF_GPU_LIGHT = 64;
 const int SIZEOF_GPU_SCENE_DATA = 400;
@@ -1361,6 +1376,7 @@ const uint MATERIAL_FEATURE_IRIDESCENCE_THICKNESS_TEXTURE = 1u << 20;
 const uint MATERIAL_FEATURE_DISPERSION = 1u << 21;
 const uint MATERIAL_FEATURE_FOLIAGE = 1u << 22;
 const uint MATERIAL_FEATURE_COMPRESSED_NORMAL_BC5 = 1u << 23;
+const uint MATERIAL_FEATURE_IOR = 1u << 24;
 
 // Documented byte offsets for layout-critical fields. These are parsed by
 // tests because GLSL has no portable compile-time offsetof operator.
@@ -1378,6 +1394,40 @@ const int OFFSET_GPU_SKINNING_DISPATCH_SOURCE_SKINNING_DATA_OFFSET = 4;
 const int OFFSET_GPU_SKINNING_DISPATCH_DESTINATION_VERTEX_OFFSET = 8;
 const int OFFSET_GPU_SKINNING_DISPATCH_VERTEX_COUNT = 12;
 const int OFFSET_GPU_SKINNING_DISPATCH_SKIN_MATRIX_OFFSET = 16;
+
+// GPUMaterialData is a public CPU/GPU ABI. Keep these constants explicit so
+// layout tests catch accidental field insertion, reordering, or padding.
+const int OFFSET_GPU_MATERIAL_DATA_ALBEDO = 0;
+const int OFFSET_GPU_MATERIAL_DATA_EMISSIVE = 16;
+const int OFFSET_GPU_MATERIAL_DATA_NORMAL_SCALE_BIAS = 32;
+const int OFFSET_GPU_MATERIAL_DATA_METALLIC_ROUGHNESS_AO = 48;
+const int OFFSET_GPU_MATERIAL_DATA_BASE_COLOR_OFFSET_SCALE = 64;
+const int OFFSET_GPU_MATERIAL_DATA_NORMAL_OFFSET_SCALE = 80;
+const int OFFSET_GPU_MATERIAL_DATA_METALLIC_ROUGHNESS_OFFSET_SCALE = 96;
+const int OFFSET_GPU_MATERIAL_DATA_OCCLUSION_OFFSET_SCALE = 112;
+const int OFFSET_GPU_MATERIAL_DATA_EMISSIVE_OFFSET_SCALE = 128;
+const int OFFSET_GPU_MATERIAL_DATA_TEXTURE_ROTATIONS = 144;
+const int OFFSET_GPU_MATERIAL_DATA_TEXTURE_TEX_COORD_SETS = 160;
+const int OFFSET_GPU_MATERIAL_DATA_OCCLUSION_BINDING = 176;
+const int OFFSET_GPU_MATERIAL_DATA_ALBEDO_TEXTURE_INDEX = 192;
+const int OFFSET_GPU_MATERIAL_DATA_NORMAL_TEXTURE_INDEX = 196;
+const int OFFSET_GPU_MATERIAL_DATA_METALLIC_ROUGHNESS_TEXTURE_INDEX = 200;
+const int OFFSET_GPU_MATERIAL_DATA_OCCLUSION_TEXTURE_INDEX = 204;
+const int OFFSET_GPU_MATERIAL_DATA_EMISSIVE_TEXTURE_INDEX = 208;
+const int OFFSET_GPU_MATERIAL_DATA_FEATURE_FLAGS = 212;
+const int OFFSET_GPU_MATERIAL_DATA_EXTENSION_DATA_INDEX = 216;
+const int OFFSET_GPU_MATERIAL_DATA_TRANSPORT_FLAGS = 220;
+const int OFFSET_GPU_MATERIAL_DATA_TRANSPORT_PROFILE_REVISION = 224;
+const int OFFSET_GPU_MATERIAL_DATA_PACKED_MEAN_METALLIC_ROUGHNESS = 228;
+const int OFFSET_GPU_MATERIAL_DATA_TRANSPORT_PROFILE_QUALITY = 232;
+const int OFFSET_GPU_MATERIAL_DATA_MATERIAL_REVISION = 236;
+const int OFFSET_GPU_MATERIAL_DATA_TEXTURE_CONTENT_REVISION = 240;
+const int OFFSET_GPU_MATERIAL_DATA_REVISION_PADDING0 = 244;
+const int OFFSET_GPU_MATERIAL_DATA_REVISION_PADDING1 = 248;
+const int OFFSET_GPU_MATERIAL_DATA_REVISION_PADDING2 = 252;
+const int OFFSET_GPU_MATERIAL_DATA_DDGI_AVERAGE_ALBEDO = 256;
+const int OFFSET_GPU_MATERIAL_DATA_DDGI_AVERAGE_EMISSIVE = 272;
+const int OFFSET_GPU_MATERIAL_DATA_DDGI_MATERIAL_POLICY = 288;
 
 const int OFFSET_GPU_PARTICLE_INSTANCE_POSITION_SIZE = 0;
 const int OFFSET_GPU_PARTICLE_INSTANCE_VELOCITY_ROTATION = 16;
@@ -1783,6 +1833,20 @@ const uint DIRECTIONAL_SHADOW_RECEIVER_RECEIVER_DEPTH_SUM_COUNTER_BASE = DIRECTI
 const uint DIRECTIONAL_SHADOW_RECEIVER_MIN_SAMPLED_DEPTH_SUM_COUNTER_BASE = DIRECTIONAL_SHADOW_RECEIVER_COUNTER_BASE + 56u;
 const uint DIRECTIONAL_SHADOW_RECEIVER_MAX_SAMPLED_DEPTH_SUM_COUNTER_BASE = DIRECTIONAL_SHADOW_RECEIVER_COUNTER_BASE + 60u;
 const uint DIRECTIONAL_SHADOW_RECEIVER_UNRESOLVED_COUNTER = DIRECTIONAL_SHADOW_RECEIVER_COUNTER_BASE + 64u;
+const uint FAR_FIELD_MATERIAL_V2_COUNTER_BASE = DIRECTIONAL_SHADOW_RECEIVER_COUNTER_BASE + 65u;
+const uint FAR_FIELD_MATERIAL_CONFLICT_COUNTER = FAR_FIELD_MATERIAL_V2_COUNTER_BASE + 0u;
+const uint FAR_FIELD_MATERIAL_STALE_PUBLICATION_COUNTER = FAR_FIELD_MATERIAL_V2_COUNTER_BASE + 1u;
+const uint MATERIAL_GI_COUNTER_BASE = FAR_FIELD_MATERIAL_V2_COUNTER_BASE + 2u;
+const uint MATERIAL_GI_ALPHA_CANDIDATE_TEST_COUNTER = MATERIAL_GI_COUNTER_BASE + 0u;
+const uint MATERIAL_GI_ALPHA_CANDIDATE_REJECT_COUNTER = MATERIAL_GI_COUNTER_BASE + 1u;
+const uint MATERIAL_GI_NONFINITE_VALUE_COUNTER = MATERIAL_GI_COUNTER_BASE + 2u;
+const uint MATERIAL_GI_CLAMPED_VALUE_COUNTER = MATERIAL_GI_COUNTER_BASE + 3u;
+const uint MATERIAL_GI_ALPHA_CANDIDATE_LIMIT_COUNTER = MATERIAL_GI_COUNTER_BASE + 4u;
+const uint MATERIAL_GI_DETAILED_TRANSPORT_HIT_COUNTER = MATERIAL_GI_COUNTER_BASE + 5u;
+const uint MATERIAL_GI_COMPACT_TRANSPORT_HIT_COUNTER = MATERIAL_GI_COUNTER_BASE + 6u;
+const uint MATERIAL_GI_CORRECTNESS_FALLBACK_HIT_COUNTER = MATERIAL_GI_COUNTER_BASE + 7u;
+const uint MATERIAL_GI_FAR_FIELD_TRANSPORT_HIT_COUNTER = MATERIAL_GI_COUNTER_BASE + 8u;
+const uint MATERIAL_GI_EMISSIVE_SAMPLING_INVOCATION_COUNTER = MATERIAL_GI_COUNTER_BASE + 9u;
 const float DIRECTIONAL_SHADOW_RECEIVER_DEPTH_QUANTIZATION_SCALE = 65535.0;
 const int OFFSET_GPU_DDGI_PROBE_CANDIDATE_PROBE_INDEX = 0;
 const int OFFSET_GPU_DDGI_PROBE_CANDIDATE_VOLUME_INDEX = 4;
@@ -2504,6 +2568,18 @@ float ReadRowMajorLinearDeterminant(uint bufferIndex, uint matrixWordOffset)
     return dot(x, cross(y, z));
 }
 
+// A negative-determinant instance reverses projected triangle winding. Mesh
+// shaders restore the authored logical facing before fixed-function culling
+// and gl_FrontFacing so depth, shadow, motion, alpha, and forward passes agree.
+uvec3 ResolveMirroredInstanceTriangle(
+    uint i0,
+    uint i1,
+    uint i2,
+    bool negativeDeterminant)
+{
+    return negativeDeterminant ? uvec3(i0, i2, i1) : uvec3(i0, i1, i2);
+}
+
 // Shared TBN construction for material passes. Tangent orthonormalization is required
 // after a non-uniform world transform; faceSign keeps double-sided normal maps coherent.
 mat3 BuildOrthonormalTbn(vec3 normal, vec4 tangent, float faceSign)
@@ -2944,20 +3020,33 @@ GPUMaterialData ReadMaterial(uint materialIndex)
     material.BaseColorOffsetScale = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 16u);
     material.NormalOffsetScale = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 20u);
     material.MetallicRoughnessOffsetScale = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 24u);
-    material.EmissiveOffsetScale = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 28u);
-    material.TextureRotations = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 32u);
-    material.TextureTexCoordSets = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 36u);
-    material.AlbedoTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 40u));
-    material.NormalTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 41u));
-    material.MetallicRoughnessTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 42u));
-    material.EmissiveTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 43u));
-    material.FeatureFlags = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 44u);
-    material.ExtensionDataIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 45u));
-    material.Reserved0 = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 46u);
-    material.Reserved1 = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 47u);
-    material.DdgiAverageAlbedo = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 48u);
-    material.DdgiAverageEmissive = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 52u);
-    material.DdgiMaterialPolicy = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 56u);
+    material.OcclusionOffsetScale = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 28u);
+    material.EmissiveOffsetScale = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 32u);
+    material.TextureRotations = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 36u);
+    material.TextureTexCoordSets = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 40u);
+    material.OcclusionBinding = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 44u);
+    material.AlbedoTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 48u));
+    material.NormalTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 49u));
+    material.MetallicRoughnessTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 50u));
+    material.OcclusionTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 51u));
+    material.EmissiveTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 52u));
+    material.FeatureFlags = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 53u);
+    material.ExtensionDataIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 54u));
+    material.TransportFlags = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 55u);
+    material.TransportProfileRevision = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 56u);
+    material.PackedMeanMetallicRoughness = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 57u);
+    material.TransportProfileQuality = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 58u);
+    material.MaterialRevision = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 59u);
+    material.TextureContentRevision = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 60u);
+    material.PackedMeanGiDirectionalDiffuseBaseRg =
+        ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 61u);
+    material.PackedMeanGiDirectionalDiffuseBaseBAndF0R =
+        ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 62u);
+    material.PackedMeanGiDielectricF0Gb =
+        ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 63u);
+    material.DdgiAverageAlbedo = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 64u);
+    material.DdgiAverageEmissive = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 68u);
+    material.DdgiMaterialPolicy = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 72u);
     return material;
 }
 
@@ -3043,14 +3132,33 @@ GPULight ReadLight(uint lightIndex)
     return light;
 }
 
+// Njulf's currently supported punctual-light contract is deliberately a
+// scene-unit convention: Color * Intensity is scene-linear incident radiance
+// at zero distance, with a squared finite-range window. Raster and GI must use
+// these helpers together until a future physical-unit migration changes both.
+float EvaluateNjulfPunctualRangeAttenuation(float distanceToLight, float lightRange)
+{
+    if (lightRange <= 0.0 || distanceToLight >= lightRange)
+        return 0.0;
+    float rangeFactor = clamp(1.0 - max(distanceToLight, 0.0) / lightRange, 0.0, 1.0);
+    return rangeFactor * rangeFactor;
+}
+
+float EvaluateNjulfSpotAttenuation(vec3 lightDirection, vec3 directionToLight, float spotAngle)
+{
+    float coneCos = cos(spotAngle);
+    float spotCos = dot(normalize(lightDirection), -directionToLight);
+    return smoothstep(coneCos, min(coneCos + 0.1, 1.0), spotCos);
+}
+
 GPUDdgiEmissiveSource ReadDdgiEmissiveSource(uint sourceIndex)
 {
     uint baseWord = sourceIndex * uint(SIZEOF_GPU_DDGI_EMISSIVE_SOURCE / 4);
     GPUDdgiEmissiveSource source;
-    source.CenterRadius = ReadStorageVec4(uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX), baseWord + 0u);
-    source.RadianceImportance = ReadStorageVec4(uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX), baseWord + 4u);
-    source.BoundsMinRevision = ReadStorageVec4(uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX), baseWord + 8u);
-    source.BoundsMaxFlags = ReadStorageVec4(uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX), baseWord + 12u);
+    source.Vertex0Area = ReadStorageVec4(uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX), baseWord + 0u);
+    source.Edge1AliasProbability = ReadStorageVec4(uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX), baseWord + 4u);
+    source.Edge2AliasFlags = ReadStorageVec4(uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX), baseWord + 8u);
+    source.RadianceSelectionProbability = ReadStorageVec4(uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX), baseWord + 12u);
     return source;
 }
 

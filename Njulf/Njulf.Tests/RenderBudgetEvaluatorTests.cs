@@ -294,7 +294,12 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(snapshot.GiResidency.DeclaredComponentBudgetBytes,
-                    Is.EqualTo(ddgiBudget + farFieldBudget + accelerationStructureBudget + accelerationStructureTransientBudget));
+                    Is.EqualTo(
+                        profile.GlobalIlluminationRenderTargetBudgetBytes +
+                        ddgiBudget +
+                        farFieldBudget +
+                        accelerationStructureBudget +
+                        accelerationStructureTransientBudget));
                 Assert.That(
                     snapshot.GiResidency.Components.Single(component => component.Name == "DDGI scratch and transient").CountsTowardCombinedBudget,
                     Is.False);
@@ -305,9 +310,12 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void RenderBudgetEvaluator_DoesNotClaimAnAggregateCapWhenLiveGiRenderTargetsHaveNoDeclaredCap()
+        public void RenderBudgetEvaluator_DoesNotClaimAnAggregateCapWhenCustomProfileOmitsRenderTargetCap()
         {
-            RenderBudgetProfile profile = RenderBudgetProfile.Development;
+            RenderBudgetProfile profile = RenderBudgetProfile.Development with
+            {
+                GlobalIlluminationRenderTargetBudgetBytes = 0
+            };
             RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
             {
                 GlobalIlluminationEnabled = 1,
@@ -334,6 +342,61 @@ namespace Njulf.Tests
                 Assert.That(snapshot.GiResidency.UniqueResidentBytes, Is.EqualTo(5));
                 Assert.That(snapshot.GiResidency.DeclaredComponentBudgetBytes, Is.Zero);
                 Assert.That(Metric(snapshot, "GI unique residency").Status, Is.EqualTo(RenderBudgetStatus.Unavailable));
+            });
+        }
+
+        [Test]
+        public void RenderBudgetEvaluator_QualifiesSsgiOnlyResidencyAgainstExplicitTierCap()
+        {
+            RenderBudgetProfile profile = RenderBudgetProfile.MidSpec1080p60;
+            RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+            {
+                GlobalIlluminationEnabled = 1,
+                GlobalIlluminationSsgiActive = 1,
+                GlobalIlluminationRenderTargetBytes = 32UL * 1024UL * 1024UL
+            };
+            var memory = new MemoryBudgetSnapshot(
+                diagnostics.GlobalIlluminationRenderTargetBytes,
+                profile.GpuMemoryBudgetBytes,
+                [
+                    new MemoryBudgetEntry(
+                        MemoryBudgetCategory.GlobalIllumination,
+                        0,
+                        0,
+                        "SSGI render targets are accounted separately")
+                ],
+                MemoryHeapBudgetSnapshot.Unavailable);
+
+            RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+                profile,
+                diagnostics,
+                memory,
+                new UploadBudgetSnapshot(
+                    0,
+                    profile.UploadBudgetBytesPerFrame,
+                    0,
+                    0,
+                    [],
+                    RenderBudgetStatus.WithinBudget),
+                new RuntimeStallSnapshot(
+                    0,
+                    0,
+                    RuntimeStallReason.Unknown,
+                    0,
+                    []));
+
+            GiResidencyComponent renderTargets =
+                snapshot.GiResidency.Components.Single(
+                    component => component.Name == "GI render targets");
+            Assert.Multiple(() =>
+            {
+                Assert.That(renderTargets.BudgetBytes,
+                    Is.EqualTo(profile.GlobalIlluminationRenderTargetBudgetBytes));
+                Assert.That(renderTargets.CountsTowardCombinedBudget, Is.True);
+                Assert.That(snapshot.GiResidency.DeclaredComponentBudgetBytes,
+                    Is.EqualTo(profile.GlobalIlluminationRenderTargetBudgetBytes));
+                Assert.That(Metric(snapshot, "GI unique residency").Status,
+                    Is.EqualTo(RenderBudgetStatus.WithinBudget));
             });
         }
 
@@ -537,6 +600,34 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void RenderBudgetEvaluator_FailsMaterialGiSafetyCounters()
+        {
+            RenderBudgetProfile profile = RenderBudgetProfile.Development;
+            RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+            {
+                GlobalIlluminationEnabled = 1,
+                MaterialNonFiniteValueCount = 1,
+                MaterialClampedValueCount = 2,
+                MaterialAlphaCandidateLimitReachedCount = 3
+            };
+
+            RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+                profile,
+                diagnostics,
+                MemoryBudgetSnapshot.Empty,
+                new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0, [], RenderBudgetStatus.WithinBudget),
+                new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Metric(snapshot, "Material GI non-finite values").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(Metric(snapshot, "Material GI clamped values").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(Metric(snapshot, "Material alpha candidate limit").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(snapshot.OverallStatus, Is.EqualTo(RenderBudgetStatus.OverBudget));
+            });
+        }
+
+        [Test]
         public void RenderBudgetEvaluator_AccountsForCanonicalAndSampledSimpleDdgiAtlases()
         {
             RenderBudgetProfile profile = RenderBudgetProfile.Development;
@@ -586,6 +677,243 @@ namespace Njulf.Tests
 
             Assert.That(Metric(snapshot, "DDGI atlas memory").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
         }
+
+        [Test]
+        public void RenderBudgetEvaluator_EnforcesMaterialGiReleaseQualificationAndActiveZeroGates()
+        {
+            RenderBudgetProfile profile = RenderBudgetProfile.Development;
+            RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+            {
+                GlobalIlluminationEnabled = 1,
+                MaterialGiV2ActiveFeatures = MaterialGiV2Feature.MaterialTransport,
+                MaterialGiReleaseQualificationRequired = 1,
+                MaterialGiReleaseQualificationFailureCount = 1,
+                MaterialActiveLegacyV1FallbackCount = 1,
+                MaterialActiveInvalidProfileCount = 1
+            };
+
+            RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+                profile,
+                diagnostics,
+                MemoryBudgetSnapshot.Empty,
+                new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0, [], RenderBudgetStatus.WithinBudget),
+                new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    Metric(snapshot, RenderBudgetEvaluator.MaterialGiQualificationMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(
+                    Metric(snapshot, RenderBudgetEvaluator.MaterialGiActiveV1FallbackMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(
+                    Metric(snapshot, RenderBudgetEvaluator.MaterialGiActiveInvalidProfileMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.OverBudget));
+            });
+        }
+
+        [Test]
+        public void RenderBudgetEvaluator_EnforcesEmissiveMeshSamplingZeroGates()
+        {
+            RenderBudgetProfile profile = RenderBudgetProfile.Development;
+            RendererDiagnostics failingDiagnostics = RendererDiagnostics.Empty with
+            {
+                GlobalIlluminationEnabled = 1,
+                MaterialGiV2ActiveFeatures = MaterialGiV2Feature.EmissiveMeshSampling,
+                DdgiEmissiveTriangleCandidateCount = 4,
+                DdgiEmissiveTriangleBudget = 2,
+                DdgiEmissiveSkippedEnergyFraction = 0.125f,
+                DdgiEmissiveSkippedSkinnedObjectCount = 1,
+                DdgiEmissiveSkippedSkinnedImportance = 0.5
+            };
+            RendererDiagnostics passingDiagnostics = failingDiagnostics with
+            {
+                DdgiEmissiveTriangleCandidateCount = 2,
+                DdgiEmissiveSkippedEnergyFraction = 0.0f,
+                DdgiEmissiveSkippedSkinnedObjectCount = 0,
+                DdgiEmissiveSkippedSkinnedImportance = 0.0
+            };
+            RendererDiagnostics nonFiniteDiagnostics = passingDiagnostics with
+            {
+                DdgiEmissiveSkippedEnergyFraction = float.NaN
+            };
+
+            RenderBudgetSnapshot failing = Evaluate(profile, failingDiagnostics);
+            RenderBudgetSnapshot passing = Evaluate(profile, passingDiagnostics);
+            RenderBudgetSnapshot nonFinite = Evaluate(profile, nonFiniteDiagnostics);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    Metric(failing, RenderBudgetEvaluator.DdgiEmissiveTruncatedSourceMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(
+                    Metric(failing, RenderBudgetEvaluator.DdgiEmissiveSkippedEnergyMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(
+                    Metric(failing, RenderBudgetEvaluator.DdgiEmissiveUnsupportedSkinnedObjectMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(
+                    Metric(failing, RenderBudgetEvaluator.DdgiEmissiveUnsupportedSkinnedImportanceMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(failing.OverallStatus, Is.EqualTo(RenderBudgetStatus.OverBudget));
+
+                Assert.That(
+                    Metric(passing, RenderBudgetEvaluator.DdgiEmissiveTruncatedSourceMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.WithinBudget));
+                Assert.That(
+                    Metric(passing, RenderBudgetEvaluator.DdgiEmissiveSkippedEnergyMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.WithinBudget));
+                Assert.That(
+                    Metric(passing, RenderBudgetEvaluator.DdgiEmissiveUnsupportedSkinnedObjectMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.WithinBudget));
+                Assert.That(
+                    Metric(passing, RenderBudgetEvaluator.DdgiEmissiveUnsupportedSkinnedImportanceMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.WithinBudget));
+
+                Assert.That(
+                    Metric(nonFinite, RenderBudgetEvaluator.DdgiEmissiveSkippedEnergyMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.OverBudget),
+                    "Non-finite zero-gate telemetry must fail closed instead of becoming unavailable.");
+            });
+        }
+
+        [Test]
+        public void RenderBudgetEvaluator_EnforcesPrimitiveProfileMemoryByQualityTier()
+        {
+            RenderBudgetProfile profile = RenderBudgetProfile.Development;
+            ulong mediumCap = RenderBudgetEvaluator.ResolvePrimitiveProfileMemoryBudgetBytes(
+                RenderQualityPreset.Medium);
+            RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+            {
+                GlobalIlluminationEnabled = 1,
+                ActiveQualityPreset = RenderQualityPreset.Medium,
+                MaterialGiV2ActiveFeatures = MaterialGiV2Feature.MaterialTransport,
+                MaterialPrimitiveProfileGpuBytes = mediumCap +
+                    MaterialManager.PrimitiveProfileGpuStrideBytes
+            };
+
+            RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+                profile,
+                diagnostics,
+                MemoryBudgetSnapshot.Empty,
+                new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0, [], RenderBudgetStatus.WithinBudget),
+                new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    Metric(snapshot, RenderBudgetEvaluator.MaterialGiPrimitiveProfileMemoryMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(
+                    RenderBudgetEvaluator.ResolvePrimitiveProfileMemoryBudgetBytes(RenderQualityPreset.Ultra),
+                    Is.EqualTo(MaterialManager.MaximumPrimitiveProfileGpuBytes));
+            });
+        }
+
+        [Test]
+        public void RenderBudgetEvaluator_ChargesCompileAndUploadP95ToExistingGiCpuBudget()
+        {
+            RenderBudgetProfile profile = RenderBudgetProfile.Development;
+            long budgetMicroseconds =
+                (long)(profile.GlobalIlluminationCpuBudgetMilliseconds * 1_000.0);
+            RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+            {
+                GlobalIlluminationEnabled = 1,
+                MaterialGiV2ActiveFeatures = MaterialGiV2Feature.MaterialTransport,
+                MaterialCompileP95Microseconds = budgetMicroseconds * 3 / 5,
+                MaterialCompileTimingSampleCount = 32,
+                MaterialUploadP95Microseconds = budgetMicroseconds * 3 / 5,
+                MaterialUploadTimingSampleCount = 256
+            };
+
+            RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+                profile,
+                diagnostics,
+                MemoryBudgetSnapshot.Empty,
+                new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0, [], RenderBudgetStatus.WithinBudget),
+                new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    Metric(snapshot, RenderBudgetEvaluator.MaterialGiCompileP95MetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.WithinBudget));
+                Assert.That(
+                    Metric(snapshot, RenderBudgetEvaluator.MaterialGiUploadP95MetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.WithinBudget));
+                Assert.That(
+                    Metric(snapshot, RenderBudgetEvaluator.MaterialGiPipelineP95MetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.OverBudget));
+            });
+        }
+
+        [Test]
+        public void RenderBudgetEvaluator_LeavesMaterialGiGatesUnavailableWhenRolloutIsInactive()
+        {
+            RenderBudgetProfile profile = RenderBudgetProfile.Development;
+            RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+                profile,
+                RendererDiagnostics.Empty with
+                {
+                    MaterialActiveLegacyV1FallbackCount = 10,
+                    MaterialActiveInvalidProfileCount = 10,
+                    MaterialCompileP95Microseconds = 10_000,
+                    MaterialCompileTimingSampleCount = 10,
+                    MaterialUploadP95Microseconds = 10_000,
+                    MaterialUploadTimingSampleCount = 10,
+                    DdgiEmissiveTriangleCandidateCount = 10,
+                    DdgiEmissiveTriangleBudget = 1,
+                    DdgiEmissiveSkippedEnergyFraction = 0.5f,
+                    DdgiEmissiveSkippedSkinnedObjectCount = 2,
+                    DdgiEmissiveSkippedSkinnedImportance = 3.0
+                },
+                MemoryBudgetSnapshot.Empty,
+                new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0, [], RenderBudgetStatus.WithinBudget),
+                new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    Metric(snapshot, RenderBudgetEvaluator.MaterialGiQualificationMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.Unavailable));
+                Assert.That(
+                    Metric(snapshot, RenderBudgetEvaluator.MaterialGiActiveV1FallbackMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.Unavailable));
+                Assert.That(
+                    Metric(snapshot, RenderBudgetEvaluator.MaterialGiPipelineP95MetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.Unavailable));
+                Assert.That(
+                    Metric(snapshot, RenderBudgetEvaluator.DdgiEmissiveTruncatedSourceMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.Unavailable));
+                Assert.That(
+                    Metric(snapshot, RenderBudgetEvaluator.DdgiEmissiveSkippedEnergyMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.Unavailable));
+                Assert.That(
+                    Metric(snapshot, RenderBudgetEvaluator.DdgiEmissiveUnsupportedSkinnedObjectMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.Unavailable));
+                Assert.That(
+                    Metric(snapshot, RenderBudgetEvaluator.DdgiEmissiveUnsupportedSkinnedImportanceMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.Unavailable));
+            });
+        }
+
+        private static RenderBudgetSnapshot Evaluate(
+            RenderBudgetProfile profile,
+            RendererDiagnostics diagnostics) =>
+            new RenderBudgetEvaluator().Evaluate(
+                profile,
+                diagnostics,
+                MemoryBudgetSnapshot.Empty,
+                new UploadBudgetSnapshot(
+                    0,
+                    profile.UploadBudgetBytesPerFrame,
+                    0,
+                    0,
+                    [],
+                    RenderBudgetStatus.WithinBudget),
+                new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
 
         private static BudgetMetric Metric(RenderBudgetSnapshot snapshot, string name)
         {

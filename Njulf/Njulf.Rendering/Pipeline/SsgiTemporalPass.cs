@@ -16,7 +16,7 @@ namespace Njulf.Rendering.Pipeline
     public sealed unsafe class SsgiTemporalPass : RenderPassBase
     {
         private const string EntryPoint = "main";
-        private const uint TraceContractVersion = 1u;
+        private const uint TraceContractVersion = 2u;
 
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
@@ -39,6 +39,7 @@ namespace Njulf.Rendering.Pipeline
         private float _lastSsgiHitNormalThreshold = -1.0f;
         private uint? _lastProducerExecutedSampleIndex;
         private uint _lastTraceContractVersion = TraceContractVersion;
+        private uint _lastMaterialRevision;
         private bool _hasLastCameraState;
         private Matrix4x4 _lastProjectionMatrix;
         private Vector3 _lastCameraPosition;
@@ -266,6 +267,7 @@ namespace Njulf.Rendering.Pipeline
                 MathF.Abs(_lastSsgiThickness - gi.SsgiThickness) > 0.0001f ||
                 MathF.Abs(_lastSsgiHitNormalThreshold - gi.SsgiHitNormalThreshold) > 0.0001f;
             changed |= _lastTraceContractVersion != TraceContractVersion ||
+                _lastMaterialRevision != sceneData.SsgiMaterialRevision ||
                 (_lastProducerExecutedSampleIndex.HasValue &&
                     sceneData.TemporalSampleIndex != unchecked(_lastProducerExecutedSampleIndex.Value + 1u));
             changed |= sceneData.HiZPolicyCameraCut != 0 ||
@@ -286,6 +288,7 @@ namespace Njulf.Rendering.Pipeline
             _lastSsgiHitNormalThreshold = gi.SsgiHitNormalThreshold;
             _lastProducerExecutedSampleIndex = sceneData.TemporalSampleIndex;
             _lastTraceContractVersion = TraceContractVersion;
+            _lastMaterialRevision = sceneData.SsgiMaterialRevision;
             _lastProjectionMatrix = sceneData.ProjectionMatrix;
             _lastCameraPosition = sceneData.CameraPosition;
             _hasLastCameraState = true;

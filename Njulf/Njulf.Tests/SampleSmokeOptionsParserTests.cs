@@ -18,6 +18,8 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_RELOAD_COUNT", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_PERFORMANCE_SCENARIO", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_FORCE_MISSING_ASSETS", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_FAIL_ON_VALIDATION_MESSAGE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_GPU_TIMING", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_COMPACTION", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_INDIRECT_DISPATCH", null);
@@ -25,17 +27,33 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_SHADOW_COMPACTION", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_SUBMISSION_VALIDATION", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_FAR_FIELD_CLIPMAP", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_FAR_FIELD_FORCE_ALL", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_DDGI_SCHEDULER_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR", null);
         Environment.SetEnvironmentVariable("NJULF_SPONZA_GI_CAPTURE_DIR", null);
+        Environment.SetEnvironmentVariable("NJULF_MATERIAL_GI_CAPTURE_DIR", null);
+        Environment.SetEnvironmentVariable("NJULF_MATERIAL_GI_QUALIFICATION_MANIFEST", null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_MATERIAL_GI_QUALIFICATION_CANDIDATE",
+            null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_REPORT", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_WARMUP_FRAMES", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_MEASURE_FRAMES", null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_BENCHMARK_BUDGET_PROFILE",
+            null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_VALIDATION", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_QUALITY_PRESET", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_LONG_RUN_REPORT", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_LONG_RUN_WARMUP_FRAMES", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_LONG_RUN_SAMPLE_INTERVAL", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_LONG_RUN_MAX_SAMPLES", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_LONG_RUN_MEMORY_GROWTH_TOLERANCE_BYTES", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_LONG_RUN_MINUTES", null);
     }
 
     [Test]
@@ -680,6 +698,9 @@ public sealed class SampleSmokeOptionsParserTests
         Assert.Multiple(() =>
         {
             Assert.That(options.EnableAsyncCompute, Is.True);
+            Assert.That(
+                options.AsyncComputeModeOverride,
+                Is.EqualTo(AsyncComputeMode.ForceEnabledForValidation));
             Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
             Assert.That(options.FrameCount, Is.EqualTo(3));
             Assert.That(options.Enabled, Is.True);
@@ -696,8 +717,78 @@ public sealed class SampleSmokeOptionsParserTests
         Assert.Multiple(() =>
         {
             Assert.That(options.EnableAsyncCompute, Is.True);
+            Assert.That(
+                options.AsyncComputeModeOverride,
+                Is.EqualTo(AsyncComputeMode.ForceEnabledForValidation));
             Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
         });
+    }
+
+    [TestCase("auto", AsyncComputeMode.Auto)]
+    [TestCase("disabled", AsyncComputeMode.Disabled)]
+    [TestCase("off", AsyncComputeMode.Disabled)]
+    [TestCase("forced", AsyncComputeMode.ForceEnabledForValidation)]
+    [TestCase("force-enabled-for-validation", AsyncComputeMode.ForceEnabledForValidation)]
+    public void ParsesExplicitAsyncComputeMode(string value, AsyncComputeMode expected)
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--async-compute-mode", value
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.AsyncComputeModeOverride, Is.EqualTo(expected));
+            Assert.That(
+                options.EnableAsyncCompute,
+                Is.EqualTo(expected == AsyncComputeMode.ForceEnabledForValidation));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+            Assert.That(options.Enabled, Is.True);
+        });
+    }
+
+    [Test]
+    public void ExplicitAsyncComputeEnvironmentOverridesLegacyBoolean()
+    {
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE", "true");
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE_MODE", "disabled");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(Array.Empty<string>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.AsyncComputeModeOverride, Is.EqualTo(AsyncComputeMode.Disabled));
+            Assert.That(options.EnableAsyncCompute, Is.False);
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+        });
+    }
+
+    [Test]
+    public void LaterAsyncComputeArgumentWins()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--async-compute",
+            "--async-compute-mode", "disabled"
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.AsyncComputeModeOverride, Is.EqualTo(AsyncComputeMode.Disabled));
+            Assert.That(options.EnableAsyncCompute, Is.False);
+        });
+    }
+
+    [Test]
+    public void InvalidAsyncComputeModeFailsBeforeRendererConstruction()
+    {
+        ArgumentException exception = Assert.Throws<ArgumentException>(
+            () => SampleSmokeOptionsParser.Parse(new[]
+            {
+                "--async-compute-mode", "maybe"
+            }))!;
+
+        Assert.That(exception.Message, Does.Contain("Valid values: auto, disabled, forced"));
     }
 
     [Test]
@@ -787,7 +878,8 @@ public sealed class SampleSmokeOptionsParserTests
             "--benchmark",
             "--benchmark-report", reportPath,
             "--benchmark-warmup-frames", "0",
-            "--benchmark-measure-frames", "8"
+            "--benchmark-measure-frames", "8",
+            "--benchmark-budget-profile", "high"
         });
 
         Assert.Multiple(() =>
@@ -796,9 +888,47 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(options.Benchmark.ReportPath, Is.EqualTo(System.IO.Path.GetFullPath(reportPath)));
             Assert.That(options.Benchmark.WarmupFrameCount, Is.EqualTo(0));
             Assert.That(options.Benchmark.MeasureFrameCount, Is.EqualTo(8));
+            Assert.That(
+                options.Benchmark.BudgetProfileOverride,
+                Is.EqualTo(RenderBudgetProfileKind.HighSpec1440p60));
             Assert.That(options.EnableGpuTiming, Is.True);
             Assert.That(options.Enabled, Is.True);
         });
+    }
+
+    [Test]
+    public void BenchmarkWithQualityAndSceneOverrides_OwnsTheFullMeasurementSequence()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--benchmark",
+            "--quality-preset", "low",
+            "--scene", "global-illumination-test",
+            "--benchmark-warmup-frames", "30",
+            "--benchmark-measure-frames", "120"
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Benchmark.Enabled, Is.True);
+            Assert.That(options.QualityPresetOverride, Is.EqualTo(RenderQualityPreset.Low));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.None));
+            Assert.That(options.FrameCount, Is.Zero);
+            Assert.That(options.Benchmark.WarmupFrameCount, Is.EqualTo(30));
+            Assert.That(options.Benchmark.MeasureFrameCount, Is.EqualTo(120));
+        });
+    }
+
+    [Test]
+    public void BenchmarkRejectsCompetingSmokeFrameSequence()
+    {
+        Assert.That(
+            () => SampleSmokeOptionsParser.Parse(new[]
+            {
+                "--benchmark",
+                "--smoke-mode", "startup"
+            }),
+            Throws.ArgumentException.With.Message.Contains("owns its warmup and measurement"));
     }
 
     [Test]
@@ -807,6 +937,9 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK", "true");
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_WARMUP_FRAMES", "2");
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_MEASURE_FRAMES", "5");
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_BENCHMARK_BUDGET_PROFILE",
+            "ultra");
 
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(Array.Empty<string>());
 
@@ -815,8 +948,24 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(options.Benchmark.Enabled, Is.True);
             Assert.That(options.Benchmark.WarmupFrameCount, Is.EqualTo(2));
             Assert.That(options.Benchmark.MeasureFrameCount, Is.EqualTo(5));
+            Assert.That(
+                options.Benchmark.BudgetProfileOverride,
+                Is.EqualTo(RenderBudgetProfileKind.Ultra4k60));
             Assert.That(options.EnableGpuTiming, Is.True);
         });
+    }
+
+    [Test]
+    public void BenchmarkBudgetProfile_RejectsNonReleaseProfile()
+    {
+        Assert.That(
+            () => SampleSmokeOptionsParser.Parse(
+            [
+                "--benchmark-budget-profile",
+                "development"
+            ]),
+            Throws.ArgumentException.With.Message.Contains(
+                "low, medium, high, ultra"));
     }
 
     [Test]
@@ -867,5 +1016,332 @@ public sealed class SampleSmokeOptionsParserTests
                 "--smoke-frames", "4"
             }),
             Throws.ArgumentException.With.Message.Contains("owns its deterministic frame sequence"));
+    }
+
+    [TestCase("low", RenderQualityPreset.Low)]
+    [TestCase("medium", RenderQualityPreset.Medium)]
+    [TestCase("high", RenderQualityPreset.High)]
+    [TestCase("ultra", RenderQualityPreset.Ultra)]
+    [TestCase("ddgi-high", RenderQualityPreset.DdgiHigh)]
+    public void ParsesQualityPresetAndDefaultsToStartup(
+        string value,
+        RenderQualityPreset expected)
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--quality-preset", value
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.QualityPresetOverride, Is.EqualTo(expected));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+            Assert.That(options.FrameCount, Is.EqualTo(3));
+        });
+    }
+
+    [TestCase("quality-switch", SampleSmokeMode.QualitySwitch, 7)]
+    [TestCase("texture-hot-reload", SampleSmokeMode.TextureHotReload, 4)]
+    [TestCase("resize", SampleSmokeMode.Resize, 5)]
+    [TestCase("minimize", SampleSmokeMode.Minimize, 4)]
+    [TestCase("all", SampleSmokeMode.All, 8)]
+    public void ParsesProductionRuntimeSmokeModes(
+        string value,
+        SampleSmokeMode expected,
+        int expectedFrames)
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--smoke-mode", value
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Mode, Is.EqualTo(expected));
+            Assert.That(options.FrameCount, Is.EqualTo(expectedFrames));
+        });
+    }
+
+    [Test]
+    public void ParsesLongRunGateAndDurationWithoutImplicitFrameCap()
+    {
+        string report = Path.Combine(Path.GetTempPath(), "material-gi-long-run.json");
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--long-run-report", report,
+            "--long-run-minutes", "30.5",
+            "--long-run-warmup-frames", "360",
+            "--long-run-sample-interval", "30",
+            "--long-run-max-samples", "512",
+            "--long-run-memory-growth-tolerance-bytes", "2097152"
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.LongRun));
+            Assert.That(options.FrameCount, Is.EqualTo(0));
+            Assert.That(options.LongRunMinutes, Is.EqualTo(30.5));
+            Assert.That(options.LongRunWarmupFrames, Is.EqualTo(360));
+            Assert.That(options.LongRunSampleInterval, Is.EqualTo(30));
+            Assert.That(options.LongRunMaxRetainedSamples, Is.EqualTo(512));
+            Assert.That(options.LongRunMemoryGrowthToleranceBytes, Is.EqualTo(2_097_152));
+            Assert.That(options.LongRunReportPath, Is.EqualTo(Path.GetFullPath(report)));
+        });
+    }
+
+    [Test]
+    public void LongRunOptionsRejectOtherSmokeModes()
+    {
+        Assert.That(
+            () => SampleSmokeOptionsParser.Parse(new[]
+            {
+                "--smoke-mode", "startup",
+                "--long-run-report", Path.GetTempPath()
+            }),
+            Throws.ArgumentException.With.Message.Contains("require --smoke-mode long-run"));
+    }
+
+    [Test]
+    public void LongRunRetainedWindowRequiresAtLeastTwoSamples()
+    {
+        Assert.That(
+            () => SampleSmokeOptionsParser.Parse(new[]
+            {
+                "--smoke-mode", "long-run",
+                "--long-run-max-samples", "1"
+            }),
+            Throws.ArgumentException.With.Message.Contains("at least two"));
+    }
+
+    [Test]
+    public void ParsesMaterialGiQualificationManifestFromCommandLine()
+    {
+        string manifest = Path.Combine(
+            Path.GetTempPath(),
+            "material-gi-release-qualification.json");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--material-gi-qualification-manifest", manifest
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                options.MaterialGiQualificationManifestPath,
+                Is.EqualTo(Path.GetFullPath(manifest)));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.None));
+        });
+    }
+
+    [Test]
+    public void ParsesMaterialGiQualificationManifestFromEnvironment()
+    {
+        string manifest = Path.Combine(
+            Path.GetTempPath(),
+            "material-gi-environment-qualification.json");
+        Environment.SetEnvironmentVariable(
+            "NJULF_MATERIAL_GI_QUALIFICATION_MANIFEST",
+            manifest);
+
+        SampleSmokeOptions options =
+            SampleSmokeOptionsParser.Parse(Array.Empty<string>());
+
+        Assert.That(
+            options.MaterialGiQualificationManifestPath,
+            Is.EqualTo(Path.GetFullPath(manifest)));
+    }
+
+    [Test]
+    public void QualificationCandidate_LocksDurableFurnaceTierBenchmark()
+    {
+        string report = Path.Combine(
+            Path.GetTempPath(),
+            "material-gi-candidate-benchmark.json");
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--material-gi-qualification-candidate",
+            "--benchmark",
+            "--benchmark-report", report,
+            "--benchmark-budget-profile", "low"
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                options.Benchmark.MaterialGiQualificationCandidate,
+                Is.True);
+            Assert.That(options.Benchmark.Enabled, Is.True);
+            Assert.That(options.Benchmark.WarmupFrameCount, Is.EqualTo(30));
+            Assert.That(options.Benchmark.MeasureFrameCount, Is.EqualTo(120));
+            Assert.That(
+                options.Benchmark.ReportPath,
+                Is.EqualTo(Path.GetFullPath(report)));
+            Assert.That(
+                options.Benchmark.BudgetProfileOverride,
+                Is.EqualTo(RenderBudgetProfileKind.LowSpec1080p30));
+            Assert.That(
+                options.PerformanceScenario,
+                Is.EqualTo(SamplePerformanceScenario.GiSimpleDdgiFurnace));
+            Assert.That(
+                options.QualityPresetOverride,
+                Is.EqualTo(RenderQualityPreset.DdgiHigh));
+        });
+    }
+
+    [Test]
+    public void QualificationCandidate_RequiresReportTierAndLockedFrames()
+    {
+        string report = Path.Combine(
+            Path.GetTempPath(),
+            "material-gi-candidate-benchmark.json");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => SampleSmokeOptionsParser.Parse(
+                [
+                    "--material-gi-qualification-candidate",
+                    "--benchmark",
+                    "--benchmark-report", report
+                ]),
+                Throws.ArgumentException.With.Message.Contains(
+                    "--benchmark-budget-profile"));
+            Assert.That(
+                () => SampleSmokeOptionsParser.Parse(
+                [
+                    "--material-gi-qualification-candidate",
+                    "--benchmark-budget-profile", "high"
+                ]),
+                Throws.ArgumentException.With.Message.Contains(
+                    "--benchmark-report"));
+            Assert.That(
+                () => SampleSmokeOptionsParser.Parse(
+                [
+                    "--material-gi-qualification-candidate",
+                    "--benchmark-report", report,
+                    "--benchmark-budget-profile", "ultra",
+                    "--benchmark-warmup-frames", "29"
+                ]),
+                Throws.ArgumentException.With.Message.Contains(
+                    "30-frame warmup"));
+        });
+    }
+
+    [Test]
+    public void QualificationCandidate_RejectsApprovedManifestAndForeignWorkload()
+    {
+        string report = Path.Combine(
+            Path.GetTempPath(),
+            "material-gi-candidate-benchmark.json");
+        string manifest = Path.Combine(
+            Path.GetTempPath(),
+            "material-gi-release-qualification.json");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => SampleSmokeOptionsParser.Parse(
+                [
+                    "--material-gi-qualification-candidate",
+                    "--material-gi-qualification-manifest", manifest,
+                    "--benchmark-report", report,
+                    "--benchmark-budget-profile", "medium"
+                ]),
+                Throws.ArgumentException.With.Message.Contains(
+                    "cannot be combined"));
+            Assert.That(
+                () => SampleSmokeOptionsParser.Parse(
+                [
+                    "--material-gi-qualification-candidate",
+                    "--benchmark-report", report,
+                    "--benchmark-budget-profile", "medium",
+                    "--performance-scenario", "gi-cornell-room"
+                ]),
+                Throws.ArgumentException.With.Message.Contains(
+                    "GiSimpleDdgiFurnace"));
+        });
+    }
+
+    [Test]
+    public void QualificationManifestRejectsNonShippingMaterialCapture()
+    {
+        Assert.That(
+            () => SampleSmokeOptionsParser.Parse(new[]
+            {
+                "--material-gi-qualification-manifest", Path.Combine(Path.GetTempPath(), "qualification.json"),
+                "--material-gi-capture-dir", Path.Combine(Path.GetTempPath(), "capture")
+            }),
+            Throws.ArgumentException.With.Message.Contains("qualified shipping rollout"));
+    }
+
+    [Test]
+    public void UnknownOption_IsRejectedBeforeAFollowingKnownOptionCanBeConsumed()
+    {
+        Assert.That(
+            () => SampleSmokeOptionsParser.Parse(
+            [
+                "--material-gi-qualificaton-manifest",
+                "--smoke-mode",
+                "startup"
+            ]),
+            Throws.ArgumentException.With.Message.Contains(
+                "Unknown renderer option '--material-gi-qualificaton-manifest'"));
+    }
+
+    [Test]
+    public void MissingValue_DoesNotConsumeTheFollowingOption()
+    {
+        Assert.That(
+            () => SampleSmokeOptionsParser.Parse(
+            [
+                "--material-gi-qualification-manifest",
+                "--smoke-mode",
+                "startup"
+            ]),
+            Throws.ArgumentException.With.Message.Contains(
+                "found option '--smoke-mode' instead"));
+    }
+
+    [Test]
+    public void BooleanPresenceOptions_HonorExplicitFalse()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--force-missing-assets=false",
+            "--fail-on-validation-message=false"
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.ForceMissingAssets, Is.False);
+            Assert.That(options.FailOnValidationMessage, Is.False);
+        });
+    }
+
+    [TestCase("--benchmark=treu", "--benchmark")]
+    [TestCase("--gpu-timing=enabled", "--gpu-timing")]
+    [TestCase("--force-missing-assets=2", "--force-missing-assets")]
+    public void BooleanOptions_RejectInvalidValuesInsteadOfSilentlyDisablingAGate(
+        string argument,
+        string optionName)
+    {
+        Assert.That(
+            () => SampleSmokeOptionsParser.Parse([argument]),
+            Throws.ArgumentException.With.Message.Contains(
+                $"{optionName} requires a boolean value"));
+    }
+
+    [Test]
+    public void BooleanEnvironmentOptions_RejectInvalidValues()
+    {
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_FAIL_ON_VALIDATION_MESSAGE",
+            "enabled");
+
+        Assert.That(
+            () => SampleSmokeOptionsParser.Parse(Array.Empty<string>()),
+            Throws.ArgumentException.With.Message.Contains(
+                "NJULF_RENDERER_FAIL_ON_VALIDATION_MESSAGE requires a boolean value"));
     }
 }

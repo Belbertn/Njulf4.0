@@ -12,4 +12,131 @@
       <ProjectReference Include="..\Njulf.Rendering\Njulf.Rendering.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+      <None Update="khronos-material-gi-assets.json" CopyToOutputDirectory="PreserveNewest" />
+      <None Update="THIRD-PARTY-NOTICES.txt"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
+      <None Update="Ktx2.NET.provenance.json"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
+      <None Update="Imazen.WebP.provenance.json"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+
+    <PropertyGroup>
+      <Ktx2RedistributedPackageVersion>1.0.5</Ktx2RedistributedPackageVersion>
+      <Ktx2RedistributedPackageRoot>$(NuGetPackageRoot)ktx2.net/$(Ktx2RedistributedPackageVersion)/</Ktx2RedistributedPackageRoot>
+      <Ktx2ThirdPartyNoticeSha256>1bde2c03564b3e3d32ed285ac494413cf05f4dcf942aa7697bf92eea009edee7</Ktx2ThirdPartyNoticeSha256>
+      <Ktx2ProvenanceManifestSha256>9289501fc7ea86382f76e1ccc52418b877cb19e8b70833ed13a398ed18c29175</Ktx2ProvenanceManifestSha256>
+      <WebPProvenanceManifestSha256>28691f4ee8a33820f6c5b63d66af1254edda51ef683021cd51c803b3dba5ef2e</WebPProvenanceManifestSha256>
+    </PropertyGroup>
+
+    <!--
+      These are the complete managed/native Ktx2.NET payloads redistributed by
+      the framework-dependent AssetTool. Hash validation runs on every real
+      build, independently of the NUnit packaging contract tests.
+    -->
+    <ItemGroup>
+      <Ktx2RedistributedAsset Include="$(Ktx2RedistributedPackageRoot)lib/net8.0/Ktx2.NET.dll">
+        <PackageRelativePath>lib/net8.0/Ktx2.NET.dll</PackageRelativePath>
+        <OutputRelativePath>Ktx2.NET.dll</OutputRelativePath>
+        <ExpectedSha256>d7e87f619302fe22451b8d1e49feb8c98b918a095f0c6bf69992b0376dc2a90f</ExpectedSha256>
+      </Ktx2RedistributedAsset>
+      <Ktx2RedistributedAsset Include="$(Ktx2RedistributedPackageRoot)runtimes/linux-x64/native/libktx.so">
+        <PackageRelativePath>runtimes/linux-x64/native/libktx.so</PackageRelativePath>
+        <OutputRelativePath>runtimes/linux-x64/native/libktx.so</OutputRelativePath>
+        <ExpectedSha256>6ab3b9b3a2d52e1293be319815d1030eb34815286979ba4919a1e5552f7edcff</ExpectedSha256>
+      </Ktx2RedistributedAsset>
+      <Ktx2RedistributedAsset Include="$(Ktx2RedistributedPackageRoot)runtimes/win-x64/native/ktx.dll">
+        <PackageRelativePath>runtimes/win-x64/native/ktx.dll</PackageRelativePath>
+        <OutputRelativePath>runtimes/win-x64/native/ktx.dll</OutputRelativePath>
+        <ExpectedSha256>28fc3827812c9d9bc91da10dbd7529830cbd3a929a1964ea6cbe28f7911eee3e</ExpectedSha256>
+      </Ktx2RedistributedAsset>
+      <Ktx2RedistributionArtifact Include="THIRD-PARTY-NOTICES.txt">
+        <OutputRelativePath>THIRD-PARTY-NOTICES.txt</OutputRelativePath>
+        <ExpectedSha256>$(Ktx2ThirdPartyNoticeSha256)</ExpectedSha256>
+      </Ktx2RedistributionArtifact>
+      <Ktx2RedistributionArtifact Include="Ktx2.NET.provenance.json">
+        <OutputRelativePath>Ktx2.NET.provenance.json</OutputRelativePath>
+        <ExpectedSha256>$(Ktx2ProvenanceManifestSha256)</ExpectedSha256>
+      </Ktx2RedistributionArtifact>
+      <Ktx2RedistributionArtifact Include="Imazen.WebP.provenance.json">
+        <OutputRelativePath>Imazen.WebP.provenance.json</OutputRelativePath>
+        <ExpectedSha256>$(WebPProvenanceManifestSha256)</ExpectedSha256>
+      </Ktx2RedistributionArtifact>
+    </ItemGroup>
+
+    <Target Name="ValidateKtx2RedistributionInputs"
+            BeforeTargets="CoreCompile"
+            Condition="'$(DesignTimeBuild)' != 'true'">
+      <Error Condition="!Exists('THIRD-PARTY-NOTICES.txt')"
+             Text="AssetTool redistribution notice THIRD-PARTY-NOTICES.txt is missing." />
+      <Error Condition="!Exists('Ktx2.NET.provenance.json')"
+             Text="AssetTool Ktx2.NET provenance manifest is missing." />
+      <Error Condition="!Exists('%(Ktx2RedistributedAsset.Identity)')"
+             Text="Restored Ktx2.NET $(Ktx2RedistributedPackageVersion) payload '%(Ktx2RedistributedAsset.PackageRelativePath)' is missing." />
+      <Error Condition="!Exists('%(Ktx2RedistributionArtifact.Identity)')"
+             Text="AssetTool redistribution artifact '%(Ktx2RedistributionArtifact.Identity)' is missing." />
+      <GetFileHash Files="@(Ktx2RedistributedAsset)"
+                   Algorithm="SHA256"
+                   HashEncoding="hex">
+        <Output TaskParameter="Items" ItemName="_HashedKtx2RedistributedAsset" />
+      </GetFileHash>
+      <Error Condition="'%(_HashedKtx2RedistributedAsset.FileHash)' != '%(_HashedKtx2RedistributedAsset.ExpectedSha256)'"
+             Text="Restored Ktx2.NET $(Ktx2RedistributedPackageVersion) payload '%(_HashedKtx2RedistributedAsset.PackageRelativePath)' differs from reviewed provenance: expected %(ExpectedSha256), got %(FileHash)." />
+      <GetFileHash Files="@(Ktx2RedistributionArtifact)"
+                   Algorithm="SHA256"
+                   HashEncoding="hex">
+        <Output TaskParameter="Items" ItemName="_HashedKtx2RedistributionArtifact" />
+      </GetFileHash>
+      <Error Condition="'%(_HashedKtx2RedistributionArtifact.FileHash)' != '%(_HashedKtx2RedistributionArtifact.ExpectedSha256)'"
+             Text="AssetTool redistribution artifact '%(_HashedKtx2RedistributionArtifact.Identity)' is stale: expected %(ExpectedSha256), got %(FileHash)." />
+    </Target>
+
+    <Target Name="ValidateKtx2RedistributionOutputs"
+            AfterTargets="Build"
+            Condition="'$(DesignTimeBuild)' != 'true'">
+      <Error Condition="!Exists('$(TargetDir)THIRD-PARTY-NOTICES.txt')"
+             Text="AssetTool output is missing THIRD-PARTY-NOTICES.txt." />
+      <Error Condition="!Exists('$(TargetDir)Ktx2.NET.provenance.json')"
+             Text="AssetTool output is missing Ktx2.NET.provenance.json." />
+      <Error Condition="!Exists('$(TargetDir)Imazen.WebP.provenance.json')"
+             Text="AssetTool output is missing Imazen.WebP.provenance.json." />
+      <Error Condition="!Exists('$(TargetDir)Ktx2.NET.dll')"
+             Text="AssetTool output is missing the Ktx2.NET managed binding." />
+      <Error Condition="!Exists('$(TargetDir)runtimes/linux-x64/native/libktx.so')"
+             Text="AssetTool output is missing the reviewed linux-x64 libktx payload." />
+      <Error Condition="!Exists('$(TargetDir)runtimes/win-x64/native/ktx.dll')"
+             Text="AssetTool output is missing the reviewed win-x64 libktx payload." />
+      <ItemGroup>
+        <_Ktx2RedistributionOutput Include="$(TargetDir)Ktx2.NET.dll">
+          <ExpectedSha256>d7e87f619302fe22451b8d1e49feb8c98b918a095f0c6bf69992b0376dc2a90f</ExpectedSha256>
+        </_Ktx2RedistributionOutput>
+        <_Ktx2RedistributionOutput Include="$(TargetDir)runtimes/linux-x64/native/libktx.so">
+          <ExpectedSha256>6ab3b9b3a2d52e1293be319815d1030eb34815286979ba4919a1e5552f7edcff</ExpectedSha256>
+        </_Ktx2RedistributionOutput>
+        <_Ktx2RedistributionOutput Include="$(TargetDir)runtimes/win-x64/native/ktx.dll">
+          <ExpectedSha256>28fc3827812c9d9bc91da10dbd7529830cbd3a929a1964ea6cbe28f7911eee3e</ExpectedSha256>
+        </_Ktx2RedistributionOutput>
+        <_Ktx2RedistributionOutput Include="$(TargetDir)THIRD-PARTY-NOTICES.txt">
+          <ExpectedSha256>$(Ktx2ThirdPartyNoticeSha256)</ExpectedSha256>
+        </_Ktx2RedistributionOutput>
+        <_Ktx2RedistributionOutput Include="$(TargetDir)Ktx2.NET.provenance.json">
+          <ExpectedSha256>$(Ktx2ProvenanceManifestSha256)</ExpectedSha256>
+        </_Ktx2RedistributionOutput>
+        <_Ktx2RedistributionOutput Include="$(TargetDir)Imazen.WebP.provenance.json">
+          <ExpectedSha256>$(WebPProvenanceManifestSha256)</ExpectedSha256>
+        </_Ktx2RedistributionOutput>
+      </ItemGroup>
+      <GetFileHash Files="@(_Ktx2RedistributionOutput)"
+                   Algorithm="SHA256"
+                   HashEncoding="hex">
+        <Output TaskParameter="Items" ItemName="_HashedKtx2RedistributionOutput" />
+      </GetFileHash>
+      <Error Condition="'%(_HashedKtx2RedistributionOutput.FileHash)' != '%(_HashedKtx2RedistributionOutput.ExpectedSha256)'"
+             Text="AssetTool output '%(_HashedKtx2RedistributionOutput.Identity)' is stale or corrupt: expected %(ExpectedSha256), got %(FileHash)." />
+    </Target>
+
 </Project>

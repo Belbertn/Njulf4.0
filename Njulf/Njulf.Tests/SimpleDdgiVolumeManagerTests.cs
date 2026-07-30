@@ -53,20 +53,62 @@ public sealed class SimpleDdgiVolumeManagerTests
         Assert.That(VulkanRenderer.ResolveConfiguredSimpleDdgiPrimaryRayBudget(configured), Is.EqualTo(expected));
     }
 
+    [TestCase(2_048, 15_368, false, 2_048)]
+    [TestCase(2_048, 15_368, true, 4_096)]
+    [TestCase(10_000, 15_368, true, 15_368)]
+    [TestCase(2_048, 3_000, true, 3_000)]
+    [TestCase(-1, 15_368, true, 0)]
+    [TestCase(2_048, -1, true, 0)]
+    public void ConfiguredSimpleDdgiRequestBudget_DeclaresBoundedDirtyResponseHeadroom(
+        int baseBudget,
+        int probeCount,
+        bool lightingDirtyBoostEnabled,
+        int expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveConfiguredRequestBudget(
+                baseBudget,
+                probeCount,
+                lightingDirtyBoostEnabled),
+            Is.EqualTo(expected));
+    }
+
     [Test]
-    public void BufferResizes_DeferOldGpuBuffersUntilFramesInFlightComplete()
+    public void BufferResizes_SynchronizeOrDeferOldGpuBuffersBeforeDestruction()
     {
         string source = File.ReadAllText(FindSourceFile(
             "Njulf.Rendering",
             "Resources",
             "SimpleDdgiVolumeManager.cs"));
+        int ensureBufferStart = source.IndexOf(
+            "private unsafe bool EnsureBuffer(",
+            StringComparison.Ordinal);
+        int ensureBufferEnd = source.IndexOf(
+            "internal static bool RequiresStableCapacityReallocation(",
+            ensureBufferStart,
+            StringComparison.Ordinal);
+        Assert.That(ensureBufferStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(ensureBufferEnd, Is.GreaterThan(ensureBufferStart));
+        string ensureBuffer = source[ensureBufferStart..ensureBufferEnd];
+
+        int synchronizedGuard = ensureBuffer.IndexOf(
+            "if (destroyPreviousImmediately && previousHandle.IsValid)",
+            StringComparison.Ordinal);
+        int synchronizedDestroy = ensureBuffer.IndexOf(
+            "_bufferManager.DestroyBuffer(previousHandle);",
+            StringComparison.Ordinal);
+        int deferredRetirement = ensureBuffer.LastIndexOf(
+            "RetireBufferResource(previousHandle);",
+            StringComparison.Ordinal);
 
         Assert.Multiple(() =>
         {
             Assert.That(source, Does.Contain("BeginFrameResourceRetirement();"));
-            Assert.That(source, Does.Contain("RetireBufferResource(previousHandle);"));
             Assert.That(source, Does.Contain("RenderingConstants.FramesInFlight + 1UL"));
-            Assert.That(source, Does.Not.Contain("_bufferManager.DestroyBuffer(handle);"));
+            Assert.That(source, Does.Contain("_context.WaitIdle();"));
+            Assert.That(synchronizedGuard, Is.GreaterThanOrEqualTo(0));
+            Assert.That(synchronizedDestroy, Is.GreaterThan(synchronizedGuard));
+            Assert.That(deferredRetirement, Is.GreaterThan(synchronizedDestroy));
         });
     }
 
@@ -144,32 +186,31 @@ public sealed class SimpleDdgiVolumeManagerTests
             Is.EqualTo(expectedSkip));
     }
 
-    [TestCase(15_354, 8, 0, true)]
-    [TestCase(15_354, 15, 0, true)]
-    [TestCase(15_354, 16, 0, false)]
-    [TestCase(15_354, 8, 1, false)]
+    [TestCase(15_354, 0, 0, true)]
+    [TestCase(15_354, 1, 0, false)]
+    [TestCase(15_354, 0, 1, false)]
     [TestCase(999, 1, 0, false)]
-    [TestCase(1_000, 1, 0, true)]
+    [TestCase(1_000, 1, 0, false)]
     [TestCase(0, 0, 0, true)]
-    public void GlobalTransportConvergence_BoundedSourceRepairTailDoesNotBlockSolvedField(
+    public void GlobalTransportConvergence_RequiresEveryActiveSourceAndProbeToBeStable(
         int participatingProbeCount,
         int sourceRepairProbeCount,
-        int pendingSolverProbeCount,
+        int pendingConvergenceProbeCount,
         bool expectedComplete)
     {
         Assert.That(
             SimpleDdgiVolumeManager.CanCompleteTransportGlobalConvergence(
                 participatingProbeCount,
                 sourceRepairProbeCount,
-                pendingSolverProbeCount),
+                pendingConvergenceProbeCount),
             Is.EqualTo(expectedComplete));
     }
 
     [TestCase(999, 0)]
-    [TestCase(1_000, 1)]
-    [TestCase(15_354, 15)]
-    [TestCase(1_000_000, 32)]
-    public void GlobalTransportConvergence_SourceRepairAllowanceIsStrictAndBounded(
+    [TestCase(1_000, 0)]
+    [TestCase(15_354, 0)]
+    [TestCase(1_000_000, 0)]
+    public void GlobalTransportConvergence_SourceRepairAllowanceIsZero(
         int participatingProbeCount,
         int expectedAllowance)
     {
@@ -424,20 +465,39 @@ public sealed class SimpleDdgiVolumeManagerTests
             "Resources",
             "SimpleDdgiVolumeManager.cs"));
 
-        int ensureCapacity = source.IndexOf(
-            "EnsureCapacity(_probeCount, _raysPerProbe, dirtyBoostedBudget, commandBuffer);",
+        int uploadStart = source.IndexOf(
+            "public void Upload(",
             StringComparison.Ordinal);
-        int markFresh = source.IndexOf("MarkFreshForNewOrScrolledProbes();", StringComparison.Ordinal);
-        int refreshImportance = source.IndexOf(
+        int uploadEnd = source.IndexOf(
+            "public void EnsureDisabled(",
+            uploadStart,
+            StringComparison.Ordinal);
+        Assert.That(uploadStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(uploadEnd, Is.GreaterThan(uploadStart));
+        string upload = source[uploadStart..uploadEnd];
+
+        int ensureCapacity = upload.IndexOf(
+            "EnsureCapacity(",
+            StringComparison.Ordinal);
+        int configuredCapacityBudget = upload.IndexOf(
+            "_schedulerConfiguredRequestBudget",
+            ensureCapacity,
+            StringComparison.Ordinal);
+        int markFresh = upload.IndexOf(
+            "MarkFreshForNewOrScrolledProbes();",
+            StringComparison.Ordinal);
+        int refreshImportance = upload.IndexOf(
             "int visibleFreshRecoveryBudget = RefreshProbeSchedulingImportance();",
             StringComparison.Ordinal);
-        int resolveFeedback = source.IndexOf(
+        int resolveFeedback = upload.IndexOf(
             "int updateBudget = ResolveFeedbackLimitedUpdateBudget(",
             StringComparison.Ordinal);
 
         Assert.Multiple(() =>
         {
             Assert.That(ensureCapacity, Is.GreaterThanOrEqualTo(0));
+            Assert.That(configuredCapacityBudget, Is.GreaterThan(ensureCapacity));
+            Assert.That(configuredCapacityBudget, Is.LessThan(markFresh));
             Assert.That(markFresh, Is.GreaterThan(ensureCapacity));
             Assert.That(refreshImportance, Is.GreaterThan(markFresh));
             Assert.That(resolveFeedback, Is.GreaterThan(refreshImportance));
@@ -459,6 +519,28 @@ public sealed class SimpleDdgiVolumeManagerTests
             Assert.That(source, Does.Contain("detailedDdgiInstrumentationActive"));
             Assert.That(source, Does.Contain("fixedSimpleDdgiBudget || hasCompletedSimpleDdgiGpuTiming"));
             Assert.That(source, Does.Contain("DeterministicFixedBudget: fixedSimpleDdgiBudget"));
+        });
+    }
+
+    [Test]
+    public void Renderer_AccountsDdgiAndPagedFarFieldAgainstIndependentMemoryBudgets()
+    {
+        string source = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "VulkanRenderer.cs"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                source,
+                Does.Contain("sceneData.DdgiBufferBytes = _simpleDdgiVolumeManager.BufferBytes;"));
+            Assert.That(
+                source,
+                Does.Not.Contain(
+                    "sceneData.DdgiBufferBytes = _simpleDdgiVolumeManager.BufferBytes + (_farFieldClipmapManager?.BufferBytes ?? 0UL);"));
+            Assert.That(
+                source,
+                Does.Contain("sceneData.FarFieldCacheBytes = _farFieldClipmapManager.PageCacheBytes;"));
         });
     }
 

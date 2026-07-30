@@ -1,4 +1,5 @@
 using Njulf.Core.Math;
+using Njulf.Assets.Cooked;
 
 namespace Njulf.Assets;
 
@@ -15,25 +16,15 @@ public static class TextureColorAverages
     {
         if (rgba.IsEmpty || rgba.Length % 4 != 0)
             throw new ArgumentException("RGBA8 texture data must contain one or more complete pixels.", nameof(rgba));
-
-        double red = 0.0;
-        double green = 0.0;
-        double blue = 0.0;
-        double alpha = 0.0;
-        for (int offset = 0; offset < rgba.Length; offset += 4)
-        {
-            red += srgb ? SrgbByteToLinear(rgba[offset]) : rgba[offset] / 255.0;
-            green += srgb ? SrgbByteToLinear(rgba[offset + 1]) : rgba[offset + 1] / 255.0;
-            blue += srgb ? SrgbByteToLinear(rgba[offset + 2]) : rgba[offset + 2] / 255.0;
-            alpha += rgba[offset + 3] / 255.0;
-        }
-
-        double inversePixelCount = 4.0 / rgba.Length;
-        return new Vector4(
-            (float)(red * inversePixelCount),
-            (float)(green * inversePixelCount),
-            (float)(blue * inversePixelCount),
-            (float)(alpha * inversePixelCount));
+        TextureTransportImage image = TextureTransportImage.FromRgba8(
+            rgba,
+            rgba.Length / 4,
+            1,
+            srgb ? TextureColorSpace.Srgb : TextureColorSpace.Linear,
+            TextureSemantic.Color,
+            CookedHash.Bytes(rgba),
+            "TextureColorAverages compatibility adapter");
+        return image.Statistics.LinearChannelMean.ToVector4();
     }
 
     internal static float SrgbByteToLinear(byte value) => SrgbToLinearLookup[value];

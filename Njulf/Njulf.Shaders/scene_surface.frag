@@ -3,6 +3,8 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 
 #include "common.glsl"
+#include "gi_material_transport.glsl"
+#include "material_coverage.glsl"
 
 #ifndef FORWARD_SIMPLE_VERTEX_INPUT
 #define FORWARD_SIMPLE_VERTEX_INPUT 0
@@ -98,6 +100,18 @@ vec3 ResolveNormal(GPUMaterialData material, vec3 interpolatedNormal, vec4 inter
 void main()
 {
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
+    bool doubleSided = GiMaterialHasFlag(material.TransportFlags, GI_MATERIAL_DOUBLE_SIDED);
+    if (!EvaluateGiSidedness(doubleSided, gl_FrontFacing))
+        discard;
+
+    MaterialAlphaCoverage coverage = EvaluateMaterialAlphaCoverage(
+        material,
+        fragTexCoord,
+        fragTexCoord2,
+        fragVertexColor.a);
+    if (!MaterialCoverageSurvivesForward(coverage))
+        discard;
+
     vec2 baseColorUv = MaterialUv(
         material.TextureTexCoordSets.x,
         material.BaseColorOffsetScale,
@@ -106,20 +120,13 @@ void main()
         ? vec4(1.0)
         : SampleMaterialTexture(material.AlbedoTextureIndex, baseColorUv);
 
-    float alphaMode = material.NormalScaleBias.y;
-    float alphaCutoff = material.NormalScaleBias.z;
-    float outputAlpha = material.Albedo.a * albedoSample.a * fragVertexColor.a;
-    if (alphaMode > 0.5 && alphaMode < 1.5 && outputAlpha <= alphaCutoff)
-        discard;
-    if (alphaMode > 1.5 && outputAlpha <= 0.001)
-        discard;
-
-    vec3 normal = normalize(fragNormal) * (gl_FrontFacing ? 1.0 : -1.0);
+    vec3 geometricNormal = normalize(fragNormal) * (gl_FrontFacing ? 1.0 : -1.0);
+    vec3 shadingNormal = geometricNormal;
     bool useNormalTexture = material.NormalTextureIndex != DEFAULT_NORMAL_TEXTURE &&
         material.NormalScaleBias.x > 0.001;
     if (useNormalTexture)
     {
-        normal = ResolveNormal(
+        shadingNormal = ResolveNormal(
             material,
             fragNormal,
             fragWorldTangent,
@@ -128,6 +135,7 @@ void main()
                 material.NormalOffsetScale,
                 material.TextureRotations.y));
     }
+    shadingNormal = CorrectGiShadingNormal(geometricNormal, shadingNormal);
 
     vec4 armSample = material.MetallicRoughnessTextureIndex == DEFAULT_BLACK_TEXTURE
         ? vec4(1.0)
@@ -137,9 +145,73 @@ void main()
                 material.TextureTexCoordSets.z,
                 material.MetallicRoughnessOffsetScale,
                 material.TextureRotations.z));
-    float metallic = clamp(material.MetallicRoughnessAO.x * armSample.b, 0.0, 1.0);
-    vec3 albedo = max(material.Albedo.rgb * albedoSample.rgb * fragVertexColor.rgb, vec3(0.0));
+    float occlusionSample = material.OcclusionTextureIndex == DEFAULT_WHITE_TEXTURE
+        ? 1.0
+        : SampleMaterialTexture(
+            material.OcclusionTextureIndex,
+            MaterialUv(
+                material.OcclusionBinding.y,
+                material.OcclusionOffsetScale,
+                material.OcclusionBinding.x)).r;
+    bool hasExtensionData = material.FeatureFlags != 0u && material.ExtensionDataIndex >= 0;
+    GPUMaterialExtensionData extensionData;
+    if (hasExtensionData)
+    {
+        extensionData = ReadMaterialExtension(uint(material.ExtensionDataIndex));
+        // Match forward and DDGI detailed-hit extension sampling before the
+        // canonical receiver response is written for SSGI composition.
+        if ((material.FeatureFlags & MATERIAL_FEATURE_CLEARCOAT_TEXTURE) != 0u)
+            extensionData.Clearcoat.x *= SampleMaterialTexture(
+                extensionData.ClearcoatTextureIndex,
+                MaterialUv(
+                    extensionData.ExtensionTextureTexCoordSets0.x,
+                    extensionData.ClearcoatOffsetScale,
+                    extensionData.ExtensionTextureRotations0.x)).r;
+        if ((material.FeatureFlags & MATERIAL_FEATURE_SHEEN_COLOR_TEXTURE) != 0u)
+            extensionData.SheenColor.rgb *= SampleMaterialTexture(
+                extensionData.SheenColorTextureIndex,
+                MaterialUv(
+                    extensionData.ExtensionTextureTexCoordSets0.w,
+                    extensionData.SheenColorOffsetScale,
+                    extensionData.ExtensionTextureRotations0.w)).rgb;
+        if ((material.FeatureFlags & MATERIAL_FEATURE_TRANSMISSION_TEXTURE) != 0u)
+            extensionData.Transmission.x *= SampleMaterialTexture(
+                extensionData.TransmissionTextureIndex,
+                MaterialUv(
+                    extensionData.ExtensionTextureTexCoordSets1.z,
+                    extensionData.TransmissionOffsetScale,
+                    extensionData.ExtensionTextureRotations1.z)).r;
+        if ((material.FeatureFlags & MATERIAL_FEATURE_SPECULAR_TEXTURE) != 0u)
+            extensionData.SpecularColor.a *= SampleMaterialTexture(
+                extensionData.SpecularTextureIndex,
+                MaterialUv(
+                    extensionData.ExtensionTextureTexCoordSets2.x,
+                    extensionData.SpecularOffsetScale,
+                    extensionData.ExtensionTextureRotations2.x)).a;
+        if ((material.FeatureFlags & MATERIAL_FEATURE_SPECULAR_COLOR_TEXTURE) != 0u)
+            extensionData.SpecularColor.rgb *= SampleMaterialTexture(
+                extensionData.SpecularColorTextureIndex,
+                MaterialUv(
+                    extensionData.ExtensionTextureTexCoordSets2.y,
+                    extensionData.SpecularColorOffsetScale,
+                    extensionData.ExtensionTextureRotations2.y)).rgb;
+    }
+    GiSurfaceSample surface = EvaluateGiTexturedSurface(
+        material,
+        extensionData,
+        hasExtensionData,
+        albedoSample,
+        armSample,
+        occlusionSample,
+        vec3(1.0),
+        fragVertexColor,
+        geometricNormal,
+        shadingNormal,
+        normalize(pc.Push.CameraPosition - fragWorldPosition),
+        false);
 
-    outSceneNormal = vec4(normal, 1.0);
-    outSceneMaterial = vec4(albedo, metallic);
+    // SSGI visibility uses the geometric normal. Its material target stores the
+    // already canonical receiver response plus material AO, never raw albedo.
+    outSceneNormal = vec4(surface.GeometricNormal, 1.0);
+    outSceneMaterial = vec4(surface.DiffuseReflectance, surface.MaterialOcclusion);
 }

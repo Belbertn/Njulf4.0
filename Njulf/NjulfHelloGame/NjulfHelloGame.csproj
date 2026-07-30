@@ -10,6 +10,7 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <PackageReference Include="FlipBinding.CSharp" Version="1.0.3" />
       <ProjectReference Include="..\Njulf.Core\Njulf.Core.csproj" />
       <ProjectReference Include="..\Njulf.Rendering\Njulf.Rendering.csproj" />
       <ProjectReference Include="..\Njulf.Assets\Njulf.Assets.csproj" />
@@ -24,6 +25,13 @@
       <None Update="NewSponza_Curtains_glTF.bin" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
       <None Update="Strut.glb" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
       <None Update="sample-asset-validation-report.json" CopyToOutputDirectory="IfDifferent" />
+      <None Update="THIRD-PARTY-NOTICES.txt"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
+      <None Include="..\Njulf.AssetTool\Imazen.WebP.provenance.json"
+            Link="Imazen.WebP.provenance.json"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
       <None Update="Assets\**\*.*" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
       <None Update="textures\**\*.*" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
       <None Update="textures\IvyLeaf_*.png" CopyToOutputDirectory="Never" />
@@ -31,6 +39,9 @@
       <None Update="Scenes\**\*.njscene.json" CopyToOutputDirectory="IfDifferent" />
     </ItemGroup>
 
+    <!-- StbImageSharp remains a deliberate runtime dependency: the supported
+         descriptor-stable texture hot-reload path decodes replacement pixels
+         in cooked Release hosts without loading any model importer. -->
     <Target Name="ExcludeSourceImporterRuntimeFiles"
             AfterTargets="ResolveReferences"
             Condition="'$(CookedAssetsOnly)' == 'true'">
@@ -39,8 +50,7 @@
           Condition="$([System.String]::Copy('%(ReferenceCopyLocalPaths.Filename)').StartsWith('SharpGLTF'))
                   Or $([System.String]::Copy('%(ReferenceCopyLocalPaths.Filename)').StartsWith('Silk.NET.Assimp'))
                   Or $([System.String]::Copy('%(ReferenceCopyLocalPaths.Filename)').StartsWith('Assimp'))
-                  Or $([System.String]::Copy('%(ReferenceCopyLocalPaths.Filename)').StartsWith('BCnEncoder'))
-                  Or $([System.String]::Copy('%(ReferenceCopyLocalPaths.Filename)').StartsWith('StbImageSharp'))" />
+                  Or $([System.String]::Copy('%(ReferenceCopyLocalPaths.Filename)').StartsWith('BCnEncoder'))" />
         <ReferenceCopyLocalPaths Remove="@(_SourceImporterRuntimeFile)" />
       </ItemGroup>
     </Target>
@@ -53,8 +63,7 @@
           Condition="$([System.String]::Copy('%(ResolvedFileToPublish.Filename)').StartsWith('SharpGLTF'))
                   Or $([System.String]::Copy('%(ResolvedFileToPublish.Filename)').StartsWith('Silk.NET.Assimp'))
                   Or $([System.String]::Copy('%(ResolvedFileToPublish.Filename)').StartsWith('Assimp'))
-                  Or $([System.String]::Copy('%(ResolvedFileToPublish.Filename)').StartsWith('BCnEncoder'))
-                  Or $([System.String]::Copy('%(ResolvedFileToPublish.Filename)').StartsWith('StbImageSharp'))" />
+                  Or $([System.String]::Copy('%(ResolvedFileToPublish.Filename)').StartsWith('BCnEncoder'))" />
         <ResolvedFileToPublish Remove="@(_SourceImporterPublishedFile)" />
       </ItemGroup>
     </Target>

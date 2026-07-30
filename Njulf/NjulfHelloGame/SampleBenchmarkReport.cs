@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
 
@@ -25,6 +26,12 @@ public sealed record SampleBenchmarkReport(
     IReadOnlyList<BudgetMetric> BudgetMetrics,
     RendererDiagnostics LastDiagnostics)
 {
+    public string Schema { get; init; } =
+        MaterialGiReleaseEvidenceContract.BenchmarkProducerSchema;
+
+    [JsonPropertyName("producerIdentity")]
+    public MaterialGiProducerIdentity? ProducerIdentity { get; init; }
+
     public SampleDdgiProductionGateReport? DdgiProductionGate { get; init; }
     public IReadOnlyList<SampleGiAccuracyOracleResult> AccuracyOracleResults { get; init; } =
         Array.Empty<SampleGiAccuracyOracleResult>();

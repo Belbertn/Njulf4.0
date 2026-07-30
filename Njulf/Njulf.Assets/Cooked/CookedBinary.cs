@@ -21,6 +21,7 @@ public sealed class CookedAssetWriter : IDisposable
     private readonly ulong _dependencyHash;
     private readonly List<CookedSectionEntry> _sections = new();
     private readonly HashSet<uint> _sectionIds = new();
+    private ulong _cumulativeUncompressedBytes;
     private bool _completed;
 
     public CookedAssetWriter(
@@ -51,9 +52,7 @@ public sealed class CookedAssetWriter : IDisposable
 
     public void WriteSection(uint sectionId, CookedSectionFlags flags, ReadOnlySpan<byte> data)
     {
-        ThrowIfCompleted();
-        if (!_sectionIds.Add(sectionId))
-            throw new InvalidOperationException($"Section '{CookedSectionIds.ToText(sectionId)}' was already written to '{_path}'.");
+        ValidateSectionAdmission(sectionId, checked((ulong)data.Length));
         CookedCompression compression = (CookedCompression)(((uint)flags >> 8) & 0xff);
         if (compression is CookedCompression.MeshoptVertex or CookedCompression.MeshoptIndex or CookedCompression.MeshoptIndexSequence)
             throw new NotSupportedException($"Use a typed meshoptimizer section writer for '{compression}'.");
@@ -64,10 +63,7 @@ public sealed class CookedAssetWriter : IDisposable
             encoded = data.ToArray();
             flags = WithCompression(flags, compression);
         }
-        AlignStream();
-        ulong offset = checked((ulong)_stream.Position);
-        _stream.Write(encoded);
-        _sections.Add(new CookedSectionEntry(sectionId, flags, offset, checked((ulong)encoded.Length), checked((ulong)data.Length), XxHash3.HashToUInt64(data)));
+        WriteAdmittedSection(sectionId, flags, data, encoded);
     }
 
     public void WriteSection<T>(uint sectionId, CookedSectionFlags flags, ReadOnlySpan<T> data) where T : unmanaged =>
@@ -76,35 +72,50 @@ public sealed class CookedAssetWriter : IDisposable
     public void WriteMeshoptVertexSection<T>(uint sectionId, CookedSectionFlags flags, ReadOnlySpan<T> data) where T : unmanaged
     {
         ReadOnlySpan<byte> bytes = MemoryMarshal.AsBytes(data);
+        ValidateSectionAdmission(sectionId, checked((ulong)bytes.Length));
         byte[] encoded = MeshOptimizerCodec.EncodeVertexBuffer(bytes, data.Length, Marshal.SizeOf<T>());
-        WriteEncodedSection(sectionId, WithCompression(flags, CookedCompression.MeshoptVertex), bytes, encoded);
+        WriteAdmittedSection(sectionId, WithCompression(flags, CookedCompression.MeshoptVertex), bytes, encoded);
     }
 
     public void WriteMeshoptIndexSection(uint sectionId, CookedSectionFlags flags, ReadOnlySpan<uint> data, int vertexCount)
     {
+        ReadOnlySpan<byte> bytes = MemoryMarshal.AsBytes(data);
+        ValidateSectionAdmission(sectionId, checked((ulong)bytes.Length));
         byte[] encoded = MeshOptimizerCodec.EncodeIndexBuffer(data, vertexCount, sequence: false);
-        WriteEncodedSection(sectionId, WithCompression(flags, CookedCompression.MeshoptIndex), MemoryMarshal.AsBytes(data), encoded);
+        WriteAdmittedSection(sectionId, WithCompression(flags, CookedCompression.MeshoptIndex), bytes, encoded);
     }
 
     public void WriteMeshoptIndexSequenceSection(uint sectionId, CookedSectionFlags flags, ReadOnlySpan<uint> data, int vertexCount)
     {
+        ReadOnlySpan<byte> bytes = MemoryMarshal.AsBytes(data);
+        ValidateSectionAdmission(sectionId, checked((ulong)bytes.Length));
         byte[] encoded = MeshOptimizerCodec.EncodeIndexBuffer(data, vertexCount, sequence: true);
-        WriteEncodedSection(sectionId, WithCompression(flags, CookedCompression.MeshoptIndexSequence), MemoryMarshal.AsBytes(data), encoded);
+        WriteAdmittedSection(sectionId, WithCompression(flags, CookedCompression.MeshoptIndexSequence), bytes, encoded);
     }
 
-    private void WriteEncodedSection(uint sectionId, CookedSectionFlags flags, ReadOnlySpan<byte> decoded, byte[] encoded)
+    private void WriteAdmittedSection(
+        uint sectionId,
+        CookedSectionFlags flags,
+        ReadOnlySpan<byte> decoded,
+        byte[] encoded)
     {
-        ThrowIfCompleted();
-        if (!_sectionIds.Add(sectionId))
-            throw new InvalidOperationException($"Section '{CookedSectionIds.ToText(sectionId)}' was already written to '{_path}'.");
-        if (encoded.Length >= decoded.Length)
+        CookedCompression compression =
+            (CookedCompression)(((uint)flags >> 8) & 0xff);
+        if (compression != CookedCompression.None &&
+            encoded.Length >= decoded.Length)
         {
             flags = WithCompression(flags, CookedCompression.None);
             encoded = decoded.ToArray();
         }
+        ValidateStoredSectionAndProjectedFile(
+            sectionId,
+            checked((ulong)encoded.Length));
         AlignStream();
         ulong offset = checked((ulong)_stream.Position);
         _stream.Write(encoded);
+        _sectionIds.Add(sectionId);
+        _cumulativeUncompressedBytes = checked(
+            _cumulativeUncompressedBytes + (ulong)decoded.Length);
         _sections.Add(new CookedSectionEntry(sectionId, flags, offset, checked((ulong)encoded.Length), checked((ulong)decoded.Length), XxHash3.HashToUInt64(decoded)));
     }
 
@@ -115,6 +126,9 @@ public sealed class CookedAssetWriter : IDisposable
     {
         if (_completed)
             return;
+        ValidateProjectedAssetLength(
+            checked((ulong)_stream.Position),
+            checked((uint)_sections.Count));
         AlignStream();
         ulong tableOffset = checked((ulong)_stream.Position);
         Span<byte> entryBytes = stackalloc byte[CookedSectionEntry.Size];
@@ -170,6 +184,124 @@ public sealed class CookedAssetWriter : IDisposable
             throw new InvalidOperationException($"Cooked asset writer for '{_path}' is already complete.");
     }
 
+    private void ValidateSectionAdmission(
+        uint sectionId,
+        ulong uncompressedBytes)
+    {
+        ThrowIfCompleted();
+        if (_sectionIds.Contains(sectionId))
+        {
+            throw new InvalidOperationException(
+                $"Section '{CookedSectionIds.ToText(sectionId)}' was already " +
+                $"written to '{_path}'.");
+        }
+
+        uint maximumSectionCount = _kind == CookedAssetKind.Texture
+            ? CookedAssetReader.MaximumTextureMetadataSectionCount
+            : CookedAssetReader.MaximumSectionCount;
+        if ((uint)_sections.Count >= maximumSectionCount)
+        {
+            throw new InvalidOperationException(
+                $"Cooked {_kind} asset '{_path}' cannot contain more than " +
+                $"{maximumSectionCount} sections; the writer mirrors the " +
+                "runtime reader limit.");
+        }
+
+        ulong maximumSectionBytes = _kind == CookedAssetKind.Texture
+            ? CookedAssetReader.MaximumTextureMetadataSectionBytes
+            : CookedAssetReader.MaximumSectionUncompressedBytes;
+        if (uncompressedBytes > maximumSectionBytes)
+        {
+            throw new InvalidOperationException(
+                $"Section '{CookedSectionIds.ToText(sectionId)}' contains " +
+                $"{uncompressedBytes} uncompressed bytes, exceeding the " +
+                $"{maximumSectionBytes}-byte runtime limit for {_kind}.");
+        }
+
+        ulong maximumCumulativeBytes = _kind == CookedAssetKind.Texture
+            ? CookedAssetReader.MaximumTextureMetadataCumulativeBytes
+            : CookedAssetReader.MaximumCumulativeUncompressedBytes;
+        ulong cumulativeBytes;
+        try
+        {
+            cumulativeBytes = checked(
+                _cumulativeUncompressedBytes + uncompressedBytes);
+        }
+        catch (OverflowException)
+        {
+            throw new InvalidOperationException(
+                $"Cooked {_kind} asset '{_path}' cumulative uncompressed " +
+                "section size overflowed.");
+        }
+        if (cumulativeBytes > maximumCumulativeBytes)
+        {
+            throw new InvalidOperationException(
+                $"Cooked {_kind} asset '{_path}' would contain " +
+                $"{cumulativeBytes} cumulative uncompressed bytes, exceeding " +
+                $"the {maximumCumulativeBytes}-byte runtime limit.");
+        }
+    }
+
+    private void ValidateStoredSectionAndProjectedFile(
+        uint sectionId,
+        ulong storedBytes)
+    {
+        ulong maximumStoredBytes = _kind == CookedAssetKind.Texture
+            ? CookedAssetReader.MaximumTextureMetadataStoredBytes
+            : CookedAssetReader.MaximumSectionStoredBytes;
+        if (storedBytes > maximumStoredBytes)
+        {
+            throw new InvalidOperationException(
+                $"Section '{CookedSectionIds.ToText(sectionId)}' stores " +
+                $"{storedBytes} bytes, exceeding the {maximumStoredBytes}-byte " +
+                $"runtime limit for {_kind}.");
+        }
+
+        ulong alignedOffset = AlignUp(checked((ulong)_stream.Position));
+        ulong payloadEnd;
+        try
+        {
+            payloadEnd = checked(alignedOffset + storedBytes);
+        }
+        catch (OverflowException)
+        {
+            throw new InvalidOperationException(
+                $"Cooked {_kind} asset '{_path}' projected length overflowed.");
+        }
+        ValidateProjectedAssetLength(
+            payloadEnd,
+            checked((uint)_sections.Count + 1));
+    }
+
+    private void ValidateProjectedAssetLength(
+        ulong payloadEnd,
+        uint sectionCount)
+    {
+        ulong finalLength;
+        try
+        {
+            ulong tableOffset = AlignUp(payloadEnd);
+            finalLength = checked(
+                tableOffset +
+                checked((ulong)sectionCount * CookedSectionEntry.Size));
+        }
+        catch (OverflowException)
+        {
+            throw new InvalidOperationException(
+                $"Cooked {_kind} asset '{_path}' projected length overflowed.");
+        }
+        if (finalLength > (ulong)CookedAssetReader.MaximumAssetBytes)
+        {
+            throw new InvalidOperationException(
+                $"Cooked {_kind} asset '{_path}' would be {finalLength} bytes, " +
+                $"exceeding the {CookedAssetReader.MaximumAssetBytes}-byte " +
+                "runtime limit.");
+        }
+    }
+
+    private static ulong AlignUp(ulong value) =>
+        checked((value + (Alignment - 1UL)) & ~(Alignment - 1UL));
+
     public void Dispose()
     {
         _stream.Dispose();
@@ -180,14 +312,31 @@ public sealed class CookedAssetWriter : IDisposable
 
 public sealed class CookedAssetReader : IDisposable
 {
+    internal const long MaximumAssetBytes = 1024L * 1024L * 1024L;
+    internal const uint MaximumSectionCount = 256;
+    internal const ulong MaximumSectionUncompressedBytes =
+        512UL * 1024UL * 1024UL;
+    internal const ulong MaximumSectionStoredBytes =
+        512UL * 1024UL * 1024UL;
+    internal const ulong MaximumCumulativeUncompressedBytes =
+        1024UL * 1024UL * 1024UL;
+    internal const uint MaximumTextureMetadataSectionCount = 8;
+    internal const ulong MaximumTextureMetadataSectionBytes =
+        2UL * 1024UL * 1024UL;
+    internal const ulong MaximumTextureMetadataCumulativeBytes =
+        4UL * 1024UL * 1024UL;
+    internal const ulong MaximumTextureMetadataStoredBytes =
+        8UL * 1024UL * 1024UL;
+
     private static readonly HashSet<uint> KnownSections = typeof(CookedSectionIds)
         .GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
         .Where(field => field.FieldType == typeof(uint))
         .Select(field => (uint)field.GetValue(null)!)
         .ToHashSet();
 
-    private readonly FileStream _stream;
-    private readonly SafeFileHandle _handle;
+    private readonly FileStream? _stream;
+    private readonly SafeFileHandle? _handle;
+    private readonly ReadOnlyMemory<byte>? _content;
     private readonly Dictionary<uint, CookedSectionEntry> _sections;
     private readonly CookedAssetReaderFlags _flags;
     private readonly long _length;
@@ -198,6 +347,7 @@ public sealed class CookedAssetReader : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         Path = System.IO.Path.GetFullPath(path);
         _flags = flags;
+        _content = null;
         try
         {
             _stream = new FileStream(Path, FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.RandomAccess);
@@ -208,10 +358,20 @@ public sealed class CookedAssetReader : IDisposable
         }
         _handle = _stream.SafeFileHandle;
         _length = _stream.Length;
-        if (_flags.HasFlag(CookedAssetReaderFlags.PreferMemoryMapped) || _length >= 4 * 1024 * 1024)
-            _mapping = MemoryMappedFile.CreateFromFile(_stream, null, 0, MemoryMappedFileAccess.Read, HandleInheritability.None, leaveOpen: true);
         try
         {
+            ValidateAssetLength();
+            if (_flags.HasFlag(CookedAssetReaderFlags.PreferMemoryMapped) ||
+                _length >= 4 * 1024 * 1024)
+            {
+                _mapping = MemoryMappedFile.CreateFromFile(
+                    _stream,
+                    null,
+                    0,
+                    MemoryMappedFileAccess.Read,
+                    HandleInheritability.None,
+                    leaveOpen: true);
+            }
             Span<byte> headerBytes = stackalloc byte[CookedAssetHeader.Size];
             ReadExactly(headerBytes, 0, "header");
             Header = CookedAssetHeader.Read(headerBytes, Path);
@@ -226,6 +386,34 @@ public sealed class CookedAssetReader : IDisposable
         }
     }
 
+    /// <summary>
+    /// Opens a reader over an immutable caller-owned byte snapshot. This is
+    /// used when signature verification and parsing must be bound to exactly
+    /// the same bytes instead of two independently opened path snapshots.
+    /// </summary>
+    public CookedAssetReader(
+        ReadOnlyMemory<byte> content,
+        string sourcePath,
+        CookedAssetKind? expectedKind = null,
+        CookedAssetReaderFlags flags = CookedAssetReaderFlags.None,
+        ulong? expectedSourceHash = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+        Path = System.IO.Path.GetFullPath(sourcePath);
+        _flags = flags;
+        _content = content;
+        _stream = null;
+        _handle = null;
+        _mapping = null;
+        _length = content.Length;
+        ValidateAssetLength();
+        Span<byte> headerBytes = stackalloc byte[CookedAssetHeader.Size];
+        ReadExactly(headerBytes, 0, "header");
+        Header = CookedAssetHeader.Read(headerBytes, Path);
+        ValidateHeader(expectedKind, expectedSourceHash);
+        _sections = ReadSectionTable();
+    }
+
     public string Path { get; }
     public CookedAssetHeader Header { get; }
     public IReadOnlyCollection<CookedSectionEntry> Sections => _sections.Values;
@@ -238,9 +426,10 @@ public sealed class CookedAssetReader : IDisposable
             data = default;
             return false;
         }
-        var bytes = GC.AllocateUninitializedArray<byte>(checked((int)entry.UncompressedSize));
         if (entry.Compression is CookedCompression.MeshoptVertex or CookedCompression.MeshoptIndex or CookedCompression.MeshoptIndexSequence)
             throw new CookedAssetFormatException(Path, $"section '{CookedSectionIds.ToText(sectionId)}' requires a typed meshoptimizer read");
+        var bytes = GC.AllocateUninitializedArray<byte>(
+            checked((int)entry.UncompressedSize));
         try
         {
             if (entry.Compression == CookedCompression.None)
@@ -358,16 +547,53 @@ public sealed class CookedAssetReader : IDisposable
 
     private Dictionary<uint, CookedSectionEntry> ReadSectionTable()
     {
+        uint maximumSectionCount = Header.AssetKind == CookedAssetKind.Texture
+            ? MaximumTextureMetadataSectionCount
+            : MaximumSectionCount;
+        if (Header.SectionCount > maximumSectionCount)
+        {
+            throw new CookedAssetFormatException(
+                Path,
+                $"section count {Header.SectionCount} exceeds the " +
+                $"{maximumSectionCount}-section runtime limit for {Header.AssetKind}");
+        }
+
         ulong tableBytes = checked((ulong)Header.SectionCount * CookedSectionEntry.Size);
         if (Header.SectionTableOffset < CookedAssetHeader.Size || Header.SectionTableOffset > (ulong)_length || tableBytes > (ulong)_length - Header.SectionTableOffset)
             throw new CookedAssetFormatException(Path, "section table is outside the file");
         var result = new Dictionary<uint, CookedSectionEntry>(checked((int)Header.SectionCount));
+        ulong cumulativeUncompressedBytes = 0;
+        ulong maximumCumulativeBytes =
+            Header.AssetKind == CookedAssetKind.Texture
+                ? MaximumTextureMetadataCumulativeBytes
+                : MaximumCumulativeUncompressedBytes;
         Span<byte> entryBytes = stackalloc byte[CookedSectionEntry.Size];
         for (uint i = 0; i < Header.SectionCount; i++)
         {
             ReadExactly(entryBytes, checked((long)Header.SectionTableOffset + (long)i * CookedSectionEntry.Size), $"section table entry {i}");
             CookedSectionEntry entry = CookedSectionEntry.Read(entryBytes);
             ValidateEntry(entry);
+            try
+            {
+                cumulativeUncompressedBytes = checked(
+                    cumulativeUncompressedBytes +
+                    entry.UncompressedSize);
+            }
+            catch (OverflowException)
+            {
+                throw new CookedAssetFormatException(
+                    Path,
+                    "cumulative uncompressed section size overflowed");
+            }
+            if (cumulativeUncompressedBytes > maximumCumulativeBytes)
+            {
+                throw new CookedAssetFormatException(
+                    Path,
+                    $"cumulative uncompressed section size " +
+                    $"{cumulativeUncompressedBytes} bytes exceeds the " +
+                    $"{maximumCumulativeBytes}-byte runtime limit for " +
+                    $"{Header.AssetKind}");
+            }
             if (!result.TryAdd(entry.SectionId, entry))
                 throw new CookedAssetFormatException(Path, $"duplicate section '{CookedSectionIds.ToText(entry.SectionId)}'");
             if (!KnownSections.Contains(entry.SectionId) && entry.Flags.HasFlag(CookedSectionFlags.Required))
@@ -398,8 +624,48 @@ public sealed class CookedAssetReader : IDisposable
             throw new CookedAssetFormatException(Path, $"uncompressed section '{CookedSectionIds.ToText(entry.SectionId)}' has inconsistent sizes");
         if (!Enum.IsDefined(entry.Compression))
             throw new CookedAssetFormatException(Path, $"section '{CookedSectionIds.ToText(entry.SectionId)}' has unknown compression {(byte)entry.Compression}");
-        if (entry.UncompressedSize > int.MaxValue)
-            throw new CookedAssetFormatException(Path, $"section '{CookedSectionIds.ToText(entry.SectionId)}' exceeds the supported 2 GiB managed-array limit");
+        ulong maximumStoredBytes =
+            Header.AssetKind == CookedAssetKind.Texture
+                ? MaximumTextureMetadataStoredBytes
+                : MaximumSectionStoredBytes;
+        if (entry.CompressedSize > maximumStoredBytes)
+        {
+            throw new CookedAssetFormatException(
+                Path,
+                $"section '{CookedSectionIds.ToText(entry.SectionId)}' " +
+                $"stores {entry.CompressedSize} bytes; the runtime limit for " +
+                $"{Header.AssetKind} is {maximumStoredBytes} bytes");
+        }
+        ulong maximumSectionBytes =
+            Header.AssetKind == CookedAssetKind.Texture
+                ? MaximumTextureMetadataSectionBytes
+                : MaximumSectionUncompressedBytes;
+        if (entry.UncompressedSize > maximumSectionBytes)
+        {
+            throw new CookedAssetFormatException(
+                Path,
+                $"section '{CookedSectionIds.ToText(entry.SectionId)}' " +
+                $"declares {entry.UncompressedSize} uncompressed bytes; " +
+                $"the runtime limit for {Header.AssetKind} is " +
+                $"{maximumSectionBytes} bytes");
+        }
+    }
+
+    private void ValidateAssetLength()
+    {
+        if (_length < CookedAssetHeader.Size)
+        {
+            throw new CookedAssetFormatException(
+                Path,
+                $"file is shorter than the {CookedAssetHeader.Size}-byte header");
+        }
+        if (_length > MaximumAssetBytes)
+        {
+            throw new CookedAssetFormatException(
+                Path,
+                $"asset length {_length} bytes exceeds the " +
+                $"{MaximumAssetBytes}-byte runtime limit");
+        }
     }
 
     private void VerifyHash(CookedSectionEntry entry, ReadOnlySpan<byte> bytes)
@@ -413,6 +679,22 @@ public sealed class CookedAssetReader : IDisposable
 
     private unsafe void ReadExactly(Span<byte> destination, long offset, string description)
     {
+        if (_content is { } content)
+        {
+            if (offset < 0 ||
+                offset > content.Length ||
+                destination.Length > content.Length - offset)
+            {
+                throw new CookedAssetFormatException(
+                    Path,
+                    $"unexpected end of file while reading {description}");
+            }
+
+            content.Span.Slice(checked((int)offset), destination.Length)
+                .CopyTo(destination);
+            return;
+        }
+
         if (_mapping is not null && destination.Length >= 64 * 1024)
         {
             using MemoryMappedViewAccessor view = _mapping.CreateViewAccessor(offset, destination.Length, MemoryMappedFileAccess.Read);
@@ -432,7 +714,7 @@ public sealed class CookedAssetReader : IDisposable
         int read = 0;
         while (read < destination.Length)
         {
-            int count = RandomAccess.Read(_handle, destination[read..], offset + read);
+            int count = RandomAccess.Read(_handle!, destination[read..], offset + read);
             if (count == 0)
                 throw new CookedAssetFormatException(Path, $"unexpected end of file while reading {description}");
             read += count;
@@ -442,7 +724,7 @@ public sealed class CookedAssetReader : IDisposable
     public void Dispose()
     {
         _mapping?.Dispose();
-        _stream.Dispose();
+        _stream?.Dispose();
     }
 }
 
@@ -527,13 +809,32 @@ public static class CookedHash
 
     public static ulong Ordered(IEnumerable<(string Name, ulong Hash)> values)
     {
+        ArgumentNullException.ThrowIfNull(values);
         var hash = new XxHash3();
-        Span<byte> bytes = stackalloc byte[8];
-        foreach ((string name, ulong value) in values.OrderBy(item => item.Name, StringComparer.Ordinal))
+        hash.Append("NJULF\0ORDERED-HASH\0V2\0"u8);
+        Span<byte> lengthBytes = stackalloc byte[sizeof(uint)];
+        Span<byte> hashBytes = stackalloc byte[sizeof(ulong)];
+        IEnumerable<(string Name, ulong Hash)> normalized = values.Select(
+            static item =>
+            {
+                ArgumentNullException.ThrowIfNull(item.Name);
+                return (item.Name.Replace('\\', '/'), item.Hash);
+            });
+        foreach ((string name, ulong value) in normalized
+                     .OrderBy(static item => item.Name, StringComparer.Ordinal)
+                     .ThenBy(static item => item.Hash))
         {
-            hash.Append(Encoding.UTF8.GetBytes(name.Replace('\\', '/')));
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bytes, value);
-            hash.Append(bytes);
+            byte[] nameBytes = Encoding.UTF8.GetBytes(name);
+            uint nameLength = checked((uint)nameBytes.Length);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(
+                lengthBytes,
+                nameLength);
+            hash.Append(lengthBytes);
+            hash.Append(nameBytes);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
+                hashBytes,
+                value);
+            hash.Append(hashBytes);
         }
         return hash.GetCurrentHashAsUInt64();
     }

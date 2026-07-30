@@ -814,7 +814,8 @@ struct SimpleDdgiTransportRayCache
     float distance;
     vec3 direction;
     vec3 normal;
-    vec3 albedo;
+    vec3 diffuseReflectance;
+    float materialOcclusion;
     uint generationAndFlags;
 };
 
@@ -845,7 +846,8 @@ void WriteSimpleDdgiTransportRayCache(
     float distance,
     vec3 direction,
     vec3 normal,
-    vec3 albedo,
+    vec3 diffuseReflectance,
+    float materialOcclusion,
     float hitKind,
     uint probeGeneration)
 {
@@ -856,7 +858,12 @@ void WriteSimpleDdgiTransportRayCache(
         vec4(clamp(sourceRadiance, vec3(0.0), vec3(65504.0)), max(distance, 0.0)));
     WriteStorageWord(bufferIndex, baseWord + 4u, PackSimpleDdgiTransportOctDirection(direction));
     WriteStorageWord(bufferIndex, baseWord + 5u, PackSimpleDdgiTransportOctDirection(normal));
-    WriteStorageWord(bufferIndex, baseWord + 6u, packUnorm4x8(vec4(clamp(albedo, vec3(0.0), vec3(1.0)), 1.0)));
+    WriteStorageWord(
+        bufferIndex,
+        baseWord + 6u,
+        packUnorm4x8(vec4(
+            clamp(diffuseReflectance, vec3(0.0), vec3(1.0)),
+            clamp(materialOcclusion, 0.0, 1.0))));
     uint flags = SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG |
         (hitKind >= 0.5 ? SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG : 0u) |
         (hitKind > 1.5 ? SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG : 0u);
@@ -878,7 +885,8 @@ bool ReadSimpleDdgiTransportRayCache(
     cache.distance = 0.0;
     cache.direction = vec3(0.0, 1.0, 0.0);
     cache.normal = vec3(0.0, 1.0, 0.0);
-    cache.albedo = vec3(0.0);
+    cache.diffuseReflectance = vec3(0.0);
+    cache.materialOcclusion = 1.0;
     cache.generationAndFlags = 0u;
     if (bufferIndex == 0u || directionRayIndex >= p.raysPerProbe)
         return false;
@@ -897,7 +905,9 @@ bool ReadSimpleDdgiTransportRayCache(
     cache.distance = max(sourceRadianceDistance.w, 0.0);
     cache.direction = UnpackSimpleDdgiTransportOctDirection(ReadStorageWord(bufferIndex, baseWord + 4u));
     cache.normal = UnpackSimpleDdgiTransportOctDirection(ReadStorageWord(bufferIndex, baseWord + 5u));
-    cache.albedo = unpackUnorm4x8(ReadStorageWord(bufferIndex, baseWord + 6u)).rgb;
+    vec4 packedSurface = unpackUnorm4x8(ReadStorageWord(bufferIndex, baseWord + 6u));
+    cache.diffuseReflectance = packedSurface.rgb;
+    cache.materialOcclusion = packedSurface.a;
     cache.generationAndFlags = generationAndFlags;
     return true;
 }

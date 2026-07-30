@@ -261,6 +261,7 @@ namespace Njulf.Tests
                 ["REFLECTION_PROBE_DEBUG_TEXTURE_INDEX"] = BindlessIndex.ReflectionProbeDebugTexture,
                 ["WEIGHTED_OIT_ACCUMULATION_TEXTURE_INDEX"] = BindlessIndex.WeightedOitAccumulationTexture,
                 ["WEIGHTED_OIT_REVEALAGE_TEXTURE_INDEX"] = BindlessIndex.WeightedOitRevealageTexture,
+                ["MATERIAL_TRANSPORT_PROVENANCE_TEXTURE_INDEX"] = BindlessIndex.MaterialTransportProvenanceTexture,
                 ["SIMPLE_DDGI_SAMPLED_ATLAS_TEXTURE_GROUP_COUNT"] = BindlessIndex.MaxSimpleDdgiSampledAtlasTextureGroups,
                 ["SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX"] = BindlessIndex.SimpleDdgiSampledIrradianceTextureBase,
                 ["SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX"] = BindlessIndex.SimpleDdgiSampledVisibilityTextureBase,
@@ -395,7 +396,8 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.ReflectionProbeDebugTexture, Is.EqualTo(BindlessIndex.ReflectionProbeCubemapArrayTexture + 1));
             Assert.That(BindlessIndex.WeightedOitAccumulationTexture, Is.EqualTo(BindlessIndex.ReflectionProbeDebugTexture + 1));
             Assert.That(BindlessIndex.WeightedOitRevealageTexture, Is.EqualTo(BindlessIndex.WeightedOitAccumulationTexture + 1));
-            Assert.That(BindlessIndex.SimpleDdgiSampledIrradianceTextureBase, Is.EqualTo(BindlessIndex.WeightedOitRevealageTexture + 1));
+            Assert.That(BindlessIndex.MaterialTransportProvenanceTexture, Is.EqualTo(BindlessIndex.WeightedOitRevealageTexture + 1));
+            Assert.That(BindlessIndex.SimpleDdgiSampledIrradianceTextureBase, Is.EqualTo(BindlessIndex.MaterialTransportProvenanceTexture + 1));
             Assert.That(BindlessIndex.SimpleDdgiSampledVisibilityTextureBase,
                 Is.EqualTo(BindlessIndex.SimpleDdgiSampledIrradianceTextureBase + BindlessIndex.MaxSimpleDdgiSampledAtlasTextureGroups));
             Assert.That(BindlessIndex.FirstDynamicTextureIndex,

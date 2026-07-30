@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.ExceptionServices;
 using Njulf.Core.Foliage;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
@@ -22,14 +23,38 @@ public sealed class SceneDocumentLoader
         ArgumentNullException.ThrowIfNull(document);
         ValidateDocument(document);
         var scene = new Scene { Id = document.Id, Name = document.Name, AmbientLight = ToColor(document.AmbientLight) };
-        Populate(document, scene, lights, particleEffects, materials);
-        return scene;
+        try
+        {
+            Populate(document, scene, lights, particleEffects, materials);
+            return scene;
+        }
+        catch (Exception populateFailure)
+        {
+            try
+            {
+                scene.Dispose();
+            }
+            catch (Exception cleanupFailure)
+            {
+                throw new AggregateException(
+                    "Scene loading and rollback both failed.",
+                    populateFailure,
+                    cleanupFailure);
+            }
+
+            ExceptionDispatchInfo.Capture(
+                populateFailure).Throw();
+            throw;
+        }
     }
 
     public void Populate(SceneDocument document, Scene scene, ISceneLightStore? lights = null, ISceneParticleEffectStore? particleEffects = null, ISceneMaterialOverrideStore? materials = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(scene);
+        document =
+            SceneDocumentCompatibility.MaterializeLegacyMaterialOverrideDefaults(
+                document);
         ValidateDocument(document);
 
         if (scene.RenderObjects.Count != 0 || scene.ReflectionProbes.Count != 0 || scene.GlobalIlluminationProbeVolumes.Count != 0 ||
@@ -42,97 +67,154 @@ public sealed class SceneDocumentLoader
         scene.Name = document.Name;
         scene.AmbientLight = ToColor(document.AmbientLight);
         var modelInstances = new Dictionary<string, ModelInstanceCursor>(StringComparer.Ordinal);
-        foreach (SceneObjectDocument record in document.Objects)
-            LoadObject(scene, record, modelInstances, materials);
-        foreach (SceneReflectionProbeDocument record in document.ReflectionProbes)
-            scene.Add(ToReflectionProbe(record));
-        foreach (SceneGlobalIlluminationProbeVolumeDocument record in document.GiProbeVolumes)
-            scene.Add(ToGiProbeVolume(record));
+        Exception? populateFailure = null;
+        try
+        {
+            foreach (SceneObjectDocument record in document.Objects)
+                LoadObject(scene, record, modelInstances, materials);
+            foreach (SceneReflectionProbeDocument record in document.ReflectionProbes)
+                scene.Add(ToReflectionProbe(record));
+            foreach (SceneGlobalIlluminationProbeVolumeDocument record in document.GiProbeVolumes)
+                scene.Add(ToGiProbeVolume(record));
 
-        var prototypes = new Dictionary<Guid, FoliagePrototype>();
-        foreach (SceneFoliagePrototypeDocument record in document.FoliagePrototypes)
-        {
-            FoliagePrototype prototype = LoadFoliagePrototype(record, modelInstances);
-            prototypes.Add(record.Id, prototype);
-            scene.Add(prototype);
-        }
-        foreach (SceneFoliagePatchDocument record in document.FoliagePatches)
-        {
-            if (!prototypes.TryGetValue(record.PrototypeId, out FoliagePrototype? prototype))
-                throw new InvalidDataException($"Foliage patch '{record.Name}' ({record.Id}) references missing prototype '{record.PrototypeId}'.");
-            scene.Add(new FoliagePatch(prototype, ToBoundingBox(record.Bounds))
+            var prototypes = new Dictionary<Guid, FoliagePrototype>();
+            foreach (SceneFoliagePrototypeDocument record in document.FoliagePrototypes)
             {
-                Id = record.Id,
-                Name = record.Name,
-                InstancePosition = ToVector3(record.InstancePosition),
-                InstanceScale = record.InstanceScale,
-                Density = record.Density,
-                Seed = record.Seed,
-                DensityTexturePath = record.DensityTexturePath,
-                Visible = record.Visible
-            });
-        }
-        foreach (SceneInstanceBatchDocument record in document.InstanceBatches)
-            LoadInstanceBatch(scene, record, modelInstances);
+                FoliagePrototype prototype = LoadFoliagePrototype(record, modelInstances);
+                try
+                {
+                    prototypes.Add(record.Id, prototype);
+                    scene.Add(prototype);
+                }
+                catch
+                {
+                    prototype.Dispose();
+                    throw;
+                }
+            }
+            foreach (SceneFoliagePatchDocument record in document.FoliagePatches)
+            {
+                if (!prototypes.TryGetValue(record.PrototypeId, out FoliagePrototype? prototype))
+                    throw new InvalidDataException($"Foliage patch '{record.Name}' ({record.Id}) references missing prototype '{record.PrototypeId}'.");
+                scene.Add(new FoliagePatch(prototype, ToBoundingBox(record.Bounds))
+                {
+                    Id = record.Id,
+                    Name = record.Name,
+                    InstancePosition = ToVector3(record.InstancePosition),
+                    InstanceScale = record.InstanceScale,
+                    Density = record.Density,
+                    Seed = record.Seed,
+                    DensityTexturePath = record.DensityTexturePath,
+                    Visible = record.Visible
+                });
+            }
+            foreach (SceneInstanceBatchDocument record in document.InstanceBatches)
+                LoadInstanceBatch(scene, record, modelInstances);
 
-        if (document.ParticleEffects.Count != 0 && particleEffects == null)
-            throw new InvalidOperationException("The document contains particle effects, but no ISceneParticleEffectStore was supplied.");
-        if (particleEffects != null)
-            foreach (SceneParticleEffectDocument record in document.ParticleEffects)
-                scene.Add(LoadParticleEffect(record, particleEffects));
+            if (document.ParticleEffects.Count != 0 && particleEffects == null)
+                throw new InvalidOperationException("The document contains particle effects, but no ISceneParticleEffectStore was supplied.");
+            if (particleEffects != null)
+                foreach (SceneParticleEffectDocument record in document.ParticleEffects)
+                    scene.Add(LoadParticleEffect(record, particleEffects));
 
-        if (lights != null)
-        {
-            lights.Clear();
-            foreach (SceneLightDocument record in document.Lights)
-                lights.Add(record.Id, record);
+            if (lights != null)
+            {
+                lights.Clear();
+                foreach (SceneLightDocument record in document.Lights)
+                    lights.Add(record.Id, record);
+            }
+            else if (document.Lights.Count != 0)
+            {
+                throw new InvalidOperationException("The document contains lights, but no ISceneLightStore was supplied.");
+            }
         }
-        else if (document.Lights.Count != 0)
+        catch (Exception failure)
         {
-            throw new InvalidOperationException("The document contains lights, but no ISceneLightStore was supplied.");
+            populateFailure = failure;
         }
+
+        try
+        {
+            DisposeModelInstanceCursors(modelInstances);
+        }
+        catch (Exception cleanupFailure)
+        {
+            if (populateFailure != null)
+            {
+                throw new AggregateException(
+                    "Scene population and unused model-instance cleanup both failed.",
+                    populateFailure,
+                    cleanupFailure);
+            }
+
+            throw;
+        }
+
+        if (populateFailure != null)
+            ExceptionDispatchInfo.Capture(populateFailure).Throw();
     }
 
     private void LoadObject(Scene scene, SceneObjectDocument record, Dictionary<string, ModelInstanceCursor> modelInstances, ISceneMaterialOverrideStore? materials)
     {
         RenderObject source = LoadSingleRenderObject(record.Model, record.Id, record.Name, modelInstances);
-        source.Id = record.Id;
-        source.Name = record.Name;
-        source.AssetReference = ToAssetReference(record.Model);
-        source.Position = ToVector3(record.Position);
-        source.Rotation = ToQuaternion(record.Rotation);
-        source.Scale = ToVector3(record.Scale);
-        source.Visible = record.Visible;
-        source.IsStatic = record.IsStatic;
-        if (record.MaterialOverride != null)
+        bool sceneOwnsSource = false;
+        try
         {
-            if (materials == null)
-                throw new InvalidOperationException($"Scene object '{record.Name}' ({record.Id}) has a material override, but no ISceneMaterialOverrideStore was supplied.");
-            materials.Apply(source, record.MaterialOverride);
+            source.Id = record.Id;
+            source.Name = record.Name;
+            source.AssetReference = ToAssetReference(record.Model);
+            source.Position = ToVector3(record.Position);
+            source.Rotation = ToQuaternion(record.Rotation);
+            source.Scale = ToVector3(record.Scale);
+            source.Visible = record.Visible;
+            source.IsStatic = record.IsStatic;
+            if (record.MaterialOverride != null)
+            {
+                if (materials == null)
+                    throw new InvalidOperationException($"Scene object '{record.Name}' ({record.Id}) has a material override, but no ISceneMaterialOverrideStore was supplied.");
+                materials.Apply(source, record.MaterialOverride);
+            }
+            scene.Add(source);
+            sceneOwnsSource = true;
+            if (source is SkinnedRenderObject { Animator: { Clips.Count: > 0 } animator })
+                animator.Play(animator.Clips[0], loop: true);
+            if (source is IUpdateable updateable)
+                scene.Add(updateable);
         }
-        scene.Add(source);
-        if (source is SkinnedRenderObject { Animator: { Clips.Count: > 0 } animator })
-            animator.Play(animator.Clips[0], loop: true);
-        if (source is IUpdateable updateable)
-            scene.Add(updateable);
+        catch
+        {
+            if (!sceneOwnsSource)
+                source.Dispose();
+            throw;
+        }
     }
 
     private FoliagePrototype LoadFoliagePrototype(SceneFoliagePrototypeDocument record, Dictionary<string, ModelInstanceCursor> modelInstances)
     {
         RenderObject source = LoadSingleRenderObject(record.Model, record.Id, record.Name, modelInstances);
-        return new FoliagePrototype
+        try
         {
-            Id = record.Id,
-            Name = record.Name,
-            AssetReference = ToAssetReference(record.Model),
-            Mesh = source.Mesh,
-            Material = source.Material,
-            GeometryMode = ParseEnum<FoliageGeometryMode>(record.GeometryMode, record.Id, record.Name),
-            AuthoredMeshletStride = record.AuthoredMeshletStride,
-            CardHeight = record.CardHeight,
-            CardWidth = record.CardWidth,
-            FarImpostorEnabled = record.FarImpostorEnabled
-        }.WithSettings(record);
+            var prototype = new FoliagePrototype
+            {
+                Id = record.Id,
+                Name = record.Name,
+                AssetReference = ToAssetReference(record.Model),
+                Mesh = source.Mesh,
+                Material = source.Material,
+                GeometryMode = ParseEnum<FoliageGeometryMode>(record.GeometryMode, record.Id, record.Name),
+                AuthoredMeshletStride = record.AuthoredMeshletStride,
+                CardHeight = record.CardHeight,
+                CardWidth = record.CardWidth,
+                FarImpostorEnabled = record.FarImpostorEnabled
+            }.WithSettings(record);
+            prototype.AdoptResourceOwner(source);
+            return prototype;
+        }
+        catch
+        {
+            source.Dispose();
+            throw;
+        }
     }
 
     private void LoadInstanceBatch(Scene scene, SceneInstanceBatchDocument record, Dictionary<string, ModelInstanceCursor> modelInstances)
@@ -141,7 +223,7 @@ public sealed class SceneDocumentLoader
         var matrices = new List<Matrix4x4>(record.Instances.Count);
         foreach (SceneTransformDocument transform in record.Instances)
             matrices.Add(Compose(transform));
-        scene.Add(new StaticInstanceBatch(matrices)
+        var batch = new StaticInstanceBatch(matrices)
         {
             Id = record.Id,
             Name = record.Name,
@@ -149,7 +231,22 @@ public sealed class SceneDocumentLoader
             Mesh = source.Mesh,
             Material = source.Material,
             Visible = record.Visible
-        });
+        };
+        bool batchOwnsSource = false;
+        try
+        {
+            batch.AdoptResourceOwner(source);
+            batchOwnsSource = true;
+            scene.Add(batch);
+        }
+        catch
+        {
+            if (batchOwnsSource)
+                batch.Dispose();
+            else
+                source.Dispose();
+            throw;
+        }
     }
 
     private static ParticleEffectInstance LoadParticleEffect(SceneParticleEffectDocument record, ISceneParticleEffectStore effects)
@@ -188,7 +285,7 @@ public sealed class SceneDocumentLoader
                 cursor = new ModelInstanceCursor(model.CreateInstance());
                 modelInstances.Add(asset.Path, cursor);
             }
-            IReadOnlyList<RenderObject> candidates = cursor.Instance.RenderObjects;
+            IReadOnlyList<RenderObject> candidates = cursor.Candidates;
             RenderObject? selected = SelectSubObject(candidates, asset.SubObject);
             if (selected == null)
                 throw new InvalidDataException($"Sub-object selector '{asset.SubObject}' matched no render object.");
@@ -197,10 +294,15 @@ public sealed class SceneDocumentLoader
                 Model model = _content.Load<Model>(asset.Path)
                     ?? throw new InvalidOperationException("Content manager returned null.");
                 cursor.Reset(model.CreateInstance());
-                selected = SelectSubObject(cursor.Instance.RenderObjects, asset.SubObject)
+                selected = SelectSubObject(cursor.Candidates, asset.SubObject)
                     ?? throw new InvalidDataException($"Sub-object selector '{asset.SubObject}' matched no render object.");
             }
             cursor.Used.Add(selected);
+            if (!cursor.Instance.Detach(selected))
+            {
+                throw new InvalidOperationException(
+                    "Selected render object was not owned by its model instance.");
+            }
             return selected;
         }
         catch (Exception error) when (error is not InvalidDataException || !error.Message.Contains(recordId.ToString(), StringComparison.Ordinal))
@@ -209,11 +311,72 @@ public sealed class SceneDocumentLoader
         }
     }
 
-    private sealed class ModelInstanceCursor(Model instance)
+    private static void DisposeModelInstanceCursors(
+        IReadOnlyDictionary<string, ModelInstanceCursor> cursors)
+    {
+        List<Exception>? failures = null;
+        foreach (ModelInstanceCursor cursor in cursors.Values)
+        {
+            try
+            {
+                cursor.Dispose();
+            }
+            catch (Exception disposeFailure)
+            {
+                (failures ??= new List<Exception>())
+                    .Add(disposeFailure);
+            }
+        }
+
+        if (failures != null)
+        {
+            throw new AggregateException(
+                "One or more unused model-instance resources could not be released.",
+                failures);
+        }
+    }
+
+    private sealed class ModelInstanceCursor(Model instance) :
+        IDisposable
     {
         public Model Instance { get; private set; } = instance;
+        public IReadOnlyList<RenderObject> Candidates
+        {
+            get;
+            private set;
+        } = instance.RenderObjects.ToArray();
         public HashSet<RenderObject> Used { get; } = [];
-        public void Reset(Model next) { Instance = next; Used.Clear(); }
+
+        public void Reset(Model next)
+        {
+            ArgumentNullException.ThrowIfNull(next);
+            try
+            {
+                Instance.Dispose();
+            }
+            catch (Exception instanceFailure)
+            {
+                try
+                {
+                    next.Dispose();
+                }
+                catch (Exception nextFailure)
+                {
+                    throw new AggregateException(
+                        "Current and replacement model instances both failed to dispose.",
+                        instanceFailure,
+                        nextFailure);
+                }
+
+                throw;
+            }
+
+            Instance = next;
+            Candidates = next.RenderObjects.ToArray();
+            Used.Clear();
+        }
+
+        public void Dispose() => Instance.Dispose();
     }
 
     private static RenderObject? SelectSubObject(IReadOnlyList<RenderObject> objects, string selector)
@@ -234,24 +397,51 @@ public sealed class SceneDocumentLoader
 
     private static ReflectionProbe ToReflectionProbe(SceneReflectionProbeDocument record) => new()
     {
-        Id = record.Id, Name = record.Name, Position = ToVector3(record.Position), Rotation = ToQuaternion(record.Rotation),
-        Shape = ParseEnum<ReflectionProbeShape>(record.Shape, record.Id, record.Name), BoxExtents = ToVector3(record.BoxExtents), Radius = record.Radius,
-        BlendDistance = record.BlendDistance, Intensity = record.Intensity, Priority = record.Priority, CubemapPath = record.CubemapPath, BoxProjection = record.BoxProjection
+        Id = record.Id,
+        Name = record.Name,
+        Position = ToVector3(record.Position),
+        Rotation = ToQuaternion(record.Rotation),
+        Shape = ParseEnum<ReflectionProbeShape>(record.Shape, record.Id, record.Name),
+        BoxExtents = ToVector3(record.BoxExtents),
+        Radius = record.Radius,
+        BlendDistance = record.BlendDistance,
+        Intensity = record.Intensity,
+        Priority = record.Priority,
+        CubemapPath = record.CubemapPath,
+        BoxProjection = record.BoxProjection
     };
 
     private static GlobalIlluminationProbeVolume ToGiProbeVolume(SceneGlobalIlluminationProbeVolumeDocument record) => new()
     {
-        Id = record.Id, Name = record.Name, Enabled = record.Enabled, Origin = ToVector3(record.Origin), Size = ToVector3(record.Size), Interior = record.Interior,
-        QualityClass = ParseEnum<GlobalIlluminationProbeVolumeQualityClass>(record.QualityClass, record.Id, record.Name), Priority = record.Priority, BlendDistance = record.BlendDistance,
-        StreamingCellId = record.StreamingCellId, ProbeCountX = record.ProbeCountX, ProbeCountY = record.ProbeCountY, ProbeCountZ = record.ProbeCountZ,
-        RaysPerProbe = record.RaysPerProbe, MaxProbeUpdatesPerFrame = record.MaxProbeUpdatesPerFrame, NormalBias = record.NormalBias, ViewBias = record.ViewBias,
-        MaxRayDistance = record.MaxRayDistance, Intensity = record.Intensity, Hysteresis = record.Hysteresis, SteadyHysteresis = record.SteadyHysteresis,
-        DirtyHysteresis = record.DirtyHysteresis, UpdatePriority = record.UpdatePriority, DirtyRaysPerProbe = record.DirtyRaysPerProbe
+        Id = record.Id,
+        Name = record.Name,
+        Enabled = record.Enabled,
+        Origin = ToVector3(record.Origin),
+        Size = ToVector3(record.Size),
+        Interior = record.Interior,
+        QualityClass = ParseEnum<GlobalIlluminationProbeVolumeQualityClass>(record.QualityClass, record.Id, record.Name),
+        Priority = record.Priority,
+        BlendDistance = record.BlendDistance,
+        StreamingCellId = record.StreamingCellId,
+        ProbeCountX = record.ProbeCountX,
+        ProbeCountY = record.ProbeCountY,
+        ProbeCountZ = record.ProbeCountZ,
+        RaysPerProbe = record.RaysPerProbe,
+        MaxProbeUpdatesPerFrame = record.MaxProbeUpdatesPerFrame,
+        NormalBias = record.NormalBias,
+        ViewBias = record.ViewBias,
+        MaxRayDistance = record.MaxRayDistance,
+        Intensity = record.Intensity,
+        Hysteresis = record.Hysteresis,
+        SteadyHysteresis = record.SteadyHysteresis,
+        DirtyHysteresis = record.DirtyHysteresis,
+        UpdatePriority = record.UpdatePriority,
+        DirtyRaysPerProbe = record.DirtyRaysPerProbe
     };
 
     private static void ValidateDocument(SceneDocument document)
     {
-        if (document.SchemaVersion != SceneDocument.CurrentSchemaVersion)
+        if (document.SchemaVersion < 1 || document.SchemaVersion > SceneDocument.CurrentSchemaVersion)
             throw new InvalidDataException($"Unsupported scene schema version {document.SchemaVersion}.");
         if (document.Id == Guid.Empty)
             throw new InvalidDataException("Scene documents require a non-empty ID.");
@@ -264,6 +454,16 @@ public sealed class SceneDocumentLoader
         AddIds(document.FoliagePrototypes, static item => item.Id, "foliage prototype");
         AddIds(document.FoliagePatches, static item => item.Id, "foliage patch");
         AddIds(document.ParticleEffects, static item => item.Id, "particle effect");
+        foreach (SceneObjectDocument record in document.Objects)
+        {
+            float alphaCutoff = record.MaterialOverride?.AlphaCutoff ?? 0.5f;
+            if (!float.IsFinite(alphaCutoff) || alphaCutoff < 0f)
+            {
+                throw new InvalidDataException(
+                    $"Scene object '{record.Name}' ({record.Id}) has a material alpha cutoff " +
+                    "that is not finite and non-negative.");
+            }
+        }
         return;
         void AddIds<T>(IEnumerable<T> records, Func<T, Guid> getId, string kind)
         {

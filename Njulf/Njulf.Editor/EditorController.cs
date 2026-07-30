@@ -183,11 +183,19 @@ public sealed class EditorController
         return false;
     }
 
-    public bool UpdateSelectedMaterial(in Njulf.Rendering.Data.GPUMaterialData material)
+    public bool UpdateSelectedMaterialDefinition(MaterialDefinition definition)
     {
-        if (Selection.Kind != EditorSelectionKind.Object || _scene.FindById(Selection.Id) is not RenderObject { Material: MaterialHandle handle })
+        ArgumentNullException.ThrowIfNull(definition);
+        if (Selection.Kind != EditorSelectionKind.Object ||
+            _scene.FindById(Selection.Id) is not RenderObject { Material: MaterialHandle handle } target)
             return false;
-        _materialManager.UpdateMaterial(handle, material);
+
+        // Validate before splitting a shared registration. This keeps an invalid editor draft from
+        // changing object/material ownership and ensures every published definition is canonical.
+        MaterialDefinition normalized = MaterialDefinitionValidator.ValidateAndNormalize(definition);
+        _materialManager.UpdateRenderObjectMaterialDefinition(
+            target,
+            normalized);
         IsDirty = true;
         return true;
     }
@@ -198,14 +206,45 @@ public sealed class EditorController
         return renderObject != null;
     }
 
-    public bool TryGetSelectedMaterial(out GPUMaterialData material)
+    public bool TryGetSelectedMaterialDefinition(out MaterialDefinition? material)
     {
         if (TryGetSelectedObject(out RenderObject? target) && target?.Material is MaterialHandle handle)
         {
-            try { material = _materialManager.GetMaterialData(handle); return true; }
-            catch (InvalidOperationException) { }
+            try
+            {
+                material = _materialManager.GetMaterialDefinition(handle);
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+            }
         }
-        material = default;
+        material = null;
+        return false;
+    }
+
+    public bool TryGetSelectedMaterialInspection(out EditorMaterialInspection? inspection)
+    {
+        if (TryGetSelectedObject(out RenderObject? target) && target?.Material is MaterialHandle handle)
+        {
+            try
+            {
+                inspection = new EditorMaterialInspection(
+                    handle,
+                    _materialManager.GetMaterialDefinition(handle),
+                    _materialManager.GetMaterialTransportProfile(handle),
+                    _materialManager.GetMaterialAspectRevisions(handle),
+                    _materialManager.GetMaterialCompileDiagnostics(handle));
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                // A stale generation can be observed for one editor frame while scene content is
+                // reloaded. Treat it as unavailable rather than presenting mismatched derived data.
+            }
+        }
+
+        inspection = null;
         return false;
     }
 

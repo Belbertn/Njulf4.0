@@ -29,7 +29,8 @@ namespace Njulf.Rendering.Data
         IridescenceThicknessTexture = 1u << 20,
         Dispersion = 1u << 21,
         Foliage = 1u << 22,
-        CompressedNormalBc5 = 1u << 23
+        CompressedNormalBc5 = 1u << 23,
+        Ior = 1u << 24
     }
 
     public static class MaterialFeatureFlagsExtensions
@@ -44,7 +45,8 @@ namespace Njulf.Rendering.Data
             MaterialFeatureFlags.EmissiveStrength |
             MaterialFeatureFlags.Specular |
             MaterialFeatureFlags.Iridescence |
-            MaterialFeatureFlags.Dispersion;
+            MaterialFeatureFlags.Dispersion |
+            MaterialFeatureFlags.Ior;
 
         private const MaterialFeatureFlags ExtensionPayloadMask =
             MaterialFeatureFlags.Clearcoat |
@@ -68,7 +70,8 @@ namespace Njulf.Rendering.Data
             MaterialFeatureFlags.Iridescence |
             MaterialFeatureFlags.IridescenceTexture |
             MaterialFeatureFlags.IridescenceThicknessTexture |
-            MaterialFeatureFlags.Dispersion;
+            MaterialFeatureFlags.Dispersion |
+            MaterialFeatureFlags.Ior;
 
         public static bool HasAnyExtensionLighting(this MaterialFeatureFlags flags)
         {

@@ -91,8 +91,11 @@ namespace Njulf.Rendering.Resources
             }
 
             if (IsReady &&
-                _probeCapacity >= requiredProbeCount &&
-                _layersPerTexture == layersPerTexture)
+                !RequiresStableCapacityReallocation(
+                    _probeCapacity,
+                    provisionedProbeCount,
+                    _layersPerTexture,
+                    layersPerTexture))
             {
                 if (bindlessHeap != null)
                     Register(bindlessHeap);
@@ -139,6 +142,14 @@ namespace Njulf.Rendering.Resources
                 Register(bindlessHeap);
             return true;
         }
+
+        internal static bool RequiresStableCapacityReallocation(
+            int provisionedProbeCapacity,
+            int requiredProbeCapacity,
+            int provisionedLayersPerTexture,
+            int requiredLayersPerTexture) =>
+            provisionedProbeCapacity != requiredProbeCapacity ||
+            provisionedLayersPerTexture != requiredLayersPerTexture;
 
         public void Register(BindlessHeap bindlessHeap)
         {
@@ -310,6 +321,18 @@ namespace Njulf.Rendering.Resources
                 return;
 
             _context.WaitIdle();
+            ReleaseAfterDeviceIdle();
+        }
+
+        /// <summary>
+        /// Releases image capacity after the owning manager has synchronized the
+        /// device for a larger stable-capacity transition.
+        /// </summary>
+        internal void ReleaseAfterDeviceIdle()
+        {
+            if (!IsReady)
+                return;
+
             DestroyImageResources();
             LastFailureReason = string.Empty;
         }

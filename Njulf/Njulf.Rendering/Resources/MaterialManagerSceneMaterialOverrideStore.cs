@@ -6,7 +6,11 @@ using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Resources;
 
-/// <summary>Persists the editable v1 material surface while retaining texture bindings and flags.</summary>
+/// <summary>
+/// Persists authored material overrides. Shared asset materials are split by
+/// copy-on-write before editing so one scene object cannot accidentally mutate
+/// every user of a deduplicated material.
+/// </summary>
 public sealed class MaterialManagerSceneMaterialOverrideStore : ISceneMaterialOverrideStore
 {
     private readonly MaterialManager _materials;
@@ -18,31 +22,167 @@ public sealed class MaterialManagerSceneMaterialOverrideStore : ISceneMaterialOv
 
     public void Apply(RenderObject renderObject, SceneMaterialOverrideDocument source)
     {
+        ArgumentNullException.ThrowIfNull(renderObject);
+        ArgumentNullException.ThrowIfNull(source);
         if (renderObject.Material is not MaterialHandle handle)
             throw new InvalidOperationException($"Scene object '{renderObject.Name}' ({renderObject.Id}) has no material handle.");
-        GPUMaterialData material = _materials.GetMaterialData(handle);
-        material.Albedo = new Vector4(source.Albedo.R, source.Albedo.G, source.Albedo.B, source.Albedo.A);
-        material.Emissive = new Vector4(source.Emissive.R, source.Emissive.G, source.Emissive.B, source.Emissive.A);
-        material.MetallicRoughnessAO.X = source.Metallic;
-        material.MetallicRoughnessAO.Y = source.Roughness;
-        material.NormalScaleBias.X = source.NormalScale;
-        material.NormalScaleBias.Z = source.AlphaCutoff;
-        _materials.UpdateMaterial(handle, material);
+
+        // Compile and normalize the authored override before copy-on-write
+        // transfers the object's logical material reference. Invalid scene data
+        // must not split a shared material or leave the object attached to an
+        // unchanged private copy.
+        MaterialDefinition material = _materials.GetMaterialDefinition(handle);
+        MaterialDefinition updated = BuildValidatedOverride(material, source);
+        if (updated == material)
+            return;
+
+        _materials.UpdateRenderObjectMaterialDefinition(
+            renderObject,
+            updated);
+    }
+
+    private static MaterialDefinition BuildValidatedOverride(
+        MaterialDefinition material,
+        SceneMaterialOverrideDocument source)
+    {
+        SceneColor? emissive = source.EmissiveColor ?? source.Emissive;
+        MaterialAlphaMode alphaMode = ParseEnum(
+            source.AlphaMode,
+            material.AlphaMode,
+            nameof(source.AlphaMode));
+        MaterialShadingModel shadingModel = ParseEnum(
+            source.ShadingModel,
+            material.ShadingModel,
+            nameof(source.ShadingModel));
+        MaterialBlendMode? blendMode = ParseBlendMode(
+            source.RenderBlendModeOverride,
+            material.RenderBlendModeOverride);
+        GiParticipationOverride emissionParticipation = ParseGiParticipation(
+            source.EmissionGiParticipation,
+            source.EmitsIntoGi,
+            material.EmissionGiParticipation,
+            nameof(source.EmissionGiParticipation));
+        GiParticipationOverride diffuseParticipation = ParseGiParticipation(
+            source.DiffuseGiParticipation,
+            source.ReceivesDiffuseGi,
+            material.DiffuseGiParticipation,
+            nameof(source.DiffuseGiParticipation));
+
+        return MaterialDefinitionValidator.ValidateAndNormalize(material with
+        {
+            Name = source.Name ?? material.Name,
+            BaseColorFactor = source.Albedo is { } albedo
+                ? new Vector4(albedo.R, albedo.G, albedo.B, albedo.A)
+                : material.BaseColorFactor,
+            EmissiveFactor = emissive is { } emissiveColor
+                ? new Vector3(emissiveColor.R, emissiveColor.G, emissiveColor.B)
+                : material.EmissiveFactor,
+            EmissiveStrength = source.EmissiveStrength ?? material.EmissiveStrength,
+            MetallicFactor = source.Metallic ?? material.MetallicFactor,
+            RoughnessFactor = source.Roughness ?? material.RoughnessFactor,
+            OcclusionStrength = source.OcclusionStrength ?? material.OcclusionStrength,
+            NormalScale = source.NormalScale ?? material.NormalScale,
+            AlphaMode = alphaMode,
+            AlphaCutoff = source.AlphaCutoff ?? material.AlphaCutoff,
+            DoubleSided = source.DoubleSided ?? material.DoubleSided,
+            ReceivesShadows = source.ReceivesShadows ?? material.ReceivesShadows,
+            RenderBlendModeOverride = blendMode,
+            ShadingModel = shadingModel,
+            EmissionGiParticipation = emissionParticipation,
+            DiffuseGiParticipation = diffuseParticipation
+        });
     }
 
     public SceneMaterialOverrideDocument? Capture(RenderObject renderObject)
     {
+        ArgumentNullException.ThrowIfNull(renderObject);
         if (renderObject.Material is not MaterialHandle handle)
             return null;
-        GPUMaterialData material = _materials.GetMaterialData(handle);
+        MaterialDefinition material = _materials.GetMaterialDefinition(handle);
         return new SceneMaterialOverrideDocument
         {
-            Albedo = new SceneColor(material.Albedo.X, material.Albedo.Y, material.Albedo.Z, material.Albedo.W),
-            Emissive = new SceneColor(material.Emissive.X, material.Emissive.Y, material.Emissive.Z, material.Emissive.W),
-            Metallic = material.MetallicRoughnessAO.X,
-            Roughness = material.MetallicRoughnessAO.Y,
-            NormalScale = material.NormalScaleBias.X,
-            AlphaCutoff = material.NormalScaleBias.Z
+            Name = material.Name,
+            Albedo = new SceneColor(
+                material.BaseColorFactor.X,
+                material.BaseColorFactor.Y,
+                material.BaseColorFactor.Z,
+                material.BaseColorFactor.W),
+            EmissiveColor = new SceneColor(
+                material.EmissiveFactor.X,
+                material.EmissiveFactor.Y,
+                material.EmissiveFactor.Z,
+                1f),
+            EmissiveStrength = material.EmissiveStrength,
+            Metallic = material.MetallicFactor,
+            Roughness = material.RoughnessFactor,
+            OcclusionStrength = material.OcclusionStrength,
+            NormalScale = material.NormalScale,
+            AlphaMode = material.AlphaMode.ToString(),
+            AlphaCutoff = material.AlphaCutoff,
+            DoubleSided = material.DoubleSided,
+            ReceivesShadows = material.ReceivesShadows,
+            RenderBlendModeOverride = material.RenderBlendModeOverride?.ToString() ??
+                SceneMaterialOverrideDocument.AutomaticBlendMode,
+            ShadingModel = material.ShadingModel.ToString(),
+            DiffuseGiParticipation = material.DiffuseGiParticipation.ToString(),
+            EmissionGiParticipation = material.EmissionGiParticipation.ToString()
+        };
+    }
+
+    private static T ParseEnum<T>(
+        string? value,
+        T fallback,
+        string fieldName)
+        where T : struct, Enum
+    {
+        if (value == null)
+            return fallback;
+
+        foreach (string name in Enum.GetNames<T>())
+        {
+            if (string.Equals(value, name, StringComparison.OrdinalIgnoreCase))
+                return Enum.Parse<T>(name);
+        }
+
+        throw new ArgumentOutOfRangeException(
+            fieldName,
+            value,
+            $"Scene material {fieldName} value is invalid.");
+    }
+
+    private static MaterialBlendMode? ParseBlendMode(
+        string? value,
+        MaterialBlendMode? fallback)
+    {
+        if (value == null)
+            return fallback;
+        if (string.Equals(
+                value,
+                SceneMaterialOverrideDocument.AutomaticBlendMode,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+        return ParseEnum(
+            value,
+            MaterialBlendMode.Opaque,
+            nameof(SceneMaterialOverrideDocument.RenderBlendModeOverride));
+    }
+
+    private static GiParticipationOverride ParseGiParticipation(
+        string? value,
+        bool? legacyValue,
+        GiParticipationOverride fallback,
+        string fieldName)
+    {
+        if (value != null)
+            return ParseEnum(value, fallback, fieldName);
+
+        return legacyValue switch
+        {
+            true => GiParticipationOverride.Enabled,
+            false => GiParticipationOverride.Disabled,
+            null => fallback
         };
     }
 }

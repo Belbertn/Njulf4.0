@@ -140,7 +140,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUMeshlet>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUObjectData>(), Is.EqualTo(208));
                 Assert.That(Marshal.SizeOf<GPUDebugLineVertex>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(240));
+                Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(304));
                 Assert.That(Marshal.SizeOf<GPUMaterialExtensionData>(), Is.EqualTo(548));
                 Assert.That(Marshal.SizeOf<GPULight>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUSceneData>(), Is.EqualTo(400));
@@ -188,6 +188,41 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(100));
                 Assert.That(Marshal.SizeOf<GPUAmbientOcclusionPushConstants>(), Is.EqualTo(176));
                 Assert.That(Marshal.SizeOf<GPUAmbientOcclusionBlurPushConstants>(), Is.EqualTo(96));
+            });
+        }
+
+        [Test]
+        public void GPUMaterialData_V2HasExactMeasuredOffsets()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(304));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.Albedo)).ToInt32(), Is.EqualTo(0));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.Emissive)).ToInt32(), Is.EqualTo(16));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.NormalScaleBias)).ToInt32(), Is.EqualTo(32));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.MetallicRoughnessAO)).ToInt32(), Is.EqualTo(48));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.BaseColorOffsetScale)).ToInt32(), Is.EqualTo(64));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.NormalOffsetScale)).ToInt32(), Is.EqualTo(80));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.MetallicRoughnessOffsetScale)).ToInt32(), Is.EqualTo(96));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.OcclusionOffsetScale)).ToInt32(), Is.EqualTo(112));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.EmissiveOffsetScale)).ToInt32(), Is.EqualTo(128));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.TextureRotations)).ToInt32(), Is.EqualTo(144));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.TextureTexCoordSets)).ToInt32(), Is.EqualTo(160));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.OcclusionBinding)).ToInt32(), Is.EqualTo(176));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.AlbedoTextureIndex)).ToInt32(), Is.EqualTo(192));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.OcclusionTextureIndex)).ToInt32(), Is.EqualTo(204));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.TransportFlags)).ToInt32(), Is.EqualTo(220));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.TransportProfileRevision)).ToInt32(), Is.EqualTo(224));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.PackedMeanMetallicRoughness)).ToInt32(), Is.EqualTo(228));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.TransportProfileQuality)).ToInt32(), Is.EqualTo(232));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.MaterialRevision)).ToInt32(), Is.EqualTo(236));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.TextureContentRevision)).ToInt32(), Is.EqualTo(240));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.PackedMeanGiDirectionalDiffuseBaseRg)).ToInt32(), Is.EqualTo(244));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.PackedMeanGiDirectionalDiffuseBaseBAndF0R)).ToInt32(), Is.EqualTo(248));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.PackedMeanGiDielectricF0Gb)).ToInt32(), Is.EqualTo(252));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.DdgiAverageAlbedo)).ToInt32(), Is.EqualTo(256));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.DdgiAverageEmissive)).ToInt32(), Is.EqualTo(272));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.DdgiMaterialPolicy)).ToInt32(), Is.EqualTo(288));
             });
         }
 
@@ -250,6 +285,21 @@ namespace Njulf.Tests
                 Assert.That(
                     (GPUForwardPushConstants.PackDiagnosticFlags(true, true, true, 5u) >> 8) & 0x03u,
                     Is.EqualTo(1u));
+                Assert.That(
+                    GPUForwardPushConstants.PackDiagnosticFlags(
+                        false,
+                        false,
+                        false,
+                        materialTransportProvenanceEnabled: true) & 8u,
+                    Is.EqualTo(8u));
+                Assert.That(
+                    GPUForwardPushConstants.PackDiagnosticFlags(
+                        true,
+                        true,
+                        true,
+                        3u,
+                        materialTransportProvenanceEnabled: true),
+                    Is.EqualTo(0x30fu));
             });
         }
 

@@ -118,6 +118,195 @@ public sealed class CookedAssetTests
     }
 
     [Test]
+    public void TextureMetadataReader_RejectsCompressedBombBeforeAllocation()
+    {
+        string path = Path.Combine(_directory, "compressed-bomb.njtex");
+        using (var writer = new CookedAssetWriter(
+                   path,
+                   CookedAssetKind.Texture))
+        {
+            writer.WriteSection(
+                CookedSectionIds.Metadata,
+                CookedSectionFlags.Required | CookedSectionFlags.Zstd,
+                new byte[4096]);
+            writer.Complete();
+        }
+
+        byte[] bytes = File.ReadAllBytes(path);
+        ulong tableOffset = BinaryPrimitives.ReadUInt64LittleEndian(
+            bytes.AsSpan(56, sizeof(ulong)));
+        BinaryPrimitives.WriteUInt64LittleEndian(
+            bytes.AsSpan(
+                checked((int)tableOffset) + 24,
+                sizeof(ulong)),
+            CookedAssetReader.MaximumTextureMetadataSectionBytes + 1);
+        File.WriteAllBytes(path, bytes);
+
+        Assert.That(
+            () => new CookedAssetReader(
+                path,
+                CookedAssetKind.Texture),
+            Throws.TypeOf<CookedAssetFormatException>()
+                .With.Message.Contains("uncompressed bytes")
+                .And.Message.Contains("runtime limit"));
+    }
+
+    [Test]
+    public void TextureMetadataReader_RejectsExcessiveSectionCountBeforeTableAllocation()
+    {
+        string path = Path.Combine(_directory, "too-many-sections.njtex");
+        using (var writer = new CookedAssetWriter(
+                   path,
+                   CookedAssetKind.Texture))
+        {
+            writer.WriteSection(
+                CookedSectionIds.Metadata,
+                CookedSectionFlags.Required,
+                new byte[] { 1 });
+            writer.Complete();
+        }
+
+        byte[] bytes = File.ReadAllBytes(path);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            bytes.AsSpan(48, sizeof(uint)),
+            CookedAssetReader.MaximumTextureMetadataSectionCount + 1);
+        File.WriteAllBytes(path, bytes);
+
+        Assert.That(
+            () => new CookedAssetReader(
+                path,
+                CookedAssetKind.Texture),
+            Throws.TypeOf<CookedAssetFormatException>()
+                .With.Message.Contains("section count")
+                .And.Message.Contains("runtime limit"));
+    }
+
+    [Test]
+    public void TextureMetadataReader_RejectsCumulativeUncompressedBudget()
+    {
+        string path = Path.Combine(_directory, "cumulative-bomb.njtex");
+        using (var writer = new CookedAssetWriter(
+                   path,
+                   CookedAssetKind.Texture))
+        {
+            writer.WriteSection(
+                CookedSectionIds.Metadata,
+                CookedSectionFlags.Required | CookedSectionFlags.Zstd,
+                new byte[4096]);
+            writer.WriteSection(
+                CookedSectionIds.StringTable,
+                CookedSectionFlags.Zstd,
+                new byte[4096]);
+            writer.WriteSection(
+                CookedSectionIds.Bounds,
+                CookedSectionFlags.Zstd,
+                new byte[4096]);
+            writer.Complete();
+        }
+
+        byte[] bytes = File.ReadAllBytes(path);
+        ulong tableOffset = BinaryPrimitives.ReadUInt64LittleEndian(
+            bytes.AsSpan(56, sizeof(ulong)));
+        for (int entry = 0; entry < 3; entry++)
+        {
+            BinaryPrimitives.WriteUInt64LittleEndian(
+                bytes.AsSpan(
+                    checked((int)tableOffset) +
+                    entry * CookedSectionEntry.Size +
+                    24,
+                    sizeof(ulong)),
+                CookedAssetReader.MaximumTextureMetadataSectionBytes);
+        }
+        File.WriteAllBytes(path, bytes);
+
+        Assert.That(
+            () => new CookedAssetReader(
+                path,
+                CookedAssetKind.Texture),
+            Throws.TypeOf<CookedAssetFormatException>()
+                .With.Message.Contains("cumulative uncompressed")
+                .And.Message.Contains("runtime limit"));
+    }
+
+    [Test]
+    public void BinaryWriter_RejectsPackagesTheRuntimeReaderCannotAdmit()
+    {
+        string oversizedPath = Path.Combine(
+            _directory,
+            "writer-oversized.njtex");
+        using (var writer = new CookedAssetWriter(
+                   oversizedPath,
+                   CookedAssetKind.Texture))
+        {
+            Assert.That(
+                () => writer.WriteSection(
+                    CookedSectionIds.Metadata,
+                    CookedSectionFlags.Zstd,
+                    new byte[
+                        checked((int)CookedAssetReader
+                            .MaximumTextureMetadataSectionBytes + 1)]),
+                Throws.TypeOf<InvalidOperationException>()
+                    .With.Message.Contains("runtime limit"));
+        }
+
+        string sectionCountPath = Path.Combine(
+            _directory,
+            "writer-section-count.njtex");
+        using (var writer = new CookedAssetWriter(
+                   sectionCountPath,
+                   CookedAssetKind.Texture))
+        {
+            for (uint index = 0;
+                 index <
+                 CookedAssetReader.MaximumTextureMetadataSectionCount;
+                 index++)
+            {
+                writer.WriteSection(
+                    CookedSectionIds.FourCc(
+                        $"A{index / 10}{index % 10}Z"),
+                    CookedSectionFlags.None,
+                    new byte[] { checked((byte)index) });
+            }
+
+            Assert.That(
+                () => writer.WriteSection(
+                    CookedSectionIds.FourCc("OVR9"),
+                    CookedSectionFlags.None,
+                    new byte[] { 9 }),
+                Throws.TypeOf<InvalidOperationException>()
+                    .With.Message.Contains("sections")
+                    .And.Message.Contains("runtime reader limit"));
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(File.Exists(oversizedPath), Is.False);
+            Assert.That(File.Exists(sectionCountPath), Is.False);
+        });
+    }
+
+    [Test]
+    public void OrderedHash_UsesUnambiguousLengthPrefixedTuples()
+    {
+        const ulong asciiHash = 0x3837363534333231UL;
+        const ulong tailHash = 0x1020304050607080UL;
+
+        ulong twoTuples = CookedHash.Ordered(
+        [
+            ("a", asciiHash),
+            ("c", tailHash)
+        ]);
+        ulong formerlyAmbiguousSingleTuple = CookedHash.Ordered(
+        [
+            ("a12345678c", tailHash)
+        ]);
+
+        Assert.That(
+            twoTuples,
+            Is.Not.EqualTo(formerlyAmbiguousSingleTuple));
+    }
+
+    [Test]
     public void BinaryWriter_IsDeterministic()
     {
         string first = Path.Combine(_directory, "first.njmesh");
@@ -171,7 +360,14 @@ public sealed class CookedAssetTests
         CookedPackage.WriteMaterials(
             path,
             new CookedMaterialTable(
-                [new ModelMaterial { DdgiBaseColorTextureAverageLinear = expected }]),
+                [
+                    new ModelMaterial
+                    {
+                        DdgiBaseColorTextureAverageLinear = expected,
+                        FeatureFlags = 1u << 24,
+                        Ior = 2.25f
+                    }
+                ]),
             sourceHash: 1,
             settingsHash: 2,
             dependencyHash: 3);
@@ -181,7 +377,14 @@ public sealed class CookedAssetTests
             CookedAssetReaderFlags.None,
             out _);
 
-        Assert.That(loaded.Materials.Single().DdgiBaseColorTextureAverageLinear, Is.EqualTo(expected));
+        ModelMaterial material = loaded.Materials.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(material.DdgiBaseColorTextureAverageLinear, Is.EqualTo(expected));
+            Assert.That(material.FeatureFlags, Is.EqualTo(1u << 24));
+            Assert.That(material.Ior, Is.EqualTo(2.25f));
+            Assert.That(material.TransmissionFactor, Is.Zero);
+        });
     }
 
     [Test]
@@ -285,6 +488,74 @@ public sealed class CookedAssetTests
     }
 
     [Test]
+    [Category("AssetIntegration")]
+    public void SampleSponzaCookedPackage_LoadsCanonicalMaterialsStrictly()
+    {
+        string repositoryRoot = Path.GetFullPath(
+            Path.Combine(
+                TestContext.CurrentContext.TestDirectory,
+                "..",
+                "..",
+                "..",
+                ".."));
+        string packagePath = Path.Combine(
+            repositoryRoot,
+            "NjulfHelloGame",
+            "Cooked",
+            CookedPlatform.Current,
+            "models",
+            "NewSponza_Main_glTF_003.njmodel");
+        Assert.That(
+            File.Exists(packagePath),
+            Is.True,
+            $"Expected cooked Sponza fixture at {packagePath}");
+
+        CookedModelAsset loaded = CookedPackage.LoadModel(
+            packagePath,
+            CookedAssetReaderFlags.StrictSourceHash);
+        string copiedPackagePath = Path.Combine(
+            AppContext.BaseDirectory,
+            "Cooked",
+            CookedPlatform.Current,
+            "models",
+            "NewSponza_Main_glTF_003.njmodel");
+        Assert.That(
+            File.Exists(copiedPackagePath),
+            Is.True,
+            $"Expected copied cooked Sponza fixture at {copiedPackagePath}");
+        CookedModelAsset copied = CookedPackage.LoadModel(
+            copiedPackagePath,
+            CookedAssetReaderFlags.StrictSourceHash);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(loaded.Materials.Materials, Is.Not.Empty);
+            Assert.That(
+                loaded.Materials.Materials,
+                Has.All.Matches<ModelMaterial>(
+                    material =>
+                        float.IsFinite(material.AttenuationDistance) ||
+                        float.IsPositiveInfinity(
+                            material.AttenuationDistance)));
+            Assert.That(
+                loaded.Materials.Materials.Any(
+                    material =>
+                        float.IsPositiveInfinity(
+                            material.AttenuationDistance)),
+                Is.True);
+            Assert.That(
+                loaded.Materials.PrimitiveTransportProfiles,
+                Has.Count.EqualTo(loaded.Mesh.SubMeshes.Count));
+            Assert.That(
+                copied.Manifest.Material,
+                Is.EqualTo(loaded.Manifest.Material));
+            Assert.That(
+                copied.Materials.Materials.Count,
+                Is.EqualTo(loaded.Materials.Materials.Count));
+        });
+    }
+
+    [Test]
     public void ContentManager_RoutesModelDirectlyToCookedUploadService()
     {
         string sourcePath = Path.Combine(_directory, "triangle.gltf");
@@ -324,23 +595,161 @@ public sealed class CookedAssetTests
     }
 
     [Test]
+    public void ContentManager_LoadsExplicitCookedModelWithoutTreatingPackageAsSource()
+    {
+        string sourcePath = Path.Combine(_directory, "explicit-source.gltf");
+        File.WriteAllText(sourcePath, "{}");
+        string modelDirectory = Path.Combine(_directory, "Cooked", "models");
+        string materialDirectory = Path.Combine(_directory, "Cooked", "materials");
+        Directory.CreateDirectory(modelDirectory);
+        Directory.CreateDirectory(materialDirectory);
+        string meshPath = Path.Combine(modelDirectory, "explicit.meshes.njmesh");
+        string materialPath = Path.Combine(materialDirectory, "explicit.materials.njmat");
+        string modelPath = Path.Combine(modelDirectory, "explicit.njmodel");
+        CookedMeshPayload mesh = CreateTrianglePayload();
+        ulong sourceHash = CookedHash.File(sourcePath);
+        CookedPackage.WriteMesh(meshPath, mesh, sourceHash, 1, 2);
+        CookedPackage.WriteMaterials(
+            materialPath,
+            new CookedMaterialTable([ModelMaterial.Default]),
+            sourceHash,
+            1,
+            2);
+        var manifest = new CookedModelManifest(
+            CookedPackage.StableAssetId(sourcePath),
+            "Explicit",
+            sourcePath,
+            sourceHash,
+            1,
+            2,
+            new CookedAssetReference("explicit.meshes.njmesh", CookedHash.File(meshPath)),
+            new CookedAssetReference("../materials/explicit.materials.njmat", CookedHash.File(materialPath)),
+            null,
+            [new CookedModelSubObject("Explicit", 0, 0, -1, -1, Matrix4x4.Identity)],
+            mesh.SubMeshes[0].BoundingBox,
+            mesh.SubMeshes[0].BoundingSphere);
+        CookedPackage.WriteModel(modelPath, manifest);
+
+        var upload = new FakeCookedUploadService();
+        using var content = new ContentManager(_directory, upload);
+        Model result = content.Load<Model>(modelPath);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Name, Is.EqualTo("Explicit"));
+            Assert.That(upload.CookedUploadCount, Is.EqualTo(1));
+            Assert.That(upload.SourceUploadCount, Is.Zero);
+            Assert.That(content.CookedDiagnostics.CookedAssetCount, Is.EqualTo(1));
+            Assert.That(
+                content.CookedDiagnostics.Entries.Single().Reason,
+                Is.EqualTo("cooked package was explicitly requested"));
+        });
+    }
+
+    [Test]
+    public void ContentManager_ModelSnapshotBindsValidationIdentityAndUploadAcrossPackageReplacement()
+    {
+        string sourcePath = Path.Combine(_directory, "snapshot-source.gltf");
+        File.WriteAllText(sourcePath, "{}");
+        string modelDirectory = Path.Combine(_directory, "Cooked", "models");
+        string materialDirectory = Path.Combine(_directory, "Cooked", "materials");
+        Directory.CreateDirectory(modelDirectory);
+        Directory.CreateDirectory(materialDirectory);
+        string meshPath = Path.Combine(modelDirectory, "snapshot.meshes.njmesh");
+        string materialPath = Path.Combine(materialDirectory, "snapshot.materials.njmat");
+        string modelPath = Path.Combine(modelDirectory, "snapshot.njmodel");
+        CookedMeshPayload mesh = CreateTrianglePayload();
+        ulong sourceHash = CookedHash.File(sourcePath);
+        CookedPackage.WriteMesh(meshPath, mesh, sourceHash, 1, 2);
+        CookedPackage.WriteMaterials(
+            materialPath,
+            new CookedMaterialTable([ModelMaterial.Default]),
+            sourceHash,
+            1,
+            2);
+        var originalManifest = new CookedModelManifest(
+            CookedPackage.StableAssetId(sourcePath),
+            "OriginalSnapshot",
+            sourcePath,
+            sourceHash,
+            1,
+            2,
+            new CookedAssetReference(
+                "snapshot.meshes.njmesh",
+                CookedHash.File(meshPath)),
+            new CookedAssetReference(
+                "../materials/snapshot.materials.njmat",
+                CookedHash.File(materialPath)),
+            null,
+            [new CookedModelSubObject(
+                "OriginalSnapshot",
+                0,
+                0,
+                -1,
+                -1,
+                Matrix4x4.Identity)],
+            mesh.SubMeshes[0].BoundingBox,
+            mesh.SubMeshes[0].BoundingSphere);
+        CookedPackage.WriteModel(modelPath, originalManifest);
+        CookedModelPackageSnapshot originalSnapshot =
+            CookedPackage.CaptureModelSnapshot(modelPath);
+
+        var upload = new FakeCookedUploadService();
+        using var content = new ContentManager(_directory, upload);
+        CookedModelSnapshotLoadResult loaded =
+            content.LoadCookedModelSnapshot(
+                originalSnapshot,
+                decoded =>
+                {
+                    Assert.That(
+                        decoded.Manifest.Name,
+                        Is.EqualTo("OriginalSnapshot"));
+                    CookedPackage.WriteModel(
+                        modelPath,
+                        originalManifest with { Name = "ReplacementOnDisk" });
+                });
+        CookedModelPackageSnapshot replacementSnapshot =
+            CookedPackage.CaptureModelSnapshot(modelPath);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(loaded.Snapshot, Is.SameAs(originalSnapshot));
+            Assert.That(
+                loaded.CookedAsset,
+                Is.SameAs(upload.LastCookedModel));
+            Assert.That(loaded.CookedAsset.Manifest.Name, Is.EqualTo("OriginalSnapshot"));
+            Assert.That(loaded.RuntimeModel.Name, Is.EqualTo("OriginalSnapshot"));
+            Assert.That(originalSnapshot.ByteLength, Is.GreaterThan(0));
+            Assert.That(originalSnapshot.Sha256, Has.Length.EqualTo(64));
+            Assert.That(
+                replacementSnapshot.Sha256,
+                Is.Not.EqualTo(originalSnapshot.Sha256));
+            Assert.That(upload.CookedUploadCount, Is.EqualTo(1));
+            Assert.That(content.CookedDiagnostics.CookedAssetCount, Is.EqualTo(1));
+            Assert.That(
+                content.CookedDiagnostics.Entries.Single().Reason,
+                Does.Contain("one immutable snapshot"));
+        });
+    }
+
+    [Test]
     public void RendererMeshletLodBuilder_GeneratesThreeProgressivelySimplifiedLevels()
     {
         const int size = 12;
         var vertices = new Vector3[size * size];
         for (int y = 0; y < size; y++)
-        for (int x = 0; x < size; x++)
-            vertices[y * size + x] = new Vector3(x, y, MathF.Sin(x * 0.3f) * MathF.Cos(y * 0.2f));
+            for (int x = 0; x < size; x++)
+                vertices[y * size + x] = new Vector3(x, y, MathF.Sin(x * 0.3f) * MathF.Cos(y * 0.2f));
         var indices = new List<uint>();
         for (int y = 0; y < size - 1; y++)
-        for (int x = 0; x < size - 1; x++)
-        {
-            uint a = (uint)(y * size + x);
-            uint b = a + 1;
-            uint c = a + size;
-            uint d = c + 1;
-            indices.AddRange([a, c, b, b, c, d]);
-        }
+            for (int x = 0; x < size - 1; x++)
+            {
+                uint a = (uint)(y * size + x);
+                uint b = a + 1;
+                uint c = a + size;
+                uint d = c + 1;
+                indices.AddRange([a, c, b, b, c, d]);
+            }
 
         RendererMeshletLodBuild result = new RendererMeshletLodBuilder().Build(vertices, indices.ToArray(), "Grid");
         Assert.Multiple(() =>
@@ -446,6 +855,30 @@ public sealed class CookedAssetTests
     }
 
     [Test]
+    public void DetachedSignature_RejectsOversizedEnvelopeBeforeAllocation()
+    {
+        string publicKey = Path.Combine(_directory, "public.pem");
+        string privateKey = Path.Combine(_directory, "private.pem");
+        string asset = CreateSimpleFile();
+        CookedPackageSigner.GenerateKeyPair(privateKey, publicKey);
+        string signaturePath = CookedPackageSigner.SignFile(asset, privateKey);
+        using (var stream = new FileStream(
+                   signaturePath,
+                   FileMode.Create,
+                   FileAccess.Write,
+                   FileShare.None))
+        {
+            stream.SetLength(
+                CookedPackageSigner.MaximumDetachedSignatureBytes + 1L);
+        }
+
+        Assert.That(
+            () => CookedPackageSigner.VerifyRequired(asset, publicKey),
+            Throws.TypeOf<CookedAssetHashException>()
+                .With.Message.Contains("runtime limit"));
+    }
+
+    [Test]
     public void Migrator_RewritesOlderMinorToCurrentFormat()
     {
         string source = Path.Combine(_directory, "old");
@@ -508,6 +941,7 @@ public sealed class CookedAssetTests
     {
         public int SourceUploadCount { get; private set; }
         public int CookedUploadCount { get; private set; }
+        public CookedModelAsset? LastCookedModel { get; private set; }
         public ModelRenderUploadDiagnostics LastUploadDiagnostics { get; } = new("", 0, 0, 0, 0, 0, 0, 0, 0);
         public Model UploadModel(ModelMesh modelMesh)
         {
@@ -517,6 +951,7 @@ public sealed class CookedAssetTests
         public Model UploadCookedModel(CookedModelAsset model)
         {
             CookedUploadCount++;
+            LastCookedModel = model;
             return new Model { Name = model.Manifest.Name };
         }
     }

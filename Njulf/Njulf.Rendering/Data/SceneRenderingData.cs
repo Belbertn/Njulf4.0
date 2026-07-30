@@ -18,6 +18,11 @@ namespace Njulf.Rendering.Data
         /// correlation rather than frame-to-frame timing.
         /// </summary>
         public ulong SceneContentRevision { get; set; }
+        /// <summary>
+        /// Monotonic revision of material aspects consumed by SSGI history:
+        /// receiver diffuse response/AO, alpha coverage, and shading model.
+        /// </summary>
+        public uint SsgiMaterialRevision { get; set; }
         public uint DdgiFrameSerialLow32 => unchecked((uint)DdgiFrameSerial);
         public uint ImageIndex { get; set; }
         public Vector4 ClearColor { get; set; } = new(0.2f, 0.2f, 0.2f, 1f);
@@ -897,6 +902,15 @@ namespace Njulf.Rendering.Data
         public uint DdgiSimpleTraceFarFieldStepBucket2Count { get; set; }
         public uint DdgiSimpleTraceFarFieldStepBucket3Count { get; set; }
         public uint DdgiSimpleTraceFarFieldStepBucket4Count { get; set; }
+        /// <summary>
+        /// Fence-complete sparse weighted transport-hit provenance from the
+        /// previous use of this frame slot. These counters are safe to consume
+        /// from a graphics diagnostic pass without a live compute-buffer hazard.
+        /// </summary>
+        public uint MaterialDetailedTransportHitCount { get; set; }
+        public uint MaterialCompactTransportHitCount { get; set; }
+        public uint MaterialCorrectnessFallbackHitCount { get; set; }
+        public uint MaterialFarFieldTransportHitCount { get; set; }
         public int DdgiBlackFrameSuspect { get; set; }
         public int DdgiBlackFrameAfterRecenter { get; set; }
         public int DdgiBlackFrameAfterAtlasClear { get; set; }
@@ -930,6 +944,18 @@ namespace Njulf.Rendering.Data
         public float DdgiSelectedLocalLightEnergyScale { get; set; } = 1.0f;
         public int DdgiEmissiveSourceCount { get; set; }
         public uint DdgiEmissiveSourceRevision { get; set; }
+        public string DdgiEmissiveSamplingMode { get; set; } = string.Empty;
+        public int DdgiEmissiveTriangleCandidateCount { get; set; }
+        public int DdgiEmissiveTriangleBudget { get; set; }
+        public float DdgiEmissiveSkippedEnergyFraction { get; set; }
+        public int DdgiEmissiveSkippedSkinnedObjectCount { get; set; }
+        public double DdgiEmissiveSkippedSkinnedImportance { get; set; }
+        public int DdgiEmissiveTableCacheHit { get; set; }
+        public ulong DdgiEmissiveTableCacheHitCount { get; set; }
+        public ulong DdgiEmissiveTableCacheMissCount { get; set; }
+        public ulong DdgiEmissiveTableRebuildCount { get; set; }
+        public ulong DdgiEmissiveTableInvalidationCount { get; set; }
+        public ulong DdgiEmissiveTableUploadCount { get; set; }
         public ulong DdgiProbeVolumeBufferBytes { get; set; }
         public ulong DdgiProbeStateBufferBytes { get; set; }
         public ulong DdgiProbeUpdateQueueBytes { get; set; }
@@ -1149,7 +1175,7 @@ namespace Njulf.Rendering.Data
         public int DebugReflectionProbeVolumesDrawn { get; set; }
         public int DebugDdgiProbeVolumesDrawn { get; set; }
         public int DebugDecalVolumesDrawn { get; set; }
-        
+
         public bool HasCpuSnapshots { get; set; }
         public List<GPUMeshletDrawCommand> MeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> OpaqueMeshletDrawCommands { get; } = new();
@@ -1170,9 +1196,9 @@ namespace Njulf.Rendering.Data
         public List<GPUParticleBatch> ParticleBatches { get; } = new();
         public List<DdgiVolumeDiagnosticsEntry> DdgiVolumeDiagnostics { get; } = new();
         public List<ObjectDebugSnapshot> ObjectDebugSnapshots { get; } = new();
-        
+
         private bool _disposed = false;
-        
+
         public void Clear()
         {
             MeshletDrawCommands.Clear();
@@ -2036,6 +2062,10 @@ namespace Njulf.Rendering.Data
             DdgiSimpleTraceFarFieldStepBucket2Count = 0;
             DdgiSimpleTraceFarFieldStepBucket3Count = 0;
             DdgiSimpleTraceFarFieldStepBucket4Count = 0;
+            MaterialDetailedTransportHitCount = 0;
+            MaterialCompactTransportHitCount = 0;
+            MaterialCorrectnessFallbackHitCount = 0;
+            MaterialFarFieldTransportHitCount = 0;
             DdgiBlackFrameSuspect = 0;
             DdgiBlackFrameAfterRecenter = 0;
             DdgiBlackFrameAfterAtlasClear = 0;
@@ -2069,6 +2099,18 @@ namespace Njulf.Rendering.Data
             DdgiSelectedLocalLightEnergyScale = 1.0f;
             DdgiEmissiveSourceCount = 0;
             DdgiEmissiveSourceRevision = 0;
+            DdgiEmissiveSamplingMode = string.Empty;
+            DdgiEmissiveTriangleCandidateCount = 0;
+            DdgiEmissiveTriangleBudget = 0;
+            DdgiEmissiveSkippedEnergyFraction = 0.0f;
+            DdgiEmissiveSkippedSkinnedObjectCount = 0;
+            DdgiEmissiveSkippedSkinnedImportance = 0.0;
+            DdgiEmissiveTableCacheHit = 0;
+            DdgiEmissiveTableCacheHitCount = 0;
+            DdgiEmissiveTableCacheMissCount = 0;
+            DdgiEmissiveTableRebuildCount = 0;
+            DdgiEmissiveTableInvalidationCount = 0;
+            DdgiEmissiveTableUploadCount = 0;
             DdgiProbeVolumeBufferBytes = 0;
             DdgiProbeStateBufferBytes = 0;
             DdgiProbeUpdateQueueBytes = 0;
@@ -2252,7 +2294,7 @@ namespace Njulf.Rendering.Data
             MaterialExtensionBufferSize = 0;
             MaterialExtensionDataBuffer = BufferHandle.Invalid;
         }
-        
+
         public void Dispose()
         {
             if (!_disposed)

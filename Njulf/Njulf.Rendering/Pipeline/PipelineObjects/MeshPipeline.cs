@@ -92,6 +92,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public PipelineLayout SceneSubmissionComputeLayout => _sceneSubmissionComputeLayout;
         public RenderSettings Settings { get; }
         public bool GpuMeshletCountersEnabled { get; private set; }
+        public bool SsgiColorAttachmentsEnabled { get; private set; }
+        public bool MaterialTransportProvenanceAttachmentEnabled { get; private set; }
 
         public void Recreate(Format colorFormat, Format depthFormat)
         {
@@ -214,16 +216,28 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 ? "forward_compacted_diagnostics.task.spv"
                 : "forward_compacted.task.spv";
             bool ssgiEnabled = Settings.GlobalIllumination.EffectiveUseSsgi;
+            SsgiColorAttachmentsEnabled = ssgiEnabled;
+            bool materialTransportProvenanceEnabled =
+                Settings.GlobalIllumination.DebugView ==
+                GlobalIlluminationDebugView.MaterialTransportHitProvenance;
+            MaterialTransportProvenanceAttachmentEnabled =
+                materialTransportProvenanceEnabled;
+            string provenanceSuffix =
+                materialTransportProvenanceEnabled ? "_provenance" : string.Empty;
             string forwardOpaqueFragmentShaderName = ssgiEnabled
-                ? "forward_opaque.frag.spv"
-                : "forward_opaque_ddgi.frag.spv";
+                ? $"forward_opaque{provenanceSuffix}.frag.spv"
+                : $"forward_opaque_ddgi{provenanceSuffix}.frag.spv";
             string forwardOpaqueSimpleFragmentShaderName = ssgiEnabled
-                ? "forward_opaque_simple.frag.spv"
-                : "forward_opaque_simple_ddgi.frag.spv";
+                ? $"forward_opaque_simple{provenanceSuffix}.frag.spv"
+                : $"forward_opaque_simple_ddgi{provenanceSuffix}.frag.spv";
             string forwardOpaqueSimpleFullInputFragmentShaderName = ssgiEnabled
-                ? "forward_opaque_simple_full_input.frag.spv"
-                : "forward_opaque_simple_full_input_ddgi.frag.spv";
+                ? $"forward_opaque_simple_full_input{provenanceSuffix}.frag.spv"
+                : $"forward_opaque_simple_full_input_ddgi{provenanceSuffix}.frag.spv";
             Format? forwardSecondaryColorFormat = ssgiEnabled ? colorFormat : null;
+            Format? materialTransportProvenanceFormat =
+                materialTransportProvenanceEnabled
+                    ? RenderTargetManager.MaterialTransportProvenanceFormat
+                    : null;
 
             _depthPipeline = CreateGraphicsPipeline(
                 depthTaskShaderName,
@@ -288,7 +302,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false,
-                secondaryColorFormat: forwardSecondaryColorFormat);
+                secondaryColorFormat: forwardSecondaryColorFormat,
+                materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_forwardPipeline.Handle, ObjectType.Pipeline, "Opaque Forward Plus Mesh Pipeline");
 
             _forwardCompactedPipeline = CreateGraphicsPipeline(
@@ -302,7 +317,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false,
-                secondaryColorFormat: forwardSecondaryColorFormat);
+                secondaryColorFormat: forwardSecondaryColorFormat,
+                materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_forwardCompactedPipeline.Handle, ObjectType.Pipeline, "Compacted Opaque Forward Plus Mesh Pipeline");
 
             _forwardSimplePipeline = CreateGraphicsPipeline(
@@ -316,7 +332,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false,
-                secondaryColorFormat: forwardSecondaryColorFormat);
+                secondaryColorFormat: forwardSecondaryColorFormat,
+                materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_forwardSimplePipeline.Handle, ObjectType.Pipeline, "Simple Opaque Forward Plus Mesh Pipeline");
 
             _forwardSimpleFullInputPipeline = CreateGraphicsPipeline(
@@ -330,7 +347,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false,
-                secondaryColorFormat: forwardSecondaryColorFormat);
+                secondaryColorFormat: forwardSecondaryColorFormat,
+                materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_forwardSimpleFullInputPipeline.Handle, ObjectType.Pipeline, "Simple Full-Input Opaque Forward Plus Mesh Pipeline");
 
             _forwardCompactedSimplePipeline = CreateGraphicsPipeline(
@@ -344,7 +362,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false,
-                secondaryColorFormat: forwardSecondaryColorFormat);
+                secondaryColorFormat: forwardSecondaryColorFormat,
+                materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_forwardCompactedSimplePipeline.Handle, ObjectType.Pipeline, "Compacted Simple Opaque Forward Plus Mesh Pipeline");
 
             _forwardCompactedSimpleFullInputPipeline = CreateGraphicsPipeline(
@@ -358,7 +377,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false,
-                secondaryColorFormat: forwardSecondaryColorFormat);
+                secondaryColorFormat: forwardSecondaryColorFormat,
+                materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_forwardCompactedSimpleFullInputPipeline.Handle, ObjectType.Pipeline, "Compacted Simple Full-Input Opaque Forward Plus Mesh Pipeline");
 
             _transparentForwardPipeline = CreateGraphicsPipeline(
@@ -437,7 +457,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             bool blendEnable,
             CullModeFlags cullMode,
             bool depthBiasEnable,
-            Format? secondaryColorFormat = null)
+            Format? secondaryColorFormat = null,
+            Format? materialTransportProvenanceFormat = null)
         {
             ShaderModule taskModule = new ShaderModule();
             ShaderModule meshModule = new ShaderModule();
@@ -466,7 +487,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 blendEnable,
                 cullMode,
                 depthBiasEnable,
-                secondaryColorFormat);
+                secondaryColorFormat,
+                materialTransportProvenanceFormat);
             }
             finally
             {
@@ -597,7 +619,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             bool blendEnable,
             CullModeFlags cullMode,
             bool depthBiasEnable,
-            Format? secondaryColorFormat = null)
+            Format? secondaryColorFormat = null,
+            Format? materialTransportProvenanceFormat = null)
         {
             var stages = stackalloc PipelineShaderStageCreateInfo[3];
             stages[0] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
@@ -674,12 +697,16 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                                  ColorComponentFlags.BBit |
                                  ColorComponentFlags.ABit
             };
-            uint colorAttachmentCount = hasColorAttachment
-                ? secondaryColorFormat.HasValue ? 2u : 1u
-                : 0u;
-            var colorBlendAttachments = stackalloc PipelineColorBlendAttachmentState[2];
+            uint colorAttachmentCount =
+                ForwardDynamicRenderingContract.ResolveColorAttachmentCount(
+                    hasColorAttachment,
+                    secondaryColorFormat.HasValue,
+                    materialTransportProvenanceFormat.HasValue);
+            var colorBlendAttachments = stackalloc PipelineColorBlendAttachmentState[4];
             colorBlendAttachments[0] = colorBlendAttachment;
             colorBlendAttachments[1] = colorBlendAttachment;
+            colorBlendAttachments[2] = colorBlendAttachment;
+            colorBlendAttachments[3] = colorBlendAttachment;
 
             var colorBlendInfo = new PipelineColorBlendStateCreateInfo
             {
@@ -701,9 +728,17 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 PDynamicStates = dynamicStates
             };
 
-            var renderingColorFormats = stackalloc Format[2];
+            var renderingColorFormats = stackalloc Format[4];
             renderingColorFormats[0] = colorFormat;
-            renderingColorFormats[1] = secondaryColorFormat ?? colorFormat;
+            renderingColorFormats[1] =
+                secondaryColorFormat ??
+                materialTransportProvenanceFormat ??
+                colorFormat;
+            renderingColorFormats[2] = secondaryColorFormat.HasValue
+                ? RenderTargetManager.GiFinalDiffuseFormat
+                : colorFormat;
+            renderingColorFormats[3] =
+                materialTransportProvenanceFormat ?? colorFormat;
             var renderingInfo = new PipelineRenderingCreateInfo
             {
                 SType = StructureType.PipelineRenderingCreateInfo,

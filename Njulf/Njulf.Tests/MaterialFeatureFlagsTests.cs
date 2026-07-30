@@ -12,6 +12,7 @@ namespace Njulf.Tests
             MaterialFeatureFlags defaultFlags = MaterialFeatureFlags.None;
             MaterialFeatureFlags clearcoat = MaterialFeatureFlags.Clearcoat;
             MaterialFeatureFlags transmission = MaterialFeatureFlags.Transmission;
+            MaterialFeatureFlags ior = MaterialFeatureFlags.Ior;
             MaterialFeatureFlags foliage = MaterialFeatureFlags.Foliage;
 
             Assert.Multiple(() =>
@@ -27,6 +28,10 @@ namespace Njulf.Tests
                 Assert.That(transmission.RequiresExtensionData(), Is.True);
                 Assert.That(transmission.RequiresTransparentPass(), Is.True);
                 Assert.That(transmission.RequiresOpaqueSceneColorInput(), Is.True);
+                Assert.That(ior.HasAnyExtensionLighting(), Is.True);
+                Assert.That(ior.RequiresExtensionData(), Is.True);
+                Assert.That(ior.RequiresTransparentPass(), Is.False);
+                Assert.That(ior.RequiresOpaqueSceneColorInput(), Is.False);
                 Assert.That(foliage.HasAnyExtensionLighting(), Is.False);
                 Assert.That(foliage.RequiresExtensionData(), Is.False);
                 Assert.That(foliage.RequiresTransparentPass(), Is.False);

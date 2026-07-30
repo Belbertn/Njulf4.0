@@ -19,11 +19,10 @@ public sealed class RendererHealthReportWriter
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("Health report path must not be empty.", nameof(path));
 
-        string fullPath = System.IO.Path.GetFullPath(path);
-        string? directory = System.IO.Path.GetDirectoryName(fullPath);
-        if (!string.IsNullOrEmpty(directory))
-            Directory.CreateDirectory(directory);
-
-        File.WriteAllText(fullPath, JsonSerializer.Serialize(report, JsonOptions));
+        byte[] payload = JsonSerializer.SerializeToUtf8Bytes(report, JsonOptions);
+        DurableJsonFileWriter.Write(
+            path,
+            payload,
+            "renderer health report");
     }
 }

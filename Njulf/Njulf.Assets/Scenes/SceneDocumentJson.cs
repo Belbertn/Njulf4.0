@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -7,6 +8,8 @@ namespace Njulf.Assets.Scenes;
 
 public static class SceneDocumentJson
 {
+    internal const int MaximumDocumentBytes = 64 * 1024 * 1024;
+
     private static readonly HashSet<string> KnownRootFields = new(StringComparer.Ordinal)
     {
         "schemaVersion", "id", "name", "ambientLight", "objects", "lights", "reflectionProbes",
@@ -27,16 +30,26 @@ public static class SceneDocumentJson
     public static SceneDocument Read(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        string json = File.ReadAllText(path);
-        WarnAboutUnknownRootFields(json, path);
-        SceneDocument document = JsonSerializer.Deserialize<SceneDocument>(json, Options)
-            ?? throw new InvalidDataException($"Scene document '{path}' is empty or invalid.");
-        if (document.SchemaVersion != SceneDocument.CurrentSchemaVersion)
-            throw new InvalidDataException($"Scene document '{path}' uses unsupported schema version {document.SchemaVersion}.");
-        return document;
+        string fullPath = Path.GetFullPath(path);
+        byte[] json = ReadBoundedSnapshot(fullPath);
+        WarnAboutUnknownRootFields(json, fullPath);
+        SceneDocument document =
+            JsonSerializer.Deserialize<SceneDocument>(json, Options)
+            ?? throw new InvalidDataException(
+                $"Scene document '{fullPath}' is empty or invalid.");
+        if (document.SchemaVersion < 1 || document.SchemaVersion > SceneDocument.CurrentSchemaVersion)
+        {
+            throw new InvalidDataException(
+                $"Scene document '{fullPath}' uses unsupported schema version {document.SchemaVersion}.");
+        }
+
+        return SceneDocumentCompatibility.MaterializeLegacyMaterialOverrideDefaults(
+            document);
     }
 
-    private static void WarnAboutUnknownRootFields(string json, string path)
+    private static void WarnAboutUnknownRootFields(
+        ReadOnlyMemory<byte> json,
+        string path)
     {
         using JsonDocument parsed = JsonDocument.Parse(json);
         if (parsed.RootElement.ValueKind != JsonValueKind.Object)
@@ -57,14 +70,100 @@ public static class SceneDocumentJson
     public static void WriteAtomic(string path, SceneDocument document, bool createBackup = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        string fullPath = Path.GetFullPath(path);
-        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-        if (createBackup && File.Exists(fullPath))
-            File.Copy(fullPath, fullPath + ".bak", overwrite: true);
+        byte[] payload = Encoding.UTF8.GetBytes(Serialize(document));
+        if (payload.Length > MaximumDocumentBytes)
+        {
+            throw new InvalidOperationException(
+                $"Scene document output contains {payload.Length} bytes, exceeding " +
+                $"the {MaximumDocumentBytes}-byte limit.");
+        }
 
-        string temporaryPath = fullPath + ".tmp";
-        File.WriteAllText(temporaryPath, Serialize(document));
-        File.Move(temporaryPath, fullPath, overwrite: true);
+        string fullPath = Path.GetFullPath(path);
+        string directory =
+            Path.GetDirectoryName(fullPath)
+            ?? throw new InvalidOperationException(
+                $"Scene document path '{fullPath}' has no parent directory.");
+        Directory.CreateDirectory(directory);
+        string temporaryPath = Path.Combine(
+            directory,
+            $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
+
+        try
+        {
+            using (var output = new FileStream(
+                       temporaryPath,
+                       FileMode.CreateNew,
+                       FileAccess.Write,
+                       FileShare.None,
+                       bufferSize: 64 * 1024,
+                       options: FileOptions.WriteThrough))
+            {
+                output.Write(payload);
+                output.Flush(flushToDisk: true);
+            }
+
+            if (File.Exists(fullPath))
+            {
+                File.Replace(
+                    temporaryPath,
+                    fullPath,
+                    createBackup ? fullPath + ".bak" : null,
+                    ignoreMetadataErrors: true);
+            }
+            else
+            {
+                File.Move(temporaryPath, fullPath);
+            }
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+                File.Delete(temporaryPath);
+        }
+    }
+
+    private static byte[] ReadBoundedSnapshot(string fullPath)
+    {
+        using var input = new FileStream(
+            fullPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 64 * 1024,
+            options: FileOptions.SequentialScan);
+        long admittedLength = input.Length;
+        if (admittedLength <= 0)
+        {
+            throw new InvalidDataException(
+                $"Scene document '{fullPath}' is empty.");
+        }
+
+        if (admittedLength > MaximumDocumentBytes)
+        {
+            throw new InvalidDataException(
+                $"Scene document '{fullPath}' contains {admittedLength} bytes, exceeding " +
+                $"the {MaximumDocumentBytes}-byte limit.");
+        }
+
+        var bytes = new byte[checked((int)admittedLength)];
+        try
+        {
+            input.ReadExactly(bytes);
+        }
+        catch (EndOfStreamException exception)
+        {
+            throw new InvalidDataException(
+                $"Scene document '{fullPath}' became shorter during its bounded read.",
+                exception);
+        }
+
+        if (input.ReadByte() != -1 || input.Length != admittedLength)
+        {
+            throw new InvalidDataException(
+                $"Scene document '{fullPath}' changed length during its bounded read.");
+        }
+
+        return bytes;
     }
 
     private static SceneDocument Normalize(SceneDocument document) => new()

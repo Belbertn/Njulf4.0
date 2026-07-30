@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Njulf.Rendering.Data;
@@ -74,6 +75,8 @@ namespace Njulf.Rendering.Diagnostics
         int VisibleClusterCount,
         int VisibleMeshletDrawCount,
         int DdgiSampleCount,
+        int DdgiTransportExcludedClusterCount,
+        string DdgiTransportExclusionReason,
         int GrassBladeEstimate,
         int FarImpostorVisibleCount,
         int OverflowCount,
@@ -359,8 +362,12 @@ namespace Njulf.Rendering.Diagnostics
     {
         internal static readonly JsonSerializerOptions SerializerOptions = new()
         {
+            AllowTrailingCommas = false,
+            MaxDepth = 64,
             WriteIndented = true,
-            PropertyNameCaseInsensitive = true,
+            PropertyNameCaseInsensitive = false,
+            ReadCommentHandling = JsonCommentHandling.Disallow,
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
             Converters =
             {
                 // The converter writes stable names for human-facing captures and continues to
@@ -386,7 +393,6 @@ namespace Njulf.Rendering.Diagnostics
                 CaptureRun = NormalizeCaptureRunMetadata(diagnostics.CaptureRun)
             };
 
-            Directory.CreateDirectory(directory);
             DateTimeOffset capturedAt = DateTimeOffset.UtcNow;
             string path = Path.Combine(
                 directory,
@@ -407,11 +413,19 @@ namespace Njulf.Rendering.Diagnostics
                 GiTiming = CreateGiTimingAttributionSnapshot(diagnostics),
                 GiResidency = budget.GiResidency.UniqueMeasurementAvailable
                     ? budget.GiResidency
-                    : GiResidencyReporter.Create(diagnostics, budget.Memory)
+                    : GiResidencyReporter.Create(
+                        diagnostics,
+                        budget.Memory,
+                        RenderBudgetProfile.GetDefault(
+                            diagnostics.ActiveBudgetProfile))
             };
-            string json = JsonSerializer.Serialize(snapshot, SerializerOptions);
-            File.WriteAllText(path, json);
-            return path;
+            byte[] payload = JsonSerializer.SerializeToUtf8Bytes(
+                snapshot,
+                SerializerOptions);
+            return DurableJsonFileWriter.Write(
+                path,
+                payload,
+                "performance snapshot");
         }
 
         private static IReadOnlyList<GiDiagnosticWarning> CreateStructuredWarnings(RendererDiagnostics diagnostics)
@@ -436,6 +450,39 @@ namespace Njulf.Rendering.Diagnostics
             var warnings = new List<string>(7);
             if (diagnostics.GlobalIlluminationEmergencyFallbackEnabled != 0)
                 warnings.Add("Emergency GI fallback is active; dynamic GI is suppressed for this capture.");
+            if (diagnostics.PendingMaterialTextureFanoutCount != 0)
+            {
+                warnings.Add(
+                    $"{diagnostics.PendingMaterialTextureFanoutCount} texture-to-material fan-out publication(s) are pending; rendering remains fail-closed until retry.");
+            }
+            if (diagnostics.MaterialBindingRepairPending != 0)
+            {
+                warnings.Add(
+                    "Material buffer descriptor publication requires repair; rendering remains fail-closed.");
+            }
+            if (diagnostics.PendingRetiredMaterialBufferCount != 0 ||
+                diagnostics.QuarantinedMaterialBufferCount != 0)
+            {
+                warnings.Add(
+                    $"{diagnostics.PendingRetiredMaterialBufferCount} retired material buffer(s) await destruction and " +
+                    $"{diagnostics.QuarantinedMaterialBufferCount} candidate buffer(s) remain quarantined.");
+            }
+            if (diagnostics.MaterialRetiredBufferCleanupFailureCount != 0)
+            {
+                warnings.Add(
+                    $"{diagnostics.MaterialRetiredBufferCleanupFailureCount} retired material-buffer cleanup attempt(s) failed and were retained for retry.");
+            }
+            if (diagnostics.MeshRetainedDeadByteBudgetRejectionCount != 0)
+            {
+                warnings.Add(
+                    $"Mesh stream fragmentation admission has rejected {diagnostics.MeshRetainedDeadByteBudgetRejectionCount} registration request(s); " +
+                    $"retained dead bytes are {diagnostics.MeshRetainedDeadBytes} of {diagnostics.MeshRetainedDeadByteBudget}.");
+            }
+            if (diagnostics.MeshPostCommitCleanupFailureCount != 0)
+            {
+                warnings.Add(
+                    $"{diagnostics.MeshPostCommitCleanupFailureCount} post-commit mesh cleanup operation(s) were deferred or quarantined.");
+            }
             if (diagnostics.SimpleDdgiLayout.IsAvailable && diagnostics.SimpleDdgiLayout.WasDegraded)
                 warnings.Add("Simple DDGI layout was degraded before allocation: " + diagnostics.SimpleDdgiLayout.Summary);
             if (diagnostics.SimpleDdgiLayout.IsAvailable &&
@@ -481,6 +528,45 @@ namespace Njulf.Rendering.Diagnostics
             {
                 warnings.Add("GI CPU scheduling and upload P95 exceeds the configured tier budget.");
             }
+            if (diagnostics.MaterialGiReleaseQualificationRequired != 0 &&
+                diagnostics.MaterialGiReleaseQualificationFailureCount > 0)
+            {
+                warnings.Add(
+                    "Material-GI V2 is active without a valid shipping qualification: " +
+                    diagnostics.MaterialGiReleaseQualificationSummary);
+            }
+            if ((diagnostics.MaterialGiV2ActiveFeatures &
+                 MaterialGiV2Feature.MaterialTransport) != 0)
+            {
+                if (diagnostics.MaterialActiveLegacyV1FallbackCount > 0)
+                {
+                    warnings.Add(
+                        $"{diagnostics.MaterialActiveLegacyV1FallbackCount} active material(s) still use the V1 compatibility path.");
+                }
+                if (diagnostics.MaterialActiveInvalidProfileCount > 0)
+                {
+                    warnings.Add(
+                        $"{diagnostics.MaterialActiveInvalidProfileCount} active material(s) have invalid compact transport profiles.");
+                }
+                if (diagnostics.MaterialCompileTimingSampleCount > 0 &&
+                    diagnostics.MaterialUploadTimingSampleCount > 0 &&
+                    diagnostics.MaterialCompileP95Microseconds +
+                    diagnostics.MaterialUploadP95Microseconds >
+                        profile.GlobalIlluminationCpuBudgetMilliseconds * 1000.0)
+                {
+                    warnings.Add(
+                        "Material compile/upload P95 exceeds the configured GI CPU scheduling/upload budget.");
+                }
+                ulong primitiveProfileTierBudget =
+                    RenderBudgetEvaluator.ResolvePrimitiveProfileMemoryBudgetBytes(
+                        diagnostics.ActiveQualityPreset);
+                if (diagnostics.MaterialPrimitiveProfileGpuBytes > primitiveProfileTierBudget)
+                {
+                    warnings.Add(
+                        $"Primitive transport profiles use {diagnostics.MaterialPrimitiveProfileGpuBytes} GPU bytes, " +
+                        $"exceeding the {primitiveProfileTierBudget}-byte {diagnostics.ActiveQualityPreset} tier cap.");
+                }
+            }
             if (diagnostics.SimpleDdgiSampledAtlasRequested != 0 &&
                 diagnostics.SimpleDdgiSampledAtlasActive == 0 &&
                 !string.IsNullOrWhiteSpace(diagnostics.SimpleDdgiSampledAtlasFallbackReason))
@@ -492,6 +578,12 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.DdgiInvestigationCountersReadbackValid == 0)
             {
                 warnings.Add("Detailed GI counter readback is unavailable; counter-based quality diagnostics are unavailable.");
+            }
+            if (diagnostics.FoliageDdgiTransportExcludedClusterCount > 0)
+            {
+                warnings.Add(
+                    $"{diagnostics.FoliageDdgiTransportExcludedClusterCount} foliage cluster(s) are excluded " +
+                    $"from DDGI occlusion/source transport: {diagnostics.FoliageDdgiTransportExclusionReason}.");
             }
             if (diagnostics.SimpleDdgiDirtyFirstUpdateLatencySampleCount > 0 &&
                 diagnostics.SimpleDdgiDirtyFirstUpdateLatencyP95Frames > 1)
@@ -706,6 +798,8 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.FoliageVisibleClusterCount,
                 diagnostics.FoliageVisibleMeshletDrawCount,
                 diagnostics.FoliageDdgiSampleCount,
+                diagnostics.FoliageDdgiTransportExcludedClusterCount,
+                diagnostics.FoliageDdgiTransportExclusionReason,
                 diagnostics.FoliageGrassBladeEstimate,
                 diagnostics.FoliageFarImpostorVisibleCount,
                 diagnostics.FoliageOverflowCount,
@@ -1067,11 +1161,18 @@ namespace Njulf.Rendering.Diagnostics
     /// </summary>
     public sealed class PerformanceSnapshotReader
     {
+        private static readonly UTF8Encoding StrictUtf8 =
+            new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
         public PerformanceSnapshot Read(string path)
         {
             if (string.IsNullOrWhiteSpace(path))
                 throw new ArgumentException("Snapshot path is required.", nameof(path));
-            return ReadJson(File.ReadAllText(path));
+            byte[] json = BoundedFileReader.ReadStable(
+                path,
+                DurableJsonFileWriter.MaximumPayloadBytes,
+                "Performance snapshot");
+            return ReadUtf8(json);
         }
 
         public PerformanceSnapshot ReadJson(string json)
@@ -1079,35 +1180,92 @@ namespace Njulf.Rendering.Diagnostics
             if (string.IsNullOrWhiteSpace(json))
                 throw new ArgumentException("Snapshot JSON is required.", nameof(json));
 
-            using JsonDocument document = JsonDocument.Parse(json);
-            JsonElement root = document.RootElement;
-            if (!root.TryGetProperty("SchemaVersion", out JsonElement schemaElement) ||
-                schemaElement.ValueKind != JsonValueKind.Number ||
-                !schemaElement.TryGetInt32(out int schemaVersion))
+            byte[] utf8;
+            try
             {
-                throw new InvalidDataException("Performance snapshot does not contain a valid SchemaVersion.");
-            }
-            if (schemaVersion is not 2 and not PerformanceSnapshot.CurrentSchemaVersion)
-            {
-                throw new NotSupportedException(
-                    $"Performance snapshot schema {schemaVersion} is not supported. Supported schemas are 2 and {PerformanceSnapshot.CurrentSchemaVersion}.");
-            }
-
-            PerformanceSnapshot? deserialized = JsonSerializer.Deserialize<PerformanceSnapshot>(
-                json,
-                PerformanceSnapshotWriter.SerializerOptions);
-            if (deserialized == null)
-                throw new InvalidDataException("Performance snapshot could not be deserialized.");
-
-            return schemaVersion == PerformanceSnapshot.CurrentSchemaVersion
-                ? deserialized with
+                int byteCount = StrictUtf8.GetByteCount(json);
+                if (byteCount <= 0 ||
+                    byteCount > DurableJsonFileWriter.MaximumPayloadBytes)
                 {
-                    SchemaVersion = PerformanceSnapshot.CurrentSchemaVersion,
-                    OriginalSchemaVersion = deserialized.OriginalSchemaVersion == 0
-                        ? PerformanceSnapshot.CurrentSchemaVersion
-                        : deserialized.OriginalSchemaVersion
+                    throw new InvalidDataException(
+                        "Performance snapshot JSON has an invalid bounded length.");
                 }
-                : MigrateSchemaV2(deserialized);
+                utf8 = new byte[byteCount];
+                StrictUtf8.GetBytes(json, utf8);
+            }
+            catch (EncoderFallbackException exception)
+            {
+                throw new InvalidDataException(
+                    "Performance snapshot JSON contains invalid Unicode.",
+                    exception);
+            }
+            return ReadUtf8(utf8);
+        }
+
+        private static PerformanceSnapshot ReadUtf8(byte[] json)
+        {
+            try
+            {
+                StrictJsonContract.RejectDuplicateProperties(
+                    json,
+                    PerformanceSnapshotWriter.SerializerOptions.MaxDepth,
+                    "Performance snapshot");
+                using JsonDocument document = JsonDocument.Parse(
+                    json,
+                    new JsonDocumentOptions
+                    {
+                        AllowTrailingCommas = false,
+                        CommentHandling = JsonCommentHandling.Disallow,
+                        MaxDepth =
+                            PerformanceSnapshotWriter.SerializerOptions.MaxDepth
+                    });
+                JsonElement root = document.RootElement;
+                if (!root.TryGetProperty(
+                        "SchemaVersion",
+                        out JsonElement schemaElement) ||
+                    schemaElement.ValueKind != JsonValueKind.Number ||
+                    !schemaElement.TryGetInt32(out int schemaVersion))
+                {
+                    throw new InvalidDataException(
+                        "Performance snapshot does not contain a valid SchemaVersion.");
+                }
+                if (schemaVersion is not 2 and
+                    not PerformanceSnapshot.CurrentSchemaVersion)
+                {
+                    throw new NotSupportedException(
+                        $"Performance snapshot schema {schemaVersion} is not supported. " +
+                        $"Supported schemas are 2 and {PerformanceSnapshot.CurrentSchemaVersion}.");
+                }
+
+                PerformanceSnapshot? deserialized =
+                    JsonSerializer.Deserialize<PerformanceSnapshot>(
+                        json,
+                        PerformanceSnapshotWriter.SerializerOptions);
+                if (deserialized == null)
+                {
+                    throw new InvalidDataException(
+                        "Performance snapshot could not be deserialized.");
+                }
+
+                return schemaVersion ==
+                        PerformanceSnapshot.CurrentSchemaVersion
+                    ? deserialized with
+                    {
+                        SchemaVersion =
+                            PerformanceSnapshot.CurrentSchemaVersion,
+                        OriginalSchemaVersion =
+                            deserialized.OriginalSchemaVersion == 0
+                                ? PerformanceSnapshot.CurrentSchemaVersion
+                                : deserialized.OriginalSchemaVersion
+                    }
+                    : MigrateSchemaV2(deserialized);
+            }
+            catch (JsonException exception)
+            {
+                throw new InvalidDataException(
+                    "Performance snapshot JSON is invalid.",
+                    exception);
+            }
         }
 
         private static PerformanceSnapshot MigrateSchemaV2(PerformanceSnapshot legacy)
@@ -1130,7 +1288,11 @@ namespace Njulf.Rendering.Diagnostics
             };
             GiResidencySnapshot residency = legacy.GiResidency.UniqueMeasurementAvailable
                 ? legacy.GiResidency
-                : GiResidencyReporter.Create(diagnostics, legacy.Budget.Memory);
+                : GiResidencyReporter.Create(
+                    diagnostics,
+                    legacy.Budget.Memory,
+                    RenderBudgetProfile.GetDefault(
+                        diagnostics.ActiveBudgetProfile));
             GiTimingAttributionSnapshot timing = PerformanceSnapshotWriter.CreateGiTimingAttributionSnapshot(diagnostics);
             return legacy with
             {

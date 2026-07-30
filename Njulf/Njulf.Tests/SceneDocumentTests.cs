@@ -118,6 +118,39 @@ public sealed class SceneDocumentTests
     }
 
     [Test]
+    public void Loader_RejectsNegativeMaterialAlphaCutoffBeforeLoadingContent()
+    {
+        Guid id = Guid.NewGuid();
+        var document = new SceneDocument
+        {
+            Objects =
+            [
+                new SceneObjectDocument
+                {
+                    Id = id,
+                    Name = "Invalid alpha",
+                    Model = new SceneAssetReferenceDocument("missing.glb"),
+                    MaterialOverride = new SceneMaterialOverrideDocument
+                    {
+                        AlphaCutoff = -0.01f
+                    }
+                }
+            ]
+        };
+        var loader = new SceneDocumentLoader(new ThrowingContentManager());
+
+        InvalidDataException error =
+            Assert.Throws<InvalidDataException>(() => loader.Load(document))!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(error.Message, Does.Contain(id.ToString()));
+            Assert.That(error.Message, Does.Contain("alpha cutoff"));
+            Assert.That(error.InnerException, Is.Null);
+        });
+    }
+
+    [Test]
     public void EditSaveReload_RoundTripsObjectsAndLightsIntoFreshScene()
     {
         string root = Path.Combine(Path.GetTempPath(), "NjulfTests", Guid.NewGuid().ToString("N"));

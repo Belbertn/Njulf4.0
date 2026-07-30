@@ -27,11 +27,22 @@ namespace Njulf.Rendering.Data
         public MaterialBlendMode BlendMode { get; init; } = MaterialBlendMode.Opaque;
         public MaterialSurfaceFlags SurfaceFlags { get; init; } = MaterialSurfaceFlags.ReceivesShadows;
         public float AlphaCutoff { get; init; } = 0.5f;
+        public MaterialShadingModel ShadingModel { get; init; } = MaterialShadingModel.Pbr;
+        public GiParticipationOverride DiffuseGiParticipation { get; init; } = GiParticipationOverride.Default;
+        public GiParticipationOverride EmissionGiParticipation { get; init; } = GiParticipationOverride.Default;
         public int DecalLayer { get; init; }
         public float DecalDepthBias { get; init; }
 
         public static MaterialRenderMetadata FromGpuMaterial(GPUMaterialData material)
         {
+            if (!float.IsFinite(material.NormalScaleBias.Z) ||
+                material.NormalScaleBias.Z < 0f)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(material),
+                    "GPU material alpha cutoff must be finite and non-negative.");
+            }
+
             MaterialRenderMode renderMode = MaterialRenderModeExtensions.FromGpuMaterial(material);
             MaterialSurfaceFlags flags = MaterialSurfaceFlags.ReceivesShadows;
             if (material.NormalScaleBias.W >= 0.5f)
@@ -46,7 +57,7 @@ namespace Njulf.Rendering.Data
                     _ => MaterialBlendMode.Opaque
                 },
                 SurfaceFlags = flags,
-                AlphaCutoff = Math.Clamp(material.NormalScaleBias.Z, 0f, 1f)
+                AlphaCutoff = material.NormalScaleBias.Z
             };
         }
 
@@ -63,5 +74,13 @@ namespace Njulf.Rendering.Data
         public bool IsGeometryDecal => SurfaceFlags.HasFlag(MaterialSurfaceFlags.GeometryDecal);
         public bool ReceivesShadows => SurfaceFlags.HasFlag(MaterialSurfaceFlags.ReceivesShadows);
         public bool DoubleSided => SurfaceFlags.HasFlag(MaterialSurfaceFlags.DoubleSided);
+        public bool IsUnlit => ShadingModel == MaterialShadingModel.Unlit;
+        public bool ReceivesIndirectDiffuse =>
+            DiffuseGiParticipation != GiParticipationOverride.Disabled &&
+            ShadingModel is not MaterialShadingModel.Unlit and not MaterialShadingModel.Decal;
+        public bool EmitsIntoGi =>
+            EmissionGiParticipation == GiParticipationOverride.Enabled ||
+            EmissionGiParticipation == GiParticipationOverride.Default &&
+            ShadingModel != MaterialShadingModel.Unlit;
     }
 }

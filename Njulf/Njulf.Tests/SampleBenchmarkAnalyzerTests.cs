@@ -104,4 +104,121 @@ public sealed class SampleBenchmarkAnalyzerTests
             Assert.That(report.GpuPasses[0].Name, Is.EqualTo("SsgiTracePass"));
         });
     }
+
+    [Test]
+    public void CreateReport_RetainsWorstBudgetMetricAcrossAllMeasurementFrames()
+    {
+        var analyzer = new SampleBenchmarkAnalyzer();
+        var overBudget = RenderBudgetSnapshot.Empty with
+        {
+            Metrics =
+            [
+                new BudgetMetric(
+                    "DDGI total memory",
+                    Value: 257,
+                    WarningThreshold: 200,
+                    FailureThreshold: 256,
+                    Unit: "MiB",
+                    Status: RenderBudgetStatus.OverBudget)
+            ]
+        };
+        var recovered = RenderBudgetSnapshot.Empty with
+        {
+            Metrics =
+            [
+                new BudgetMetric(
+                    "DDGI total memory",
+                    Value: 128,
+                    WarningThreshold: 200,
+                    FailureThreshold: 256,
+                    Unit: "MiB",
+                    Status: RenderBudgetStatus.WithinBudget)
+            ]
+        };
+        RendererDiagnostics validTiming = RendererDiagnostics.Empty with
+        {
+            GpuTimingSupported = 1,
+            GpuTimingValid = 1,
+            GpuFrameMicroseconds = 1_000
+        };
+
+        analyzer.AddSample(validTiming, overBudget);
+        analyzer.AddSample(validTiming, recovered);
+
+        SampleBenchmarkReport report = analyzer.CreateReport(
+            new SampleBenchmarkOptions(true, 0, 2, null),
+            SamplePerformanceScenario.Normal,
+            warmupFrameCount: 0,
+            measurementFrameCount: 2,
+            firstMeasurementFrameIndex: 0,
+            lastMeasurementFrameIndex: 1);
+
+        BudgetMetric metric = report.BudgetMetrics.Single(
+            candidate => candidate.Name == "DDGI total memory");
+        Assert.Multiple(() =>
+        {
+            Assert.That(metric.Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+            Assert.That(metric.Value, Is.EqualTo(257));
+            Assert.That(
+                report.Findings.Any(
+                    finding => finding.Category == "budget" &&
+                               finding.Subject == "DDGI total memory"),
+                Is.True);
+        });
+    }
+
+    [TestCase(RenderBudgetStatus.Unavailable)]
+    [TestCase(RenderBudgetStatus.Unknown)]
+    public void CreateReport_RetainsIncompleteCoverageFromAnyMeasurementFrame(
+        RenderBudgetStatus incompleteStatus)
+    {
+        var analyzer = new SampleBenchmarkAnalyzer();
+        var unavailable = RenderBudgetSnapshot.Empty with
+        {
+            Metrics =
+            [
+                new BudgetMetric(
+                    "GI GPU",
+                    Value: 0,
+                    WarningThreshold: 5,
+                    FailureThreshold: 6,
+                    Unit: "ms",
+                    Status: incompleteStatus)
+            ]
+        };
+        var available = RenderBudgetSnapshot.Empty with
+        {
+            Metrics =
+            [
+                new BudgetMetric(
+                    "GI GPU",
+                    Value: 2,
+                    WarningThreshold: 5,
+                    FailureThreshold: 6,
+                    Unit: "ms",
+                    Status: RenderBudgetStatus.WithinBudget)
+            ]
+        };
+        RendererDiagnostics validTiming = RendererDiagnostics.Empty with
+        {
+            GpuTimingSupported = 1,
+            GpuTimingValid = 1,
+            GpuFrameMicroseconds = 1_000
+        };
+
+        analyzer.AddSample(validTiming, unavailable);
+        analyzer.AddSample(validTiming, available);
+
+        SampleBenchmarkReport report = analyzer.CreateReport(
+            new SampleBenchmarkOptions(true, 0, 2, null),
+            SamplePerformanceScenario.Normal,
+            warmupFrameCount: 0,
+            measurementFrameCount: 2,
+            firstMeasurementFrameIndex: 0,
+            lastMeasurementFrameIndex: 1);
+
+        BudgetMetric metric = report.BudgetMetrics.Single(
+            candidate => candidate.Name == "GI GPU");
+        Assert.That(metric.Status, Is.EqualTo(incompleteStatus));
+    }
 }

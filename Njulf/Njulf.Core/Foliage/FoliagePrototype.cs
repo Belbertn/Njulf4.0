@@ -2,7 +2,9 @@ using System;
 
 namespace Njulf.Core.Foliage;
 
-public sealed class FoliagePrototype : Njulf.Core.Scene.IIdentifiedSceneEntity
+public sealed class FoliagePrototype :
+    Njulf.Core.Scene.IIdentifiedSceneEntity,
+    IDisposable
 {
     private string _name = "FoliagePrototype";
     private object? _mesh;
@@ -13,6 +15,7 @@ public sealed class FoliagePrototype : Njulf.Core.Scene.IIdentifiedSceneEntity
     private float _cardWidth = 0.08f;
     private bool _farImpostorEnabled;
     private uint _revision = 1;
+    private Njulf.Core.Scene.RenderObject? _resourceOwner;
 
     public Guid Id { get; set; } = Guid.NewGuid();
 
@@ -131,6 +134,41 @@ public sealed class FoliagePrototype : Njulf.Core.Scene.IIdentifiedSceneEntity
     public FoliageWindSettings Wind { get; } = new();
     public FoliageLightingSettings Lighting { get; } = new();
     public uint Revision => _revision;
+
+    /// <summary>
+    /// Transfers a render object's mesh/material leases to this prototype.
+    /// The source remains the retryable lifetime owner until disposal.
+    /// </summary>
+    public void AdoptResourceOwner(
+        Njulf.Core.Scene.RenderObject source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (_resourceOwner != null)
+        {
+            throw new InvalidOperationException(
+                "Foliage resource ownership is already attached.");
+        }
+        if (!Equals(Mesh, source.Mesh) ||
+            !Equals(Material, source.Material))
+        {
+            throw new InvalidOperationException(
+                "Foliage handles must match the transferred resource owner.");
+        }
+
+        _resourceOwner = source;
+    }
+
+    public void Dispose()
+    {
+        if (_resourceOwner == null)
+            return;
+
+        _resourceOwner.Dispose();
+        _resourceOwner = null;
+        _mesh = null;
+        _material = null;
+        IncrementRevision();
+    }
 
     public void MarkSettingsChanged()
     {

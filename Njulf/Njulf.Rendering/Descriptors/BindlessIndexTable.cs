@@ -11,47 +11,47 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         // STORAGE BUFFER HEAP INDICES (0-14 reserved)
         // ============================================
-        
+
         /// <summary>Object data buffer - per-object transforms and metadata</summary>
         public const int ObjectDataBuffer = 0;
-        
+
         /// <summary>Material data buffer - PBR material parameters</summary>
         public const int MaterialDataBuffer = 1;
 
         /// <summary>Optional material extension payload buffer</summary>
         public const int MaterialExtensionDataBuffer = 44;
-        
+
         /// <summary>Scene mesh metadata buffer</summary>
         public const int SceneMeshMetadataBuffer = 2;
-        
+
         /// <summary>
         /// Legacy vertex-buffer slot. Static mesh data is canonical split streams;
         /// this slot aliases the position stream for compatibility and must not be
         /// interpreted as interleaved <c>GPUVertex</c> data.
         /// </summary>
         public const int VertexBuffer = 3;
-        
+
         /// <summary>Consolidated index buffer</summary>
         public const int IndexBuffer = 4;
-        
+
         /// <summary>Meshlet descriptor buffer</summary>
         public const int MeshletBuffer = 5;
-        
+
         /// <summary>Meshlet local vertex index buffer</summary>
         public const int MeshletVertexIndexBuffer = 6;
-        
+
         /// <summary>Meshlet local triangle index buffer</summary>
         public const int MeshletTriangleIndexBuffer = 7;
-        
+
         /// <summary>Instance buffer for frame 0 (base)</summary>
         public const int InstanceBufferBase = 8;
-        
+
         /// <summary>Instance buffer for the second in-flight frame</summary>
         public const int InstanceBufferFrame1 = 9;
-        
+
         /// <summary>Meshlet draw command buffer for frame 0 (base)</summary>
         public const int MeshletDrawBufferBase = 10;
-        
+
         /// <summary>Meshlet draw command buffer for the second in-flight frame</summary>
         public const int MeshletDrawBufferFrame1 = 11;
 
@@ -60,13 +60,13 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Transparent meshlet draw command buffer for the second in-flight frame</summary>
         public const int TransparentMeshletDrawBufferFrame1 = 13;
-        
+
         /// <summary>GPU light buffer</summary>
         public const int LightBuffer = 14;
-        
+
         /// <summary>Tiled light culling header buffer</summary>
         public const int TiledLightHeaderBuffer = 15;
-        
+
         /// <summary>Tiled light culling indices buffer</summary>
         public const int TiledLightIndicesBuffer = 16;
 
@@ -547,11 +547,11 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Bounded virtual-page table for the streamed far-field cache.</summary>
         public const int FarFieldClipmapPageTableBuffer = FarFieldClipmapJumpFloodScratch1Buffer + 1;
-        
+
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
         // ============================================
-        
+
         /// <summary>First available texture index</summary>
         public const int FirstTextureIndex = 0;
 
@@ -681,6 +681,9 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Fixed sampled weighted blended OIT revealage texture</summary>
         public const int WeightedOitRevealageTexture = WeightedOitAccumulationTexture + 1;
 
+        /// <summary>Fixed sampled per-pixel material transport source-path diagnostic</summary>
+        public const int MaterialTransportProvenanceTexture = WeightedOitRevealageTexture + 1;
+
         /// <summary>
         /// Number of fixed sampled-image Simple-DDGI atlas groups reserved for the
         /// optional A/B migration path.  Each group is a 2D-array texture and the
@@ -689,7 +692,8 @@ namespace Njulf.Rendering.Descriptors
         public const int MaxSimpleDdgiSampledAtlasTextureGroups = 128;
 
         /// <summary>First fixed sampled Simple-DDGI irradiance atlas texture group.</summary>
-        public const int SimpleDdgiSampledIrradianceTextureBase = WeightedOitRevealageTexture + 1;
+        public const int SimpleDdgiSampledIrradianceTextureBase =
+            MaterialTransportProvenanceTexture + 1;
 
         /// <summary>First fixed sampled Simple-DDGI visibility atlas texture group.</summary>
         public const int SimpleDdgiSampledVisibilityTextureBase =
@@ -698,33 +702,33 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>First dynamically allocated material texture index</summary>
         public const int FirstDynamicTextureIndex =
             SimpleDdgiSampledVisibilityTextureBase + MaxSimpleDdgiSampledAtlasTextureGroups;
-        
+
         /// <summary>Maximum number of textures</summary>
         public const int MaxTextures = 65536;
-        
+
         // ============================================
         // STATIC BUFFER COUNT (for validation)
         // ============================================
-        
+
         /// <summary>Number of static (fixed-index) buffers</summary>
         public const int StaticBufferCount = FarFieldClipmapPageTableBuffer + 1;
-        
+
         // ============================================
         // UTILITY METHODS
         // ============================================
-        
+
         /// <summary>Validates that an index is a static buffer index</summary>
         public static bool IsStaticBufferIndex(int index)
         {
             return index >= 0 && index < StaticBufferCount;
         }
-        
+
         /// <summary>Validates that an index is a texture index</summary>
         public static bool IsTextureIndex(int index)
         {
             return index >= FirstTextureIndex && index < FirstTextureIndex + MaxTextures;
         }
-        
+
         /// <summary>
         /// Gets the name of a storage-buffer bindless index.
         /// Texture indices live in a separate descriptor set and can overlap these values.
@@ -917,7 +921,7 @@ namespace Njulf.Rendering.Descriptors
             {
                 return $"Texture {index - FirstTextureIndex}";
             }
-            
+
             return "Unknown";
         }
 

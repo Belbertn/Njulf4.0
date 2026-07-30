@@ -9,6 +9,7 @@
 layout(early_fragment_tests) in;
 
 #include "common.glsl"
+#include "gi_material_transport.glsl"
 #include "material_coverage.glsl"
 #define SIMPLE_DDGI_FORWARD_TILE_CANDIDATES 1
 // Detailed captures need representative gather counts, not one globally
@@ -30,6 +31,10 @@ layout(early_fragment_tests) in;
 
 #ifndef FORWARD_SSGI_TRACE_SOURCE_OUTPUT
 #define FORWARD_SSGI_TRACE_SOURCE_OUTPUT NJULF_SSGI_TRACE_OUTPUT
+#endif
+
+#ifndef NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
+#define NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT 0
 #endif
 
 #if FORWARD_SIMPLE_VERTEX_INPUT
@@ -61,6 +66,17 @@ layout(location = 1) out vec4 outOitRevealage;
 layout(location = 0) out vec4 outColor;
 #if FORWARD_SSGI_TRACE_SOURCE_OUTPUT
 layout(location = 1) out vec4 outSsgiTraceSource;
+// GiFinalDiffuse is phase-reused as the forward DDGI/environment baseline while
+// SSGI traces. The denoiser later phase-reuses the trace-source image for the
+// full-resolution SSGI estimate, so hybrid composition needs no extra HDR image.
+layout(location = 2) out vec4 outGiCompositionBaseline;
+#if NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
+layout(location = 3) out float outMaterialTransportProvenance;
+#endif
+#else
+#if NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
+layout(location = 1) out float outMaterialTransportProvenance;
+#endif
 #endif
 #endif
 
@@ -70,6 +86,13 @@ layout(push_constant) uniform ForwardPushConstantBlock
 } pc;
 
 const float PI = 3.14159265359;
+// R8_UNORM material-transport provenance attachment ABI. Keep synchronized
+// with MaterialTransportProvenanceCode on the CPU.
+const uint MATERIAL_TRANSPORT_PROVENANCE_BACKGROUND = 0u;
+const uint MATERIAL_TRANSPORT_PROVENANCE_DETAILED_MESH = 1u;
+const uint MATERIAL_TRANSPORT_PROVENANCE_COMPACT_PRIMITIVE = 2u;
+const uint MATERIAL_TRANSPORT_PROVENANCE_FAR_FIELD = 3u;
+const uint MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN = 255u;
 const uint DEBUG_VIEW_NONE = 0u;
 const uint DEBUG_VIEW_MESHLETS = 1u;
 const uint DEBUG_VIEW_SHADOW_CASCADE_OVERLAY = 2u;
@@ -120,6 +143,19 @@ const uint MATERIAL_DEBUG_SPECULAR_COLOR = 51u;
 const uint MATERIAL_DEBUG_IRIDESCENCE_FACTOR = 52u;
 const uint MATERIAL_DEBUG_IRIDESCENCE_THICKNESS = 53u;
 const uint MATERIAL_DEBUG_DISPERSION = 54u;
+const uint MATERIAL_DEBUG_MATERIAL_OCCLUSION = 55u;
+const uint MATERIAL_DEBUG_CANONICAL_DIFFUSE_REFLECTANCE = 56u;
+const uint MATERIAL_DEBUG_COMPILED_EMISSION = 57u;
+const uint MATERIAL_DEBUG_GEOMETRIC_NORMAL = 58u;
+const uint MATERIAL_DEBUG_OPACITY = 59u;
+const uint MATERIAL_DEBUG_SIDEDNESS = 60u;
+const uint MATERIAL_DEBUG_SHADING_MODEL = 61u;
+const uint MATERIAL_DEBUG_TRANSPORT_PROFILE = 62u;
+const uint MATERIAL_DEBUG_MATERIAL_REVISIONS = 63u;
+// Values 64-70 are animation diagnostics. These two modes are deliberately
+// capture-only and execute after the full direct-light loop.
+const uint MATERIAL_CAPTURE_LINEAR_DIRECT_DIFFUSE = 71u;
+const uint MATERIAL_CAPTURE_LINEAR_DIRECT_SPECULAR = 72u;
 const uint GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT = 80u;
 const uint GLOBAL_ILLUMINATION_DEBUG_SSGI_RAW = 81u;
 const uint GLOBAL_ILLUMINATION_DEBUG_SSGI_FILTERED = 82u;
@@ -268,6 +304,11 @@ bool DirectionalShadowReceiverCountersEnabled()
     return (pc.Push.DiagnosticFlags & 4u) != 0u;
 }
 
+bool MaterialTransportProvenanceEnabled()
+{
+    return (pc.Push.DiagnosticFlags & 8u) != 0u;
+}
+
 bool DdgiSparseDiagnosticPixel()
 {
     uvec2 pixel = uvec2(max(gl_FragCoord.xy, vec2(0.0)));
@@ -379,7 +420,7 @@ vec3 MeshletDebugColor(uint meshletIndex)
 bool IsMaterialDebugView(uint debugViewMode)
 {
     return debugViewMode >= MATERIAL_DEBUG_FEATURE_FLAGS &&
-           debugViewMode <= MATERIAL_DEBUG_DISPERSION;
+           debugViewMode <= MATERIAL_DEBUG_MATERIAL_REVISIONS;
 }
 
 bool IsAnimationDebugView(uint debugViewMode)
@@ -603,6 +644,7 @@ struct DdgiSampleResult
     float strongestSupportWeight;
     float sampleTotalWeight;
     float sampleExpectedWeight;
+    uint transportSourcePath;
 };
 
 struct DdgiVolumeSampleInfo
@@ -935,6 +977,7 @@ DdgiSampleResult EmptyDdgiSampleResult()
     result.strongestSupportWeight = 0.0;
     result.sampleTotalWeight = 0.0;
     result.sampleExpectedWeight = 0.0;
+    result.transportSourcePath = MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN;
     return result;
 }
 
@@ -1474,6 +1517,9 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
     result.leakClamp = clamp(result.leakClamp, 0.0, 1.0);
     result.cascadeIndex = float(info.cascadeIndex);
     result.cascadeBlendWeight = clamp(volumeEdgeFade, 0.0, 1.0);
+    result.transportSourcePath = info.kind == DDGI_VOLUME_KIND_CAMERA_CLIPMAP
+        ? MATERIAL_TRANSPORT_PROVENANCE_COMPACT_PRIMITIVE
+        : MATERIAL_TRANSPORT_PROVENANCE_DETAILED_MESH;
     return result;
 }
 
@@ -1559,6 +1605,7 @@ float AccumulateDdgiCandidate(
         result.strongestSupportWeight = candidate.strongestSupportWeight;
         result.sampleTotalWeight = candidate.sampleTotalWeight;
         result.sampleExpectedWeight = candidate.sampleExpectedWeight;
+        result.transportSourcePath = candidate.transportSourcePath;
     }
 
     return candidate.cascadeBlendWeight;
@@ -1858,11 +1905,15 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
     return result;
 }
 
-vec3 SampleDdgiDiffuse(DdgiSampleResult ddgi, vec3 albedo, float metallic)
+vec3 SampleDdgiDiffuse(
+    DdgiSampleResult ddgi,
+    vec3 diffuseReflectance,
+    float materialOcclusion)
 {
-    float diffuseWeight = 1.0 - clamp(metallic, 0.0, 1.0);
     // Probe atlas values are irradiance. Apply the receiver diffuse BRDF exactly once here.
-    return ddgi.irradiance * (albedo / PI) * diffuseWeight;
+    return ApplyGiMaterialOcclusion(
+        EvaluateGiDiffuseFromIrradiance(ddgi.irradiance, diffuseReflectance),
+        materialOcclusion);
 }
 
 struct HybridDiffuseGiResult
@@ -3165,6 +3216,7 @@ vec3 EvaluateGlobalReflectionSpecular(
 void EvaluateIbl(
     vec3 albedo,
     float metallic,
+    vec3 diffuseReflectance,
     float roughness,
     vec3 dielectricF0,
     vec3 normal,
@@ -3187,8 +3239,6 @@ void EvaluateIbl(
     vec3 f0 = mix(dielectricF0, albedo, metallic);
     float nDotV = max(dot(normal, viewDirection), 0.0);
     vec3 fresnel = FresnelSchlickRoughness(nDotV, f0, roughness);
-    vec3 diffuseWeight = (vec3(1.0) - fresnel) * (1.0 - metallic);
-
     vec3 irradianceDirection = RotateEnvironmentDirection(normal, environment.RotationRadians);
     vec3 irradiance = texture(BindlessCubeTextures[nonuniformEXT(environment.IrradianceTextureIndex)], irradianceDirection).rgb;
     // Diffuse IBL is an irradiance-derived radiance field.  AO is applied once by
@@ -3197,7 +3247,9 @@ void EvaluateIbl(
     // Irradiance cubemaps store E = integral(L cos(theta) dw), for both HDR
     // sources and the procedural sky. Convert that incident irradiance to
     // outgoing Lambertian radiance exactly once, matching DDGI receivers.
-    diffuseIbl = diffuseWeight * (albedo / PI) * irradiance * environment.DiffuseIntensity;
+    diffuseIbl = EvaluateGiDiffuseFromIrradiance(
+        irradiance * environment.DiffuseIntensity,
+        diffuseReflectance);
 
     vec3 reflectionDirection = reflect(-viewDirection, normal);
     float maxLod = max(float(environment.PrefilteredMipCount) - 1.0, 0.0);
@@ -3233,13 +3285,16 @@ void EvaluateIbl(
 vec3 EvaluatePbrLight(
     vec3 albedo,
     float metallic,
+    vec3 directionalDiffuseBase,
     float roughness,
     vec3 dielectricF0,
     vec3 normal,
     vec3 viewDirection,
     vec3 lightDirection,
-    vec3 radiance)
+    vec3 radiance,
+    out vec3 diffuseContribution)
 {
+    diffuseContribution = vec3(0.0);
     vec3 halfVector = normalize(viewDirection + lightDirection);
     float nDotL = max(dot(normal, lightDirection), 0.0);
     float nDotV = max(dot(normal, viewDirection), 0.0);
@@ -3255,16 +3310,21 @@ vec3 EvaluatePbrLight(
     float geometry = GeometrySmith(nDotV, nDotL, roughness);
 
     vec3 specular = (distribution * geometry * fresnel) / max(4.0 * nDotV * nDotL, 0.000001);
-    vec3 diffuseWeight = (vec3(1.0) - fresnel) * (1.0 - metallic);
-    vec3 diffuse = diffuseWeight * albedo / PI;
+    vec3 diffuse = EvaluateGiDiffuseBrdf(
+        directionalDiffuseBase,
+        dielectricF0,
+        nDotL,
+        nDotV);
+    diffuseContribution = diffuse * radiance * nDotL;
 
-    return (diffuse + specular) * radiance * nDotL;
+    return diffuseContribution + specular * radiance * nDotL;
 }
 
 void AccumulateLight(
     uint lightIndex,
     vec3 albedo,
     float metallic,
+    vec3 directionalDiffuseBase,
     float roughness,
     vec3 dielectricF0,
     vec3 normal,
@@ -3273,7 +3333,8 @@ void AccumulateLight(
     vec3 worldPosition,
     out float shadowFactor,
     out uint shadowCascade,
-    inout vec3 directLighting)
+    inout vec3 directLighting,
+    inout vec3 directDiffuseSource)
 {
     GPULight light = ReadLight(lightIndex);
     shadowFactor = 1.0;
@@ -3303,15 +3364,11 @@ void AccumulateLight(
         lightDirection = toLight / max(distanceToLight, 0.0001);
         if (dot(normal, lightDirection) <= 0.0)
             return;
-        float rangeFactor = clamp(1.0 - distanceToLight / light.Range, 0.0, 1.0);
-        attenuation = rangeFactor * rangeFactor;
+        attenuation = EvaluateNjulfPunctualRangeAttenuation(distanceToLight, light.Range);
 
         if (light.Type == 2)
         {
-            float coneCos = cos(light.SpotAngle);
-            float spotCos = dot(normalize(light.Direction), -lightDirection);
-            float spotFactor = smoothstep(coneCos, min(coneCos + 0.1, 1.0), spotCos);
-            attenuation *= spotFactor;
+            attenuation *= EvaluateNjulfSpotAttenuation(light.Direction, lightDirection, light.SpotAngle);
             shadowFactor = EvaluateSpotShadow(lightIndex, worldPosition, shadowNormal);
         }
         else
@@ -3321,15 +3378,19 @@ void AccumulateLight(
     }
 
     vec3 radiance = max(light.Color, vec3(0.0)) * max(light.Intensity, 0.0) * attenuation;
+    vec3 diffuseContribution;
     directLighting += EvaluatePbrLight(
         albedo,
         metallic,
+        directionalDiffuseBase,
         roughness,
         dielectricF0,
         normal,
         viewDirection,
         lightDirection,
-        radiance) * shadowFactor;
+        radiance,
+        diffuseContribution) * shadowFactor;
+    directDiffuseSource += diffuseContribution * shadowFactor;
 }
 
 void WriteForwardColor(vec4 color)
@@ -3473,11 +3534,65 @@ void WriteSsgiTraceSource(vec4 color)
 #endif
 }
 
+void WriteGiCompositionBaseline(vec3 diffuseIndirect, float ddgiOwnership)
+{
+#if !FORWARD_WEIGHTED_OIT && FORWARD_SSGI_TRACE_SOURCE_OUTPUT
+    // Alpha remains the exact scalar DDGI/probe ownership consumed by hybrid
+    // composition. The target has no spare channel for exact selected-cascade
+    // or far-field ray-hit provenance, so the later transport-source view
+    // combines this value with SSGI support and configured fallback capability
+    // and explicitly presents capability/ownership rather than fake provenance.
+    outGiCompositionBaseline = vec4(
+        clamp(diffuseIndirect, vec3(0.0), vec3(GI_MATERIAL_MAXIMUM_FINITE_RADIANCE)),
+        clamp(ddgiOwnership, 0.0, 1.0));
+#endif
+}
+
+void WriteMaterialTransportProvenance(uint sourcePath)
+{
+#if !FORWARD_WEIGHTED_OIT && NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
+    if (MaterialTransportProvenanceEnabled())
+        outMaterialTransportProvenance =
+            float(min(sourcePath, MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN)) / 255.0;
+#endif
+}
+
+uint ResolveSimpleDdgiMaterialTransportProvenance(
+    SimpleDdgiGatherResult gather,
+    SimpleDdgiParams params)
+{
+    if (SimpleDdgiRadiometricOwnership(gather) <= 0.000001)
+        return MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN;
+
+    uint sourceVolumeIndex = gather.selectedVolume;
+    if (gather.secondaryVolume != SIMPLE_DDGI_GATHER_TILE_INVALID_VOLUME_INDEX &&
+        gather.secondaryContributionWeight > gather.primaryContributionWeight)
+    {
+        sourceVolumeIndex = gather.secondaryVolume;
+    }
+    if (sourceVolumeIndex >= params.volumeCount)
+        return MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN;
+
+    SimpleDdgiVolume sourceVolume = ReadSimpleDdgiVolume(
+        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX),
+        sourceVolumeIndex);
+    bool farFieldOnlyRing =
+        (params.flags & SIMPLE_DDGI_FLAG_FAR_FIELD_ENABLED) != 0u &&
+        sourceVolume.spacing >= 15.999;
+    if (farFieldOnlyRing)
+        return MATERIAL_TRANSPORT_PROVENANCE_FAR_FIELD;
+    return sourceVolume.kind == SIMPLE_DDGI_VOLUME_KIND_AUTHORED
+        ? MATERIAL_TRANSPORT_PROVENANCE_DETAILED_MESH
+        : MATERIAL_TRANSPORT_PROVENANCE_COMPACT_PRIMITIVE;
+}
+
 void main()
 {
     uint debugViewMode = ForwardDebugViewMode();
     uint ambientOcclusionDebugView = ForwardAmbientOcclusionDebugView();
     WriteSsgiTraceSource(vec4(0.0, 0.0, 0.0, 1.0));
+    WriteGiCompositionBaseline(vec3(0.0), 0.0);
+    WriteMaterialTransportProvenance(MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN);
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
     bool doubleSided = material.NormalScaleBias.w >= 0.5;
     if (!doubleSided && !gl_FrontFacing)
@@ -3577,8 +3692,8 @@ void main()
     vec3 ddgiNormal = geometricNormal;
     vec3 viewDirection = normalize(pc.Push.CameraPosition - fragWorldPosition);
 
-    // glTF metallic-roughness contract: G = roughness, B = metallic.
-    // R is occlusion only when the material upload marks this as a shared ORM texture.
+    // glTF metallic-roughness contract: G = roughness and B = metallic.
+    // Occlusion is an independent binding even when it aliases the same image.
     vec4 armSample = material.MetallicRoughnessTextureIndex == DEFAULT_BLACK_TEXTURE
         ? vec4(1.0, 1.0, 1.0, 1.0)
         : SampleMaterialTexture(
@@ -3599,11 +3714,22 @@ void main()
 
     float roughness = clamp(material.MetallicRoughnessAO.y * armSample.g, 0.04, 1.0);
     float metallic = clamp(material.MetallicRoughnessAO.x * armSample.b, 0.0, 1.0);
-    float sampledOcclusion = material.MetallicRoughnessAO.w > 0.5 ? armSample.r : 1.0;
-    float ambientOcclusion = clamp(material.MetallicRoughnessAO.z * sampledOcclusion, 0.0, 1.0);
+    float sampledOcclusion = material.OcclusionTextureIndex == DEFAULT_WHITE_TEXTURE
+        ? 1.0
+        : SampleMaterialTexture(
+            material.OcclusionTextureIndex,
+            MaterialUv(
+                material.OcclusionBinding.y,
+                material.OcclusionOffsetScale,
+                material.OcclusionBinding.x)).r;
+    float ambientOcclusion = EvaluateGiMaterialOcclusion(
+        material.MetallicRoughnessAO.z,
+        sampledOcclusion);
     float screenSpaceAo = SampleScreenSpaceAo();
     float indirectAo = clamp(ambientOcclusion * screenSpaceAo, 0.0, 1.0);
-    float ddgiIndirectAo = ambientOcclusion;
+    // Material AO is receiver energy, not probe visibility/leak metadata. It is
+    // applied once after the DDGI irradiance gather below.
+    float ddgiIndirectAo = 1.0;
     vec3 albedo = max(material.Albedo.rgb * albedoSample.rgb * fragVertexColor.rgb, vec3(0.0));
     vec3 emissive = max(material.Emissive.rgb * emissiveSample.rgb, vec3(0.0));
 
@@ -3658,12 +3784,17 @@ void main()
             roughness = clamp(mix(roughness, roughness * 0.65, anisotropyStrength), 0.04, 1.0);
         }
 
+        if ((material.FeatureFlags &
+             (MATERIAL_FEATURE_TRANSMISSION | MATERIAL_FEATURE_IOR)) != 0u)
+        {
+            ior = clamp(materialExtension.Transmission.y, 1.0, 3.0);
+        }
+
         if ((material.FeatureFlags & MATERIAL_FEATURE_TRANSMISSION) != 0u)
         {
             transmissionFactor = clamp(materialExtension.Transmission.x, 0.0, 1.0);
             if ((material.FeatureFlags & MATERIAL_FEATURE_TRANSMISSION_TEXTURE) != 0u)
                 transmissionFactor *= SampleMaterialTexture(materialExtension.TransmissionTextureIndex, ExtensionUv(materialExtension.TransmissionOffsetScale, materialExtension.ExtensionTextureRotations1.z, materialExtension.ExtensionTextureTexCoordSets1.z)).r;
-            ior = clamp(materialExtension.Transmission.y, 1.0, 3.0);
             transmissionThickness = max(materialExtension.Transmission.z, 0.0);
             attenuationDistance = max(materialExtension.Transmission.w, 0.0);
             attenuationColor = max(materialExtension.AttenuationColor.rgb, vec3(0.0));
@@ -3707,6 +3838,30 @@ void main()
             dispersion = clamp(materialExtension.Dispersion.x, 0.0, 1.0);
         }
     }
+
+    bool reflectsIndirectDiffuse = GiMaterialHasFlag(
+        material.TransportFlags,
+        GI_MATERIAL_REFLECTS_INDIRECT_DIFFUSE);
+    vec3 directionalDiffuseBase = reflectsIndirectDiffuse
+        ? EvaluateGiDirectionalDiffuseBase(
+            albedo,
+            metallic,
+            transmissionFactor,
+            clearcoatFactor,
+            sheenColor)
+        : vec3(0.0);
+    vec3 canonicalDiffuseReflectance = reflectsIndirectDiffuse
+        ? EvaluateGiHemisphericalDiffuseReflectance(
+            albedo,
+            metallic,
+            ior,
+            specularFactor,
+            specularColor,
+            transmissionFactor,
+            clearcoatFactor,
+            sheenColor,
+            max(dot(normal, viewDirection), 0.0))
+        : vec3(0.0);
 
     if (IsMaterialDebugView(debugViewMode))
     {
@@ -3850,18 +4005,117 @@ void main()
             WriteForwardColor(vec4(vec3(dispersion), 1.0));
             return;
         }
+
+        if (debugViewMode == MATERIAL_DEBUG_MATERIAL_OCCLUSION)
+        {
+            WriteForwardColor(vec4(vec3(ambientOcclusion), 1.0));
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_CANONICAL_DIFFUSE_REFLECTANCE)
+        {
+            WriteForwardColor(vec4(canonicalDiffuseReflectance, 1.0));
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_COMPILED_EMISSION)
+        {
+            vec3 displayEmission = emissive / (vec3(1.0) + emissive);
+            WriteForwardColor(vec4(displayEmission, 1.0));
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_GEOMETRIC_NORMAL)
+        {
+            WriteForwardColor(vec4(geometricNormal * 0.5 + vec3(0.5), 1.0));
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_OPACITY)
+        {
+            WriteForwardColor(vec4(vec3(outputAlpha), 1.0));
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_SIDEDNESS)
+        {
+            vec3 sidedness = doubleSided
+                ? (gl_FrontFacing ? vec3(0.1, 0.8, 1.0) : vec3(1.0, 0.45, 0.1))
+                : vec3(0.2, 0.85, 0.25);
+            WriteForwardColor(vec4(sidedness, 1.0));
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_SHADING_MODEL)
+        {
+            vec3 modelColor = GiMaterialHasFlag(material.TransportFlags, GI_MATERIAL_UNLIT)
+                ? vec3(1.0, 0.65, 0.1)
+                : (material.FeatureFlags & MATERIAL_FEATURE_FOLIAGE) != 0u
+                    ? vec3(0.15, 0.85, 0.25)
+                    : (material.FeatureFlags & MATERIAL_FEATURE_SUBSURFACE) != 0u
+                        ? vec3(1.0, 0.25, 0.55)
+                        : vec3(0.2, 0.55, 1.0);
+            WriteForwardColor(vec4(modelColor, 1.0));
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_TRANSPORT_PROFILE)
+        {
+            vec3 validity = vec3(
+                GiMaterialHasFlag(material.TransportFlags, GI_MATERIAL_DIFFUSE_PROFILE_VALID) ? 1.0 : 0.0,
+                GiMaterialHasFlag(material.TransportFlags, GI_MATERIAL_EMISSION_PROFILE_VALID) ? 1.0 : 0.0,
+                GiMaterialHasFlag(material.TransportFlags, GI_MATERIAL_ALPHA_PROFILE_VALID) ? 1.0 : 0.0);
+            float quality = clamp(float(material.TransportProfileQuality) / 3.0, 0.0, 1.0);
+            if (GiMaterialHasFlag(material.TransportFlags, GI_MATERIAL_COMPACT_TEXTURE_FALLBACK))
+                validity = mix(validity, vec3(1.0, 0.0, 1.0), 0.5);
+            WriteForwardColor(vec4(validity * mix(0.3, 1.0, quality), 1.0));
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_MATERIAL_REVISIONS)
+        {
+            // Three deliberately incommensurate multipliers keep independently
+            // changing revisions visually distinct: red=material publication,
+            // green=texture-content publication, blue=transport profile.
+            float materialRevision = fract(float(material.MaterialRevision) * 0.61803398875);
+            float textureRevision = fract(float(material.TextureContentRevision) * 0.56984029099);
+            float profileRevision = fract(float(material.TransportProfileRevision) * 0.75487766625);
+            WriteForwardColor(vec4(materialRevision, textureRevision, profileRevision, 1.0));
+            return;
+        }
     }
+
+    bool unlit = GiMaterialHasFlag(material.TransportFlags, GI_MATERIAL_UNLIT);
+    if (unlit)
+    {
+        // KHR_materials_unlit is base-color only. The trace source was cleared
+        // before material evaluation, so unlit surfaces neither receive nor
+        // reflect diffuse GI unless a future named transport override opts in.
+        if (debugViewMode == MATERIAL_CAPTURE_LINEAR_DIRECT_DIFFUSE ||
+            debugViewMode == MATERIAL_CAPTURE_LINEAR_DIRECT_SPECULAR)
+        {
+            WriteForwardColor(vec4(0.0, 0.0, 0.0, 1.0));
+            return;
+        }
+        WriteForwardColor(vec4(albedo, outputAlpha));
+        return;
+    }
+
+    vec3 diffuseReflectance = canonicalDiffuseReflectance;
 
     vec3 diffuseIbl = vec3(0.0);
     vec3 specularIbl = vec3(0.0);
     bool reflectionDebugActive = false;
     vec3 reflectionDebugColor = vec3(0.0);
-    float dielectricF0Scalar = pow((ior - 1.0) / max(ior + 1.0, 0.0001), 2.0);
-    vec3 dielectricF0 = clamp(vec3(dielectricF0Scalar) * specularColor * specularFactor, vec3(0.0), vec3(1.0));
+    vec3 dielectricF0 = EvaluateGiMaterialDielectricF0(
+        ior,
+        specularFactor,
+        specularColor);
 
     EvaluateIbl(
         albedo,
         metallic,
+        diffuseReflectance,
         roughness,
         dielectricF0,
         normal,
@@ -3873,6 +4127,7 @@ void main()
         reflectionDebugColor);
     GPUEnvironmentData environment = ReadEnvironmentData();
     vec3 directLighting = vec3(0.0);
+    vec3 directDiffuseSource = vec3(0.0);
     float lastShadowFactor = 1.0;
     uint lastShadowCascade = 0u;
 
@@ -3957,6 +4212,7 @@ void main()
             i,
             albedo,
             metallic,
+            directionalDiffuseBase,
             roughness,
             dielectricF0,
             normal,
@@ -3965,7 +4221,8 @@ void main()
             fragWorldPosition,
             lastShadowFactor,
             lastShadowCascade,
-            directLighting);
+            directLighting,
+            directDiffuseSource);
     }
 
     if (pc.Push.LocalLightCount == 0u)
@@ -3987,6 +4244,7 @@ void main()
                 ReadTiledLightIndex(tileHeader.LightOffset + i),
                 albedo,
                 metallic,
+                directionalDiffuseBase,
                 roughness,
                 dielectricF0,
                 normal,
@@ -3995,12 +4253,48 @@ void main()
                 fragWorldPosition,
                 lastShadowFactor,
                 lastShadowCascade,
-                directLighting);
+                directLighting,
+                directDiffuseSource);
         }
     }
 
-    // SSGI traces canonical direct lighting, never the visible debug output.
-    WriteSsgiTraceSource(vec4(clamp(directLighting + emissive, vec3(0.0), vec3(64.0)), 1.0));
+    // Keep diffuse-source radiance and emission distinct until this transport
+    // boundary. SSGI estimates the same diffuse path space as DDGI, so visible
+    // emission must be available to both estimators; aggregate direct specular
+    // remains exclusively owned by the reflection path.
+    vec3 ssgiDiffuseSource = max(directDiffuseSource, vec3(0.0));
+    vec3 ssgiEmissionSource = max(emissive, vec3(0.0));
+    WriteSsgiTraceSource(vec4(
+        clamp(
+            ssgiDiffuseSource + ssgiEmissionSource,
+            vec3(0.0),
+            vec3(GI_MATERIAL_MAXIMUM_FINITE_RADIANCE)),
+        1.0));
+
+    if (debugViewMode == MATERIAL_CAPTURE_LINEAR_DIRECT_DIFFUSE)
+    {
+        WriteForwardColor(vec4(
+            clamp(
+                max(directDiffuseSource, vec3(0.0)),
+                vec3(0.0),
+                vec3(GI_MATERIAL_MAXIMUM_FINITE_RADIANCE)),
+            1.0));
+        return;
+    }
+
+    if (debugViewMode == MATERIAL_CAPTURE_LINEAR_DIRECT_SPECULAR)
+    {
+        // Both terms came from the same light loop and shadow samples, avoiding
+        // a second BRDF implementation or persistent MRT.
+        vec3 directSpecular = max(directLighting - directDiffuseSource, vec3(0.0));
+        WriteForwardColor(vec4(
+            clamp(
+                directSpecular,
+                vec3(0.0),
+                vec3(GI_MATERIAL_MAXIMUM_FINITE_RADIANCE)),
+            1.0));
+        return;
+    }
 
     if (debugViewMode == DEBUG_VIEW_SHADOW_RECEIVER_FACTOR)
     {
@@ -4041,6 +4335,8 @@ void main()
     vec3 hybridDebugDiffuse = vec3(0.0);
     vec3 hybridSuppressionMask = vec3(0.0);
     float hybridEffectiveDdgiWeight = 0.0;
+    uint materialTransportProvenance =
+        MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN;
 
     if (!globalIlluminationEnabled)
     {
@@ -4120,7 +4416,11 @@ void main()
         // must not premultiply it, or inactive probes next to geometry become a
         // visible dark lattice. Screen-space AO is reserved for the environment
         // fallback because probe visibility already occludes DDGI bounce lighting.
-        ddgiDiffuse = simpleIrradiance * simpleDdgiParams.indirectIntensity * albedo * max(1.0 - metallic, 0.0) / PI;
+        ddgiDiffuse = ApplyGiMaterialOcclusion(
+            EvaluateGiDiffuseFromIrradiance(
+                simpleIrradiance * simpleDdgiParams.indirectIntensity,
+                diffuseReflectance),
+            ambientOcclusion);
         finalDdgiDiffuse = ddgiDiffuse * simpleOwnership;
         finalDiffuseIndirect = finalDdgiDiffuse + diffuseIbl * simpleFallback * indirectAo;
         ddgiCoverage = simpleGather.spatialCoverage;
@@ -4128,6 +4428,10 @@ void main()
         hybridDebugDiffuse = finalDiffuseIndirect;
         hybridSuppressionMask = vec3(simpleSupport, simpleDirectionalSupport, simpleGather.transportVisibility);
         hybridEffectiveDdgiWeight = simpleOwnership;
+        materialTransportProvenance =
+            ResolveSimpleDdgiMaterialTransportProvenance(
+                simpleGather,
+                simpleDdgiParams);
 
         HybridDiffuseGiResult simpleHybridDiagnostics;
         simpleHybridDiagnostics.diffuse = finalDiffuseIndirect;
@@ -4190,7 +4494,7 @@ void main()
             ddgiSample.visibilityMaxRayDistance,
             ddgiSample.visibility,
             ddgiSample.irradianceAtlasConfidence);
-        ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic);
+        ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, diffuseReflectance, ambientOcclusion);
         float ddgiEnvironmentFallbackIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 13u), 0.0, 4.0);
         HybridDiffuseGiResult hybridDiffuse = ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo, ddgiEnvironmentFallbackIntensity, debugViewMode);
         AccumulateDdgiForwardEstimateDiagnostics(hybridDiffuse, ddgiSample, ddgiDiffuse);
@@ -4202,6 +4506,8 @@ void main()
         hybridDebugDiffuse = hybridDiffuse.diffuse;
         hybridSuppressionMask = hybridDiffuse.suppressionMask;
         hybridEffectiveDdgiWeight = hybridDiffuse.effectiveDdgiWeight;
+        if (hybridEffectiveDdgiWeight > 0.000001)
+            materialTransportProvenance = ddgiSample.transportSourcePath;
         AccumulateDdgiInvestigationForwardDiagnostics(
             false,
             simpleDdgiParams,
@@ -4215,6 +4521,14 @@ void main()
             diffuseIbl,
             finalDiffuseIndirect);
     }
+
+    // Record exactly the diffuse-indirect term already present in SceneColor.
+    // The later composite adds w * (Lssgi - Lbaseline), making the resulting
+    // diffuse term a bounded convex estimate instead of a second positive-only
+    // lighting contribution. The alpha channel exposes DDGI ownership; the
+    // environment fallback owns its complement.
+    WriteGiCompositionBaseline(finalDiffuseIndirect, hybridEffectiveDdgiWeight);
+    WriteMaterialTransportProvenance(materialTransportProvenance);
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT)
     {
         WriteForwardColor(vec4(finalDiffuseIndirect, 1.0));

@@ -25,6 +25,19 @@ namespace Njulf.Assets
                             $"/textures/{textureIndex}/extensions/KHR_texture_basisu",
                             "KHR_texture_basisu texture source will be imported as a native KTX2 texture payload.");
                     }
+                    bool usesWebP =
+                        textureElement.TryGetProperty("extensions", out extensions) &&
+                        extensions.ValueKind == JsonValueKind.Object &&
+                        extensions.TryGetProperty("EXT_texture_webp", out _);
+                    if (usesWebP)
+                    {
+                        diagnostics.Add(
+                            AssetImportSeverity.Info,
+                            AssetImportMessageCode.ColorSpaceAssigned,
+                            modelPath,
+                            $"/textures/{textureIndex}/extensions/EXT_texture_webp",
+                            "EXT_texture_webp texture source will be imported through the bounded WebP decoder.");
+                    }
 
                     textureIndex++;
                 }

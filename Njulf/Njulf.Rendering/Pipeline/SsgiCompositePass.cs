@@ -38,7 +38,7 @@ namespace Njulf.Rendering.Pipeline
         {
             return GlobalIlluminationPassExecutionPolicy.ShouldCompositeSsgi(
                        _settings.GlobalIllumination,
-                   sceneData.DebugViewMode) &&
+                       sceneData.DebugViewMode) &&
                    sceneData.DepthPrePassEnabled &&
                    sceneData.FoliageDebugView == 0 &&
                    sceneData.AnimationDebugView == AnimationDebugView.None &&
@@ -52,8 +52,22 @@ namespace Njulf.Rendering.Pipeline
 
             Extent2D outputExtent = _renderTargets.SceneColor.Extent;
             SetFullViewportAndScissor(cmd, outputExtent);
-            _renderTargets.GiFinalDiffuse.TransitionToShaderRead(cmd);
-            _renderTargets.SceneMaterial.TransitionToShaderRead(cmd);
+            GlobalIlluminationDebugView debugView = _settings.GlobalIllumination.DebugView;
+            bool transportProvenanceDiagnostic =
+                debugView == GlobalIlluminationDebugView.MaterialTransportHitProvenance;
+            // The provenance diagnostic is a compact categorical attachment and
+            // remains valid in DDGI-only configurations where the SSGI
+            // attachments were not produced.
+            if (transportProvenanceDiagnostic)
+            {
+                _renderTargets.MaterialTransportProvenance.TransitionToShaderRead(cmd);
+            }
+            else
+            {
+                _renderTargets.GiFinalDiffuse.TransitionToShaderRead(cmd);
+                _renderTargets.SsgiTraceSource.TransitionToShaderRead(cmd);
+                _renderTargets.SceneMaterial.TransitionToShaderRead(cmd);
+            }
             _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _pipeline.Pipeline);
@@ -63,11 +77,21 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _pipeline.Layout, 0, 1, &storageSet, 0, null);
             _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _pipeline.Layout, 1, 1, &textureSet, 0, null);
 
+            bool standaloneDiagnostic = IsStandaloneHybridDiagnosticView(debugView);
+            SsgiCompositionFlags compositionFlags =
+                ResolveCompositionFlags(_settings.GlobalIllumination);
+
             var pushConstants = new GPUSsgiCompositePushConstants
             {
                 GiFinalDiffuseTextureIndex = BindlessIndex.GiFinalDiffuseTexture,
                 SceneMaterialTextureIndex = BindlessIndex.SceneMaterialTexture,
-                DebugView = (uint)_settings.GlobalIllumination.DebugView
+                MaterialTransportProvenanceTextureIndex =
+                    BindlessIndex.MaterialTransportProvenanceTexture,
+                DebugView = (uint)debugView,
+                CompositionFlags = (uint)compositionFlags,
+                Padding0 = 0u,
+                Padding1 = 0u,
+                Padding2 = 0u
             };
 
             _context.Api.CmdPushConstants(
@@ -83,8 +107,16 @@ namespace Njulf.Rendering.Pipeline
                 SType = StructureType.RenderingAttachmentInfo,
                 ImageView = _renderTargets.SceneColor.View,
                 ImageLayout = ImageLayout.ColorAttachmentOptimal,
-                LoadOp = AttachmentLoadOp.Load,
-                StoreOp = AttachmentStoreOp.Store
+                // The pipeline uses additive blending for signed production
+                // composition. Clear first for diagnostic modes so their
+                // positive visualization is standalone rather than added over
+                // the lit scene.
+                LoadOp = standaloneDiagnostic
+                    ? AttachmentLoadOp.Clear
+                    : AttachmentLoadOp.Load,
+                StoreOp = AttachmentStoreOp.Store,
+                ClearValue = new ClearValue(
+                    new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f))
             };
 
             var renderingInfo = new RenderingInfo
@@ -101,6 +133,30 @@ namespace Njulf.Rendering.Pipeline
             _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
             _context.Api.CmdDraw(cmd, 3, 1, 0, 0);
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
+        }
+
+        internal static bool IsStandaloneHybridDiagnosticView(
+            GlobalIlluminationDebugView view) =>
+            view is GlobalIlluminationDebugView.MaterialTransportSourceOwnership
+                or GlobalIlluminationDebugView.HybridEstimatorOwnership
+                or GlobalIlluminationDebugView.HybridFinalComposition
+                or GlobalIlluminationDebugView.MaterialTransportHitProvenance;
+
+        internal static SsgiCompositionFlags ResolveCompositionFlags(
+            GlobalIlluminationSettings gi)
+        {
+            ArgumentNullException.ThrowIfNull(gi);
+            SsgiCompositionFlags flags = SsgiCompositionFlags.None;
+            if (gi.EffectiveGiHybridCompositionV2)
+                flags |= SsgiCompositionFlags.HybridV2;
+            if (gi.EnvironmentFallbackIntensity > 0.0f)
+                flags |= SsgiCompositionFlags.EnvironmentFallback;
+            if (gi.EffectiveGiMaterialTransportV2)
+                flags |= SsgiCompositionFlags.MaterialTransportV2;
+            if (gi.FarFieldClipmapEnabled &&
+                gi.EffectiveGiFarFieldMaterialV2)
+                flags |= SsgiCompositionFlags.FarFieldTransport;
+            return flags;
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
