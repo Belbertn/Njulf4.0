@@ -507,7 +507,12 @@ namespace Njulf.Rendering.Data
         /// Geometric authority of the structured DDGI estimator. This is kept
         /// separate from probe-data availability and transport visibility.
         /// </summary>
-        DdgiDirectionalSupport = 50
+        DdgiDirectionalSupport = 50,
+        /// <summary>
+        /// Direct, emissive, and sky source-cache irradiance sampled with the
+        /// receiver's normal and cascade weights, before recursive bounce.
+        /// </summary>
+        DdgiSourceCacheRadiance = 51
     }
 
     public enum AntiAliasingMode : uint
@@ -1704,12 +1709,15 @@ namespace Njulf.Rendering.Data
         private float _simpleDdgiStableMaintenanceEmaThreshold = 0.03f;
         private float _simpleDdgiTransportSolverRelaxation = 0.70f;
         private float _simpleDdgiTransportAlbedoClamp = 0.95f;
-        // Low-energy bounce crosses several probe cells before it reaches a deep
-        // interior. Eight Jacobi generations stabilized the local field but
-        // retired it before that propagation wave reached shaded galleries.
-        private float _simpleDdgiTransportResidualThreshold = 0.01f;
-        private int _simpleDdgiTransportMaximumSolverGenerations = 32;
-        private int _simpleDdgiTransportSourceRefreshFrames = 240;
+        private float _simpleDdgiTransportResidualThreshold = 0.025f;
+        private int _simpleDdgiTransportMaximumSolverGenerations = 8;
+        // A routine source refresh starts a bounded transport propagation wave.
+        // Keep the default comfortably above the worst-case eight-generation
+        // high-tier solve so a static
+        // field can actually reach a fixed point before the next maintenance
+        // cohort is admitted. Transform/material/light invalidations remain
+        // regional and are not delayed by this maintenance interval.
+        private int _simpleDdgiTransportSourceRefreshFrames = 600;
         private float _simpleDdgiAutomaticProbeDensityScale = 0.70f;
         private float _simpleDdgiNormalBias = 0.1f;
         private float _simpleDdgiViewBias = 0.3f;
@@ -3107,8 +3115,8 @@ namespace Njulf.Rendering.Data
             SimpleDdgiAutomaticProbeDensityEnabled = true;
             SimpleDdgiTransportSolverRelaxation = 0.70f;
             SimpleDdgiTransportAlbedoClamp = 0.95f;
-            SimpleDdgiTransportResidualThreshold = 0.01f;
-            SimpleDdgiTransportMaximumSolverGenerations = 32;
+            SimpleDdgiTransportResidualThreshold = 0.025f;
+            SimpleDdgiTransportMaximumSolverGenerations = 8;
             SimpleDdgiVerticalRingPolicy = SimpleDdgiVerticalRingPolicy.CameraRelativeWithHysteresis;
             SimpleDdgiVerticalRecenterHysteresisFraction = 0.25f;
             SimpleDdgiReducedBlendEnabled = tier is DdgiQualityTier.DdgiLow or DdgiQualityTier.DdgiMedium;
@@ -3286,10 +3294,14 @@ namespace Njulf.Rendering.Data
             };
             SimpleDdgiTransportSourceRefreshFrames = tier switch
             {
-                DdgiQualityTier.DdgiLow => 360,
-                DdgiQualityTier.DdgiMedium => 300,
-                DdgiQualityTier.DdgiUltra => 120,
-                _ => 240
+                // Lower tiers update fewer probes per frame and therefore need
+                // a longer quiet interval for the same eight-generation fixed-point
+                // contract. Higher tiers may refresh more often without
+                // overlapping their own propagation waves.
+                DdgiQualityTier.DdgiLow => 1_200,
+                DdgiQualityTier.DdgiMedium => 900,
+                DdgiQualityTier.DdgiUltra => 480,
+                _ => 600
             };
 
             switch (tier)
@@ -4663,9 +4675,9 @@ namespace Njulf.Rendering.Data
             public float SimpleDdgiStableMaintenanceEmaThreshold { get; init; } = 0.03f;
             public float SimpleDdgiTransportSolverRelaxation { get; init; } = 0.70f;
             public float SimpleDdgiTransportAlbedoClamp { get; init; } = 0.95f;
-            public float SimpleDdgiTransportResidualThreshold { get; init; } = 0.01f;
-            public int SimpleDdgiTransportMaximumSolverGenerations { get; init; } = 32;
-            public int SimpleDdgiTransportSourceRefreshFrames { get; init; } = 240;
+            public float SimpleDdgiTransportResidualThreshold { get; init; } = 0.025f;
+            public int SimpleDdgiTransportMaximumSolverGenerations { get; init; } = 8;
+            public int SimpleDdgiTransportSourceRefreshFrames { get; init; } = 600;
             public float SimpleDdgiAutomaticProbeDensityScale { get; init; } = 0.70f;
             // These are spacing-relative authoring controls used by the shared
             // forward gather.  Persist them with the layout so a capture or

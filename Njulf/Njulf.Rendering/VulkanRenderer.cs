@@ -2085,6 +2085,7 @@ namespace Njulf.Rendering
                     GlobalIlluminationDebugView.FarFieldSkyVisibility => 122u,
                     GlobalIlluminationDebugView.FarFieldSunShadow => 123u,
                     GlobalIlluminationDebugView.DdgiDirectionalSupport => 124u,
+                    GlobalIlluminationDebugView.DdgiSourceCacheRadiance => 125u,
                     _ => (uint)Settings.Shadows.DebugView
                 };
             }
@@ -4252,7 +4253,7 @@ namespace Njulf.Rendering
                 DdgiDetailedCountersRequested = ddgiRequested &&
                     (Settings.Diagnostics.DdgiForwardEstimateCountersEnabled ||
                      giSettings.DebugView != GlobalIlluminationDebugView.None) ? 1 : 0,
-                DdgiDetailedCountersEnabled = giUsesDdgi &&
+                DdgiDetailedCountersEnabled = (giUsesDdgi || giUsesSimpleDdgi) &&
                     (Settings.Diagnostics.DdgiForwardEstimateCountersEnabled ||
                      giSettings.DebugView != GlobalIlluminationDebugView.None) ? 1 : 0,
                 SimpleDdgiProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiProbeCount : 0,
@@ -4270,6 +4271,8 @@ namespace Njulf.Rendering
                 SimpleDdgiTransportPublishRegionTotal = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportPublishRegionTotal : 0UL,
                 SimpleDdgiUpdateTransactionAbortCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiUpdateTransactionAbortCount : 0UL,
                 SimpleDdgiTransportSourceCacheInvalidationCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceCacheInvalidationCount : 0UL,
+                SimpleDdgiTransportSolverInvalidationCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSolverInvalidationCount : 0,
+                SimpleDdgiTransportSolverInvalidationsPerSourceRefresh = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSolverInvalidationsPerSourceRefresh : 0.0f,
                 SimpleDdgiSourceLightingGeneration = giUsesSimpleDdgi ? sceneData.SimpleDdgiSourceLightingGeneration : 0u,
                 SimpleDdgiTransportGeneration = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportGeneration : 0u,
                 SimpleDdgiTransportSourceReadyProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceReadyProbeCount : 0,
@@ -8556,6 +8559,10 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiTransportPublishRegionTotal = _simpleDdgiVolumeManager.TransportPublishRegionTotal;
             sceneData.SimpleDdgiUpdateTransactionAbortCount = _simpleDdgiVolumeManager.UpdateTransactionAbortCount;
             sceneData.SimpleDdgiTransportSourceCacheInvalidationCount = _simpleDdgiVolumeManager.SourceCacheInvalidationCount;
+            sceneData.SimpleDdgiTransportSolverInvalidationCount =
+                _simpleDdgiVolumeManager.SourceRefreshTransportInvalidationCount;
+            sceneData.SimpleDdgiTransportSolverInvalidationsPerSourceRefresh =
+                _simpleDdgiVolumeManager.SourceRefreshTransportInvalidationsPerRefresh;
             sceneData.SimpleDdgiSourceLightingGeneration = _simpleDdgiVolumeManager.SourceLightingGeneration;
             sceneData.SimpleDdgiTransportGeneration = _simpleDdgiVolumeManager.TransportGeneration;
             _simpleDdgiVolumeManager.GetTransportProgress(
@@ -8576,7 +8583,8 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiTransportAlbedoClamp = Settings.GlobalIllumination.SimpleDdgiTransportAlbedoClamp;
             sceneData.SimpleDdgiTransportResidualThreshold = Settings.GlobalIllumination.SimpleDdgiTransportResidualThreshold;
             sceneData.SimpleDdgiTransportMaximumSolverGenerations = Settings.GlobalIllumination.SimpleDdgiTransportMaximumSolverGenerations;
-            sceneData.SimpleDdgiTransportSourceRefreshFrames = Settings.GlobalIllumination.SimpleDdgiTransportSourceRefreshFrames;
+            sceneData.SimpleDdgiTransportSourceRefreshFrames =
+                _simpleDdgiVolumeManager.EffectiveTransportSourceRefreshFrames;
             sceneData.SimpleDdgiInactiveProbeCount = _simpleDdgiVolumeManager.InactiveProbeCount;
             sceneData.SimpleDdgiInactiveProbeSkipCount = _simpleDdgiVolumeManager.InactiveProbeSkipCount;
             sceneData.SimpleDdgiSavedRaysPerFrame = _simpleDdgiVolumeManager.InactiveProbeSavedPrimaryRayCount;

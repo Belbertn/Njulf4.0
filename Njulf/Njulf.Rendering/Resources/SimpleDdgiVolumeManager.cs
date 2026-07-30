@@ -409,6 +409,13 @@ namespace Njulf.Rendering.Resources
         private ulong _transportPublishRegionTotal;
         private ulong _updateTransactionAbortCount;
         private ulong _sourceCacheInvalidationCount;
+        // Fence-safe prior-frame counts. MarkBlendExecuted runs after scene
+        // diagnostics are populated, so completion counters use the same
+        // current/published handoff as transport publication telemetry.
+        private int _sourceRefreshTransportInvalidationCount;
+        private int _currentSourceRefreshTransportInvalidationCount;
+        private int _completedSourceRefreshProbeCount;
+        private int _currentCompletedSourceRefreshProbeCount;
         private uint _sourceLightingGeneration = 1u;
         private uint _transportGeneration;
         // A local residual alone cannot prove that multi-bounce transport has
@@ -580,6 +587,13 @@ namespace Njulf.Rendering.Resources
         /// <summary>Scheduled rays that actually entered the primary ray-query source path.</summary>
         public ulong ScheduledSourceRayCount => _scheduledSourceRayCount;
         public int SourceRefreshProbeCount => _sourceRefreshProbeCount;
+        public int EffectiveTransportSourceRefreshFrames =>
+            ResolveEffectiveTransportSourceRefreshFrames(
+                _settings.GlobalIllumination.SimpleDdgiTransportSourceRefreshFrames,
+                _probeCount,
+                _settings.GlobalIllumination.SimpleDdgiProbeUpdatesPerFrame,
+                _settings.GlobalIllumination.SimpleDdgiTransportMaximumSolverGenerations,
+                _settings.GlobalIllumination.SimpleDdgiStableMaintenanceUpdateCount);
         public int SourceCacheReuseProbeCount => _sourceCacheReuseProbeCount;
         public int TransportPublishedProbeCount => _transportPublishedProbeCount;
         public int TransportPublishRegionCount => _transportPublishRegionCount;
@@ -587,6 +601,13 @@ namespace Njulf.Rendering.Resources
         public ulong TransportPublishRegionTotal => _transportPublishRegionTotal;
         public ulong UpdateTransactionAbortCount => _updateTransactionAbortCount;
         public ulong SourceCacheInvalidationCount => _sourceCacheInvalidationCount;
+        public int SourceRefreshTransportInvalidationCount =>
+            _sourceRefreshTransportInvalidationCount;
+        public float SourceRefreshTransportInvalidationsPerRefresh =>
+            _completedSourceRefreshProbeCount > 0
+                ? _sourceRefreshTransportInvalidationCount /
+                    (float)_completedSourceRefreshProbeCount
+                : 0.0f;
         public uint SourceLightingGeneration => _sourceLightingGeneration;
         public uint TransportGeneration => _transportGeneration;
         public bool TransportV2Active => _settings.GlobalIllumination.SimpleDdgiTransportV2Enabled;
@@ -1523,6 +1544,15 @@ namespace Njulf.Rendering.Resources
                             bool sourceRefresh = (update.Flags & ProbeUpdateSourceRefreshFlag) != 0u;
                             if (sourceRefresh)
                             {
+                                if (_currentCompletedSourceRefreshProbeCount < int.MaxValue)
+                                    _currentCompletedSourceRefreshProbeCount++;
+                                bool sourceGenerationBoundary =
+                                    IsTransportSourceGenerationBoundary(
+                                        true,
+                                        _probeSourceLightingGenerations[probeIndex],
+                                        update.SourceLightingGeneration,
+                                        _sourceLightingGeneration,
+                                        (update.Flags & ProbeStateFreshFlag) != 0u);
                                 bool beginPropagationSweep =
                                     ShouldBeginTransportPropagationSweep(
                                         true,
@@ -1545,16 +1575,35 @@ namespace Njulf.Rendering.Resources
                                     recordedSourceRayCount,
                                     1,
                                     GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe));
-                                _probeTransportGenerationCounts[probeIndex] = 1;
-                                // Convergence evidence belongs to the prior
-                                // source field. Reset it when direct/sky/
-                                // emissive input changes so a previously quiet
-                                // probe cannot be declared solved solely from
-                                // stale readback residuals.
-                                if ((uint)probeIndex < (uint)_probeStableUpdateCounts.Length)
-                                    _probeStableUpdateCounts[probeIndex] = 0;
-                                if ((uint)probeIndex < (uint)_probeLuminanceChangeEma.Length)
-                                    _probeLuminanceChangeEma[probeIndex] = 0.0f;
+                                if (sourceGenerationBoundary)
+                                {
+                                    _probeTransportGenerationCounts[probeIndex] = 1;
+                                    // Only a genuine physical/source generation
+                                    // boundary invalidates the prior Jacobi
+                                    // convergence evidence. A periodic refresh
+                                    // keeps the published solution as its initial
+                                    // guess and relaxes from it below.
+                                    if ((uint)probeIndex < (uint)_probeStableUpdateCounts.Length)
+                                        _probeStableUpdateCounts[probeIndex] = 0;
+                                    if ((uint)probeIndex < (uint)_probeLuminanceChangeEma.Length)
+                                        _probeLuminanceChangeEma[probeIndex] = 0.0f;
+                                    if (_currentSourceRefreshTransportInvalidationCount < int.MaxValue)
+                                        _currentSourceRefreshTransportInvalidationCount++;
+                                }
+                                else
+                                {
+                                    // Preserve the warm-start generation and EMA,
+                                    // but require fresh stability samples. This
+                                    // holds the propagation latch open long enough
+                                    // for dependants to relax from their existing
+                                    // solutions instead of retiring before the
+                                    // refreshed residual reaches CPU readback.
+                                    _probeTransportGenerationCounts[probeIndex] = (byte)Math.Min(
+                                        byte.MaxValue,
+                                        _probeTransportGenerationCounts[probeIndex] + 1);
+                                    if ((uint)probeIndex < (uint)_probeStableUpdateCounts.Length)
+                                        _probeStableUpdateCounts[probeIndex] = 0;
+                                }
                                 if (beginPropagationSweep)
                                 {
                                     BeginTransportGlobalConvergence(
@@ -1796,8 +1845,14 @@ namespace Njulf.Rendering.Resources
         {
             _transportPublishedProbeCount = _currentTransportPublishedProbeCount;
             _transportPublishRegionCount = _currentTransportPublishRegionCount;
+            _sourceRefreshTransportInvalidationCount =
+                _currentSourceRefreshTransportInvalidationCount;
+            _completedSourceRefreshProbeCount =
+                _currentCompletedSourceRefreshProbeCount;
             _currentTransportPublishedProbeCount = 0;
             _currentTransportPublishRegionCount = 0;
+            _currentSourceRefreshTransportInvalidationCount = 0;
+            _currentCompletedSourceRefreshProbeCount = 0;
             _currentProbeInvalidationMarkerSerial = ++_nextProbeInvalidationMarkerSerial;
             if (_currentProbeInvalidationMarkerSerial == 0u)
             {
@@ -2214,7 +2269,7 @@ namespace Njulf.Rendering.Resources
                     _transportPeriodicSourceRefreshWavePending,
                     _transportGlobalWatchdogRefreshWaveStarted,
                     globalSolveAge,
-                    _settings.GlobalIllumination.SimpleDdgiTransportSourceRefreshFrames))
+                    EffectiveTransportSourceRefreshFrames))
             {
                 _transportPeriodicSourceRefreshWavePending = true;
                 _transportPeriodicSourceRefreshWaveCutoffFrame = _frameIndex;
@@ -3362,8 +3417,7 @@ namespace Njulf.Rendering.Resources
                 return false;
             }
 
-            int periodicRefreshFrames =
-                _settings.GlobalIllumination.SimpleDdgiTransportSourceRefreshFrames;
+            int periodicRefreshFrames = EffectiveTransportSourceRefreshFrames;
             uint elapsed = unchecked(_frameIndex - _probeLastSourceRefreshFrames[probeIndex]);
             bool periodicRefreshWaveMember =
                 _transportPeriodicSourceRefreshWavePending &&
@@ -3474,6 +3528,36 @@ namespace Njulf.Rendering.Resources
                 ageAtCutoff >= (uint)Math.Max(1, periodicRefreshFrames);
         }
 
+        internal static int ResolveEffectiveTransportSourceRefreshFrames(
+            int configuredRefreshFrames,
+            int probeCount,
+            int probeUpdatesPerFrame,
+            int maximumSolverGenerations,
+            int stableMaintenanceUpdates)
+        {
+            int probes = Math.Max(0, probeCount);
+            int updates = probeUpdatesPerFrame <= 0
+                ? Math.Max(probes, 1)
+                : Math.Max(1, probeUpdatesPerFrame);
+            long sweepFrames = Math.Max(
+                1L,
+                ((long)probes + updates - 1L) / updates);
+            long generations = Math.Max(1, maximumSolverGenerations);
+            long stableUpdates = Math.Max(1, stableMaintenanceUpdates);
+
+            // A periodic source cohort reopens field-wide propagation. If the
+            // next cohort becomes due before every probe can receive the required
+            // solve and stability generations, a static scene can never publish
+            // a completed fixed point. Reserve two complete windows: one for
+            // scheduling/readback skew and one for the actual Jacobi wave.
+            long convergenceQuietWindow = checked(
+                sweepFrames * (generations + stableUpdates) * 2L);
+            long effective = Math.Max(
+                Math.Max(1, configuredRefreshFrames),
+                convergenceQuietWindow);
+            return (int)Math.Min(effective, int.MaxValue);
+        }
+
         internal static bool ShouldBeginTransportPropagationSweep(
             bool transportV2Active,
             bool sourceRefresh,
@@ -3481,6 +3565,24 @@ namespace Njulf.Rendering.Resources
             transportV2Active &&
             sourceRefresh &&
             !globalConvergencePending;
+
+        internal static bool IsTransportSourceGenerationBoundary(
+            bool sourceRefresh,
+            uint cachedSourceLightingGeneration,
+            uint requestedSourceLightingGeneration,
+            uint currentSourceLightingGeneration,
+            bool freshPhysicalProbe)
+        {
+            if (!sourceRefresh)
+                return false;
+
+            uint targetGeneration = requestedSourceLightingGeneration == 0u
+                ? currentSourceLightingGeneration
+                : requestedSourceLightingGeneration;
+            return freshPhysicalProbe ||
+                cachedSourceLightingGeneration == 0u ||
+                cachedSourceLightingGeneration != targetGeneration;
+        }
 
         internal static int ResolveTransportSourceRefreshWatchdogGeneration(
             int minimumSolverGenerations)
@@ -6172,8 +6274,17 @@ namespace Njulf.Rendering.Resources
                     (uint)probeIndex < (uint)_probeTransportGenerationCounts.Length
                         ? _probeTransportGenerationCounts[probeIndex]
                         : (byte)0;
+                bool sourceRefresh =
+                    (update.Flags & ProbeUpdateSourceRefreshFlag) != 0u;
+                bool sourceGenerationBoundary =
+                    IsTransportSourceGenerationBoundary(
+                        sourceRefresh,
+                        _probeSourceLightingGenerations[probeIndex],
+                        update.SourceLightingGeneration,
+                        _sourceLightingGeneration,
+                        (update.Flags & ProbeStateFreshFlag) != 0u);
                 expectedTransportGenerations[probeIndex] =
-                    (update.Flags & ProbeUpdateSourceRefreshFlag) != 0u
+                    sourceGenerationBoundary
                         ? (byte)1
                         : (byte)Math.Min(byte.MaxValue, priorTransportGeneration + 1);
                 uint priorSourceEpoch =
@@ -6181,7 +6292,7 @@ namespace Njulf.Rendering.Resources
                         ? _probeSourceEpochs[probeIndex]
                         : 0u;
                 expectedSourceEpochs[probeIndex] =
-                    (update.Flags & ProbeUpdateSourceRefreshFlag) != 0u
+                    sourceRefresh
                         ? AdvanceSourceEpoch(priorSourceEpoch)
                         : priorSourceEpoch;
             }

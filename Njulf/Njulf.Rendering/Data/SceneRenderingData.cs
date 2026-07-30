@@ -777,6 +777,8 @@ namespace Njulf.Rendering.Data
         public ulong SimpleDdgiTransportPublishRegionTotal { get; set; }
         public ulong SimpleDdgiUpdateTransactionAbortCount { get; set; }
         public ulong SimpleDdgiTransportSourceCacheInvalidationCount { get; set; }
+        public int SimpleDdgiTransportSolverInvalidationCount { get; set; }
+        public float SimpleDdgiTransportSolverInvalidationsPerSourceRefresh { get; set; }
         public uint SimpleDdgiSourceLightingGeneration { get; set; }
         public uint SimpleDdgiTransportGeneration { get; set; }
         public int SimpleDdgiTransportSourceReadyProbeCount { get; set; }
@@ -1963,6 +1965,8 @@ namespace Njulf.Rendering.Data
             SimpleDdgiTransportPublishRegionTotal = 0;
             SimpleDdgiUpdateTransactionAbortCount = 0;
             SimpleDdgiTransportSourceCacheInvalidationCount = 0;
+            SimpleDdgiTransportSolverInvalidationCount = 0;
+            SimpleDdgiTransportSolverInvalidationsPerSourceRefresh = 0;
             SimpleDdgiSourceLightingGeneration = 0;
             SimpleDdgiTransportGeneration = 0;
             SimpleDdgiTransportSourceReadyProbeCount = 0;

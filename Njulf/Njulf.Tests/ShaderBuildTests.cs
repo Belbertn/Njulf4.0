@@ -1378,6 +1378,7 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_TRACE_RESULT = 121u"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SKY_VISIBILITY = 122u"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SUN_SHADOW = 123u"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_SOURCE_CACHE_RADIANCE = 125u"));
             Assert.That(shader, Does.Contain("float cascadeIndex;"));
             Assert.That(shader, Does.Contain("float cascadeBlendWeight;"));
             Assert.That(shader, Does.Contain("float updateReason;"));
@@ -1399,7 +1400,7 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("vec3 ApplyDdgiDebugIdentity(vec3 color, uint view)"));
             Assert.That(shader, Does.Contain("void WriteDdgiDebugColor(uint view, vec3 color)"));
             Assert.That(shader, Does.Contain("view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE"));
-            Assert.That(shader, Does.Contain("view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_DIRECTIONAL_SUPPORT"));
+            Assert.That(shader, Does.Contain("view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_SOURCE_CACHE_RADIANCE"));
             Assert.That(shader, Does.Contain("p.x < 4.0 || p.y < 4.0"));
             Assert.That(shader, Does.Contain("bool badge = p.x < 96.0 && p.y < 32.0;"));
             Assert.That(shader, Does.Contain("for (uint bit = 0u; bit < 6u; bit++)"));
@@ -1413,6 +1414,8 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("clamp(ddgiSample.supportCoverage, 0.0, 1.0),"));
             Assert.That(shader, Does.Contain("clamp(ddgiSample.qualityConfidence, 0.0, 1.0),"));
             Assert.That(shader, Does.Contain("float presentedLuminance = log2(1.0 + irradianceLuminance * logScale)"));
+            Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_SOURCE_CACHE_RADIANCE)"));
+            Assert.That(shader, Does.Contain("float presentedLuminance = log2(1.0 + sourceLuminance * logScale)"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_EFFECTIVE_WEIGHT, vec3(clamp(hybridEffectiveDdgiWeight, 0.0, 1.0)));"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_ENVIRONMENT_FALLBACK_WEIGHT, vec3(clamp(fallbackWeight / 4.0, 0.0, 1.0)));"));
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY_MOMENTS)"));
@@ -1485,6 +1488,7 @@ public sealed class ShaderBuildTests
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiFinalDiffuse => 118u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiConfidenceBypass => 119u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiDirectionalSupport => 124u"));
+            Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiSourceCacheRadiance => 125u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.FarFieldOccupancySlice => 120u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.FarFieldTraceResult => 121u"));
         });

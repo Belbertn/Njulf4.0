@@ -900,6 +900,8 @@ namespace Njulf.Rendering.Data
         public ulong SimpleDdgiTransportPublishRegionTotal { get; init; }
         public ulong SimpleDdgiUpdateTransactionAbortCount { get; init; }
         public ulong SimpleDdgiTransportSourceCacheInvalidationCount { get; init; }
+        public int SimpleDdgiTransportSolverInvalidationCount { get; init; }
+        public float SimpleDdgiTransportSolverInvalidationsPerSourceRefresh { get; init; }
         public uint SimpleDdgiSourceLightingGeneration { get; init; }
         public uint SimpleDdgiTransportGeneration { get; init; }
         public int SimpleDdgiTransportSourceReadyProbeCount { get; init; }

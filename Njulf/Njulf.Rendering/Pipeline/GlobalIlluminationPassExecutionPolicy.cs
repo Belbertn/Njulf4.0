@@ -8,7 +8,7 @@ namespace Njulf.Rendering.Pipeline
         public const uint ForwardDebugViewNone = 0u;
         public const uint ForwardDebugViewGlobalIlluminationFirst = 80u;
         public const uint ForwardDebugViewGlobalIlluminationFinalIndirect = 80u;
-        public const uint ForwardDebugViewGlobalIlluminationLast = 124u;
+        public const uint ForwardDebugViewGlobalIlluminationLast = 125u;
 
         public static bool IsDdgiDebugView(GlobalIlluminationDebugView view)
         {
@@ -38,6 +38,7 @@ namespace Njulf.Rendering.Pipeline
                 or GlobalIlluminationDebugView.DdgiSupportCoverage
                 or GlobalIlluminationDebugView.DdgiDataConfidence
                 or GlobalIlluminationDebugView.DdgiDirectionalSupport
+                or GlobalIlluminationDebugView.DdgiSourceCacheRadiance
                 or GlobalIlluminationDebugView.DdgiVisibilityConfidence
                 or GlobalIlluminationDebugView.DdgiConfidenceChain
                 or GlobalIlluminationDebugView.DdgiProbeLogicalPosition

@@ -201,6 +201,7 @@ const uint GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_TRACE_RESULT = 121u;
 const uint GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SKY_VISIBILITY = 122u;
 const uint GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SUN_SHADOW = 123u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_DIRECTIONAL_SUPPORT = 124u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_SOURCE_CACHE_RADIANCE = 125u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -3429,12 +3430,13 @@ void WriteForwardColor(vec4 color)
 bool IsDdgiDebugView(uint view)
 {
     return view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE &&
-           view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_DIRECTIONAL_SUPPORT;
+           view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_SOURCE_CACHE_RADIANCE;
 }
 
 vec3 DdgiDebugCategoryColor(uint view)
 {
     if (view == GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_SOURCE_CACHE_RADIANCE ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_SAMPLED_IRRADIANCE ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAW_DIFFUSE ||
@@ -4337,6 +4339,7 @@ void main()
         (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) != 0u;
     DdgiSampleResult ddgiSample = EmptyDdgiSampleResult();
     vec3 simpleDdgiContributingVolumeColor = vec3(0.0);
+    vec3 simpleDdgiSourceCacheIrradiance = vec3(0.0);
     uint simpleDdgiPrimaryVolume = SIMPLE_DDGI_GATHER_TILE_INVALID_VOLUME_INDEX;
     uint simpleDdgiSecondaryVolume = SIMPLE_DDGI_GATHER_TILE_INVALID_VOLUME_INDEX;
     float simpleDdgiSecondVolumeUsed = 0.0;
@@ -4382,6 +4385,7 @@ void main()
         float simpleFallback = (1.0 - simpleRadiometricOwnership) * simpleDdgiParams.environmentFallbackIntensity;
         vec3 simpleIrradiance = simpleGather.irradiance;
         simpleDdgiContributingVolumeColor = simpleGather.contributingVolumeColor;
+        simpleDdgiSourceCacheIrradiance = simpleGather.sourceCacheIrradiance;
         simpleDdgiPrimaryVolume = simpleGather.selectedVolume;
         simpleDdgiSecondaryVolume = simpleGather.secondaryVolume;
         simpleDdgiSecondVolumeUsed = simpleGather.secondVolumeUsed;
@@ -4674,6 +4678,30 @@ void main()
         WriteDdgiDebugColor(
             GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE,
             presentedIrradiance);
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_SOURCE_CACHE_RADIANCE)
+    {
+        // Use the same normalized logarithmic presentation as DdgiIrradiance.
+        // The hue remains radiometric, so a green direct/emissive source is
+        // immediately distinguishable from a grey transport result.
+        vec3 safeSource = max(simpleDdgiSourceCacheIrradiance, vec3(0.0));
+        float sourceLuminance = DdgiDiagnosticLuminance(safeSource);
+        vec3 presentedSource = vec3(0.0);
+        if (sourceLuminance > 0.00000001)
+        {
+            const float logScale = 1024.0;
+            float presentedLuminance = log2(1.0 + sourceLuminance * logScale) /
+                log2(1.0 + logScale);
+            presentedSource = clamp(
+                safeSource * (presentedLuminance / sourceLuminance),
+                vec3(0.0),
+                vec3(1.0));
+        }
+        WriteDdgiDebugColor(
+            GLOBAL_ILLUMINATION_DEBUG_DDGI_SOURCE_CACHE_RADIANCE,
+            presentedSource);
         return;
     }
 

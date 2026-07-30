@@ -408,6 +408,7 @@ namespace Njulf.Tests
                 Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.FarFieldSkyVisibility => 122u"));
                 Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.FarFieldSunShadow => 123u"));
                 Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiDirectionalSupport => 124u"));
+                Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiSourceCacheRadiance => 125u"));
                 Assert.That(renderer, Does.Contain("ScheduleReflectionProbeRecapturesFromGi(sceneData, ddgiActive, simpleDdgiActive);"));
                 Assert.That(renderer, Does.Contain("_reflectionProbeManager.RequestRecaptureAll(\"ddgi-ready\")"));
                 Assert.That(renderer, Does.Contain("_reflectionProbeManager.RequestRecaptureAll(\"simple-ddgi-dirty\")"));

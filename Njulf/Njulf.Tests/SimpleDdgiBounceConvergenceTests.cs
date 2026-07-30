@@ -340,6 +340,28 @@ public sealed class SimpleDdgiBounceConvergenceTests
         });
     }
 
+    [TestCase(240, 15_368, 2_048, 8, 3, 240)]
+    [TestCase(600, 15_368, 2_048, 8, 3, 600)]
+    [TestCase(900, 15_368, 2_048, 8, 3, 900)]
+    [TestCase(120, 1_024, 0, 8, 3, 120)]
+    public void PeriodicSourceRefresh_LeavesTwoCompleteConvergenceWindows(
+        int configuredFrames,
+        int probeCount,
+        int updatesPerFrame,
+        int solverGenerations,
+        int stableUpdates,
+        int expectedFrames)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveEffectiveTransportSourceRefreshFrames(
+                configuredFrames,
+                probeCount,
+                updatesPerFrame,
+                solverGenerations,
+                stableUpdates),
+            Is.EqualTo(expectedFrames));
+    }
+
     [TestCase(true, true, false, true)]
     [TestCase(true, true, true, false)]
     [TestCase(true, false, false, false)]
@@ -355,6 +377,30 @@ public sealed class SimpleDdgiBounceConvergenceTests
                 transportV2,
                 sourceRefresh,
                 globalConvergencePending),
+            Is.EqualTo(expected));
+    }
+
+    [TestCase(true, 54u, 54u, 54u, false, false)]
+    [TestCase(true, 54u, 0u, 54u, false, false)]
+    [TestCase(true, 0u, 54u, 54u, false, true)]
+    [TestCase(true, 53u, 54u, 54u, false, true)]
+    [TestCase(true, 54u, 54u, 54u, true, true)]
+    [TestCase(false, 0u, 54u, 54u, true, false)]
+    public void SourceRefresh_ResetsSolverOnlyAtSourceGenerationBoundary(
+        bool sourceRefresh,
+        uint cachedGeneration,
+        uint requestedGeneration,
+        uint currentGeneration,
+        bool freshPhysicalProbe,
+        bool expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.IsTransportSourceGenerationBoundary(
+                sourceRefresh,
+                cachedGeneration,
+                requestedGeneration,
+                currentGeneration,
+                freshPhysicalProbe),
             Is.EqualTo(expected));
     }
 

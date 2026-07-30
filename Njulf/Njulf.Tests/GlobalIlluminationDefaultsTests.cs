@@ -50,8 +50,36 @@ public sealed class GlobalIlluminationDefaultsTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(settings.SimpleDdgiTransportResidualThreshold, Is.EqualTo(0.01f));
-            Assert.That(settings.SimpleDdgiTransportMaximumSolverGenerations, Is.EqualTo(32));
+            Assert.That(settings.SimpleDdgiTransportResidualThreshold, Is.EqualTo(0.025f));
+            Assert.That(settings.SimpleDdgiTransportMaximumSolverGenerations, Is.EqualTo(8));
+            Assert.That(settings.SimpleDdgiTransportSourceRefreshFrames, Is.EqualTo(600));
+        });
+    }
+
+    // Low/Medium do not activate a DDGI quality tier and retain the safe
+    // transport default. The DDGI-capable presets apply their tier interval.
+    [TestCase(RenderQualityPreset.Low, 600)]
+    [TestCase(RenderQualityPreset.Medium, 600)]
+    [TestCase(RenderQualityPreset.High, 600)]
+    [TestCase(RenderQualityPreset.Ultra, 480)]
+    [TestCase(RenderQualityPreset.DdgiHigh, 600)]
+    public void QualityPreset_SourceRefreshLeavesACompleteSolverQuietWindow(
+        RenderQualityPreset preset,
+        int expectedRefreshFrames)
+    {
+        var settings = new RenderSettings();
+
+        settings.ApplyQualityPreset(preset);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                settings.GlobalIllumination.SimpleDdgiTransportSourceRefreshFrames,
+                Is.EqualTo(expectedRefreshFrames));
+            Assert.That(
+                settings.GlobalIllumination.SimpleDdgiTransportSourceRefreshFrames,
+                Is.GreaterThan(
+                    settings.GlobalIllumination.SimpleDdgiTransportMaximumSolverGenerations));
         });
     }
 
@@ -79,8 +107,8 @@ public sealed class GlobalIlluminationDefaultsTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(settings.GlobalIllumination.SimpleDdgiTransportResidualThreshold, Is.EqualTo(0.01f));
-            Assert.That(settings.GlobalIllumination.SimpleDdgiTransportMaximumSolverGenerations, Is.EqualTo(32));
+            Assert.That(settings.GlobalIllumination.SimpleDdgiTransportResidualThreshold, Is.EqualTo(0.025f));
+            Assert.That(settings.GlobalIllumination.SimpleDdgiTransportMaximumSolverGenerations, Is.EqualTo(8));
         });
     }
 

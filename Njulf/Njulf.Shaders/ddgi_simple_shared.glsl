@@ -856,6 +856,9 @@ const uint SIMPLE_DDGI_TRANSPORT_RAY_CACHE_STRIDE_WORDS = 8u;
 const uint SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG = 1u << 24u;
 const uint SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG = 1u << 25u;
 const uint SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG = 1u << 26u;
+// Forward debug ABI value. Kept here because this include is parsed before the
+// forward shader declares its public debug-view constants.
+const uint SIMPLE_DDGI_DEBUG_SOURCE_CACHE_RADIANCE = 125u;
 
 struct SimpleDdgiTransportRayCache
 {
@@ -1307,6 +1310,9 @@ bool TryFindSimpleDdgiTileSecondary(
 struct SimpleDdgiGatherResult
 {
     vec3 irradiance;
+    // Direct + emissive + sky source cache evaluated independently of recursive
+    // bounce, using the same probe/cascade weights as the receiver gather.
+    vec3 sourceCacheIrradiance;
     // Weighted with the same directional masses that compose irradiance. This
     // lets the cascade-selection debug view show every volume that contributed,
     // rather than only the finest volume selected before fallback blending.
@@ -1337,6 +1343,7 @@ SimpleDdgiGatherResult EmptySimpleDdgiGatherResult()
 {
     SimpleDdgiGatherResult result;
     result.irradiance = vec3(0.0);
+    result.sourceCacheIrradiance = vec3(0.0);
     result.contributingVolumeColor = vec3(0.0);
     result.validSupport = 0.0;
     result.directionalSupport = 0.0;
@@ -1468,6 +1475,49 @@ void RecordSimpleDdgiGatherRejectionMask(
     }
 }
 
+vec3 SampleSimpleDdgiProbeSourceCacheIrradiance(
+    SimpleDdgiParams p,
+    uint probeIndex,
+    SimpleDdgiProbeState state,
+    vec3 safeNormal)
+{
+    if ((p.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) == 0u ||
+        p.transportSourceCacheBufferIndex == 0u)
+    {
+        return vec3(0.0);
+    }
+
+    vec3 accumulated = vec3(0.0);
+    float weightSum = 0.0;
+    uint rayCount = min(p.raysPerProbe, SIMPLE_DDGI_MAX_RAYS_PER_PROBE);
+    uint probeGeneration = SimpleDdgiProbeGeneration(state);
+    for (uint rayIndex = 0u; rayIndex < rayCount; rayIndex++)
+    {
+        SimpleDdgiTransportRayCache source;
+        if (!ReadSimpleDdgiTransportRayCache(
+                p.transportSourceCacheBufferIndex,
+                probeIndex,
+                rayIndex,
+                p,
+                probeGeneration,
+                source))
+        {
+            continue;
+        }
+
+        float weight = max(dot(safeNormal, normalize(source.direction)), 0.0);
+        accumulated += clamp(source.sourceRadiance, vec3(0.0), vec3(65504.0)) * weight;
+        weightSum += weight;
+    }
+
+    // Match the irradiance estimator used by ddgi_simple_blend.comp so this
+    // differs from the published atlas only by recursive bounce and solver
+    // history, not by a debug-only radiometric convention.
+    return weightSum > 0.000001
+        ? accumulated * (SIMPLE_DDGI_PI / weightSum)
+        : vec3(0.0);
+}
+
 SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     SimpleDdgiParams p,
     SimpleDdgiVolume volume,
@@ -1489,6 +1539,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     vec3 fracV = clamp(grid - baseF, vec3(0.0), vec3(1.0));
     ivec3 base = ivec3(baseF);
     vec3 accumulated = vec3(0.0);
+    vec3 sourceCacheAccumulated = vec3(0.0);
     float availableMass = 0.0;
     float validMass = 0.0;
     float directionalMass = 0.0;
@@ -1554,6 +1605,14 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
         float selectedDataWeight = dataWeight * visibilitySelectionWeight;
         float selectedDirectionalWeight = directionalTransportWeight * visibilitySelectionWeight;
         accumulated += max(irradiance.rgb, vec3(0.0)) * selectedDirectionalWeight;
+        if (p.debugView == SIMPLE_DDGI_DEBUG_SOURCE_CACHE_RADIANCE)
+        {
+            sourceCacheAccumulated += SampleSimpleDdgiProbeSourceCacheIrradiance(
+                p,
+                probeIndex,
+                state,
+                safeNormal) * selectedDirectionalWeight;
+        }
         availableMass += dataWeight;
         validMass += selectedDataWeight;
         directionalMass += selectedDirectionalWeight;
@@ -1581,6 +1640,9 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     // the radiance traced into each probe.
     result.irradiance = result.validProbeCount > 0u && directionalMass > 0.000001
         ? clamp(accumulated / directionalMass, vec3(0.0), vec3(64.0))
+        : vec3(0.0);
+    result.sourceCacheIrradiance = result.validProbeCount > 0u && directionalMass > 0.000001
+        ? clamp(sourceCacheAccumulated / directionalMass, vec3(0.0), vec3(64.0))
         : vec3(0.0);
     result.contributingVolumeColor = result.validProbeCount > 0u && directionalMass > 0.000001
         ? SimpleDdgiVolumeContributorDebugColor(volumeIndex, volume.kind)
@@ -1727,6 +1789,8 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
     float visibleMass = outerVisibleMass + innerVisibleMass;
     vec3 accumulated = outer.irradiance * outerDirectionalMass +
         inner.irradiance * innerDirectionalMass;
+    vec3 sourceCacheAccumulated = outer.sourceCacheIrradiance * outerDirectionalMass +
+        inner.sourceCacheIrradiance * innerDirectionalMass;
     vec3 contributorColorAccumulated = outer.contributingVolumeColor * outerDirectionalMass +
         inner.contributingVolumeColor * innerDirectionalMass;
     SimpleDdgiGatherResult result;
@@ -1754,6 +1818,9 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
     result.ownership = clamp(validMass, 0.0, 1.0);
     result.irradiance = directionalMass > 0.000001
         ? clamp(accumulated / directionalMass, vec3(0.0), vec3(64.0))
+        : vec3(0.0);
+    result.sourceCacheIrradiance = directionalMass > 0.000001
+        ? clamp(sourceCacheAccumulated / directionalMass, vec3(0.0), vec3(64.0))
         : vec3(0.0);
     result.contributingVolumeColor = directionalMass > 0.000001
         ? clamp(contributorColorAccumulated / directionalMass, vec3(0.0), vec3(1.0))

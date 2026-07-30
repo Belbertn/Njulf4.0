@@ -42,6 +42,7 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
     [TestCase(GlobalIlluminationDebugView.DdgiSupportCoverage, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiDataConfidence, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiDirectionalSupport, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiSourceCacheRadiance, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiVisibilityConfidence, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiConfidenceChain, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiProbeLogicalPosition, true, false, false)]

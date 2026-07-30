@@ -2460,7 +2460,8 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.SsgiHistory => GlobalIlluminationDebugView.SsgiRayHitMask,
             GlobalIlluminationDebugView.SsgiRayHitMask => GlobalIlluminationDebugView.SsgiHistoryRejection,
             GlobalIlluminationDebugView.SsgiHistoryRejection => GlobalIlluminationDebugView.DdgiIrradiance,
-            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiSampledIrradiance,
+            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiSourceCacheRadiance,
+            GlobalIlluminationDebugView.DdgiSourceCacheRadiance => GlobalIlluminationDebugView.DdgiSampledIrradiance,
             GlobalIlluminationDebugView.DdgiSampledIrradiance => GlobalIlluminationDebugView.DdgiFinalDiffuse,
             GlobalIlluminationDebugView.DdgiFinalDiffuse => GlobalIlluminationDebugView.DdgiRawDiffuse,
             GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiConfidenceBypass,
@@ -2514,7 +2515,8 @@ internal sealed class SampleInputController
         {
             GlobalIlluminationDebugView.None => GlobalIlluminationDebugView.FinalIndirect,
             GlobalIlluminationDebugView.FinalIndirect => GlobalIlluminationDebugView.DdgiIrradiance,
-            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiSampledIrradiance,
+            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiSourceCacheRadiance,
+            GlobalIlluminationDebugView.DdgiSourceCacheRadiance => GlobalIlluminationDebugView.DdgiSampledIrradiance,
             GlobalIlluminationDebugView.DdgiSampledIrradiance => GlobalIlluminationDebugView.DdgiFinalDiffuse,
             GlobalIlluminationDebugView.DdgiFinalDiffuse => GlobalIlluminationDebugView.DdgiRawDiffuse,
             GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiConfidenceBypass,
@@ -2564,7 +2566,8 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiDataConfidence => GlobalIlluminationDebugView.DdgiDirectionalSupport,
             GlobalIlluminationDebugView.DdgiDirectionalSupport => GlobalIlluminationDebugView.DdgiConfidenceChain,
             GlobalIlluminationDebugView.DdgiConfidenceChain => GlobalIlluminationDebugView.DdgiIrradiance,
-            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiSampledIrradiance,
+            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiSourceCacheRadiance,
+            GlobalIlluminationDebugView.DdgiSourceCacheRadiance => GlobalIlluminationDebugView.DdgiSampledIrradiance,
             GlobalIlluminationDebugView.DdgiSampledIrradiance => GlobalIlluminationDebugView.DdgiFinalDiffuse,
             GlobalIlluminationDebugView.DdgiFinalDiffuse => GlobalIlluminationDebugView.DdgiRawDiffuse,
             GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiConfidenceBypass,
@@ -2580,7 +2583,8 @@ internal sealed class SampleInputController
         return mode switch
         {
             GlobalIlluminationDebugView.FinalIndirect => GlobalIlluminationDebugView.DdgiIrradiance,
-            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiSampledIrradiance,
+            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiSourceCacheRadiance,
+            GlobalIlluminationDebugView.DdgiSourceCacheRadiance => GlobalIlluminationDebugView.DdgiSampledIrradiance,
             GlobalIlluminationDebugView.DdgiSampledIrradiance => GlobalIlluminationDebugView.DdgiFinalDiffuse,
             GlobalIlluminationDebugView.DdgiFinalDiffuse => GlobalIlluminationDebugView.DdgiRawDiffuse,
             GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiConfidenceBypass,
@@ -2633,6 +2637,7 @@ internal sealed class SampleInputController
             or GlobalIlluminationDebugView.DdgiSupportCoverage
             or GlobalIlluminationDebugView.DdgiDataConfidence
             or GlobalIlluminationDebugView.DdgiDirectionalSupport
+            or GlobalIlluminationDebugView.DdgiSourceCacheRadiance
             or GlobalIlluminationDebugView.DdgiVisibilityConfidence
             or GlobalIlluminationDebugView.DdgiConfidenceChain
             or GlobalIlluminationDebugView.DdgiProbeLogicalPosition
@@ -2662,7 +2667,9 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiConfidenceChain =>
                 "blue border; RGB = data availability / directional authority / transport visibility.",
             GlobalIlluminationDebugView.DdgiSampledIrradiance =>
-                "orange border; sampled DDGI irradiance before albedo and metallic.",
+                "orange border; raw linear sampled DDGI irradiance before albedo and metallic. Low nonzero values can look black; use DdgiIrradiance for the log-normalized diagnostic.",
+            GlobalIlluminationDebugView.DdgiSourceCacheRadiance =>
+                "orange border; log-normalized direct/emissive/sky source cache before recursive bounce. Source colour here but not in DdgiIrradiance isolates transport.",
             GlobalIlluminationDebugView.DdgiFinalDiffuse =>
                 "orange border; owned DDGI diffuse after albedo and metallic, before environment fallback.",
             GlobalIlluminationDebugView.DdgiConfidenceBypass =>

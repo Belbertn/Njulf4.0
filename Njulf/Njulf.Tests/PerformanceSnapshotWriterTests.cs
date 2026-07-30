@@ -64,12 +64,15 @@ public sealed class PerformanceSnapshotWriterTests
             SimpleDdgiActive = 1,
             SimpleDdgiTransportV2Active = 1,
             SimpleDdgiAutomaticProbeDensityActive = 1,
+            SimpleDdgiTransportSourceRefreshProbeCount = 8,
             SimpleDdgiTransportPublishedProbeCount = 37,
             SimpleDdgiTransportPublishRegionCount = 5,
             SimpleDdgiTransportPublishedProbeTotal = 9_437,
             SimpleDdgiTransportPublishRegionTotal = 1_205,
             SimpleDdgiUpdateTransactionAbortCount = 3,
             SimpleDdgiTransportSourceCacheInvalidationCount = 1_024,
+            SimpleDdgiTransportSolverInvalidationCount = 2,
+            SimpleDdgiTransportSolverInvalidationsPerSourceRefresh = 0.25f,
             SimpleDdgiSourceLightingGeneration = 12,
             SimpleDdgiTransportGeneration = 37,
             SimpleDdgiTransportGlobalConvergencePending = 1,
@@ -399,6 +402,8 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"SimpleDdgiTransportPublishRegionTotal\": 1205"));
             Assert.That(json, Does.Contain("\"SimpleDdgiUpdateTransactionAbortCount\": 3"));
             Assert.That(json, Does.Contain("\"SimpleDdgiTransportSourceCacheInvalidationCount\": 1024"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiTransportSolverInvalidationCount\": 2"));
+            Assert.That(json, Does.Contain("\"SimpleDdgiTransportSolverInvalidationsPerSourceRefresh\": 0.25"));
             Assert.That(json, Does.Contain("\"SimpleDdgiSourceLightingGeneration\": 12"));
             Assert.That(json, Does.Contain("\"SimpleDdgiTransportGeneration\": 37"));
             Assert.That(json, Does.Contain("\"SimpleDdgiTransportGlobalConvergencePending\": true"));
