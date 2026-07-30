@@ -22,6 +22,7 @@ namespace Njulf.Core
         private Scene.Scene _scene = null!;
         private bool _isRunning = false;
         private bool _isShuttingDown = false;
+        private bool _isUpdatingFrame = false;
         private bool _isRenderingFrame = false;
         private bool _exitRequestedAfterFrame = false;
         private bool _firstFrameLogged = false;
@@ -111,6 +112,9 @@ namespace Njulf.Core
 
         protected virtual void Update(float deltaTime)
         {
+            if (!_isRunning)
+                return;
+
             _scene.Update(deltaTime);
         }
 
@@ -153,7 +157,7 @@ namespace Njulf.Core
         public void Exit()
         {
             _isRunning = false;
-            if (_isRenderingFrame)
+            if (_isUpdatingFrame || _isRenderingFrame)
             {
                 _exitRequestedAfterFrame = true;
                 return;
@@ -165,6 +169,16 @@ namespace Njulf.Core
         public void Dispose()
         {
             Exit();
+
+            // Exit() defers the window close while an update or render callback is
+            // active. Keep disposal deferred as well so the callback cannot resume
+            // against a scene that has already been torn down.
+            if (_isUpdatingFrame || _isRenderingFrame)
+            {
+                GC.SuppressFinalize(this);
+                return;
+            }
+
             Shutdown(disposeWindow: true);
             GC.SuppressFinalize(this);
         }
@@ -205,8 +219,23 @@ namespace Njulf.Core
             if (!_isRunning)
                 return;
 
-            _input?.Update();
-            Update((float)deltaSeconds);
+            _isUpdatingFrame = true;
+            try
+            {
+                _input?.Update();
+                if (_isRunning)
+                    Update((float)deltaSeconds);
+            }
+            finally
+            {
+                _isUpdatingFrame = false;
+
+                if (_exitRequestedAfterFrame)
+                {
+                    _exitRequestedAfterFrame = false;
+                    _window?.Close();
+                }
+            }
         }
 
         private void OnWindowRender(double deltaSeconds)
