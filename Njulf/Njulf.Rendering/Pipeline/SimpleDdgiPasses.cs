@@ -585,10 +585,12 @@ namespace Njulf.Rendering.Pipeline
 
         private void InsertWriteBarrier(CommandBuffer cmd)
         {
-            // This is an intra-DDGI dependency.  Render-graph barriers handle
-            // visibility to later graphics consumers, which keeps this legal on a
-            // compute-only queue family as well as on the graphics queue.
-            PipelineStageFlags2 destinationStage = PipelineStageFlags2.ComputeShaderBit;
+            // Diagnostic: keep every Simple-DDGI storage write visible both to the
+            // next compute dispatch and to forward fragment gather (irradiance,
+            // visibility, and probe state). Run this experiment on the graphics queue;
+            // FragmentShaderBit is not valid on a compute-only queue family.
+            PipelineStageFlags2 destinationStage =
+                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit;
             AccessFlags2 destinationAccess = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit;
             var memoryBarrier = new MemoryBarrier2
             {
