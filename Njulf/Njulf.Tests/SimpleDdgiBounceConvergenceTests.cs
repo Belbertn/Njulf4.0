@@ -251,18 +251,30 @@ public sealed class SimpleDdgiBounceConvergenceTests
             Is.EqualTo(expected));
     }
 
-    [TestCase(false, false, true)]
-    [TestCase(true, false, false)]
-    [TestCase(true, true, true)]
-    public void GlobalConvergence_CoalescesContinuousLocalInvalidations(
-        bool globalConvergencePending,
+    [TestCase(false, false)]
+    [TestCase(true, true)]
+    public void GlobalConvergence_OnlyGenuineFieldBoundariesResetEvidence(
         bool forceFieldEvidenceReset,
         bool expected)
     {
         Assert.That(
             SimpleDdgiVolumeManager.ShouldResetTransportFieldEvidence(
-                globalConvergencePending,
                 forceFieldEvidenceReset),
+            Is.EqualTo(expected));
+    }
+
+    [TestCase(false, false, true)]
+    [TestCase(true, false, false)]
+    [TestCase(true, true, true)]
+    public void GlobalConvergence_StartsClockOncePerPropagationWave(
+        bool globalConvergencePending,
+        bool resetFieldEvidence,
+        bool expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ShouldStartTransportConvergenceWave(
+                globalConvergencePending,
+                resetFieldEvidence),
             Is.EqualTo(expected));
     }
 

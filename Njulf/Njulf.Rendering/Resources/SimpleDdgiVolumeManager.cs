@@ -641,7 +641,12 @@ namespace Njulf.Rendering.Resources
                 }
 
                 sourceReadyProbeCount++;
-                if (IsTransportConverged(probeIndex))
+                // Report local fixed-point progress even while the field-wide
+                // propagation latch deliberately keeps every probe schedulable.
+                // Using IsTransportConverged here collapses all progress to zero
+                // whenever the global latch is set and makes a healthy bounded
+                // propagation wave indistinguishable from a solver livelock.
+                if (HasLocalTransportConvergenceEvidence(probeIndex))
                     convergedProbeCount++;
                 else
                     pendingSolverProbeCount++;
@@ -2069,23 +2074,34 @@ namespace Njulf.Rendering.Resources
             bool preservePeriodicSourceRefreshWave = false,
             bool forceFieldEvidenceReset = false)
         {
+            bool convergenceWasPending = _transportGlobalConvergencePending;
             bool resetFieldEvidence = ShouldResetTransportFieldEvidence(
-                _transportGlobalConvergencePending,
                 forceFieldEvidenceReset);
+            bool startConvergenceWave = ShouldStartTransportConvergenceWave(
+                convergenceWasPending,
+                resetFieldEvidence);
             if (ShouldClearTransportPeriodicSourceRefreshWave(
                     preservePeriodicSourceRefreshWave,
-                    _transportGlobalConvergencePending,
+                    convergenceWasPending,
                     resetFieldEvidence))
             {
                 _transportPeriodicSourceRefreshWavePending = false;
             }
             _transportGlobalConvergencePending = true;
             _transportGlobalSourceRepairPhasePending = true;
+            if (startConvergenceWave)
+            {
+                // A repair that begins after a completed solve is a new bounded
+                // propagation wave, but it is not a new lighting field. Give it
+                // its own watchdog interval without discarding quiet probes'
+                // fixed-point evidence. Re-arms while a wave is active leave
+                // this clock untouched.
+                _transportGlobalWatchdogRefreshWaveStarted = false;
+                _transportGlobalConvergenceStartFrame = _frameIndex;
+            }
             if (resetFieldEvidence)
             {
                 _transportFieldConvergenceEvidenceResetPending = true;
-                _transportGlobalWatchdogRefreshWaveStarted = false;
-                _transportGlobalConvergenceStartFrame = _frameIndex;
             }
             _transportGlobalConvergenceSourceGeneration = _sourceLightingGeneration;
             if (resetFieldEvidence)
@@ -2101,9 +2117,13 @@ namespace Njulf.Rendering.Resources
         }
 
         internal static bool ShouldResetTransportFieldEvidence(
-            bool globalConvergencePending,
             bool forceFieldEvidenceReset) =>
-            !globalConvergencePending || forceFieldEvidenceReset;
+            forceFieldEvidenceReset;
+
+        internal static bool ShouldStartTransportConvergenceWave(
+            bool globalConvergencePending,
+            bool resetFieldEvidence) =>
+            !globalConvergencePending || resetFieldEvidence;
 
         internal static bool ShouldClearTransportPeriodicSourceRefreshWave(
             bool preservePeriodicSourceRefreshWave,

@@ -100,7 +100,6 @@ const float SIMPLE_DDGI_VISIBILITY_VARIANCE_SPACING_CAP = 4.0;
 // should rapidly acquire solver authority. Receiver composition deliberately
 // keeps the broader ownership ramp and stronger leak suppression below.
 const float SIMPLE_DDGI_SOLVER_OWNERSHIP_SUPPORT_RAMP = 0.02;
-const float SIMPLE_DDGI_SOLVER_LEAK_FLOOR = 0.35;
 // Missing probe ownership may attenuate sky bounce, but must never annihilate it.
 const float SIMPLE_DDGI_MINIMUM_SKY_VISIBILITY = 0.10;
 const uint SIMPLE_DDGI_AUTHORED_VOLUME_CASCADE = 0xffffffffu;
@@ -1282,6 +1281,10 @@ struct SimpleDdgiGatherResult
     // lets the cascade-selection debug view show every volume that contributed,
     // rather than only the finest volume selected before fallback blending.
     vec3 contributingVolumeColor;
+    // Fraction of spatial interpolation mass backed by state-valid probe data.
+    // Probe-to-receiver visibility is deliberately excluded: it selects which
+    // valid probes represent irradiance, but it does not make their atlas data
+    // unavailable.
     float validSupport;
     float directionalSupport;
     float spatialCoverage;
@@ -1338,11 +1341,12 @@ float SimpleDdgiRadiometricOwnership(SimpleDdgiGatherResult gather)
     // The gathered irradiance is normalized independently of support, but
     // ownership is not binary.  Granting an entire cell to a single usable
     // trilinear corner turns a bright isolated probe into full authority and
-    // hides the environment/coarser complement. `ownership` is the bounded
-    // valid interpolation mass after state, visibility, and active-weight
-    // rejection; the caller composes its missing share exactly once.
+    // hides the environment complement. Data availability is intentionally
+    // independent of probe-to-receiver visibility: visibility already selects
+    // the representative probes in the normalized gather and the late leak
+    // attenuation remains responsible for genuinely all-blocked cells.
     float spatialCoverage = clamp(gather.spatialCoverage, 0.0, 1.0);
-    float validSupport = clamp(gather.ownership, 0.0, 1.0);
+    float validSupport = clamp(gather.validSupport, 0.0, 1.0);
     return spatialCoverage * smoothstep(0.0, SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP, validSupport);
 }
 
@@ -1398,6 +1402,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     vec3 fracV = clamp(grid - baseF, vec3(0.0), vec3(1.0));
     ivec3 base = ivec3(baseF);
     vec3 accumulated = vec3(0.0);
+    float availableMass = 0.0;
     float validMass = 0.0;
     float directionalMass = 0.0;
     float visibleMass = 0.0;
@@ -1444,6 +1449,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
         float selectedDataWeight = dataWeight * visibilitySelectionWeight;
         float selectedDirectionalWeight = directionalTransportWeight * visibilitySelectionWeight;
         accumulated += max(irradiance.rgb, vec3(0.0)) * selectedDirectionalWeight;
+        availableMass += dataWeight;
         validMass += selectedDataWeight;
         directionalMass += selectedDirectionalWeight;
         visibleMass += selectedDirectionalWeight * transportVisibility;
@@ -1453,8 +1459,10 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     float spatialCoverage = clamp(result.spatialCoverage, 0.0, 1.0);
     result.spatialCoverage = spatialCoverage;
     result.validSupport = spatialCoverage > 0.000001
-        ? clamp(validMass / spatialCoverage, 0.0, 1.0)
+        ? clamp(availableMass / spatialCoverage, 0.0, 1.0)
         : 0.0;
+    // Keep selection mass separate from data availability. It remains the
+    // cascade/fallback interpolation authority and retains visibility shaping.
     result.directionalSupport = validMass > 0.000001
         ? clamp(directionalMass / validMass, 0.0, 1.0)
         : 0.0;
@@ -1610,12 +1618,19 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
         inner.contributingVolumeColor * innerDirectionalMass;
     SimpleDdgiGatherResult result;
     float innerSpatialMass = inner.spatialCoverage * w;
+    float outerSpatialMass = outer.spatialCoverage * (1.0 - innerSpatialMass);
     result.spatialCoverage = clamp(
-        innerSpatialMass + outer.spatialCoverage * (1.0 - innerSpatialMass),
+        innerSpatialMass + outerSpatialMass,
         0.0,
         1.0);
+    // Availability follows every field that can actually contribute. Keep this
+    // independent from visibility-selected `validMass`, which still decides how
+    // inner and outer irradiance are combined and whether recovery is required.
+    float innerAvailableMass = inner.validSupport * inner.spatialCoverage * w;
+    float outerAvailableMass = outer.validSupport * outer.spatialCoverage * outerWeight;
+    float availableMass = innerAvailableMass + outerAvailableMass;
     result.validSupport = result.spatialCoverage > 0.000001
-        ? clamp(validMass / result.spatialCoverage, 0.0, 1.0)
+        ? clamp(availableMass / result.spatialCoverage, 0.0, 1.0)
         : 0.0;
     result.directionalSupport = validMass > 0.000001
         ? clamp(directionalMass / validMass, 0.0, 1.0)
@@ -1903,11 +1918,14 @@ vec3 SampleSimpleDdgiSolverBounceIrradiance(vec3 worldPos, vec3 normal, vec3 vie
     float solverOwnership = spatialCoverage * smoothstep(
         0.0,
         SIMPLE_DDGI_SOLVER_OWNERSHIP_SUPPORT_RAMP,
-        clamp(gather.ownership, 0.0, 1.0));
-    float solverLeakAttenuation = max(
-        SimpleDdgiLeakAttenuation(gather, p),
-        SIMPLE_DDGI_SOLVER_LEAK_FLOOR);
-    vec3 irradiance = gather.irradiance * solverOwnership * solverLeakAttenuation;
+        clamp(gather.validSupport, 0.0, 1.0));
+    // Probe-to-hit visibility already participates in normalized probe
+    // selection. Applying the receiver leak clamp again here turns visibility
+    // confidence into a per-bounce absorption coefficient (0.35^N in the
+    // common low-confidence case), which prevents the Jacobi fixed point from
+    // accumulating multi-hop energy. Thin-wall rejection remains in vis^3
+    // selection and, independently, at the final receiver.
+    vec3 irradiance = gather.irradiance * solverOwnership;
 
     float fallbackWeight = (1.0 - solverOwnership) * p.environmentFallbackIntensity;
     if (fallbackWeight > 0.0001)

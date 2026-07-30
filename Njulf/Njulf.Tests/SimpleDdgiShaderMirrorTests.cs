@@ -163,12 +163,31 @@ namespace Njulf.Tests
                 Assert.That(leakProneSelection, Is.EqualTo(0.05f).Within(1.0e-6f));
                 Assert.That(partialSelection, Is.EqualTo(0.125f).Within(1.0e-6f));
                 Assert.That(fullSelection, Is.EqualTo(1.0f).Within(1.0e-6f));
-                Assert.That(SmoothStep(0.0f, 0.15f, blockedSelection), Is.InRange(0.25f, 0.27f),
-                    "A fully occluded support floor must leave most ownership to the environment/coarser complement.");
                 Assert.That(leakProneSelection * 0.2f, Is.EqualTo(0.01f).Within(1.0e-6f),
                     "A twenty-percent-visible probe must not regain full selection authority before normalization.");
                 Assert.That(SimpleDdgiLeakAttenuation(0.0f, 1.0f), Is.EqualTo(0.05f).Within(1.0e-6f),
                     "Receiver composition, rather than gather normalization, suppresses fully blocked transport.");
+            });
+        }
+
+        [Test]
+        public void ReceiverOwnership_UsesDataAvailabilityWithoutRemovingFinalLeakProtection()
+        {
+            float visibilitySelection = SimpleDdgiVisibilitySelectionWeight(transportVisibility: 0.0f);
+            float dataAvailability = 1.0f;
+            float radiometricOwnership = SmoothStep(0.0f, 0.15f, dataAvailability);
+            float effectiveOwnership = radiometricOwnership * SimpleDdgiLeakAttenuation(
+                transportVisibility: 0.0f,
+                thinWallLeakClampStrength: 0.9f);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(visibilitySelection, Is.EqualTo(0.05f).Within(1.0e-6f),
+                    "Visibility must retain its conservative probe-selection floor.");
+                Assert.That(radiometricOwnership, Is.EqualTo(1.0f).Within(1.0e-6f),
+                    "State-valid probe data must retain receiver ownership even when visibility is low.");
+                Assert.That(effectiveOwnership, Is.EqualTo(0.1f).Within(1.0e-6f),
+                    "The existing all-blocked thin-wall safeguard must remain active.");
             });
         }
 
@@ -900,7 +919,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void RadiometricOwnership_UsesBoundedSupportAwareMassWithoutRenormalizingIrradiance()
+        public void RadiometricOwnership_UsesDataAvailabilityWithoutRenormalizingIrradiance()
         {
             string shared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
             string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
@@ -909,8 +928,14 @@ namespace Njulf.Tests
             {
                 Assert.That(shared, Does.Contain("float SimpleDdgiRadiometricOwnership(SimpleDdgiGatherResult gather)"));
                 Assert.That(shared, Does.Contain("float spatialCoverage = clamp(gather.spatialCoverage, 0.0, 1.0);"));
-                Assert.That(shared, Does.Contain("float validSupport = clamp(gather.ownership, 0.0, 1.0);"));
+                Assert.That(shared, Does.Contain("float validSupport = clamp(gather.validSupport, 0.0, 1.0);"));
                 Assert.That(shared, Does.Contain("return spatialCoverage * smoothstep(0.0, SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP, validSupport);"));
+                Assert.That(shared, Does.Contain("float availableMass = 0.0;"));
+                Assert.That(shared, Does.Contain("availableMass += dataWeight;"));
+                Assert.That(shared, Does.Contain("? clamp(availableMass / spatialCoverage, 0.0, 1.0)"));
+                Assert.That(shared, Does.Contain("float innerAvailableMass = inner.validSupport * inner.spatialCoverage * w;"));
+                Assert.That(shared, Does.Contain("float outerAvailableMass = outer.validSupport * outer.spatialCoverage * outerWeight;"));
+                Assert.That(shared, Does.Contain("result.ownership = clamp(validMass, 0.0, 1.0);"));
                 Assert.That(shared, Does.Contain("float radiometricOwnership = SimpleDdgiRadiometricOwnership(gather);"));
                 Assert.That(shared, Does.Contain("float effectiveOwnership = radiometricOwnership * leakAttenuation;"));
                 Assert.That(forward, Does.Contain("float simpleRadiometricOwnership = SimpleDdgiRadiometricOwnership(simpleGather);"));
@@ -1034,7 +1059,8 @@ namespace Njulf.Tests
                 Assert.That(blend, Does.Contain(": missMoments;"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_VISIBILITY_VARIANCE_SPACING_CAP = 4.0"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_SOLVER_OWNERSHIP_SUPPORT_RAMP = 0.02"));
-                Assert.That(shared, Does.Contain("SIMPLE_DDGI_SOLVER_LEAK_FLOOR = 0.35"));
+                Assert.That(shared, Does.Contain("clamp(gather.validSupport, 0.0, 1.0)"));
+                Assert.That(shared, Does.Not.Contain("SIMPLE_DDGI_SOLVER_LEAK_FLOOR"));
                 Assert.That(shared, Does.Contain("varianceSpacing * varianceSpacing * 0.005"));
                 Assert.That(shared, Does.Contain("accumulated += max(irradiance.rgb, vec3(0.0)) * selectedDirectionalWeight;"));
                 Assert.That(shared, Does.Not.Contain("float transportWeight = selectedDirectionalWeight * transportVisibility;"));
@@ -1100,8 +1126,9 @@ namespace Njulf.Tests
                 Assert.That(trace, Does.Contain("uint sourceRayOrdinal = min("));
                 Assert.That(trace, Does.Contain("uint directionRayIndex = sourceRayOrdinal * params.raysPerProbe / sourceRayCount;"));
                 Assert.That(transport, Does.Contain("vec3 bounceRadiance = vec3(0.0);"));
-                Assert.That(transport, Does.Contain("bounceRadiance = ApplyGiMaterialOcclusion("));
-                Assert.That(transport, Does.Contain("EvaluateGiDiffuseFromIrradiance("));
+                Assert.That(transport, Does.Contain("vec3(params.transportAlbedoClamp)"));
+                Assert.That(transport, Does.Contain("bounceRadiance = EvaluateGiDiffuseFromIrradiance("));
+                Assert.That(transport, Does.Not.Contain("bounceRadiance = ApplyGiMaterialOcclusion("));
                 Assert.That(transport, Does.Contain("ReadSimpleDdgiTransportRayCache("));
                 Assert.That(transport, Does.Contain("SampleSimpleDdgiSolverBounceIrradiance("));
                 Assert.That(transport, Does.Not.Contain("SampleSimpleDdgiUnifiedIrradiance("));
