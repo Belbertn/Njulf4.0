@@ -768,6 +768,9 @@ namespace Njulf.Rendering.Data
         public ulong SimpleDdgiTransportSolveRayCount { get; set; }
         public int SimpleDdgiTransportPublishedProbeCount { get; set; }
         public int SimpleDdgiTransportPublishRegionCount { get; set; }
+        public ulong SimpleDdgiTransportPublishedProbeTotal { get; set; }
+        public ulong SimpleDdgiTransportPublishRegionTotal { get; set; }
+        public ulong SimpleDdgiUpdateTransactionAbortCount { get; set; }
         public ulong SimpleDdgiTransportSourceCacheInvalidationCount { get; set; }
         public uint SimpleDdgiSourceLightingGeneration { get; set; }
         public uint SimpleDdgiTransportGeneration { get; set; }
@@ -1931,6 +1934,9 @@ namespace Njulf.Rendering.Data
             SimpleDdgiTransportSolveRayCount = 0;
             SimpleDdgiTransportPublishedProbeCount = 0;
             SimpleDdgiTransportPublishRegionCount = 0;
+            SimpleDdgiTransportPublishedProbeTotal = 0;
+            SimpleDdgiTransportPublishRegionTotal = 0;
+            SimpleDdgiUpdateTransactionAbortCount = 0;
             SimpleDdgiTransportSourceCacheInvalidationCount = 0;
             SimpleDdgiSourceLightingGeneration = 0;
             SimpleDdgiTransportGeneration = 0;

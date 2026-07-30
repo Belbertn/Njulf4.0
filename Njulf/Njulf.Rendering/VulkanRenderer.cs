@@ -4265,6 +4265,9 @@ namespace Njulf.Rendering
                 SimpleDdgiTransportSolveRayCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSolveRayCount : 0UL,
                 SimpleDdgiTransportPublishedProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportPublishedProbeCount : 0,
                 SimpleDdgiTransportPublishRegionCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportPublishRegionCount : 0,
+                SimpleDdgiTransportPublishedProbeTotal = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportPublishedProbeTotal : 0UL,
+                SimpleDdgiTransportPublishRegionTotal = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportPublishRegionTotal : 0UL,
+                SimpleDdgiUpdateTransactionAbortCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiUpdateTransactionAbortCount : 0UL,
                 SimpleDdgiTransportSourceCacheInvalidationCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceCacheInvalidationCount : 0UL,
                 SimpleDdgiSourceLightingGeneration = giUsesSimpleDdgi ? sceneData.SimpleDdgiSourceLightingGeneration : 0u,
                 SimpleDdgiTransportGeneration = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportGeneration : 0u,
@@ -8516,6 +8519,9 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiTransportSolveRayCount = _simpleDdgiVolumeManager.ScheduledTransportRayCount;
             sceneData.SimpleDdgiTransportPublishedProbeCount = _simpleDdgiVolumeManager.TransportPublishedProbeCount;
             sceneData.SimpleDdgiTransportPublishRegionCount = _simpleDdgiVolumeManager.TransportPublishRegionCount;
+            sceneData.SimpleDdgiTransportPublishedProbeTotal = _simpleDdgiVolumeManager.TransportPublishedProbeTotal;
+            sceneData.SimpleDdgiTransportPublishRegionTotal = _simpleDdgiVolumeManager.TransportPublishRegionTotal;
+            sceneData.SimpleDdgiUpdateTransactionAbortCount = _simpleDdgiVolumeManager.UpdateTransactionAbortCount;
             sceneData.SimpleDdgiTransportSourceCacheInvalidationCount = _simpleDdgiVolumeManager.SourceCacheInvalidationCount;
             sceneData.SimpleDdgiSourceLightingGeneration = _simpleDdgiVolumeManager.SourceLightingGeneration;
             sceneData.SimpleDdgiTransportGeneration = _simpleDdgiVolumeManager.TransportGeneration;

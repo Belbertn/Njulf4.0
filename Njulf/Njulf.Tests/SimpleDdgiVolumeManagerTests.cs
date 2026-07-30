@@ -187,12 +187,15 @@ public sealed class SimpleDdgiVolumeManagerTests
     }
 
     [TestCase(15_354, 0, 0, true)]
-    [TestCase(15_354, 1, 0, false)]
+    [TestCase(15_354, 1, 0, true)]
+    [TestCase(15_354, 14, 0, true)]
+    [TestCase(15_354, 15, 0, false)]
     [TestCase(15_354, 0, 1, false)]
-    [TestCase(999, 1, 0, false)]
-    [TestCase(1_000, 1, 0, false)]
+    [TestCase(999, 1, 0, true)]
+    [TestCase(999, 2, 0, false)]
+    [TestCase(1_000, 1, 0, true)]
     [TestCase(0, 0, 0, true)]
-    public void GlobalTransportConvergence_RequiresEveryActiveSourceAndProbeToBeStable(
+    public void GlobalTransportConvergence_AllowsOnlyTheBoundedSourceRepairTail(
         int participatingProbeCount,
         int sourceRepairProbeCount,
         int pendingConvergenceProbeCount,
@@ -206,11 +209,13 @@ public sealed class SimpleDdgiVolumeManagerTests
             Is.EqualTo(expectedComplete));
     }
 
-    [TestCase(999, 0)]
-    [TestCase(1_000, 0)]
-    [TestCase(15_354, 0)]
-    [TestCase(1_000_000, 0)]
-    public void GlobalTransportConvergence_SourceRepairAllowanceIsZero(
+    [TestCase(0, 1)]
+    [TestCase(999, 1)]
+    [TestCase(1_000, 1)]
+    [TestCase(1_024, 1)]
+    [TestCase(15_354, 14)]
+    [TestCase(1_000_000, 976)]
+    public void GlobalTransportConvergence_SourceRepairAllowanceIsBounded(
         int participatingProbeCount,
         int expectedAllowance)
     {

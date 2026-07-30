@@ -81,9 +81,9 @@ public static class SampleSponzaGlobalIlluminationProfile
         settings.Reflections.Enabled = true;
         settings.Shadows.DirectionalShadowMapSize = 2048;
         settings.Shadows.DirectionalCascadeCount = 3;
-        // Cover the full plaza while retaining the three-cascade split layout used
-        // by the directional-shadow boundary investigation.
-        settings.Shadows.MaxShadowDistance = 120.0f;
+        // Sponza fits inside this range; concentrating the three cascades here
+        // keeps the existing receiver and raster biases proportional to texels.
+        settings.Shadows.MaxShadowDistance = 48.0f;
         settings.Shadows.PcfRadius = 1;
         settings.Shadows.SpotShadowsEnabled = false;
         settings.Shadows.MaxShadowedSpotLights = 0;

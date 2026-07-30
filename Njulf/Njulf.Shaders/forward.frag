@@ -4426,7 +4426,10 @@ void main()
                 diffuseReflectance),
             ambientOcclusion);
         finalDdgiDiffuse = ddgiDiffuse * simpleOwnership;
-        finalDiffuseIndirect = finalDdgiDiffuse + diffuseIbl * simpleFallback * indirectAo;
+        vec3 simpleEnvironmentFallback = diffuseIbl;
+        if ((simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u)
+            simpleEnvironmentFallback *= EstimateFarFieldSkyVisibility(fragWorldPosition, ddgiNormal);
+        finalDiffuseIndirect = finalDdgiDiffuse + simpleEnvironmentFallback * simpleFallback * indirectAo;
         ddgiCoverage = simpleGather.spatialCoverage;
         fallbackWeight = simpleFallback;
         hybridDebugDiffuse = finalDiffuseIndirect;

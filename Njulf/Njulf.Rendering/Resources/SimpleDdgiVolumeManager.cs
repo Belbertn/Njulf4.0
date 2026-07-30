@@ -153,7 +153,7 @@ namespace Njulf.Rendering.Resources
         // iterations for long multi-hop paths before the corruption/noise
         // watchdog is allowed to resample it.
         private const int TransportSourceRefreshSolverWatchdogMultiplier = 16;
-        private const int TransportGlobalSourceRefreshWatchdogFrameMultiplier = 4;
+        private const int TransportGlobalSourceRefreshWatchdogFrameMultiplier = 2;
         // Exact buckets keep the published P50/P95 meaningful during a soak.
         // The former 15+ bucket made a 773-frame convergence tail appear as a
         // harmless 15-frame P95.  4K buckets cost 32 KiB for both histograms and
@@ -380,8 +380,16 @@ namespace Njulf.Rendering.Resources
         private ulong _scheduledSourceRayCount;
         private int _sourceRefreshProbeCount;
         private int _sourceCacheReuseProbeCount;
+        // Publication occurs after scene diagnostics are populated. Retain the
+        // completed frame separately so captures never observe the just-reset
+        // current-frame counters as a false zero-publication result.
         private int _transportPublishedProbeCount;
         private int _transportPublishRegionCount;
+        private int _currentTransportPublishedProbeCount;
+        private int _currentTransportPublishRegionCount;
+        private ulong _transportPublishedProbeTotal;
+        private ulong _transportPublishRegionTotal;
+        private ulong _updateTransactionAbortCount;
         private ulong _sourceCacheInvalidationCount;
         private uint _sourceLightingGeneration = 1u;
         private uint _transportGeneration;
@@ -557,6 +565,9 @@ namespace Njulf.Rendering.Resources
         public int SourceCacheReuseProbeCount => _sourceCacheReuseProbeCount;
         public int TransportPublishedProbeCount => _transportPublishedProbeCount;
         public int TransportPublishRegionCount => _transportPublishRegionCount;
+        public ulong TransportPublishedProbeTotal => _transportPublishedProbeTotal;
+        public ulong TransportPublishRegionTotal => _transportPublishRegionTotal;
+        public ulong UpdateTransactionAbortCount => _updateTransactionAbortCount;
         public ulong SourceCacheInvalidationCount => _sourceCacheInvalidationCount;
         public uint SourceLightingGeneration => _sourceLightingGeneration;
         public uint TransportGeneration => _transportGeneration;
@@ -1545,8 +1556,8 @@ namespace Njulf.Rendering.Resources
         /// </summary>
         public unsafe void PublishTransportAtlasAfterBlend(CommandBuffer commandBuffer)
         {
-            _transportPublishedProbeCount = 0;
-            _transportPublishRegionCount = 0;
+            _currentTransportPublishedProbeCount = 0;
+            _currentTransportPublishRegionCount = 0;
             if (!TransportV2Active || _probesToUpdate <= 0 ||
                 !_transportIrradianceAtlasBuffer.IsValid || !_irradianceAtlasBuffer.IsValid ||
                 commandBuffer.Handle == 0)
@@ -1652,8 +1663,14 @@ namespace Njulf.Rendering.Resources
             };
             _context.Api.CmdPipelineBarrier2(commandBuffer, &afterDependency);
 
-            _transportPublishedProbeCount = uniqueCount;
-            _transportPublishRegionCount = copyCount;
+            _currentTransportPublishedProbeCount = uniqueCount;
+            _currentTransportPublishRegionCount = copyCount;
+            _transportPublishedProbeTotal = SaturatingAdd(
+                _transportPublishedProbeTotal,
+                (ulong)uniqueCount);
+            _transportPublishRegionTotal = SaturatingAdd(
+                _transportPublishRegionTotal,
+                (ulong)copyCount);
             _transportGeneration = AdvanceSourceLightingGeneration(_transportGeneration);
         }
 
@@ -1689,6 +1706,12 @@ namespace Njulf.Rendering.Resources
 
         public void AbortUpdateTransaction()
         {
+            if (_updateTransactionPending)
+            {
+                _updateTransactionAbortCount = SaturatingAdd(
+                    _updateTransactionAbortCount,
+                    1UL);
+            }
             _updateTransactionPending = false;
             _traceTransactionExecuted = false;
             _relocateClassifyTransactionExecuted = false;
@@ -1708,6 +1731,10 @@ namespace Njulf.Rendering.Resources
 
         private void ResetFrameCounters()
         {
+            _transportPublishedProbeCount = _currentTransportPublishedProbeCount;
+            _transportPublishRegionCount = _currentTransportPublishRegionCount;
+            _currentTransportPublishedProbeCount = 0;
+            _currentTransportPublishRegionCount = 0;
             _currentProbeInvalidationMarkerSerial = ++_nextProbeInvalidationMarkerSerial;
             if (_currentProbeInvalidationMarkerSerial == 0u)
             {
@@ -1735,8 +1762,6 @@ namespace Njulf.Rendering.Resources
             _scheduledSourceRayCount = 0;
             _sourceRefreshProbeCount = 0;
             _sourceCacheReuseProbeCount = 0;
-            _transportPublishedProbeCount = 0;
-            _transportPublishRegionCount = 0;
             _effectiveMaxShadedLights = 0;
             _adaptiveRaySavedPrimaryRayCount = 0;
             _rayBudgetRejectedProbeCount = 0;
@@ -2060,9 +2085,9 @@ namespace Njulf.Rendering.Resources
             {
                 _transportFieldConvergenceEvidenceResetPending = true;
                 _transportGlobalWatchdogRefreshWaveStarted = false;
+                _transportGlobalConvergenceStartFrame = _frameIndex;
             }
             _transportGlobalConvergenceSourceGeneration = _sourceLightingGeneration;
-            _transportGlobalConvergenceStartFrame = _frameIndex;
             if (resetFieldEvidence)
             {
                 _probeConvergenceReadbackValid = 0;
@@ -2134,7 +2159,10 @@ namespace Njulf.Rendering.Resources
                     pendingConvergenceProbeCount++;
             }
 
-            if (sourceRepairProbeCount > 0)
+            int sourceRepairAllowance =
+                ResolveTransportGlobalConvergenceSourceRepairAllowance(
+                    participatingProbeCount);
+            if (sourceRepairProbeCount > sourceRepairAllowance)
             {
                 _transportGlobalSourceRepairPhasePending = true;
                 return;
@@ -2144,17 +2172,11 @@ namespace Njulf.Rendering.Resources
                     _transportGlobalSourceRepairPhasePending,
                     sourceRepairProbeCount))
             {
-                // Source terms are assembled over multiple queue batches. Throw
-                // away every residual observed during that moving-source phase;
-                // only iterations against the complete, fixed source field can
-                // prove multi-hop convergence.
+                // A genuine source/layout boundary already latched one field-wide
+                // reset in BeginTransportGlobalConvergence. Repairs clear their
+                // own per-probe evidence; repeating a global wipe here would make
+                // a continuously repaired field incapable of converging.
                 _transportGlobalSourceRepairPhasePending = false;
-                _transportFieldConvergenceEvidenceResetPending = true;
-                _probeConvergenceReadbackValid = 0;
-                for (int i = 0; i < _probeStateReadbackRecorded.Length; i++)
-                    DropProbeStateReadbackSlot(i);
-                ApplyPendingTransportFieldConvergenceEvidenceReset();
-                return;
             }
 
             if (!CanCompleteTransportGlobalConvergence(
@@ -2216,11 +2238,8 @@ namespace Njulf.Rendering.Resources
         internal static int ResolveTransportGlobalConvergenceSourceRepairAllowance(
             int participatingProbeCount)
         {
-            // A repaired source can affect every downstream Jacobi receiver.
-            // Releasing even one active source-repair tail would let already
-            // quiet neighbors retire before that energy propagates.
-            _ = participatingProbeCount;
-            return 0;
+            int participants = Math.Max(0, participatingProbeCount);
+            return Math.Max(1, participants / 1_024);
         }
 
         internal static bool CanCompleteTransportGlobalConvergence(
@@ -3998,6 +4017,11 @@ namespace Njulf.Rendering.Resources
                 _probeStableUpdateCounts[probeIndex] = 0;
             if ((uint)probeIndex < (uint)_probeLuminanceChangeEma.Length)
                 _probeLuminanceChangeEma[probeIndex] = 0.0f;
+            // BuildProbeStateRecord omits GPU-only transient flags, including
+            // SourceCacheInvalid. Queueing this sparse upload is what commits the
+            // CPU invalidation and prevents the completed readback from re-arming
+            // the same source repair indefinitely.
+            _probeStateDirtySlots.Add(probeIndex);
             // A per-slot cache repair is exceptional (normally a live resource
             // transition or corruption guard). Treat it as a new transport
             // boundary so neighboring bounce paths cannot remain retired while

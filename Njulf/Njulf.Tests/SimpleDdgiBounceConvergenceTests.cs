@@ -195,11 +195,11 @@ public sealed class SimpleDdgiBounceConvergenceTests
             Is.EqualTo(expectedWatchdogGeneration));
     }
 
-    [TestCase(true, false, false, 959u, 240, false)]
-    [TestCase(true, false, false, 960u, 240, true)]
-    [TestCase(true, false, true, 960u, 240, false)]
-    [TestCase(true, true, false, 960u, 240, false)]
-    [TestCase(false, false, false, 960u, 240, false)]
+    [TestCase(true, false, false, 479u, 240, false)]
+    [TestCase(true, false, false, 480u, 240, true)]
+    [TestCase(true, false, true, 480u, 240, false)]
+    [TestCase(true, true, false, 480u, 240, false)]
+    [TestCase(false, false, false, 480u, 240, false)]
     public void GlobalSourceRefreshWatchdog_StartsAtMostOneCohortPerSolve(
         bool globalConvergencePending,
         bool periodicRefreshWavePending,

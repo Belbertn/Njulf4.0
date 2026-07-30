@@ -92,9 +92,15 @@ const float SIMPLE_DDGI_VISIBILITY_SELECTION_HIGH = 0.08;
 // suppresses their radiance, while this floor prevents every corner in a dense
 // architectural cell from disappearing at once.
 const float SIMPLE_DDGI_VISIBILITY_SELECTION_FLOOR = 0.05;
-// Variance uncertainty grows through the fine-probe range, but is capped at one
-// metre so coarse fallback rings do not become progressively leakier.
-const float SIMPLE_DDGI_VISIBILITY_VARIANCE_SPACING_CAP = 1.0;
+// Variance uncertainty grows through the fine and first coarse-probe ranges.
+// The mean-distance bound below remains authoritative at thin occluders, while
+// this cap prevents valid coarse-ring support from collapsing numerically.
+const float SIMPLE_DDGI_VISIBILITY_VARIANCE_SPACING_CAP = 4.0;
+// Recursive transport consumes a normalized estimator, so genuine probe support
+// should rapidly acquire solver authority. Receiver composition deliberately
+// keeps the broader ownership ramp and stronger leak suppression below.
+const float SIMPLE_DDGI_SOLVER_OWNERSHIP_SUPPORT_RAMP = 0.02;
+const float SIMPLE_DDGI_SOLVER_LEAK_FLOOR = 0.35;
 // Missing probe ownership may attenuate sky bounce, but must never annihilate it.
 const float SIMPLE_DDGI_MINIMUM_SKY_VISIBILITY = 0.10;
 const uint SIMPLE_DDGI_AUTHORED_VOLUME_CASCADE = 0xffffffffu;
@@ -1061,8 +1067,8 @@ float SimpleDdgiChebyshev(float mean, float mean2, float receiverDistance, float
         return 1.0;
     // Fine lattices need enough numerical uncertainty to tolerate the 0.15-0.3 m
     // mean-distance error common around trim and relocated probes.  Cap the
-    // spacing term at one metre: a coarse ring must not make the same blocked
-    // receiver increasingly visible merely because its cells are larger.
+    // spacing term at four metres: coarse-ring uncertainty must remain large
+    // enough to avoid losing every supported probe to numerical over-occlusion.
     // Measured variance always wins and the mean-distance bound remains a final
     // guard for probes whose recorded visibility distance is very small.
     float measuredVariance = max(mean2 - mean * mean, 0.0);
@@ -1437,11 +1443,10 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
             SimpleDdgiVisibilitySelectionWeight(transportVisibility);
         float selectedDataWeight = dataWeight * visibilitySelectionWeight;
         float selectedDirectionalWeight = directionalTransportWeight * visibilitySelectionWeight;
-        float transportWeight = selectedDirectionalWeight * transportVisibility;
-        accumulated += max(irradiance.rgb, vec3(0.0)) * transportWeight;
+        accumulated += max(irradiance.rgb, vec3(0.0)) * selectedDirectionalWeight;
         validMass += selectedDataWeight;
         directionalMass += selectedDirectionalWeight;
-        visibleMass += transportWeight;
+        visibleMass += selectedDirectionalWeight * transportVisibility;
         result.validProbeCount++;
     }
 
@@ -1461,13 +1466,13 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     // the standard DDGI estimator and prevents probe-to-receiver visibility from
     // becoming a second ambient-occlusion term. Physical shadowing is already in
     // the radiance traced into each probe.
-    result.irradiance = visibleMass > 0.000001
-        ? clamp(accumulated / visibleMass, vec3(0.0), vec3(64.0))
+    result.irradiance = result.validProbeCount > 0u && directionalMass > 0.000001
+        ? clamp(accumulated / directionalMass, vec3(0.0), vec3(64.0))
         : vec3(0.0);
-    result.contributingVolumeColor = visibleMass > 0.000001
+    result.contributingVolumeColor = result.validProbeCount > 0u && directionalMass > 0.000001
         ? SimpleDdgiVolumeContributorDebugColor(volumeIndex, volume.kind)
         : vec3(0.0);
-    result.primaryContributionWeight = visibleMass > 0.000001 ? 1.0 : 0.0;
+    result.primaryContributionWeight = result.validProbeCount > 0u && directionalMass > 0.000001 ? 1.0 : 0.0;
     return result;
 }
 
@@ -1599,10 +1604,10 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
     float outerVisibleMass = outerDirectionalMass * outer.transportVisibility;
     float innerVisibleMass = innerDirectionalMass * inner.transportVisibility;
     float visibleMass = outerVisibleMass + innerVisibleMass;
-    vec3 accumulated = outer.irradiance * outerVisibleMass +
-        inner.irradiance * innerVisibleMass;
-    vec3 contributorColorAccumulated = outer.contributingVolumeColor * outerVisibleMass +
-        inner.contributingVolumeColor * innerVisibleMass;
+    vec3 accumulated = outer.irradiance * outerDirectionalMass +
+        inner.irradiance * innerDirectionalMass;
+    vec3 contributorColorAccumulated = outer.contributingVolumeColor * outerDirectionalMass +
+        inner.contributingVolumeColor * innerDirectionalMass;
     SimpleDdgiGatherResult result;
     float innerSpatialMass = inner.spatialCoverage * w;
     result.spatialCoverage = clamp(
@@ -1619,20 +1624,20 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
         ? clamp(visibleMass / directionalMass, 0.0, 1.0)
         : 0.0;
     result.ownership = clamp(validMass, 0.0, 1.0);
-    result.irradiance = visibleMass > 0.000001
-        ? clamp(accumulated / visibleMass, vec3(0.0), vec3(64.0))
+    result.irradiance = directionalMass > 0.000001
+        ? clamp(accumulated / directionalMass, vec3(0.0), vec3(64.0))
         : vec3(0.0);
-    result.contributingVolumeColor = visibleMass > 0.000001
-        ? clamp(contributorColorAccumulated / visibleMass, vec3(0.0), vec3(1.0))
+    result.contributingVolumeColor = directionalMass > 0.000001
+        ? clamp(contributorColorAccumulated / directionalMass, vec3(0.0), vec3(1.0))
         : vec3(0.0);
     result.selectedVolume = inner.selectedVolume;
     result.secondaryVolume = outer.selectedVolume;
     result.transitionWeight = w;
-    result.primaryContributionWeight = visibleMass > 0.000001
-        ? clamp(innerVisibleMass / visibleMass, 0.0, 1.0)
+    result.primaryContributionWeight = directionalMass > 0.000001
+        ? clamp(innerDirectionalMass / directionalMass, 0.0, 1.0)
         : 0.0;
-    result.secondaryContributionWeight = visibleMass > 0.000001
-        ? clamp(outerVisibleMass / visibleMass, 0.0, 1.0)
+    result.secondaryContributionWeight = directionalMass > 0.000001
+        ? clamp(outerDirectionalMass / directionalMass, 0.0, 1.0)
         : 0.0;
     result.selectedSpacing = mix(
         outer.selectedSpacing,
@@ -1884,6 +1889,36 @@ vec3 SampleSimpleDdgiUnifiedIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir,
 {
     float ignoredOwnership;
     return SampleSimpleDdgiUnifiedIrradiance(worldPos, normal, viewDir, allowFallback, ignoredOwnership);
+}
+
+vec3 SampleSimpleDdgiSolverBounceIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir)
+{
+    SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    if ((p.flags & SIMPLE_DDGI_FLAG_ENABLED) == 0u)
+        return vec3(0.0);
+
+    vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
+    SimpleDdgiGatherResult gather = SampleSimpleDdgiGather(worldPos, safeNormal, viewDir);
+    float spatialCoverage = clamp(gather.spatialCoverage, 0.0, 1.0);
+    float solverOwnership = spatialCoverage * smoothstep(
+        0.0,
+        SIMPLE_DDGI_SOLVER_OWNERSHIP_SUPPORT_RAMP,
+        clamp(gather.ownership, 0.0, 1.0));
+    float solverLeakAttenuation = max(
+        SimpleDdgiLeakAttenuation(gather, p),
+        SIMPLE_DDGI_SOLVER_LEAK_FLOOR);
+    vec3 irradiance = gather.irradiance * solverOwnership * solverLeakAttenuation;
+
+    float fallbackWeight = (1.0 - solverOwnership) * p.environmentFallbackIntensity;
+    if (fallbackWeight > 0.0001)
+    {
+        vec3 fallback = SimpleDdgiEnvironmentIrradianceFallback(safeNormal, p);
+        if ((p.flags & SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u)
+            fallback *= EstimateFarFieldSkyVisibility(worldPos, safeNormal);
+        irradiance += fallback * fallbackWeight;
+    }
+
+    return clamp(irradiance, vec3(0.0), vec3(64.0));
 }
 
 SimpleDdgiDebugSample SampleSimpleDdgiDebug(vec3 worldPos, vec3 normal, vec3 viewDir)

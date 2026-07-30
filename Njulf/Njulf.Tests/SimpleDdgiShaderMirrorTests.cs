@@ -123,7 +123,7 @@ namespace Njulf.Tests
             float fine = SimpleDdgiChebyshev(mean: 2.0f, mean2: 4.0f, receiverDistance: 3.0f, probeSpacing: 1.0f);
             float coarse = SimpleDdgiChebyshev(mean: 2.0f, mean2: 4.0f, receiverDistance: 3.0f, probeSpacing: 4.0f);
 
-            Assert.That(coarse, Is.GreaterThanOrEqualTo(fine).And.LessThan(0.01f));
+            Assert.That(coarse, Is.GreaterThan(fine).And.LessThan(0.10f));
         }
 
         [Test]
@@ -144,8 +144,8 @@ namespace Njulf.Tests
             {
                 Assert.That(fine, Is.GreaterThan(0.08f),
                     "A 20 cm fine-probe mean error should remain above the full-selection threshold.");
-                Assert.That(coarseBlocked, Is.LessThan(0.01f),
-                    "Coarse spacing must not relax a receiver one metre behind an occluder.");
+                Assert.That(coarseBlocked, Is.LessThan(0.10f),
+                    "Coarse uncertainty must remain bounded by the mean-distance guard.");
             });
         }
 
@@ -167,8 +167,8 @@ namespace Njulf.Tests
                     "A fully occluded support floor must leave most ownership to the environment/coarser complement.");
                 Assert.That(leakProneSelection * 0.2f, Is.EqualTo(0.01f).Within(1.0e-6f),
                     "A twenty-percent-visible probe must not regain full selection authority before normalization.");
-                Assert.That(blockedSelection * 0.0f, Is.Zero,
-                    "The support floor must not manufacture radiance through a fully blocked transport term.");
+                Assert.That(SimpleDdgiLeakAttenuation(0.0f, 1.0f), Is.EqualTo(0.05f).Within(1.0e-6f),
+                    "Receiver composition, rather than gather normalization, suppresses fully blocked transport.");
             });
         }
 
@@ -274,7 +274,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void VisibilityWeightedGather_NormalizesConstantIrradianceWithoutDoubleShadowing()
+        public void VisibilitySelectedGather_NormalizesConstantIrradianceWithoutDoubleShadowing()
         {
             Vector3 irradiance = new(0.7f, 1.1f, 1.6f);
             float[] interpolationWeights = [0.45f, 0.35f, 0.20f];
@@ -284,6 +284,18 @@ namespace Njulf.Tests
                 [irradiance, irradiance, irradiance],
                 interpolationWeights,
                 transportVisibility);
+
+            Assert.That(Vector3.Distance(gathered, irradiance), Is.LessThan(1.0e-6f));
+        }
+
+        [Test]
+        public void VisibilitySelectedGather_RetainsSupportedIrradianceAtZeroRawVisibility()
+        {
+            Vector3 irradiance = new(0.4f, 0.6f, 0.8f);
+            Vector3 gathered = NormalizeVisibilityWeightedIrradiance(
+                [irradiance],
+                [1.0f],
+                [0.0f]);
 
             Assert.That(Vector3.Distance(gathered, irradiance), Is.LessThan(1.0e-6f));
         }
@@ -988,8 +1000,8 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("uint validProbeCount;"));
                 Assert.That(shared, Does.Contain("SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 viewDir)"));
                 Assert.That(shared, Does.Contain("bool SimpleDdgiProbeSupportsGather(SimpleDdgiProbeState state, vec4 irradiance, vec4 visibility)"));
-                Assert.That(shared, Does.Contain("result.irradiance = visibleMass > 0.000001"));
-                Assert.That(shared, Does.Contain("accumulated / visibleMass"));
+                Assert.That(shared, Does.Contain("result.irradiance = result.validProbeCount > 0u && directionalMass > 0.000001"));
+                Assert.That(shared, Does.Contain("accumulated / directionalMass"));
                 Assert.That(shared, Does.Contain("bool SimpleDdgiCanSampleAtlasImage(SimpleDdgiParams p, uint bufferIndex, uint probeIndex)"));
                 Assert.That(shared, Does.Contain("vec4 SampleSimpleDdgiAtlasImage("));
                 Assert.That(shared, Does.Contain("vec4 SampleSimpleDdgiAtlasBilinear("));
@@ -1020,8 +1032,12 @@ namespace Njulf.Tests
                 Assert.That(blend, Does.Contain("float narrowWeight = broadWeight * broadWeight;"));
                 Assert.That(blend, Does.Contain("? hitMoments"));
                 Assert.That(blend, Does.Contain(": missMoments;"));
-                Assert.That(shared, Does.Contain("SIMPLE_DDGI_VISIBILITY_VARIANCE_SPACING_CAP = 1.0"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_VISIBILITY_VARIANCE_SPACING_CAP = 4.0"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_SOLVER_OWNERSHIP_SUPPORT_RAMP = 0.02"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_SOLVER_LEAK_FLOOR = 0.35"));
                 Assert.That(shared, Does.Contain("varianceSpacing * varianceSpacing * 0.005"));
+                Assert.That(shared, Does.Contain("accumulated += max(irradiance.rgb, vec3(0.0)) * selectedDirectionalWeight;"));
+                Assert.That(shared, Does.Not.Contain("float transportWeight = selectedDirectionalWeight * transportVisibility;"));
                 Assert.That(shared, Does.Not.Contain("if (transportVisibility < 0.05)"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_MINIMUM_SKY_VISIBILITY = 0.10"));
                 Assert.That(shared, Does.Contain("float EstimateFarFieldSkyVisibility(vec3 worldPos, vec3 surfaceNormal)"));
@@ -1029,6 +1045,7 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("DDGI_INVESTIGATION_SKY_VISIBILITY_SAMPLE_COUNTER"));
                 Assert.That(shared, Does.Contain("DDGI_INVESTIGATION_SKY_VISIBILITY_ACCUM_COUNTER"));
                 Assert.That(shared, Does.Contain("vec3 SampleSimpleDdgiUnifiedIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir, bool allowFallback)"));
+                Assert.That(shared, Does.Contain("vec3 SampleSimpleDdgiSolverBounceIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir)"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_UPDATE_RAY_COUNT_SHIFT"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT"));
                 Assert.That(shared, Does.Contain("bool SimpleDdgiUpdateMatchesProbeGeneration(SimpleDdgiProbeUpdate update, SimpleDdgiProbeState state)"));
@@ -1064,9 +1081,9 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP = 0.15"));
                 Assert.That(shared, Does.Contain("smoothstep(0.0, SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP, validSupport)"));
                 Assert.That(shared, Does.Contain("float outerWeight = 1.0 - innerValidMass;"));
-                Assert.That(shared, Does.Contain("outer.contributingVolumeColor * outerVisibleMass"));
-                Assert.That(shared, Does.Contain("inner.contributingVolumeColor * innerVisibleMass"));
-                Assert.That(shared, Does.Contain("contributorColorAccumulated / visibleMass"));
+                Assert.That(shared, Does.Contain("outer.contributingVolumeColor * outerDirectionalMass"));
+                Assert.That(shared, Does.Contain("inner.contributingVolumeColor * innerDirectionalMass"));
+                Assert.That(shared, Does.Contain("contributorColorAccumulated / directionalMass"));
                 Assert.That(shared, Does.Contain("DDGI_INVESTIGATION_SIMPLE_VOLUME_PRIMARY_GATHER_COUNTER_BASE + selectedVolumeIndex"));
                 Assert.That(shared, Does.Contain("DDGI_INVESTIGATION_SIMPLE_VOLUME_SAMPLED_GATHER_COUNTER_BASE + selectedVolumeIndex"));
                 Assert.That(shared, Does.Contain("DDGI_INVESTIGATION_SIMPLE_SECOND_VOLUME_GATHER_COUNTER"));
@@ -1086,7 +1103,8 @@ namespace Njulf.Tests
                 Assert.That(transport, Does.Contain("bounceRadiance = ApplyGiMaterialOcclusion("));
                 Assert.That(transport, Does.Contain("EvaluateGiDiffuseFromIrradiance("));
                 Assert.That(transport, Does.Contain("ReadSimpleDdgiTransportRayCache("));
-                Assert.That(transport, Does.Contain("SampleSimpleDdgiUnifiedIrradiance("));
+                Assert.That(transport, Does.Contain("SampleSimpleDdgiSolverBounceIrradiance("));
+                Assert.That(transport, Does.Not.Contain("SampleSimpleDdgiUnifiedIrradiance("));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID"));
                 Assert.That(shared, Does.Contain("void MarkSimpleDdgiProbeSourceCacheInvalid("));
                 Assert.That(shared, Does.Contain("void ClearSimpleDdgiProbeSourceCacheInvalid("));
@@ -1185,7 +1203,7 @@ namespace Njulf.Tests
                 Assert.That(relocate, Does.Contain("nearestBackfaceDistance <= maximumActionableBackfaceDistance"));
                 Assert.That(relocate, Does.Contain("targetRelocation = previous.relocation + nearestBackfaceDirection * targetDistance;"));
                 Assert.That(relocate, Does.Contain("vec3 targetRelocation = previous.relocation;"));
-                Assert.That(relocate, Does.Contain("bool relocationChanged = relocationDelta > max(volume.spacing * 0.001, 0.0001);"));
+                Assert.That(relocate, Does.Contain("bool relocationChanged = relocationDelta > max(volume.spacing * 0.02, 0.005);"));
                 Assert.That(relocate, Does.Contain("relocationWasPending && maintenanceUpdate"));
                 Assert.That(relocate, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING"));
                 Assert.That(relocate, Does.Not.Contain("targetSurfaceDistance - nearestDistance"));
@@ -1211,6 +1229,7 @@ namespace Njulf.Tests
                 Assert.That(forward, Does.Contain(
                     "bool primaryValid = simpleDdgiPrimaryContributionWeight > 0.000001"));
                 Assert.That(forward, Does.Contain("float simpleFallback = (1.0 - simpleRadiometricOwnership) * simpleDdgiParams.environmentFallbackIntensity;"));
+                Assert.That(forward, Does.Contain("simpleEnvironmentFallback *= EstimateFarFieldSkyVisibility(fragWorldPosition, ddgiNormal);"));
                 Assert.That(forward, Does.Contain("EstimateFarFieldSunShadow(worldPosition, normal, normalize(-light.Direction))"));
                 Assert.That(forward, Does.Contain("DDGI_INVESTIGATION_FAR_SUN_SHADOW_SAMPLE_COUNTER"));
                 Assert.That(forward, Does.Not.Contain("DDGI_INVESTIGATION_ROUGH_SPECULAR_SAMPLE_COUNTER"));
@@ -1228,7 +1247,7 @@ namespace Njulf.Tests
                 Assert.That(forward, Does.Contain("ddgiSample.minProbeSpacing = simpleGather.selectedSpacing;"));
                 Assert.That(forward, Does.Contain("simpleIrradiance * simpleDdgiParams.indirectIntensity,"));
                 Assert.That(forward, Does.Contain("diffuseReflectance),"));
-                Assert.That(forward, Does.Contain("finalDiffuseIndirect = finalDdgiDiffuse + diffuseIbl * simpleFallback * indirectAo;"));
+                Assert.That(forward, Does.Contain("finalDiffuseIndirect = finalDdgiDiffuse + simpleEnvironmentFallback * simpleFallback * indirectAo;"));
                 Assert.That(forward, Does.Not.Contain("finalDiffuseIndirect = ddgiDiffuse + diffuseIbl * indirectAo;"));
                 Assert.That(blend, Does.Contain("float SimpleDdgiStableRelativeDelta"));
                 Assert.That(blend, Does.Contain("if (maintenanceUpdate)"));
@@ -1486,7 +1505,7 @@ namespace Njulf.Tests
             for (int i = 0; i < irradiance.Length; i++)
             {
                 float weight = Math.Max(interpolationWeights[i], 0.0f) *
-                    Math.Clamp(transportVisibility[i], 0.0f, 1.0f);
+                    SimpleDdgiVisibilitySelectionWeight(transportVisibility[i]);
                 accumulated += Vector3.Max(irradiance[i], Vector3.Zero) * weight;
                 visibleMass += weight;
             }
@@ -1755,7 +1774,7 @@ namespace Njulf.Tests
                 return 1.0f;
 
             float measuredVariance = Math.Max(mean2 - mean * mean, 0.0f);
-            float varianceSpacing = Math.Min(Math.Max(probeSpacing, 0.0f), 1.0f);
+            float varianceSpacing = Math.Min(Math.Max(probeSpacing, 0.0f), 4.0f);
             float spacingFloor = Math.Max(0.0005f, varianceSpacing * varianceSpacing * 0.005f);
             float meanBound = Math.Max(0.0005f, mean * mean * 0.0625f);
             float variance = Math.Max(measuredVariance, Math.Min(spacingFloor, meanBound));

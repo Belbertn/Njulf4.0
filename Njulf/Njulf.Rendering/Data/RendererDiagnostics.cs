@@ -896,6 +896,9 @@ namespace Njulf.Rendering.Data
         public ulong SimpleDdgiTransportSolveRayCount { get; init; }
         public int SimpleDdgiTransportPublishedProbeCount { get; init; }
         public int SimpleDdgiTransportPublishRegionCount { get; init; }
+        public ulong SimpleDdgiTransportPublishedProbeTotal { get; init; }
+        public ulong SimpleDdgiTransportPublishRegionTotal { get; init; }
+        public ulong SimpleDdgiUpdateTransactionAbortCount { get; init; }
         public ulong SimpleDdgiTransportSourceCacheInvalidationCount { get; init; }
         public uint SimpleDdgiSourceLightingGeneration { get; init; }
         public uint SimpleDdgiTransportGeneration { get; init; }

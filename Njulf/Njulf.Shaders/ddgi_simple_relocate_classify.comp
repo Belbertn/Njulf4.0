@@ -197,7 +197,9 @@ void main()
     // full-ray update to validate it. Maintenance work is deliberately unable to
     // retire the pending state even if it happens to run before CPU readback.
     float relocationDelta = length(blendedRelocation - previous.relocation);
-    bool relocationChanged = relocationDelta > max(volume.spacing * 0.001, 0.0001);
+    // Per-frame ray rotation introduces small target jitter. Only re-arm the
+    // trace transaction for a material origin change, not estimator noise.
+    bool relocationChanged = relocationDelta > max(volume.spacing * 0.02, 0.005);
     bool relocationWasPending =
         (previous.flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u;
 
