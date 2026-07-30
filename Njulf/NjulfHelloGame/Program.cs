@@ -261,7 +261,8 @@ internal sealed class HelloGame : Game
         {
             _inputController.StartSponzaGiCapture(
                 _smokeOptions.SponzaGiCaptureDirectory,
-                exitWhenComplete: true);
+                exitWhenComplete: true,
+                captureMode: SampleSponzaGiCaptureMode.DetailedDiagnostics);
         }
         else if (!string.IsNullOrWhiteSpace(_smokeOptions.BaselineSnapshotDirectory))
         {

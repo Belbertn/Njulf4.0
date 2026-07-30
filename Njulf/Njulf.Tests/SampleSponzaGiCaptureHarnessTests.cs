@@ -25,11 +25,12 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(contract.Scenario, Is.EqualTo(SamplePerformanceScenario.GiSponzaRightWallStationary));
             Assert.That(contract.Width, Is.EqualTo(1600));
             Assert.That(contract.Height, Is.EqualTo(900));
-            Assert.That(contract.WarmupFrames, Is.EqualTo(360));
+            Assert.That(contract.WarmupFrames, Is.EqualTo(600));
+            Assert.That(SampleSponzaGiCaptureContract.HighBookmarkStationarySettleFrameCount, Is.EqualTo(600));
             Assert.That(contract.VerticalPathDurationSeconds, Is.InRange(10, 20));
             Assert.That(contract.VerticalTraversalFrameCount, Is.EqualTo(960));
-            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v5"));
-            Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(1_398));
+            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v6"));
+            Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(2_268));
             Assert.That(contract.LowBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeLow"));
             Assert.That(contract.LowBookmark.Position.Y, Is.EqualTo(1.35f));
             Assert.That(contract.HighBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeHigh"));
@@ -48,16 +49,21 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                 "beauty",
                 "direct-only",
                 "final-indirect",
+                "raw-irradiance",
                 "sampled-irradiance",
                 "final-diffuse",
                 "volume-contributor",
                 "gather-clipmap",
                 "gather-blend-weight",
                 "gather-fallback",
+                "spatial-coverage",
                 "support",
                 "visibility",
                 "ownership",
-                "fallback"
+                "fallback",
+                "probe-state",
+                "classification-invalid-score",
+                "update-reasons"
             }));
             SampleSponzaGiCaptureOutput directOnly = contract.Outputs.Single(static output => output.Name == "direct-only");
             Assert.That(directOnly.DisableGlobalIllumination, Is.True);

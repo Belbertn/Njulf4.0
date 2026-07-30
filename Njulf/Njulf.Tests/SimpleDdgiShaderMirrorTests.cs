@@ -758,11 +758,85 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_GATHER_TILE_CANDIDATE_OVERFLOW_FLAG"));
                 Assert.That(shared, Does.Contain("!selectedFromTileCandidates &&"));
                 Assert.That(shared, Does.Contain("foundFallback = FindSimpleDdgiFallbackVolume("));
-                Assert.That(shared, Does.Contain("SIMPLE_DDGI_MAX_GATHER_VOLUME_SAMPLES = 3u"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_MAX_GATHER_VOLUME_SAMPLES = SIMPLE_DDGI_MAX_VOLUME_COUNT"));
                 Assert.That(tileManager, Does.Contain("public const uint HeaderSimpleDdgiFlag = 1u << 1"));
                 Assert.That(tileManager, Does.Contain("HeaderEnabledFlag | HeaderSimpleDdgiFlag"));
                 Assert.That(tileManager, Does.Contain("tile.Flags |= TileFallbackFlag;"));
                 Assert.That(tileManager, Does.Contain("TileSimpleCandidateOverflowFlag = 1u << 4"));
+            });
+        }
+
+        [TestCase(1u << 0, 0u, 1.0f, 1.0f, 1.0f, 1u << 0)]
+        [TestCase(1u << 1, 0u, 1.0f, 1.0f, 1.0f, 1u << 1)]
+        [TestCase(1u << 3, 0u, 1.0f, 1.0f, 1.0f, 1u << 2)]
+        [TestCase(1u << 2, 0u, 1.0f, 1.0f, 1.0f, 1u << 3)]
+        [TestCase(0u, 1u, 1.0f, 1.0f, 1.0f, 1u << 4)]
+        [TestCase(0u, 0u, 0.001f, 1.0f, 1.0f, 1u << 5)]
+        [TestCase(0u, 0u, 1.0f, 0.5f, 1.0f, 1u << 6)]
+        [TestCase(0u, 0u, 1.0f, 1.0f, 0.5f, 1u << 7)]
+        public void ProbeGatherRejectionMask_AttributesEveryProbeGate(
+            uint flags,
+            uint classification,
+            float activeWeight,
+            float irradianceAlpha,
+            float visibilityMarker,
+            uint expectedMask)
+        {
+            Assert.That(
+                SimpleDdgiProbeGatherRejectionMask(
+                    flags,
+                    classification,
+                    activeWeight,
+                    irradianceAlpha,
+                    visibilityMarker),
+                Is.EqualTo(expectedMask));
+        }
+
+        [Test]
+        public void BoundedContainingVolumeWalk_ReachesSupportedCoarseRingBeyondThirdVolume()
+        {
+            CpuSimpleDdgiVolume[] volumes =
+            [
+                new(new Vector3(-2), new Vector3(2), 0.5f, 0),
+                new(new Vector3(-4), new Vector3(4), 1.0f, 1),
+                new(new Vector3(-8), new Vector3(8), 2.0f, 2),
+                new(new Vector3(-16), new Vector3(16), 4.0f, 3)
+            ];
+            bool[] supported = [false, false, false, true];
+
+            Assert.That(
+                SelectFirstSupportedContainingVolume(volumes, supported, Vector3.Zero),
+                Is.EqualTo(3));
+        }
+
+        [Test]
+        public void AllContainingVolumesUnsupported_LeavesZeroDdgiOwnershipAndFullComplement()
+        {
+            float ownership = SmoothStep(0.0f, 0.15f, 0.0f);
+            float environmentComplement = 1.0f - ownership;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(ownership, Is.Zero);
+                Assert.That(environmentComplement, Is.EqualTo(1.0f));
+            });
+        }
+
+        [Test]
+        public void PersistentStateRecoveryContracts_AreBoundedAndObservable()
+        {
+            string shared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
+            string relocate = ReadRepoText("Njulf.Shaders", "ddgi_simple_relocate_classify.comp");
+            string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_RELOCATION_PENDING_MAX_RETRY_AGE = 32u"));
+                Assert.That(relocate, Does.Contain("bool relocationTimedOut"));
+                Assert.That(relocate, Does.Contain("state.activeWeight = 0.0;"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_GATHER_REJECTION_COUNTER_BASE"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_GATHER_ALL_FAILED_COUNTER_BASE"));
+                Assert.That(forward, Does.Contain("simpleDdgiCombinedRejectionMask"));
             });
         }
 
@@ -1082,12 +1156,12 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("uint SimpleDdgiUpdateSourceRayCount(SimpleDdgiProbeUpdate update, SimpleDdgiParams p)"));
                 Assert.That(shared, Does.Contain("state.luminanceChangeEma = uintBitsToFloat"));
                 Assert.That(shared, Does.Contain("SimpleDdgiParams p, float volumeSpacing)"));
-                Assert.That(shared, Does.Contain("SIMPLE_DDGI_MAX_GATHER_VOLUME_SAMPLES = 3u"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_MAX_GATHER_VOLUME_SAMPLES = SIMPLE_DDGI_MAX_VOLUME_COUNT"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_MAX_SELECTION_VOLUME_CHECKS = SIMPLE_DDGI_MAX_VOLUME_COUNT"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_MAX_GATHER_FALLBACK_CANDIDATE_CHECKS"));
                 Assert.That(shared, Does.Contain("bool FindSimpleDdgiFallbackVolume("));
                 Assert.That(shared, Does.Contain("candidateOffset <= SIMPLE_DDGI_MAX_GATHER_FALLBACK_CANDIDATE_CHECKS"));
-                Assert.That(shared, Does.Contain("combined.ownership < SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP"));
+                Assert.That(shared, Does.Contain("combined.ownership >= SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP"));
                 Assert.That(shared, Does.Contain("fallbackVolumeIndex,"));
                 Assert.That(shared, Does.Contain("BlendSimpleDdgiGatherResults(recovery, combined, 1.0)"));
                 Assert.That(shared, Does.Contain("vec3 SimpleDdgiResolveInterpolationPosition("));
@@ -1118,7 +1192,7 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("SimpleDdgiProbeState ReadSimpleDdgiProbeState(uint bufferIndex, uint probeIndex)"));
                 Assert.That(shared, Does.Contain("SimpleDdgiProbeUpdate ReadSimpleDdgiProbeUpdate(uint bufferIndex, uint queueOffset)"));
                 Assert.That(shared, Does.Contain("vec3 SimpleDdgiProbeRelocatedPosition(uint probeIndex, SimpleDdgiVolume volume, uint localProbeIndex)"));
-                Assert.That(shared, Does.Contain("state.classification != SIMPLE_DDGI_CLASSIFICATION_INACTIVE"));
+                Assert.That(shared, Does.Contain("state.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE"));
                 Assert.That(trace, Does.Contain("SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, updateProbeOffset);"));
                 Assert.That(trace, Does.Contain("uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);"));
                 Assert.That(trace, Does.Contain("if (rayIndex >= activeRayCount)"));
@@ -1180,6 +1254,7 @@ namespace Njulf.Tests
                 Assert.That(trace, Does.Contain("hitKind = frontFace ? 1.0 : 2.0;"));
                 Assert.That(shared, Does.Contain($"SIMPLE_DDGI_TRACE_ENERGY_COUNTER_BASE = {RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase}u"));
                 Assert.That(shared, Does.Contain($"SIMPLE_DDGI_BLEND_ENERGY_COUNTER_BASE = {RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase}u"));
+                Assert.That(shared, Does.Contain($"SIMPLE_DDGI_GATHER_REJECTION_COUNTER_BASE = {RendererDiagnosticsBuffer.SimpleDdgiGatherRejectionCounterBase}u"));
                 Assert.That(shared, Does.Contain("void RecordSimpleDdgiTraceEnergyDiagnostics("));
                 Assert.That(shared, Does.Contain("void RecordSimpleDdgiBlendEnergyDiagnostics("));
                 Assert.That(trace, Does.Contain("RecordSimpleDdgiTraceEnergyDiagnostics("));
@@ -1216,6 +1291,8 @@ namespace Njulf.Tests
                 Assert.That(blend, Does.Contain("bool maintenanceUpdate = SimpleDdgiUpdateIsMaintenance(update);"));
                 Assert.That(blend, Does.Contain("(initialState.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u;"));
                 Assert.That(blend, Does.Contain("initialState.flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING"));
+                Assert.That(blend, Does.Contain("Publishing the probe state is the commit point for gather."));
+                Assert.That(blend, Does.Contain("memoryBarrierBuffer();"));
                 Assert.That(blend, Does.Contain("state.flags &= ~SIMPLE_DDGI_PROBE_FLAG_FRESH;"));
                 Assert.That(blend, Does.Contain("previous.z > 0.5 && !freshUpdate"));
                 Assert.That(blend, Does.Contain("SIMPLE_DDGI_BOOTSTRAP_VISIBILITY_MEAN_SPACING = 1.0"));
@@ -1236,7 +1313,7 @@ namespace Njulf.Tests
                 Assert.That(relocate, Does.Not.Contain("targetSurfaceDistance - nearestDistance"));
                 Assert.That(relocate, Does.Contain("WriteRelocationClassification(probeIndex, blendedRelocation"));
                 Assert.That(shared, Does.Contain("const uint SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING = 1u << 3;"));
-                Assert.That(shared, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING |"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u"));
                 Assert.That(simpleManager, Does.Contain("ProbeStateRelocationPendingFlag = 1u << 3"));
                 Assert.That(simpleManager, Does.Contain("_probeFresh[probeIndex] = 1;"));
                 Assert.That(shared, Does.Not.Contain("confidence chain").IgnoreCase);
@@ -1813,6 +1890,39 @@ namespace Njulf.Tests
             Math.Max(
                 MathF.Pow(Math.Clamp(transportVisibility, 0.0f, 1.0f), 3.0f),
                 0.05f);
+
+        private static uint SimpleDdgiProbeGatherRejectionMask(
+            uint flags,
+            uint classification,
+            float activeWeight,
+            float irradianceAlpha,
+            float visibilityMarker)
+        {
+            uint mask = 0;
+            if ((flags & (1u << 0)) != 0) mask |= 1u << 0;
+            if ((flags & (1u << 1)) != 0) mask |= 1u << 1;
+            if ((flags & (1u << 3)) != 0) mask |= 1u << 2;
+            if ((flags & (1u << 2)) != 0) mask |= 1u << 3;
+            if (classification == 1u) mask |= 1u << 4;
+            if (activeWeight <= 0.001f) mask |= 1u << 5;
+            if (irradianceAlpha <= 0.5f) mask |= 1u << 6;
+            if (visibilityMarker <= 0.5f) mask |= 1u << 7;
+            return mask;
+        }
+
+        private static int SelectFirstSupportedContainingVolume(
+            ReadOnlySpan<CpuSimpleDdgiVolume> volumes,
+            ReadOnlySpan<bool> supported,
+            Vector3 worldPosition)
+        {
+            Assert.That(supported.Length, Is.EqualTo(volumes.Length));
+            for (int i = 0; i < volumes.Length; i++)
+            {
+                if (Contains(volumes[i], worldPosition) && supported[i])
+                    return volumes[i].VolumeIndex;
+            }
+            return -1;
+        }
 
         private static float DirectionalVisibilityMomentMean(
             ReadOnlySpan<float> directionCosines,

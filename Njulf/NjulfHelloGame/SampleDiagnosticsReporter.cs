@@ -487,6 +487,8 @@ internal sealed class SampleDiagnosticsReporter
             $"simpleEvents recenter/clear/preserve/framesSinceClear/framesSinceRecenter={diagnostics.SimpleDdgiRecenterCount}/{diagnostics.SimpleDdgiAtlasClearCount}/{diagnostics.SimpleDdgiAtlasPreserveOnRecenterCount}/{diagnostics.SimpleDdgiFramesSinceLastClear}/{diagnostics.SimpleDdgiFramesSinceLastRecenter}, " +
             $"simpleForward fresh/zero/nonzero/avgIrrLum/avgVisibility/lowVisibility={diagnostics.SimpleDdgiFreshAtlasForwardSampleCount}/{diagnostics.SimpleDdgiZeroIrradianceSampleCount}/{diagnostics.SimpleDdgiNonzeroIrradianceSampleCount}/{diagnostics.SimpleDdgiAverageSampledIrradianceLuminance:F5}/{diagnostics.SimpleDdgiAverageVisibility:F3}/{diagnostics.SimpleDdgiLowVisibilitySampleCount}, " +
             $"simpleGather primary/second/rate={diagnostics.SimpleDdgiGatherSampleCount}/{diagnostics.SimpleDdgiSecondVolumeGatherCount}/{FormatSimpleDdgiSecondVolumeGatherRate(diagnostics)}, " +
+            $"simpleReject primary=[{FormatSimpleDdgiRejections(diagnostics.SimpleDdgiGatherPrimaryRejectionCounts)}] fallback=[{FormatSimpleDdgiRejections(diagnostics.SimpleDdgiGatherFallbackRejectionCounts)}] recovery=[{FormatSimpleDdgiRejections(diagnostics.SimpleDdgiGatherRecoveryRejectionCounts)}] allFailed={diagnostics.SimpleDdgiGatherPrimaryAllFailedCount}/{diagnostics.SimpleDdgiGatherFallbackAllFailedCount}/{diagnostics.SimpleDdgiGatherRecoveryAllFailedCount}, " +
+            $"simpleLifecycle target/oldestUnsupported/overTarget/repairUpdates/maxFresh/maxScroll/maxRelocate/maxUnpublished/findings={diagnostics.SimpleDdgiProbeLifecycleLatencyTargetFrames}/{diagnostics.SimpleDdgiOldestVisibleUnsupportedProbeAge}/{diagnostics.SimpleDdgiVisibleUnsupportedProbeCountAboveLatencyTarget}/{diagnostics.SimpleDdgiVisibleZeroSupportRepairUpdateCount}/{diagnostics.SimpleDdgiMaximumFreshProbeAge}/{diagnostics.SimpleDdgiMaximumScrollExposedProbeAge}/{diagnostics.SimpleDdgiMaximumRelocationPendingProbeAge}/{diagnostics.SimpleDdgiMaximumUnpublishedProbeAge}/{diagnostics.SimpleDdgiProbeLifecycleBoundExceededCount}, " +
             $"updateFrames full/partial/updatedFraction/start/end/skipped={diagnostics.DdgiFullRefreshFrameCount}/{diagnostics.DdgiPartialRefreshFrameCount}/{diagnostics.DdgiUpdatedProbeFraction:F3}/{diagnostics.DdgiProbeUpdateStartIndex}/{diagnostics.DdgiProbeUpdateEndIndex}/{diagnostics.DdgiSkippedProbeCount}, " +
             $"probeAge p50/p95/max={diagnostics.DdgiFramesSinceProbeUpdatedP50:F1}/{diagnostics.DdgiFramesSinceProbeUpdatedP95:F1}/{diagnostics.DdgiFramesSinceProbeUpdatedMax:F1}, " +
             $"invalidated={diagnostics.DdgiNewlyInvalidatedProbeCount}, reasons recenter/dirty/age/visibility/full={diagnostics.DdgiRefreshReasonRecenterProbeCount}/{diagnostics.DdgiRefreshReasonDirtyProbeCount}/{diagnostics.DdgiRefreshReasonAgeProbeCount}/{diagnostics.DdgiRefreshReasonVisibilityProbeCount}/{diagnostics.DdgiRefreshReasonFullRefreshProbeCount}, " +
@@ -907,6 +909,34 @@ internal sealed class SampleDiagnosticsReporter
             return "n/a";
         return (diagnostics.SimpleDdgiSecondVolumeGatherCount /
             (double)diagnostics.SimpleDdgiGatherSampleCount).ToString("P1", CultureInfo.InvariantCulture);
+    }
+
+    private static string FormatSimpleDdgiRejections(IReadOnlyList<uint> counts)
+    {
+        if (counts.Count == 0)
+            return "unavailable";
+
+        string[] names =
+        [
+            "fresh",
+            "scroll",
+            "relocate",
+            "inactiveFlag",
+            "inactiveClass",
+            "zeroWeight",
+            "irrAtlas",
+            "visAtlas",
+            "outside"
+        ];
+        StringBuilder result = new();
+        int count = Math.Min(names.Length, counts.Count);
+        for (int i = 0; i < count; i++)
+        {
+            if (i > 0)
+                result.Append(',');
+            result.Append(names[i]).Append('=').Append(counts[i]);
+        }
+        return result.ToString();
     }
 
     private static string FormatDdgiRingMismatchSample(RendererDiagnostics diagnostics)

@@ -202,6 +202,8 @@ void main()
     bool relocationChanged = relocationDelta > max(volume.spacing * 0.02, 0.005);
     bool relocationWasPending =
         (previous.flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u;
+    bool relocationTimedOut = relocationWasPending &&
+        SimpleDdgiUpdateAge(update) >= SIMPLE_DDGI_RELOCATION_PENDING_MAX_RETRY_AGE;
 
     SimpleDdgiProbeState state;
     state.relocation = blendedRelocation;
@@ -210,21 +212,28 @@ void main()
         SIMPLE_DDGI_PROBE_FLAG_FRESH |
         SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED |
         SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING);
-    if (relocationChanged || (relocationWasPending && maintenanceUpdate))
+    if (!relocationTimedOut &&
+        (relocationChanged || (relocationWasPending && maintenanceUpdate)))
     {
         state.flags |= SIMPLE_DDGI_PROBE_FLAG_FRESH |
             SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING;
     }
-    else if (relocationWasPending)
+    else if (relocationWasPending && !relocationTimedOut)
     {
         // The full retry was traced from the committed relocation. Keep FRESH
         // through relocation so blend resets history, then let blend publish and
         // clear it only after all atlas writes have completed.
         state.flags |= SIMPLE_DDGI_PROBE_FLAG_FRESH;
     }
-    bool inactiveProbe = maintenanceUpdate
+    // A probe that cannot retire relocation in a bounded interval becomes a
+    // normal inactive retry candidate. It no longer blocks publication forever;
+    // the CPU's periodic inactive retry can reactivate it when geometry evidence
+    // becomes usable.
+    bool inactiveProbe = relocationTimedOut || (maintenanceUpdate
         ? previous.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE
-        : activeWeight <= 0.05 && hardInvalidProbeScore >= 0.75;
+        : activeWeight <= 0.05 && hardInvalidProbeScore >= 0.75);
+    if (relocationTimedOut)
+        state.activeWeight = 0.0;
     if (inactiveProbe)
         state.flags |= SIMPLE_DDGI_PROBE_FLAG_INACTIVE;
     else

@@ -51,7 +51,16 @@ namespace Njulf.Rendering.Resources
         public const int FarFieldMaterialV2CounterCount = 2;
         public const int MaterialGiCounterBase = FarFieldMaterialV2CounterBase + FarFieldMaterialV2CounterCount;
         public const int MaterialGiCounterCount = 10;
-        public const int CounterCount = MaterialGiCounterBase + MaterialGiCounterCount;
+        public const int SimpleDdgiGatherRejectionCounterBase = MaterialGiCounterBase + MaterialGiCounterCount;
+        public const int SimpleDdgiGatherRoleCount = 3;
+        public const int SimpleDdgiGatherRejectionReasonCount = 9;
+        public const int SimpleDdgiGatherRejectionCounterCount =
+            SimpleDdgiGatherRoleCount * SimpleDdgiGatherRejectionReasonCount;
+        public const int SimpleDdgiGatherAllFailedCounterBase =
+            SimpleDdgiGatherRejectionCounterBase + SimpleDdgiGatherRejectionCounterCount;
+        public const int SimpleDdgiGatherAllFailedCounterCount = SimpleDdgiGatherRoleCount;
+        public const int CounterCount =
+            SimpleDdgiGatherAllFailedCounterBase + SimpleDdgiGatherAllFailedCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const ulong CounterBufferSize = CounterCount * sizeof(uint);
@@ -260,10 +269,30 @@ namespace Njulf.Rendering.Resources
             uint[] simpleVolumeSampledGatherCounts = investigationValid
                 ? new uint[SimpleDdgiVolumeGatherCounterCount]
                 : Array.Empty<uint>();
+            uint[] simpleGatherPrimaryRejectionCounts = investigationValid
+                ? new uint[SimpleDdgiGatherRejectionReasonCount]
+                : Array.Empty<uint>();
+            uint[] simpleGatherFallbackRejectionCounts = investigationValid
+                ? new uint[SimpleDdgiGatherRejectionReasonCount]
+                : Array.Empty<uint>();
+            uint[] simpleGatherRecoveryRejectionCounts = investigationValid
+                ? new uint[SimpleDdgiGatherRejectionReasonCount]
+                : Array.Empty<uint>();
             for (int i = 0; i < simpleVolumePrimaryGatherCounts.Length; i++)
             {
                 simpleVolumePrimaryGatherCounts[i] = counters[SimpleDdgiVolumePrimaryGatherCounterBase + i];
                 simpleVolumeSampledGatherCounts[i] = counters[SimpleDdgiVolumeSampledGatherCounterBase + i];
+            }
+            for (int reason = 0; reason < simpleGatherPrimaryRejectionCounts.Length; reason++)
+            {
+                simpleGatherPrimaryRejectionCounts[reason] =
+                    counters[SimpleDdgiGatherRejectionCounterBase + reason];
+                simpleGatherFallbackRejectionCounts[reason] =
+                    counters[SimpleDdgiGatherRejectionCounterBase +
+                        SimpleDdgiGatherRejectionReasonCount + reason];
+                simpleGatherRecoveryRejectionCounts[reason] =
+                    counters[SimpleDdgiGatherRejectionCounterBase +
+                        SimpleDdgiGatherRejectionReasonCount * 2 + reason];
             }
 
             _lastCompletedDdgiInvestigationCounters[frameIndex] = investigationValid
@@ -309,6 +338,12 @@ namespace Njulf.Rendering.Resources
                     SimpleSecondVolumeGatherCount: counters[DdgiInvestigationCounterBase + 37],
                     SimpleVolumePrimaryGatherCounts: simpleVolumePrimaryGatherCounts,
                     SimpleVolumeSampledGatherCounts: simpleVolumeSampledGatherCounts,
+                    SimpleGatherPrimaryRejectionCounts: simpleGatherPrimaryRejectionCounts,
+                    SimpleGatherFallbackRejectionCounts: simpleGatherFallbackRejectionCounts,
+                    SimpleGatherRecoveryRejectionCounts: simpleGatherRecoveryRejectionCounts,
+                    SimpleGatherPrimaryAllFailedCount: counters[SimpleDdgiGatherAllFailedCounterBase],
+                    SimpleGatherFallbackAllFailedCount: counters[SimpleDdgiGatherAllFailedCounterBase + 1],
+                    SimpleGatherRecoveryAllFailedCount: counters[SimpleDdgiGatherAllFailedCounterBase + 2],
                     FarFieldStepBucket0Count: counters[FarFieldCounterBase + 5],
                     FarFieldStepBucket1Count: counters[FarFieldCounterBase + 6],
                     FarFieldStepBucket2Count: counters[FarFieldCounterBase + 7],

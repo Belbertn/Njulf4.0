@@ -47,7 +47,9 @@ namespace Njulf.Tests
                 ("simple DDGI transport", RendererDiagnosticsBuffer.SimpleDdgiTransportCounterBase, RendererDiagnosticsBuffer.SimpleDdgiTransportCounterCount),
                 ("directional shadow receiver", RendererDiagnosticsBuffer.DirectionalShadowReceiverCounterBase, RendererDiagnosticsBuffer.DirectionalShadowReceiverCounterCount),
                 ("far-field material V2", RendererDiagnosticsBuffer.FarFieldMaterialV2CounterBase, RendererDiagnosticsBuffer.FarFieldMaterialV2CounterCount),
-                ("material GI", RendererDiagnosticsBuffer.MaterialGiCounterBase, RendererDiagnosticsBuffer.MaterialGiCounterCount)
+                ("material GI", RendererDiagnosticsBuffer.MaterialGiCounterBase, RendererDiagnosticsBuffer.MaterialGiCounterCount),
+                ("simple DDGI gather rejection", RendererDiagnosticsBuffer.SimpleDdgiGatherRejectionCounterBase, RendererDiagnosticsBuffer.SimpleDdgiGatherRejectionCounterCount),
+                ("simple DDGI gather all failed", RendererDiagnosticsBuffer.SimpleDdgiGatherAllFailedCounterBase, RendererDiagnosticsBuffer.SimpleDdgiGatherAllFailedCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -74,6 +76,8 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.DirectionalShadowReceiverDepthQuantizationScale, Is.EqualTo(65535.0f));
                 Assert.That(RendererDiagnosticsBuffer.FarFieldMaterialV2CounterCount, Is.EqualTo(2));
                 Assert.That(RendererDiagnosticsBuffer.MaterialGiCounterCount, Is.EqualTo(10));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiGatherRejectionReasonCount, Is.EqualTo(9));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiGatherRoleCount, Is.EqualTo(3));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(nextExpectedStart));
                 Assert.That(RendererDiagnosticsBuffer.CounterBufferSize, Is.EqualTo((ulong)nextExpectedStart * sizeof(uint)));
             });

@@ -813,6 +813,15 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiDirtyFirstUpdateLatencyP50Frames { get; set; }
         public int SimpleDdgiDirtyFirstUpdateLatencyP95Frames { get; set; }
         public int SimpleDdgiDirtyFirstUpdateLatencyMaxFrames { get; set; }
+        public uint SimpleDdgiOldestVisibleUnsupportedProbeAge { get; set; }
+        public int SimpleDdgiVisibleUnsupportedProbeCountAboveLatencyTarget { get; set; }
+        public int SimpleDdgiVisibleZeroSupportRepairUpdateCount { get; set; }
+        public int SimpleDdgiProbeLifecycleLatencyTargetFrames { get; set; }
+        public uint SimpleDdgiMaximumFreshProbeAge { get; set; }
+        public uint SimpleDdgiMaximumScrollExposedProbeAge { get; set; }
+        public uint SimpleDdgiMaximumRelocationPendingProbeAge { get; set; }
+        public uint SimpleDdgiMaximumUnpublishedProbeAge { get; set; }
+        public int SimpleDdgiProbeLifecycleBoundExceededCount { get; set; }
         public int SimpleDdgiDirtyConvergenceLatencySampleCount { get; set; }
         public int SimpleDdgiDirtyConvergenceLatencyP50Frames { get; set; }
         public int SimpleDdgiDirtyConvergenceLatencyP95Frames { get; set; }
@@ -855,6 +864,12 @@ namespace Njulf.Rendering.Data
         public uint SimpleDdgiLowVisibilitySampleCount { get; set; }
         public uint SimpleDdgiGatherSampleCount { get; set; }
         public uint SimpleDdgiSecondVolumeGatherCount { get; set; }
+        public IReadOnlyList<uint> SimpleDdgiGatherPrimaryRejectionCounts { get; set; } = Array.Empty<uint>();
+        public IReadOnlyList<uint> SimpleDdgiGatherFallbackRejectionCounts { get; set; } = Array.Empty<uint>();
+        public IReadOnlyList<uint> SimpleDdgiGatherRecoveryRejectionCounts { get; set; } = Array.Empty<uint>();
+        public uint SimpleDdgiGatherPrimaryAllFailedCount { get; set; }
+        public uint SimpleDdgiGatherFallbackAllFailedCount { get; set; }
+        public uint SimpleDdgiGatherRecoveryAllFailedCount { get; set; }
         public int DdgiFullRefreshFrameCount { get; set; }
         public int DdgiPartialRefreshFrameCount { get; set; }
         public float DdgiUpdatedProbeFraction { get; set; }
@@ -1976,6 +1991,15 @@ namespace Njulf.Rendering.Data
             SimpleDdgiDirtyFirstUpdateLatencyP50Frames = 0;
             SimpleDdgiDirtyFirstUpdateLatencyP95Frames = 0;
             SimpleDdgiDirtyFirstUpdateLatencyMaxFrames = 0;
+            SimpleDdgiOldestVisibleUnsupportedProbeAge = 0;
+            SimpleDdgiVisibleUnsupportedProbeCountAboveLatencyTarget = 0;
+            SimpleDdgiVisibleZeroSupportRepairUpdateCount = 0;
+            SimpleDdgiProbeLifecycleLatencyTargetFrames = 0;
+            SimpleDdgiMaximumFreshProbeAge = 0;
+            SimpleDdgiMaximumScrollExposedProbeAge = 0;
+            SimpleDdgiMaximumRelocationPendingProbeAge = 0;
+            SimpleDdgiMaximumUnpublishedProbeAge = 0;
+            SimpleDdgiProbeLifecycleBoundExceededCount = 0;
             SimpleDdgiDirtyConvergenceLatencySampleCount = 0;
             SimpleDdgiDirtyConvergenceLatencyP50Frames = 0;
             SimpleDdgiDirtyConvergenceLatencyP95Frames = 0;
@@ -2018,6 +2042,12 @@ namespace Njulf.Rendering.Data
             SimpleDdgiLowVisibilitySampleCount = 0;
             SimpleDdgiGatherSampleCount = 0;
             SimpleDdgiSecondVolumeGatherCount = 0;
+            SimpleDdgiGatherPrimaryRejectionCounts = Array.Empty<uint>();
+            SimpleDdgiGatherFallbackRejectionCounts = Array.Empty<uint>();
+            SimpleDdgiGatherRecoveryRejectionCounts = Array.Empty<uint>();
+            SimpleDdgiGatherPrimaryAllFailedCount = 0;
+            SimpleDdgiGatherFallbackAllFailedCount = 0;
+            SimpleDdgiGatherRecoveryAllFailedCount = 0;
             DdgiFullRefreshFrameCount = 0;
             DdgiPartialRefreshFrameCount = 0;
             DdgiUpdatedProbeFraction = 0;

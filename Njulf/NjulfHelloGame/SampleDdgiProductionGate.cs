@@ -28,7 +28,7 @@ public static class SampleDdgiProductionGate
     public const float MinimumPhase10CoverageMean = 0.25f;
     public const float MinimumPhase10VisibleSupportMean = 0.05f;
     public const float MinimumPhase10EffectiveWeightMean = 0.02f;
-    public const float MaximumPhase10ZeroVisibleCoveredFraction = 0.05f;
+    public const float MaximumPhase10ZeroVisibleCoveredFraction = 0.001f;
     public const float MinimumPhase9HealthyRawDiffuseLuminance = 0.05f;
     public const float MinimumPhase9HealthyFinalDiffuseLuminance = 0.015f;
     public const float MinimumPhase9FinalToRawLuminanceRatio = 0.25f;
@@ -182,6 +182,10 @@ public static class SampleDdgiProductionGate
                 "phase10-warmup-progress-valid",
                 IsPhase10WarmupProgressValid(diagnostics),
                 $"warmup={diagnostics.DdgiWarmupState}, visible/local/cascade0={diagnostics.DdgiWarmedVisibleProbeFraction:F3}/{diagnostics.DdgiWarmedLocalProbeFraction:F3}/{diagnostics.DdgiWarmedCascade0ProbeFraction:F3}"),
+            Criterion(
+                "simple-ddgi-probe-lifecycle-bounded",
+                IsSimpleDdgiProbeLifecycleBounded(diagnostics),
+                $"target={diagnostics.SimpleDdgiProbeLifecycleLatencyTargetFrames}, oldestUnsupported={diagnostics.SimpleDdgiOldestVisibleUnsupportedProbeAge}, overTarget={diagnostics.SimpleDdgiVisibleUnsupportedProbeCountAboveLatencyTarget}, maxFresh={diagnostics.SimpleDdgiMaximumFreshProbeAge}, maxScroll={diagnostics.SimpleDdgiMaximumScrollExposedProbeAge}, maxRelocation={diagnostics.SimpleDdgiMaximumRelocationPendingProbeAge}, maxUnpublished={diagnostics.SimpleDdgiMaximumUnpublishedProbeAge}, findings={diagnostics.SimpleDdgiProbeLifecycleBoundExceededCount}"),
             Criterion(
                 "phase10-scheduler-p95-budget",
                 IsPhase10SchedulerP95WithinBudget(diagnostics),
@@ -369,7 +373,7 @@ public static class SampleDdgiProductionGate
             diagnostics.DdgiAverageSpatialCoverageEstimate >= MinimumPhase10CoverageMean &&
             diagnostics.DdgiAverageSupportCoverageEstimate >= MinimumPhase10VisibleSupportMean &&
             diagnostics.DdgiAverageEffectiveContributionEstimate >= MinimumPhase10EffectiveWeightMean &&
-            GetZeroVisibleCoveredFraction(diagnostics) <= MaximumPhase10ZeroVisibleCoveredFraction;
+            GetZeroVisibleCoveredFraction(diagnostics) < MaximumPhase10ZeroVisibleCoveredFraction;
     }
 
     private static bool IsPhase9RawAtlasToFinalEnergyHealthy(RendererDiagnostics diagnostics)
@@ -455,6 +459,15 @@ public static class SampleDdgiProductionGate
             diagnostics.DdgiWarmedVisibleProbeFraction >= WarmupCompletionTarget &&
             diagnostics.DdgiWarmedLocalProbeFraction >= WarmupCompletionTarget &&
             diagnostics.DdgiWarmedCascade0ProbeFraction >= WarmupCompletionTarget;
+    }
+
+    private static bool IsSimpleDdgiProbeLifecycleBounded(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.GlobalIlluminationDdgiActive == 0)
+            return true;
+
+        return diagnostics.SimpleDdgiVisibleUnsupportedProbeCountAboveLatencyTarget == 0 &&
+            diagnostics.SimpleDdgiProbeLifecycleBoundExceededCount == 0;
     }
 
     private static bool IsPhase10SchedulerP95WithinBudget(RendererDiagnostics diagnostics)

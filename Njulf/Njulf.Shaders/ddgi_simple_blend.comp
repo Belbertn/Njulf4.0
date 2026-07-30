@@ -622,6 +622,12 @@ void main()
     SharedSimpleIrradianceDelta[local] = localIrradianceDelta;
     barrier();
 
+    // Publishing the probe state is the commit point for gather. Ensure every
+    // invocation's irradiance and visibility SSBO writes are available before
+    // the FRESH gate can be cleared by invocation zero.
+    memoryBarrierBuffer();
+    barrier();
+
     if (local == 0u)
     {
         float aggregateIrradianceDelta = 0.0;

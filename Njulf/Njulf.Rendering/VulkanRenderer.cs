@@ -4307,6 +4307,15 @@ namespace Njulf.Rendering
                 SimpleDdgiDirtyFirstUpdateLatencyP50Frames = giUsesSimpleDdgi ? sceneData.SimpleDdgiDirtyFirstUpdateLatencyP50Frames : 0,
                 SimpleDdgiDirtyFirstUpdateLatencyP95Frames = giUsesSimpleDdgi ? sceneData.SimpleDdgiDirtyFirstUpdateLatencyP95Frames : 0,
                 SimpleDdgiDirtyFirstUpdateLatencyMaxFrames = giUsesSimpleDdgi ? sceneData.SimpleDdgiDirtyFirstUpdateLatencyMaxFrames : 0,
+                SimpleDdgiOldestVisibleUnsupportedProbeAge = giUsesSimpleDdgi ? sceneData.SimpleDdgiOldestVisibleUnsupportedProbeAge : 0,
+                SimpleDdgiVisibleUnsupportedProbeCountAboveLatencyTarget = giUsesSimpleDdgi ? sceneData.SimpleDdgiVisibleUnsupportedProbeCountAboveLatencyTarget : 0,
+                SimpleDdgiVisibleZeroSupportRepairUpdateCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiVisibleZeroSupportRepairUpdateCount : 0,
+                SimpleDdgiProbeLifecycleLatencyTargetFrames = giUsesSimpleDdgi ? sceneData.SimpleDdgiProbeLifecycleLatencyTargetFrames : 0,
+                SimpleDdgiMaximumFreshProbeAge = giUsesSimpleDdgi ? sceneData.SimpleDdgiMaximumFreshProbeAge : 0,
+                SimpleDdgiMaximumScrollExposedProbeAge = giUsesSimpleDdgi ? sceneData.SimpleDdgiMaximumScrollExposedProbeAge : 0,
+                SimpleDdgiMaximumRelocationPendingProbeAge = giUsesSimpleDdgi ? sceneData.SimpleDdgiMaximumRelocationPendingProbeAge : 0,
+                SimpleDdgiMaximumUnpublishedProbeAge = giUsesSimpleDdgi ? sceneData.SimpleDdgiMaximumUnpublishedProbeAge : 0,
+                SimpleDdgiProbeLifecycleBoundExceededCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiProbeLifecycleBoundExceededCount : 0,
                 SimpleDdgiDirtyConvergenceLatencySampleCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiDirtyConvergenceLatencySampleCount : 0,
                 SimpleDdgiDirtyConvergenceLatencyP50Frames = giUsesSimpleDdgi ? sceneData.SimpleDdgiDirtyConvergenceLatencyP50Frames : 0,
                 SimpleDdgiDirtyConvergenceLatencyP95Frames = giUsesSimpleDdgi ? sceneData.SimpleDdgiDirtyConvergenceLatencyP95Frames : 0,
@@ -4356,6 +4365,24 @@ namespace Njulf.Rendering
                 SimpleDdgiLowVisibilitySampleCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiLowVisibilitySampleCount : 0,
                 SimpleDdgiGatherSampleCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiGatherSampleCount : 0,
                 SimpleDdgiSecondVolumeGatherCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiSecondVolumeGatherCount : 0,
+                SimpleDdgiGatherPrimaryRejectionCounts = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiGatherPrimaryRejectionCounts
+                    : Array.Empty<uint>(),
+                SimpleDdgiGatherFallbackRejectionCounts = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiGatherFallbackRejectionCounts
+                    : Array.Empty<uint>(),
+                SimpleDdgiGatherRecoveryRejectionCounts = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiGatherRecoveryRejectionCounts
+                    : Array.Empty<uint>(),
+                SimpleDdgiGatherPrimaryAllFailedCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiGatherPrimaryAllFailedCount
+                    : 0,
+                SimpleDdgiGatherFallbackAllFailedCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiGatherFallbackAllFailedCount
+                    : 0,
+                SimpleDdgiGatherRecoveryAllFailedCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiGatherRecoveryAllFailedCount
+                    : 0,
                 DdgiFullRefreshFrameCount = giUsesDdgi ? sceneData.DdgiFullRefreshFrameCount : 0,
                 DdgiPartialRefreshFrameCount = giUsesDdgi ? sceneData.DdgiPartialRefreshFrameCount : 0,
                 DdgiUpdatedProbeFraction = giUsesDdgi ? sceneData.DdgiUpdatedProbeFraction : 0.0f,
@@ -8566,6 +8593,24 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiDirtyFirstUpdateLatencyP50Frames = _simpleDdgiVolumeManager.DirtyFirstUpdateLatencyP50Frames;
             sceneData.SimpleDdgiDirtyFirstUpdateLatencyP95Frames = _simpleDdgiVolumeManager.DirtyFirstUpdateLatencyP95Frames;
             sceneData.SimpleDdgiDirtyFirstUpdateLatencyMaxFrames = _simpleDdgiVolumeManager.DirtyFirstUpdateLatencyMaxFrames;
+            sceneData.SimpleDdgiOldestVisibleUnsupportedProbeAge =
+                _simpleDdgiVolumeManager.OldestVisibleUnsupportedProbeAge;
+            sceneData.SimpleDdgiVisibleUnsupportedProbeCountAboveLatencyTarget =
+                _simpleDdgiVolumeManager.VisibleUnsupportedProbeCountAboveLatencyTarget;
+            sceneData.SimpleDdgiVisibleZeroSupportRepairUpdateCount =
+                _simpleDdgiVolumeManager.VisibleZeroSupportRepairUpdateCount;
+            sceneData.SimpleDdgiProbeLifecycleLatencyTargetFrames =
+                _simpleDdgiVolumeManager.ProbeLifecycleLatencyTargetFrames;
+            sceneData.SimpleDdgiMaximumFreshProbeAge =
+                _simpleDdgiVolumeManager.MaximumFreshProbeAge;
+            sceneData.SimpleDdgiMaximumScrollExposedProbeAge =
+                _simpleDdgiVolumeManager.MaximumScrollExposedProbeAge;
+            sceneData.SimpleDdgiMaximumRelocationPendingProbeAge =
+                _simpleDdgiVolumeManager.MaximumRelocationPendingProbeAge;
+            sceneData.SimpleDdgiMaximumUnpublishedProbeAge =
+                _simpleDdgiVolumeManager.MaximumUnpublishedProbeAge;
+            sceneData.SimpleDdgiProbeLifecycleBoundExceededCount =
+                _simpleDdgiVolumeManager.ProbeLifecycleBoundExceededCount;
             sceneData.SimpleDdgiDirtyConvergenceLatencySampleCount = _simpleDdgiVolumeManager.DirtyConvergenceLatencySampleCount;
             sceneData.SimpleDdgiDirtyConvergenceLatencyP50Frames = _simpleDdgiVolumeManager.DirtyConvergenceLatencyP50Frames;
             sceneData.SimpleDdgiDirtyConvergenceLatencyP95Frames = _simpleDdgiVolumeManager.DirtyConvergenceLatencyP95Frames;
@@ -8765,6 +8810,21 @@ namespace Njulf.Rendering
                 EmptyGatherTileCount: sceneData.DdgiForwardGatherTileEmpty,
                 SelectedLocalTileCount: sceneData.DdgiGatherSelectedLocalTileCount,
                 SelectedClipmapTileCount: sceneData.DdgiGatherSelectedClipmapTileCount,
+                SimpleGatherPrimaryRejectionCounts: sceneData.SimpleDdgiGatherPrimaryRejectionCounts,
+                SimpleGatherFallbackRejectionCounts: sceneData.SimpleDdgiGatherFallbackRejectionCounts,
+                SimpleGatherRecoveryRejectionCounts: sceneData.SimpleDdgiGatherRecoveryRejectionCounts,
+                SimpleGatherPrimaryAllFailedCount: sceneData.SimpleDdgiGatherPrimaryAllFailedCount,
+                SimpleGatherFallbackAllFailedCount: sceneData.SimpleDdgiGatherFallbackAllFailedCount,
+                SimpleGatherRecoveryAllFailedCount: sceneData.SimpleDdgiGatherRecoveryAllFailedCount,
+                SimpleOldestVisibleUnsupportedProbeAge: sceneData.SimpleDdgiOldestVisibleUnsupportedProbeAge,
+                SimpleVisibleUnsupportedProbeCountAboveLatencyTarget: sceneData.SimpleDdgiVisibleUnsupportedProbeCountAboveLatencyTarget,
+                SimpleVisibleZeroSupportRepairUpdateCount: sceneData.SimpleDdgiVisibleZeroSupportRepairUpdateCount,
+                SimpleProbeLifecycleLatencyTargetFrames: sceneData.SimpleDdgiProbeLifecycleLatencyTargetFrames,
+                SimpleMaximumFreshProbeAge: sceneData.SimpleDdgiMaximumFreshProbeAge,
+                SimpleMaximumScrollExposedProbeAge: sceneData.SimpleDdgiMaximumScrollExposedProbeAge,
+                SimpleMaximumRelocationPendingProbeAge: sceneData.SimpleDdgiMaximumRelocationPendingProbeAge,
+                SimpleMaximumUnpublishedProbeAge: sceneData.SimpleDdgiMaximumUnpublishedProbeAge,
+                SimpleProbeLifecycleBoundExceededCount: sceneData.SimpleDdgiProbeLifecycleBoundExceededCount,
                 SimpleActive: sceneData.SimpleDdgiActive,
                 SimpleProbeCount: sceneData.SimpleDdgiProbeCount,
                 SimpleProbesUpdated: sceneData.SimpleDdgiProbesUpdated,
@@ -10996,6 +11056,12 @@ namespace Njulf.Rendering
                 sceneData.SimpleDdgiLowVisibilitySampleCount = 0;
                 sceneData.SimpleDdgiGatherSampleCount = 0;
                 sceneData.SimpleDdgiSecondVolumeGatherCount = 0;
+                sceneData.SimpleDdgiGatherPrimaryRejectionCounts = Array.Empty<uint>();
+                sceneData.SimpleDdgiGatherFallbackRejectionCounts = Array.Empty<uint>();
+                sceneData.SimpleDdgiGatherRecoveryRejectionCounts = Array.Empty<uint>();
+                sceneData.SimpleDdgiGatherPrimaryAllFailedCount = 0;
+                sceneData.SimpleDdgiGatherFallbackAllFailedCount = 0;
+                sceneData.SimpleDdgiGatherRecoveryAllFailedCount = 0;
                 sceneData.DdgiForwardSimplePathSampleCount = 0;
                 sceneData.DdgiForwardLegacyPathSampleCount = 0;
                 sceneData.DdgiForwardZeroFinalIndirectCount = 0;
@@ -11049,6 +11115,18 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiLowVisibilitySampleCount = counters.SimpleLowVisibilitySampleCount;
             sceneData.SimpleDdgiGatherSampleCount = counters.SimpleGatherCount;
             sceneData.SimpleDdgiSecondVolumeGatherCount = counters.SimpleSecondVolumeGatherCount;
+            sceneData.SimpleDdgiGatherPrimaryRejectionCounts =
+                counters.SimpleGatherPrimaryRejectionCounts ?? Array.Empty<uint>();
+            sceneData.SimpleDdgiGatherFallbackRejectionCounts =
+                counters.SimpleGatherFallbackRejectionCounts ?? Array.Empty<uint>();
+            sceneData.SimpleDdgiGatherRecoveryRejectionCounts =
+                counters.SimpleGatherRecoveryRejectionCounts ?? Array.Empty<uint>();
+            sceneData.SimpleDdgiGatherPrimaryAllFailedCount =
+                counters.SimpleGatherPrimaryAllFailedCount;
+            sceneData.SimpleDdgiGatherFallbackAllFailedCount =
+                counters.SimpleGatherFallbackAllFailedCount;
+            sceneData.SimpleDdgiGatherRecoveryAllFailedCount =
+                counters.SimpleGatherRecoveryAllFailedCount;
             sceneData.DdgiForwardSimplePathSampleCount = counters.SimpleForwardSampleCount;
             sceneData.DdgiForwardLegacyPathSampleCount = counters.LegacyForwardSampleCount;
             sceneData.DdgiForwardZeroFinalIndirectCount = counters.ForwardZeroFinalIndirectCount;

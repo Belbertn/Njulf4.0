@@ -938,6 +938,15 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiDirtyFirstUpdateLatencyP50Frames { get; init; }
         public int SimpleDdgiDirtyFirstUpdateLatencyP95Frames { get; init; }
         public int SimpleDdgiDirtyFirstUpdateLatencyMaxFrames { get; init; }
+        public uint SimpleDdgiOldestVisibleUnsupportedProbeAge { get; init; }
+        public int SimpleDdgiVisibleUnsupportedProbeCountAboveLatencyTarget { get; init; }
+        public int SimpleDdgiVisibleZeroSupportRepairUpdateCount { get; init; }
+        public int SimpleDdgiProbeLifecycleLatencyTargetFrames { get; init; }
+        public uint SimpleDdgiMaximumFreshProbeAge { get; init; }
+        public uint SimpleDdgiMaximumScrollExposedProbeAge { get; init; }
+        public uint SimpleDdgiMaximumRelocationPendingProbeAge { get; init; }
+        public uint SimpleDdgiMaximumUnpublishedProbeAge { get; init; }
+        public int SimpleDdgiProbeLifecycleBoundExceededCount { get; init; }
         public int SimpleDdgiDirtyConvergenceLatencySampleCount { get; init; }
         public int SimpleDdgiDirtyConvergenceLatencyP50Frames { get; init; }
         public int SimpleDdgiDirtyConvergenceLatencyP95Frames { get; init; }
@@ -981,6 +990,12 @@ namespace Njulf.Rendering.Data
         public uint SimpleDdgiLowVisibilitySampleCount { get; init; }
         public uint SimpleDdgiGatherSampleCount { get; init; }
         public uint SimpleDdgiSecondVolumeGatherCount { get; init; }
+        public IReadOnlyList<uint> SimpleDdgiGatherPrimaryRejectionCounts { get; init; } = [];
+        public IReadOnlyList<uint> SimpleDdgiGatherFallbackRejectionCounts { get; init; } = [];
+        public IReadOnlyList<uint> SimpleDdgiGatherRecoveryRejectionCounts { get; init; } = [];
+        public uint SimpleDdgiGatherPrimaryAllFailedCount { get; init; }
+        public uint SimpleDdgiGatherFallbackAllFailedCount { get; init; }
+        public uint SimpleDdgiGatherRecoveryAllFailedCount { get; init; }
         public int DdgiFullRefreshFrameCount { get; init; }
         public int DdgiPartialRefreshFrameCount { get; init; }
         public float DdgiUpdatedProbeFraction { get; init; }

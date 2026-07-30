@@ -22,13 +22,14 @@ namespace Njulf.Rendering.Resources
     /// </summary>
     public enum SimpleDdgiSchedulerWorkClass : byte
     {
-        FreshExposedVisible = 0,
-        VisibleDirty = 1,
-        VisibleRetry = 2,
-        NearMaintenance = 3,
-        MidMaintenance = 4,
-        FarMaintenance = 5,
-        Count = 6,
+        VisibleZeroSupport = 0,
+        FreshExposedVisible = 1,
+        VisibleDirty = 2,
+        VisibleRetry = 3,
+        NearMaintenance = 4,
+        MidMaintenance = 5,
+        FarMaintenance = 6,
+        Count = 7,
         None = byte.MaxValue
     }
 
@@ -53,18 +54,21 @@ namespace Njulf.Rendering.Resources
     public readonly record struct SimpleDdgiSchedulerTelemetry(
         int ConfiguredRequestBudget,
         int EffectiveRequestBudget,
+        int ScheduledVisibleZeroSupport,
         int ScheduledFreshExposedVisible,
         int ScheduledVisibleDirty,
         int ScheduledVisibleRetry,
         int ScheduledNearMaintenance,
         int ScheduledMidMaintenance,
         int ScheduledFarMaintenance,
+        int ReservedVisibleZeroSupport,
         int ReservedFreshExposedVisible,
         int ReservedVisibleDirty,
         int ReservedVisibleRetry,
         int ReservedNearMaintenance,
         int ReservedMidMaintenance,
         int ReservedFarMaintenance,
+        int PendingVisibleZeroSupport,
         int PendingFreshExposedVisible,
         int PendingVisibleDirty,
         int PendingVisibleRetry,
@@ -139,6 +143,10 @@ namespace Njulf.Rendering.Resources
         private const int ProbeUpdateAgeShift = 24;
         private const uint ProbeUpdateAgeValueMask = 0xffu;
         private const uint InactiveProbeRetryFrames = 8u;
+        // Keep synchronized with
+        // SIMPLE_DDGI_RELOCATION_PENDING_MAX_RETRY_AGE in
+        // ddgi_simple_shared.glsl.
+        internal const uint RelocationPendingMaximumRetryAge = 32u;
         private const int SchedulerWorkClassCount = (int)SimpleDdgiSchedulerWorkClass.Count;
         private const byte ProbeSchedulingScrollExposedFlag = 1 << 0;
         private const byte ProbeSchedulingRegionalDirtyFlag = 1 << 1;
@@ -203,6 +211,7 @@ namespace Njulf.Rendering.Resources
         private readonly byte[] _queuedWorkClassScratch = new byte[GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount];
         private byte[] _probeFresh = Array.Empty<byte>();
         private byte[] _probeInactive = Array.Empty<byte>();
+        private byte[] _probeRelocationPending = Array.Empty<byte>();
         private byte[] _probeQueued = Array.Empty<byte>();
         // Per-physical-slot metadata follows the same toroidal mapping as fresh,
         // relocation, and generation state. It lets scheduling distinguish a local
@@ -229,6 +238,15 @@ namespace Njulf.Rendering.Resources
         private byte[] _probeStableUpdateCounts = Array.Empty<byte>();
         private float[] _probeLuminanceChangeEma = Array.Empty<float>();
         private uint[] _probeAges = Array.Empty<uint>();
+        private uint _oldestVisibleUnsupportedProbeAge;
+        private int _visibleUnsupportedProbeCountAboveLatencyTarget;
+        private int _visibleZeroSupportRepairUpdateCount;
+        private int _probeLifecycleLatencyTargetFrames;
+        private uint _maximumFreshProbeAge;
+        private uint _maximumScrollExposedProbeAge;
+        private uint _maximumRelocationPendingProbeAge;
+        private uint _maximumUnpublishedProbeAge;
+        private int _probeLifecycleBoundExceededCount;
         // Source-cache lifetime follows the physical probe slot.  A lighting
         // generation changes globally; geometry/scroll invalidation clears only
         // the affected slot, preserving static source work elsewhere.
@@ -664,18 +682,21 @@ namespace Njulf.Rendering.Resources
         public SimpleDdgiSchedulerTelemetry SchedulerTelemetry => new(
             ConfiguredRequestBudget: _schedulerConfiguredRequestBudget,
             EffectiveRequestBudget: _schedulerEffectiveRequestBudget,
+            ScheduledVisibleZeroSupport: _scheduledWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.VisibleZeroSupport],
             ScheduledFreshExposedVisible: _scheduledWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.FreshExposedVisible],
             ScheduledVisibleDirty: _scheduledWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.VisibleDirty],
             ScheduledVisibleRetry: _scheduledWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.VisibleRetry],
             ScheduledNearMaintenance: _scheduledWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.NearMaintenance],
             ScheduledMidMaintenance: _scheduledWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.MidMaintenance],
             ScheduledFarMaintenance: _scheduledWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.FarMaintenance],
+            ReservedVisibleZeroSupport: _reservedWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.VisibleZeroSupport],
             ReservedFreshExposedVisible: _reservedWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.FreshExposedVisible],
             ReservedVisibleDirty: _reservedWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.VisibleDirty],
             ReservedVisibleRetry: _reservedWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.VisibleRetry],
             ReservedNearMaintenance: _reservedWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.NearMaintenance],
             ReservedMidMaintenance: _reservedWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.MidMaintenance],
             ReservedFarMaintenance: _reservedWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.FarMaintenance],
+            PendingVisibleZeroSupport: _pendingWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.VisibleZeroSupport],
             PendingFreshExposedVisible: _pendingWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.FreshExposedVisible],
             PendingVisibleDirty: _pendingWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.VisibleDirty],
             PendingVisibleRetry: _pendingWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.VisibleRetry],
@@ -688,6 +709,16 @@ namespace Njulf.Rendering.Resources
             LastCompletedGpuMicroseconds: _schedulerLastCompletedGpuMicroseconds,
             TargetGpuMicroseconds: _schedulerTargetGpuMicroseconds,
             DeterministicFixedBudget: _schedulerDeterministicFixedBudget);
+        public uint OldestVisibleUnsupportedProbeAge => _oldestVisibleUnsupportedProbeAge;
+        public int VisibleUnsupportedProbeCountAboveLatencyTarget =>
+            _visibleUnsupportedProbeCountAboveLatencyTarget;
+        public int VisibleZeroSupportRepairUpdateCount => _visibleZeroSupportRepairUpdateCount;
+        public int ProbeLifecycleLatencyTargetFrames => _probeLifecycleLatencyTargetFrames;
+        public uint MaximumFreshProbeAge => _maximumFreshProbeAge;
+        public uint MaximumScrollExposedProbeAge => _maximumScrollExposedProbeAge;
+        public uint MaximumRelocationPendingProbeAge => _maximumRelocationPendingProbeAge;
+        public uint MaximumUnpublishedProbeAge => _maximumUnpublishedProbeAge;
+        public int ProbeLifecycleBoundExceededCount => _probeLifecycleBoundExceededCount;
 
         /// <summary>
         /// Returns the priority class assigned to a queue item. This is a debug and
@@ -1229,6 +1260,7 @@ namespace Njulf.Rendering.Resources
                     visibleFreshRecoveryBudget);
                 _schedulerEffectiveRequestBudget = updateBudget;
                 _probesToUpdate = BuildUpdateQueue(updateBudget);
+                RefreshProbeLifecycleTelemetry(updateBudget);
                 BeginUpdateTransaction(_probesToUpdate > 0);
                 _updateStartProbe = _probesToUpdate > 0 ? (int)_updateQueueScratch[0].ProbeIndex : 0;
                 if (_probesToUpdate >= _probeCount)
@@ -1454,12 +1486,38 @@ namespace Njulf.Rendering.Resources
                     int probeIndex = checked((int)update.ProbeIndex);
                     if ((uint)probeIndex < (uint)_probeFresh.Length)
                     {
-                        _probeFresh[probeIndex] = 0;
+                        bool relocationPublicationPending =
+                            (uint)probeIndex < (uint)_probeRelocationPending.Length &&
+                            _probeRelocationPending[probeIndex] != 0;
+                        bool relocationTimedOut = ShouldRetireRelocationPendingOnCpu(
+                            relocationPublicationPending,
+                            ReadProbeUpdateAge(update.Reserved0));
+                        if (relocationTimedOut)
+                        {
+                            // The relocation shader deterministically performs
+                            // this same transition for the current physical
+                            // generation. Mirror it at transaction completion so
+                            // a continuously refreshed source epoch cannot keep
+                            // every in-flight readback stale and leave the CPU
+                            // scheduler believing the pending bit is permanent.
+                            _probeRelocationPending[probeIndex] = 0;
+                            _probeInactive[probeIndex] = 1;
+                            _probeActiveWeights[probeIndex] = 0.0f;
+                            _probeClassifications[probeIndex] = 1u;
+                            relocationPublicationPending = false;
+                        }
+                        _probeFresh[probeIndex] =
+                            relocationPublicationPending ? (byte)1 : (byte)0;
                         if ((uint)probeIndex < (uint)_probeSchedulingFlags.Length)
-                            _probeSchedulingFlags[probeIndex] = 0;
+                        {
+                            _probeSchedulingFlags[probeIndex] = relocationPublicationPending
+                                ? (byte)(_probeSchedulingFlags[probeIndex] & ProbeSchedulingVisibleFlag)
+                                : (byte)0;
+                        }
                         if ((uint)probeIndex < (uint)_probeDirtyReasons.Length)
                             _probeDirtyReasons[probeIndex] = 0;
-                        _probeAges[probeIndex] = 0;
+                        if (!relocationPublicationPending)
+                            _probeAges[probeIndex] = 0;
                         if (TransportV2Active)
                         {
                             bool sourceRefresh = (update.Flags & ProbeUpdateSourceRefreshFlag) != 0u;
@@ -1802,6 +1860,7 @@ namespace Njulf.Rendering.Resources
 
             byte[] previousFresh = _probeFresh;
             byte[] previousInactive = _probeInactive;
+            byte[] previousRelocationPending = _probeRelocationPending;
             byte[] previousSchedulingFlags = _probeSchedulingFlags;
             byte[] previousDirtyReasons = _probeDirtyReasons;
             byte[] previousVisibilityImportance = _probeVisibilityImportance;
@@ -1821,6 +1880,7 @@ namespace Njulf.Rendering.Resources
             uint[] previousDirtyLatencyStartFrames = _probeDirtyLatencyStartFrames;
             _probeFresh = new byte[Math.Max(0, probeCount)];
             _probeInactive = new byte[Math.Max(0, probeCount)];
+            _probeRelocationPending = new byte[Math.Max(0, probeCount)];
             _probeQueued = new byte[Math.Max(0, probeCount)];
             _probeSchedulingFlags = new byte[Math.Max(0, probeCount)];
             _probeDirtyReasons = new byte[Math.Max(0, probeCount)];
@@ -1843,6 +1903,10 @@ namespace Njulf.Rendering.Resources
             int copyCount = Math.Min(probeCount, previousFresh.Length);
             Array.Copy(previousFresh, _probeFresh, copyCount);
             Array.Copy(previousInactive, _probeInactive, copyCount);
+            Array.Copy(
+                previousRelocationPending,
+                _probeRelocationPending,
+                Math.Min(copyCount, previousRelocationPending.Length));
             Array.Copy(previousSchedulingFlags, _probeSchedulingFlags, Math.Min(copyCount, previousSchedulingFlags.Length));
             Array.Copy(previousDirtyReasons, _probeDirtyReasons, Math.Min(copyCount, previousDirtyReasons.Length));
             Array.Copy(previousVisibilityImportance, _probeVisibilityImportance, Math.Min(copyCount, previousVisibilityImportance.Length));
@@ -2735,6 +2799,84 @@ namespace Njulf.Rendering.Resources
             return count;
         }
 
+        private void RefreshProbeLifecycleTelemetry(int updateBudget)
+        {
+            _probeLifecycleLatencyTargetFrames =
+                ResolveProbeLifecycleLatencyTarget(_probeCount, updateBudget);
+            _oldestVisibleUnsupportedProbeAge = 0;
+            _visibleUnsupportedProbeCountAboveLatencyTarget = 0;
+            _maximumFreshProbeAge = 0;
+            _maximumScrollExposedProbeAge = 0;
+            _maximumRelocationPendingProbeAge = 0;
+            _maximumUnpublishedProbeAge = 0;
+            _probeLifecycleBoundExceededCount = 0;
+            _visibleZeroSupportRepairUpdateCount =
+                _scheduledWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.VisibleZeroSupport];
+
+            uint bound = checked((uint)_probeLifecycleLatencyTargetFrames);
+            for (int probeIndex = 0; probeIndex < _probeCount; probeIndex++)
+            {
+                uint age = _probeAges[probeIndex];
+                bool visible =
+                    (uint)probeIndex < (uint)_probeSchedulingFlags.Length &&
+                    (_probeSchedulingFlags[probeIndex] & ProbeSchedulingVisibleFlag) != 0;
+                bool fresh = _probeFresh[probeIndex] != 0;
+                bool scrollExposed =
+                    (uint)probeIndex < (uint)_probeSchedulingFlags.Length &&
+                    (_probeSchedulingFlags[probeIndex] & ProbeSchedulingScrollExposedFlag) != 0;
+                bool relocationPending =
+                    (uint)probeIndex < (uint)_probeRelocationPending.Length &&
+                    _probeRelocationPending[probeIndex] != 0;
+                bool unpublished = fresh || relocationPending ||
+                    (TransportV2Active &&
+                        ((uint)probeIndex >= (uint)_probeSourceRayCounts.Length ||
+                            _probeSourceRayCounts[probeIndex] == 0));
+                bool unsupported = IsProbeDataUnavailable(probeIndex);
+
+                if (fresh)
+                    _maximumFreshProbeAge = Math.Max(_maximumFreshProbeAge, age);
+                if (scrollExposed)
+                    _maximumScrollExposedProbeAge =
+                        Math.Max(_maximumScrollExposedProbeAge, age);
+                if (relocationPending)
+                    _maximumRelocationPendingProbeAge =
+                        Math.Max(_maximumRelocationPendingProbeAge, age);
+                if (unpublished)
+                    _maximumUnpublishedProbeAge = Math.Max(_maximumUnpublishedProbeAge, age);
+                if (visible && unsupported)
+                {
+                    _oldestVisibleUnsupportedProbeAge =
+                        Math.Max(_oldestVisibleUnsupportedProbeAge, age);
+                    if (age > bound)
+                        _visibleUnsupportedProbeCountAboveLatencyTarget++;
+                }
+                if (visible && age > bound &&
+                    (fresh || scrollExposed || relocationPending || unpublished))
+                {
+                    _probeLifecycleBoundExceededCount++;
+                }
+            }
+        }
+
+        internal static int ResolveProbeLifecycleLatencyTarget(
+            int probeCount,
+            int updateBudget)
+        {
+            int safeBudget = Math.Max(updateBudget, 1);
+            int fullSweepFrames = (int)Math.Ceiling(
+                Math.Max(probeCount, 0) / (double)safeBudget);
+            // The finding bound cannot be shorter than a recovery transition it
+            // intentionally permits. Two sweep intervals cover admission and
+            // publication; the relocation timeout is the hard minimum.
+            int minimumRecoveryFrames = checked((int)Math.Max(
+                InactiveProbeRetryFrames,
+                RelocationPendingMaximumRetryAge));
+            return Math.Clamp(
+                fullSweepFrames * 2,
+                minimumRecoveryFrames,
+                600);
+        }
+
         private void BuildWorkClassReservations(int[] volumeQuotas)
         {
             Array.Clear(_volumeWorkClassPendingScratch);
@@ -2814,6 +2956,9 @@ namespace Njulf.Rendering.Resources
                 return;
 
             int budget = Math.Max(0, volumeQuota);
+            int zeroSupport = Math.Max(
+                0,
+                pending[(int)SimpleDdgiSchedulerWorkClass.VisibleZeroSupport]);
             int fresh = Math.Max(0, pending[(int)SimpleDdgiSchedulerWorkClass.FreshExposedVisible]);
             int dirty = Math.Max(0, pending[(int)SimpleDdgiSchedulerWorkClass.VisibleDirty]);
             int retry = Math.Max(0, pending[(int)SimpleDdgiSchedulerWorkClass.VisibleRetry]);
@@ -2834,7 +2979,8 @@ namespace Njulf.Rendering.Resources
             // quota can represent it. Reservations are deliberately consumed from
             // the bottom up, so a capacity of one remains strictly visible-first.
             int lowerReservations = SaturatingAdd(maintenanceReservation, SaturatingAdd(retryReservation, dirtyReservation));
-            if (lowerReservations >= budget && (fresh > 0 || dirty > 0 || retry > 0))
+            if (lowerReservations >= budget &&
+                (zeroSupport > 0 || fresh > 0 || dirty > 0 || retry > 0))
             {
                 if (maintenanceReservation > 0)
                     maintenanceReservation--;
@@ -2843,6 +2989,17 @@ namespace Njulf.Rendering.Resources
                 else if (dirtyReservation > 0)
                     dirtyReservation--;
                 lowerReservations--;
+            }
+
+            if (zeroSupport > 0)
+            {
+                reservations[(int)SimpleDdgiSchedulerWorkClass.VisibleZeroSupport] =
+                    Math.Max(0, budget - lowerReservations);
+                reservations[(int)SimpleDdgiSchedulerWorkClass.VisibleDirty] = dirtyReservation;
+                reservations[(int)SimpleDdgiSchedulerWorkClass.VisibleRetry] = retryReservation;
+                if (maintenanceClass >= 0)
+                    reservations[maintenanceClass] = maintenanceReservation;
+                return;
             }
 
             if (fresh > 0)
@@ -3128,8 +3285,32 @@ namespace Njulf.Rendering.Resources
             }
             bool retry = IsEligibleForVisibleRetry(probeIndex);
             int ringIndex = ResolveVolumeQuality(volumeIndex).RingIndex;
-            workClass = ResolveSchedulerWorkClass(freshOrExposed, visible, dirty, retry, ringIndex);
+            bool zeroSupport = visible && IsProbeDataUnavailable(probeIndex);
+            workClass = ResolveSchedulerWorkClass(
+                zeroSupport,
+                freshOrExposed,
+                visible,
+                dirty,
+                retry,
+                ringIndex);
             return true;
+        }
+
+        private bool IsProbeDataUnavailable(int probeIndex)
+        {
+            if ((uint)probeIndex >= (uint)_probeCount)
+                return true;
+
+            return _probeFresh[probeIndex] != 0 ||
+                ((uint)probeIndex < (uint)_probeRelocationPending.Length &&
+                    _probeRelocationPending[probeIndex] != 0) ||
+                ((uint)probeIndex < (uint)_probeInactive.Length &&
+                    _probeInactive[probeIndex] != 0) ||
+                ((uint)probeIndex < (uint)_probeActiveWeights.Length &&
+                    _probeActiveWeights[probeIndex] <= 0.001f) ||
+                (TransportV2Active &&
+                    ((uint)probeIndex >= (uint)_probeSourceRayCounts.Length ||
+                        _probeSourceRayCounts[probeIndex] == 0));
         }
 
         private bool IsCachedTransportSolvePriorityCandidate(int probeIndex)
@@ -3381,12 +3562,15 @@ namespace Njulf.Rendering.Resources
         }
 
         internal static SimpleDdgiSchedulerWorkClass ResolveSchedulerWorkClass(
+            bool zeroSupport,
             bool freshOrExposed,
             bool visible,
             bool dirty,
             bool retry,
             int ringIndex)
         {
+            if (zeroSupport && visible)
+                return SimpleDdgiSchedulerWorkClass.VisibleZeroSupport;
             if (freshOrExposed && visible)
                 return SimpleDdgiSchedulerWorkClass.FreshExposedVisible;
             if (dirty && visible)
@@ -3400,6 +3584,20 @@ namespace Njulf.Rendering.Resources
                 _ => SimpleDdgiSchedulerWorkClass.FarMaintenance
             };
         }
+
+        internal static SimpleDdgiSchedulerWorkClass ResolveSchedulerWorkClass(
+            bool freshOrExposed,
+            bool visible,
+            bool dirty,
+            bool retry,
+            int ringIndex) =>
+            ResolveSchedulerWorkClass(
+                zeroSupport: false,
+                freshOrExposed,
+                visible,
+                dirty,
+                retry,
+                ringIndex);
 
         private bool IsEligibleForVisibleRetry(int probeIndex)
         {
@@ -3910,6 +4108,12 @@ namespace Njulf.Rendering.Resources
         internal static uint ReadProbeUpdateAge(uint metadata) =>
             (metadata >> ProbeUpdateAgeShift) & ProbeUpdateAgeValueMask;
 
+        internal static bool ShouldRetireRelocationPendingOnCpu(
+            bool relocationPending,
+            uint updateAge) =>
+            relocationPending &&
+            updateAge >= RelocationPendingMaximumRetryAge;
+
         private int ResolveUpdateRayCount(int probeIndex, SimpleDdgiRingQuality quality, uint flags)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
@@ -3968,6 +4172,8 @@ namespace Njulf.Rendering.Resources
                 _probeRelocations[probeIndex] = Vector3.Zero;
                 _probeActiveWeights[probeIndex] = 1.0f;
                 _probeClassifications[probeIndex] = 0u;
+                if ((uint)probeIndex < (uint)_probeRelocationPending.Length)
+                    _probeRelocationPending[probeIndex] = 0;
                 if ((uint)probeIndex < (uint)_probeStableUpdateCounts.Length)
                     _probeStableUpdateCounts[probeIndex] = 0;
                 if ((uint)probeIndex < (uint)_probeLuminanceChangeEma.Length)
@@ -6002,6 +6208,15 @@ namespace Njulf.Rendering.Resources
             uint currentSourceEpoch) =>
             expectedSourceEpoch == currentSourceEpoch;
 
+        internal static bool IsProbeStateReadbackCurrent(
+            uint readbackProbeGeneration,
+            uint currentProbeGeneration,
+            uint expectedSourceEpoch,
+            uint currentSourceEpoch) =>
+            NormalizeProbeGeneration(readbackProbeGeneration) ==
+                NormalizeProbeGeneration(currentProbeGeneration) &&
+            IsTransportSourceEpochCurrent(expectedSourceEpoch, currentSourceEpoch);
+
         internal static bool IsTransportProbeReactivated(
             bool classificationFeedbackEnabled,
             bool wasInactive,
@@ -6066,16 +6281,15 @@ namespace Njulf.Rendering.Resources
                 // toroidal scrolling, dirty-region invalidation, or source-cache
                 // resampling. Never let old classification or convergence state
                 // overwrite the new physical/source epoch.
-                bool physicalGenerationMatches =
-                    ReadProbeStateGeneration(state.Flags) ==
-                        NormalizeProbeGeneration(_probeGenerations[probeIndex]);
-                bool sourceEpochMatches =
+                bool readbackGenerationCurrent =
                     (uint)probeIndex < (uint)expectedSourceEpochs.Length &&
                     (uint)probeIndex < (uint)_probeSourceEpochs.Length &&
-                    IsTransportSourceEpochCurrent(
+                    IsProbeStateReadbackCurrent(
+                        ReadProbeStateGeneration(state.Flags),
+                        _probeGenerations[probeIndex],
                         expectedSourceEpochs[probeIndex],
                         _probeSourceEpochs[probeIndex]);
-                if (!physicalGenerationMatches || !sourceEpochMatches)
+                if (!readbackGenerationCurrent)
                 {
                     if (classificationFeedbackEnabled)
                     {
@@ -6137,6 +6351,9 @@ namespace Njulf.Rendering.Resources
                     relocationDelta > ResolveProbeSpacing(probeIndex) * 0.05f;
                 bool relocationRetracePending =
                     (state.Flags & ProbeStateRelocationPendingFlag) != 0u;
+                if ((uint)probeIndex < (uint)_probeRelocationPending.Length)
+                    _probeRelocationPending[probeIndex] =
+                        relocationRetracePending ? (byte)1 : (byte)0;
                 bool sourceCacheInvalid =
                     (state.Flags & ProbeStateSourceCacheInvalidFlag) != 0u;
 

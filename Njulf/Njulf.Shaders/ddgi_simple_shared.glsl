@@ -49,11 +49,15 @@ const uint SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS = 8u;
 const uint SIMPLE_DDGI_HEADER_WORDS = 52u;
 const uint SIMPLE_DDGI_VOLUME_STRIDE_WORDS = 24u;
 const uint SIMPLE_DDGI_MAX_VOLUME_COUNT = 16u;
-// The hot path samples one authoritative volume and at most one fallback. A
-// third, coarser recovery volume is permitted only when those two volumes still
-// provide less than the minimum ownership ramp. This closes inactive-probe
-// holes without turning every overlap into an additional eight-corner gather.
-const uint SIMPLE_DDGI_MAX_GATHER_VOLUME_SAMPLES = 3u;
+// The hot path normally samples one authoritative volume and one fallback.
+// Additional coarser recovery volumes are sampled only while the accumulated
+// ownership remains below the minimum support ramp. This closes inactive-probe
+// holes without turning healthy overlaps into extra eight-corner gathers.
+// Volume metadata and recovery are bounded by the configured maximum. The gather must not
+// assume that a primary, secondary, and one recovery ring are sufficient: a
+// stale tile entry or an unsupported fine ring can require walking farther
+// through the containing clipmap rings.
+const uint SIMPLE_DDGI_MAX_GATHER_VOLUME_SAMPLES = SIMPLE_DDGI_MAX_VOLUME_COUNT;
 // The CPU clamps the uploaded table to SIMPLE_DDGI_MAX_VOLUME_COUNT. Keep the
 // selection loops statically bounded as well: drivers can unroll the small
 // metadata-only walk, while a corrupt runtime count cannot turn one shaded
@@ -64,6 +68,26 @@ const uint SIMPLE_DDGI_MAX_SELECTION_VOLUME_CHECKS = SIMPLE_DDGI_MAX_VOLUME_COUN
 // the complete remaining table rather than using an arbitrary coverage cap.
 const uint SIMPLE_DDGI_MAX_GATHER_FALLBACK_CANDIDATE_CHECKS =
     SIMPLE_DDGI_MAX_VOLUME_COUNT - 1u;
+const uint SIMPLE_DDGI_GATHER_ROLE_PRIMARY = 0u;
+const uint SIMPLE_DDGI_GATHER_ROLE_FALLBACK = 1u;
+const uint SIMPLE_DDGI_GATHER_ROLE_RECOVERY = 2u;
+const uint SIMPLE_DDGI_GATHER_ROLE_COUNT = 3u;
+const uint SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT = 9u;
+const uint SIMPLE_DDGI_GATHER_REJECT_FRESH = 1u << 0;
+const uint SIMPLE_DDGI_GATHER_REJECT_SCROLL_EXPOSED = 1u << 1;
+const uint SIMPLE_DDGI_GATHER_REJECT_RELOCATION_PENDING = 1u << 2;
+const uint SIMPLE_DDGI_GATHER_REJECT_INACTIVE_FLAG = 1u << 3;
+const uint SIMPLE_DDGI_GATHER_REJECT_INACTIVE_CLASSIFICATION = 1u << 4;
+const uint SIMPLE_DDGI_GATHER_REJECT_ZERO_ACTIVE_WEIGHT = 1u << 5;
+const uint SIMPLE_DDGI_GATHER_REJECT_INVALID_IRRADIANCE = 1u << 6;
+const uint SIMPLE_DDGI_GATHER_REJECT_INVALID_VISIBILITY = 1u << 7;
+const uint SIMPLE_DDGI_GATHER_REJECT_OUTSIDE_DOMAIN = 1u << 8;
+// Appended after the MaterialGi diagnostic family. Detailed diagnostics use a
+// sparse forward sample, so production gather frames pay no atomic cost.
+const uint SIMPLE_DDGI_GATHER_REJECTION_COUNTER_BASE = 262u;
+const uint SIMPLE_DDGI_GATHER_ALL_FAILED_COUNTER_BASE =
+    SIMPLE_DDGI_GATHER_REJECTION_COUNTER_BASE +
+    SIMPLE_DDGI_GATHER_ROLE_COUNT * SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT;
 // The fixed-size Simple-DDGI candidate table reuses the legacy DDGI gather-tile
 // storage binding. Its producer tag prevents a transition frame from treating a
 // legacy table as Simple-DDGI data; an unavailable or untagged tile always
@@ -148,6 +172,7 @@ const uint SIMPLE_DDGI_UPDATE_RAY_COUNT_MASK = 0xffff0000u;
 const uint SIMPLE_DDGI_UPDATE_GENERATION_MASK = 0x00ffffffu;
 const uint SIMPLE_DDGI_UPDATE_AGE_SHIFT = 24u;
 const uint SIMPLE_DDGI_UPDATE_AGE_MASK = 0xff000000u;
+const uint SIMPLE_DDGI_RELOCATION_PENDING_MAX_RETRY_AGE = 32u;
 const uint SIMPLE_DDGI_CLASSIFICATION_ACTIVE = 0u;
 const uint SIMPLE_DDGI_CLASSIFICATION_INACTIVE = 1u;
 
@@ -1298,6 +1323,9 @@ struct SimpleDdgiGatherResult
     float primaryContributionWeight;
     float secondaryContributionWeight;
     uint validProbeCount;
+    uint combinedRejectionMask;
+    uint firstRejectionReason;
+    uint rejectedProbeCount;
 };
 
 SimpleDdgiGatherResult EmptySimpleDdgiGatherResult()
@@ -1318,6 +1346,9 @@ SimpleDdgiGatherResult EmptySimpleDdgiGatherResult()
     result.primaryContributionWeight = 0.0;
     result.secondaryContributionWeight = 0.0;
     result.validProbeCount = 0u;
+    result.combinedRejectionMask = 0u;
+    result.firstRejectionReason = SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT;
+    result.rejectedProbeCount = 0u;
     return result;
 }
 
@@ -1369,23 +1400,54 @@ float SimpleDdgiLeakAttenuation(SimpleDdgiGatherResult gather, SimpleDdgiParams 
         1.0);
 }
 
+uint SimpleDdgiProbeGatherRejectionMask(SimpleDdgiProbeState state, vec4 irradiance, vec4 visibility);
+
 bool SimpleDdgiProbeSupportsGather(SimpleDdgiProbeState state, vec4 irradiance, vec4 visibility)
 {
-    uint invalidFlags = SIMPLE_DDGI_PROBE_FLAG_FRESH |
-        SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED |
-        SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING |
-        SIMPLE_DDGI_PROBE_FLAG_INACTIVE;
-    return (state.flags & invalidFlags) == 0u &&
-        state.classification != SIMPLE_DDGI_CLASSIFICATION_INACTIVE &&
-        state.activeWeight > 0.001 &&
-        irradiance.w > 0.5 &&
-        visibility.z > 0.5;
+    return SimpleDdgiProbeGatherRejectionMask(state, irradiance, visibility) == 0u;
+}
+
+// Returns the reason mask as well as the legacy Boolean decision. Keeping this
+// pure makes it usable by diagnostic builds without adding work to production
+// gather paths.
+uint SimpleDdgiProbeGatherRejectionMask(SimpleDdgiProbeState state, vec4 irradiance, vec4 visibility)
+{
+    uint mask = 0u;
+    if ((state.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u) mask |= SIMPLE_DDGI_GATHER_REJECT_FRESH;
+    if ((state.flags & SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED) != 0u) mask |= SIMPLE_DDGI_GATHER_REJECT_SCROLL_EXPOSED;
+    if ((state.flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u) mask |= SIMPLE_DDGI_GATHER_REJECT_RELOCATION_PENDING;
+    if ((state.flags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u) mask |= SIMPLE_DDGI_GATHER_REJECT_INACTIVE_FLAG;
+    if (state.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE) mask |= SIMPLE_DDGI_GATHER_REJECT_INACTIVE_CLASSIFICATION;
+    if (state.activeWeight <= 0.001) mask |= SIMPLE_DDGI_GATHER_REJECT_ZERO_ACTIVE_WEIGHT;
+    if (irradiance.w <= 0.5) mask |= SIMPLE_DDGI_GATHER_REJECT_INVALID_IRRADIANCE;
+    if (visibility.z <= 0.5) mask |= SIMPLE_DDGI_GATHER_REJECT_INVALID_VISIBILITY;
+    return mask;
+}
+
+void RecordSimpleDdgiGatherRejectionMask(
+    SimpleDdgiParams p,
+    uint gatherRole,
+    uint rejectionMask)
+{
+    if (!SimpleDdgiDetailedDiagnosticsEnabled(p) || rejectionMask == 0u)
+        return;
+
+    uint safeRole = min(gatherRole, SIMPLE_DDGI_GATHER_ROLE_COUNT - 1u);
+    uint roleBase = SIMPLE_DDGI_GATHER_REJECTION_COUNTER_BASE +
+        safeRole * SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT;
+    uint diagnosticFrame = p.frameIndex % uint(FRAMES_IN_FLIGHT);
+    for (uint reason = 0u; reason < SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT; reason++)
+    {
+        if ((rejectionMask & (1u << reason)) != 0u)
+            AddSimpleDdgiGatherDiagnostic(p, diagnosticFrame, roleBase + reason);
+    }
 }
 
 SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     SimpleDdgiParams p,
     SimpleDdgiVolume volume,
     uint volumeIndex,
+    uint gatherRole,
     vec3 biasedWorldPos,
     vec3 safeNormal)
 {
@@ -1413,7 +1475,17 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     {
         ivec3 c = base + ivec3(int(x), int(y), int(z));
         if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, ivec3(volume.gridCount))))
+        {
+            result.combinedRejectionMask |= SIMPLE_DDGI_GATHER_REJECT_OUTSIDE_DOMAIN;
+            if (result.firstRejectionReason >= SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT)
+                result.firstRejectionReason = 8u;
+            result.rejectedProbeCount++;
+            RecordSimpleDdgiGatherRejectionMask(
+                p,
+                gatherRole,
+                SIMPLE_DDGI_GATHER_REJECT_OUTSIDE_DOMAIN);
             continue;
+        }
 
         vec3 w3 = mix(1.0 - fracV, fracV, vec3(x, y, z));
         float trilinear = w3.x * w3.y * w3.z;
@@ -1427,8 +1499,16 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
         vec3 probeToSurface = distanceToProbe > 0.00001 ? toSurface / distanceToProbe : safeNormal;
         vec4 irradiance = SampleSimpleDdgiAtlasBilinear(p.publishedIrradianceAtlasBufferIndex, probeIndex, safeNormal, p.irradianceTexels, p);
         vec4 moments = SampleSimpleDdgiAtlasBilinear(uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), probeIndex, probeToSurface, p.visibilityTexels, p);
-        if (!SimpleDdgiProbeSupportsGather(state, irradiance, moments))
+        uint rejectionMask = SimpleDdgiProbeGatherRejectionMask(state, irradiance, moments);
+        if (rejectionMask != 0u)
+        {
+            result.combinedRejectionMask |= rejectionMask;
+            if (result.firstRejectionReason >= SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT)
+                result.firstRejectionReason = uint(findLSB(rejectionMask));
+            result.rejectedProbeCount++;
+            RecordSimpleDdgiGatherRejectionMask(p, gatherRole, rejectionMask);
             continue;
+        }
 
         float halfLambert = clamp(dot(safeNormal, -probeToSurface) * 0.5 + 0.5, 0.0, 1.0);
         // Directional weighting chooses representative probes; it is not missing
@@ -1481,6 +1561,14 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
         ? SimpleDdgiVolumeContributorDebugColor(volumeIndex, volume.kind)
         : vec3(0.0);
     result.primaryContributionWeight = result.validProbeCount > 0u && directionalMass > 0.000001 ? 1.0 : 0.0;
+    if (result.validProbeCount == 0u && result.spatialCoverage > 0.000001)
+    {
+        AddSimpleDdgiGatherDiagnostic(
+            p,
+            p.frameIndex % uint(FRAMES_IN_FLIGHT),
+            SIMPLE_DDGI_GATHER_ALL_FAILED_COUNTER_BASE +
+                min(gatherRole, SIMPLE_DDGI_GATHER_ROLE_COUNT - 1u));
+    }
     return result;
 }
 
@@ -1660,6 +1748,12 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
         result.primaryContributionWeight);
     result.secondVolumeUsed = result.secondaryContributionWeight > 0.000001 ? 1.0 : 0.0;
     result.validProbeCount = inner.validProbeCount + outer.validProbeCount;
+    result.combinedRejectionMask = inner.combinedRejectionMask | outer.combinedRejectionMask;
+    result.firstRejectionReason =
+        inner.firstRejectionReason < SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT
+            ? inner.firstRejectionReason
+            : outer.firstRejectionReason;
+    result.rejectedProbeCount = inner.rejectedProbeCount + outer.rejectedProbeCount;
     return result;
 }
 
@@ -1699,7 +1793,13 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 v
 #endif
     if (!selectedFromTileCandidates &&
         !SelectSimpleDdgiVolume(p, worldPos, selectedVolumeIndex, selectedVolume, edgeWeight))
+    {
+        RecordSimpleDdgiGatherRejectionMask(
+            p,
+            SIMPLE_DDGI_GATHER_ROLE_PRIMARY,
+            SIMPLE_DDGI_GATHER_REJECT_OUTSIDE_DOMAIN);
         return empty;
+    }
     // Keep edge ownership in stable receiver space.  The old implementation
     // recomputed this using the biased position, so reversing view direction at
     // the same receiver could toggle a second cascade and change mean energy.
@@ -1716,6 +1816,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 v
         p,
         selectedVolume,
         selectedVolumeIndex,
+        SIMPLE_DDGI_GATHER_ROLE_PRIMARY,
         selectedInterpolationPosition,
         safeNormal);
     uint diagnosticFrame = p.frameIndex % uint(FRAMES_IN_FLIGHT);
@@ -1792,6 +1893,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 v
             p,
             fallbackVolume,
             fallbackVolumeIndex,
+            SIMPLE_DDGI_GATHER_ROLE_FALLBACK,
             fallbackInterpolationPosition,
             safeNormal);
         AddSimpleDdgiGatherDiagnostic(
@@ -1811,17 +1913,24 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 v
         // geometry. If the normal two-volume path still has only trace ownership,
         // let one containing coarser ring fill that missing mass instead of
         // promoting the tiny remainder to full radiometric authority.
-        if (combined.ownership < SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP)
+        uint recoveryBaseVolumeIndex = fallbackVolumeIndex;
+        for (uint recoverySample = 0u;
+             recoverySample < SIMPLE_DDGI_MAX_GATHER_VOLUME_SAMPLES - 2u;
+             recoverySample++)
         {
+            if (combined.ownership >= SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP)
+                break;
             uint recoveryVolumeIndex = 0u;
             SimpleDdgiVolume recoveryVolume;
             bool foundRecovery = FindSimpleDdgiFallbackVolume(
                 p,
-                fallbackVolumeIndex,
+                recoveryBaseVolumeIndex,
                 worldPos,
                 recoveryVolumeIndex,
                 recoveryVolume);
-            if (foundRecovery)
+            if (!foundRecovery)
+                break;
+            recoveryBaseVolumeIndex = recoveryVolumeIndex;
             {
                 bool recoveryBiasOutsideSelectionDomain;
                 vec3 recoveryInterpolationPosition = SimpleDdgiResolveInterpolationPosition(
@@ -1835,6 +1944,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 v
                     p,
                     recoveryVolume,
                     recoveryVolumeIndex,
+                    SIMPLE_DDGI_GATHER_ROLE_RECOVERY,
                     recoveryInterpolationPosition,
                     safeNormal);
                 AddSimpleDdgiGatherDiagnostic(

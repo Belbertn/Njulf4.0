@@ -163,6 +163,72 @@ public sealed class SimpleDdgiVolumeManagerTests
             Is.EqualTo(expected));
     }
 
+    [Test]
+    public void SchedulerWorkClasses_VisibleZeroSupportPreemptsFreshAndMaintenance()
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveSchedulerWorkClass(
+                zeroSupport: true,
+                freshOrExposed: true,
+                visible: true,
+                dirty: true,
+                retry: true,
+                ringIndex: 0),
+            Is.EqualTo(SimpleDdgiSchedulerWorkClass.VisibleZeroSupport));
+    }
+
+    [Test]
+    public void ProbeStateReadback_OldPhysicalOrSourceGenerationCannotOverwriteCurrentState()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager.IsProbeStateReadbackCurrent(
+                    readbackProbeGeneration: 7,
+                    currentProbeGeneration: 7,
+                    expectedSourceEpoch: 11,
+                    currentSourceEpoch: 11),
+                Is.True);
+            Assert.That(
+                SimpleDdgiVolumeManager.IsProbeStateReadbackCurrent(6, 7, 11, 11),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager.IsProbeStateReadbackCurrent(7, 7, 10, 11),
+                Is.False);
+        });
+    }
+
+    [TestCase(false, 255u, false)]
+    [TestCase(true, 31u, false)]
+    [TestCase(true, 32u, true)]
+    [TestCase(true, 255u, true)]
+    public void RelocationPendingCpuMirror_RetiresAtTheShaderTimeout(
+        bool relocationPending,
+        uint updateAge,
+        bool expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ShouldRetireRelocationPendingOnCpu(
+                relocationPending,
+                updateAge),
+            Is.EqualTo(expected));
+    }
+
+    [TestCase(15_354, 2_048, 32)]
+    [TestCase(15_354, 1, 600)]
+    [TestCase(0, 2_048, 32)]
+    public void ProbeLifecycleLatencyTarget_CoversConfiguredRecoveryTransitions(
+        int probeCount,
+        int updateBudget,
+        int expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveProbeLifecycleLatencyTarget(
+                probeCount,
+                updateBudget),
+            Is.EqualTo(expected));
+    }
+
     [TestCase(true, true, false, 0u, 8u, true)]
     [TestCase(true, true, true, 0u, 8u, false)]
     [TestCase(true, true, false, 8u, 8u, false)]
@@ -266,7 +332,7 @@ public sealed class SimpleDdgiVolumeManagerTests
         Assert.Multiple(() =>
         {
             Assert.That(quotas.Sum(), Is.EqualTo(1));
-            Assert.That(quotas[(int)SimpleDdgiSchedulerWorkClass.FreshExposedVisible], Is.EqualTo(1));
+            Assert.That(quotas[(int)SimpleDdgiSchedulerWorkClass.VisibleZeroSupport], Is.EqualTo(1));
             Assert.That(quotas.Skip(1), Is.All.Zero);
         });
     }

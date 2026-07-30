@@ -59,8 +59,9 @@ public enum SampleSponzaGiCaptureStage : byte
     Warmup = 0,
     CaptureLowBookmark = 1,
     VerticalTraversal = 2,
-    CaptureHighBookmark = 3,
-    Complete = 4
+    HighBookmarkStationarySettle = 3,
+    CaptureHighBookmark = 4,
+    Complete = 5
 }
 
 /// <summary>
@@ -140,13 +141,14 @@ public sealed record SampleSponzaGiVisualMetricGate(
 /// </summary>
 public sealed class SampleSponzaGiCaptureContract
 {
-    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v5";
+    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v6";
     public const string VisualMetricGateSchemaVersion = "realtime-gi-closure-sponza-visual-metrics/v1";
     public const string CoverageOracleSchemaVersion = "realtime-gi-closure-sponza-coverage-oracle/v1";
     public const int LockedWidth = 1600;
     public const int LockedHeight = 900;
     public const int FixedFramesPerSecond = 60;
-    public const int WarmupFrameCount = 360;
+    public const int WarmupFrameCount = 600;
+    public const int HighBookmarkStationarySettleFrameCount = 600;
     public const int VerticalTraversalDurationSeconds = 16;
     // One frame presents the requested state, one spans the two-frame GPU timing
     // latency, and the final frame captures the held state with settled telemetry.
@@ -189,6 +191,7 @@ public sealed class SampleSponzaGiCaptureContract
     public int TotalCaptureFrameCount => checked(
         WarmupFrames +
         VerticalTraversalFrameCount +
+        HighBookmarkStationarySettleFrameCount +
         Outputs.Count * 2 * FramesPerEndpointOutput);
 
     public static SampleSponzaGiCaptureContract Default => DefaultContract;
@@ -849,9 +852,9 @@ public sealed class SampleSponzaGiCaptureContract
         if (ReceiverRois.Count != 6)
             throw new InvalidOperationException(
                 "The closure capture requires central façade, both side galleries, right wall, arcade, and outdoor receiver ROIs.");
-        if (Outputs.Count != 13)
+        if (Outputs.Count != 18)
             throw new InvalidOperationException(
-                "The closure capture requires the thirteen locked beauty/direct/GI diagnostic outputs.");
+                "The closure capture requires the eighteen locked beauty/direct/GI attribution outputs.");
 
         ValidateDistinctNames(ReceiverRois.Select(static roi => roi.Name), "receiver ROI");
         ValidateDistinctNames(Outputs.Select(static output => output.Name), "output");
@@ -900,9 +903,10 @@ public sealed class SampleSponzaGiCaptureContract
 
         string[] requiredOutputs =
         [
-            "beauty", "direct-only", "final-indirect", "sampled-irradiance", "final-diffuse",
+            "beauty", "direct-only", "final-indirect", "raw-irradiance", "sampled-irradiance", "final-diffuse",
             "volume-contributor", "gather-clipmap", "gather-blend-weight", "gather-fallback",
-            "support", "visibility", "ownership", "fallback"
+            "spatial-coverage", "support", "visibility", "ownership", "fallback",
+            "probe-state", "classification-invalid-score", "update-reasons"
         ];
         if (!Outputs.Select(static output => output.Name).OrderBy(static value => value, StringComparer.Ordinal).SequenceEqual(
                 requiredOutputs.OrderBy(static value => value, StringComparer.Ordinal), StringComparer.Ordinal))
@@ -1006,16 +1010,21 @@ public sealed class SampleSponzaGiCaptureContract
                     "Direct sun/local-light reference with indirect environment surface lighting disabled.",
                     DisableEnvironmentLighting: true),
                 new SampleSponzaGiCaptureOutput("final-indirect", "final-indirect", GlobalIlluminationDebugView.FinalIndirect, false, "Final indirect debug output."),
+                new SampleSponzaGiCaptureOutput("raw-irradiance", "raw-irradiance", GlobalIlluminationDebugView.DdgiIrradiance, false, "Raw structured-gather irradiance used to distinguish support rejection from zero-energy transport."),
                 new SampleSponzaGiCaptureOutput("sampled-irradiance", "sampled-irradiance", GlobalIlluminationDebugView.DdgiSampledIrradiance, false, "Sampled DDGI irradiance before final diffuse composition."),
                 new SampleSponzaGiCaptureOutput("final-diffuse", "final-diffuse", GlobalIlluminationDebugView.DdgiFinalDiffuse, false, "Final diffuse GI after material composition."),
                 new SampleSponzaGiCaptureOutput("volume-contributor", "volume-contributor", GlobalIlluminationDebugView.DdgiGatherLocalVolume, false, "Local authored-volume contribution; empty in the default Sponza profile."),
                 new SampleSponzaGiCaptureOutput("gather-clipmap", "gather-clipmap", GlobalIlluminationDebugView.DdgiGatherClipmap, false, "Selected camera-ring contribution and coverage."),
                 new SampleSponzaGiCaptureOutput("gather-blend-weight", "gather-blend-weight", GlobalIlluminationDebugView.DdgiGatherBlendWeight, false, "Secondary-volume contribution weight."),
                 new SampleSponzaGiCaptureOutput("gather-fallback", "gather-fallback", GlobalIlluminationDebugView.DdgiGatherFallback, false, "Receivers that required a fallback volume gather."),
+                new SampleSponzaGiCaptureOutput("spatial-coverage", "spatial-coverage", GlobalIlluminationDebugView.DdgiSpatialCoverage, false, "Geometric interpolation coverage before probe-state rejection."),
                 new SampleSponzaGiCaptureOutput("support", "support", GlobalIlluminationDebugView.DdgiSupportCoverage, false, "Valid DDGI support coverage."),
                 new SampleSponzaGiCaptureOutput("visibility", "visibility", GlobalIlluminationDebugView.DdgiVisibility, false, "DDGI visibility term."),
                 new SampleSponzaGiCaptureOutput("ownership", "ownership", GlobalIlluminationDebugView.DdgiEffectiveWeight, false, "Effective normalized DDGI ownership weight."),
-                new SampleSponzaGiCaptureOutput("fallback", "fallback", GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight, false, "Environment fallback composition weight.")
+                new SampleSponzaGiCaptureOutput("fallback", "fallback", GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight, false, "Environment fallback composition weight."),
+                new SampleSponzaGiCaptureOutput("probe-state", "probe-state", GlobalIlluminationDebugView.DdgiProbeState, false, "First gather rejection reason and combined rejection mask for unsupported Simple-DDGI receivers."),
+                new SampleSponzaGiCaptureOutput("classification-invalid-score", "classification-invalid-score", GlobalIlluminationDebugView.DdgiClassificationInvalidScore, false, "Probe relocation/classification invalid score."),
+                new SampleSponzaGiCaptureOutput("update-reasons", "update-reasons", GlobalIlluminationDebugView.DdgiUpdateReasons, false, "Scheduled probe update reasons and recovery activity.")
             ]);
     }
 
@@ -1029,6 +1038,7 @@ public sealed class SampleSponzaGiCaptureContract
         Append(builder, Height);
         Append(builder, FramesPerSecond);
         Append(builder, WarmupFrames);
+        Append(builder, HighBookmarkStationarySettleFrameCount);
         Append(builder, VerticalPathDurationSeconds);
         Append(builder, "coverage-oracle-full-fixed-trajectory");
         Append(builder, VerticalTraversalFrameCount);
@@ -1374,6 +1384,14 @@ public sealed class SampleSponzaGiCaptureSequence
                     null,
                     "SponzaPlazaUpperFacadeVerticalTraversal",
                     false),
+                SampleSponzaGiCaptureStage.HighBookmarkStationarySettle => new SampleSponzaGiCaptureInstruction(
+                    _stage,
+                    _stageFrameIndex,
+                    SampleSponzaGiCaptureContract.HighBookmarkStationarySettleFrameCount,
+                    _contract.HighBookmark,
+                    null,
+                    _contract.HighBookmark.Name,
+                    false),
                 SampleSponzaGiCaptureStage.CaptureHighBookmark => CaptureBookmarkInstruction(_contract.HighBookmark),
                 _ => new SampleSponzaGiCaptureInstruction(
                     SampleSponzaGiCaptureStage.Complete,
@@ -1407,6 +1425,10 @@ public sealed class SampleSponzaGiCaptureSequence
                 MoveTo(SampleSponzaGiCaptureStage.VerticalTraversal);
                 break;
             case SampleSponzaGiCaptureStage.VerticalTraversal when _stageFrameIndex >= _contract.VerticalTraversalFrameCount:
+                MoveTo(SampleSponzaGiCaptureStage.HighBookmarkStationarySettle);
+                break;
+            case SampleSponzaGiCaptureStage.HighBookmarkStationarySettle when
+                _stageFrameIndex >= SampleSponzaGiCaptureContract.HighBookmarkStationarySettleFrameCount:
                 MoveTo(SampleSponzaGiCaptureStage.CaptureHighBookmark);
                 break;
             case SampleSponzaGiCaptureStage.CaptureHighBookmark when

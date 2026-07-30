@@ -40,6 +40,21 @@ namespace Njulf.Rendering.Data
         int EmptyGatherTileCount,
         int SelectedLocalTileCount,
         int SelectedClipmapTileCount,
+        IReadOnlyList<uint> SimpleGatherPrimaryRejectionCounts,
+        IReadOnlyList<uint> SimpleGatherFallbackRejectionCounts,
+        IReadOnlyList<uint> SimpleGatherRecoveryRejectionCounts,
+        uint SimpleGatherPrimaryAllFailedCount,
+        uint SimpleGatherFallbackAllFailedCount,
+        uint SimpleGatherRecoveryAllFailedCount,
+        uint SimpleOldestVisibleUnsupportedProbeAge,
+        int SimpleVisibleUnsupportedProbeCountAboveLatencyTarget,
+        int SimpleVisibleZeroSupportRepairUpdateCount,
+        int SimpleProbeLifecycleLatencyTargetFrames,
+        uint SimpleMaximumFreshProbeAge,
+        uint SimpleMaximumScrollExposedProbeAge,
+        uint SimpleMaximumRelocationPendingProbeAge,
+        uint SimpleMaximumUnpublishedProbeAge,
+        int SimpleProbeLifecycleBoundExceededCount,
         int SimpleActive,
         int SimpleProbeCount,
         int SimpleProbesUpdated,
@@ -75,6 +90,21 @@ namespace Njulf.Rendering.Data
             EmptyGatherTileCount: 0,
             SelectedLocalTileCount: 0,
             SelectedClipmapTileCount: 0,
+            SimpleGatherPrimaryRejectionCounts: Array.Empty<uint>(),
+            SimpleGatherFallbackRejectionCounts: Array.Empty<uint>(),
+            SimpleGatherRecoveryRejectionCounts: Array.Empty<uint>(),
+            SimpleGatherPrimaryAllFailedCount: 0,
+            SimpleGatherFallbackAllFailedCount: 0,
+            SimpleGatherRecoveryAllFailedCount: 0,
+            SimpleOldestVisibleUnsupportedProbeAge: 0,
+            SimpleVisibleUnsupportedProbeCountAboveLatencyTarget: 0,
+            SimpleVisibleZeroSupportRepairUpdateCount: 0,
+            SimpleProbeLifecycleLatencyTargetFrames: 0,
+            SimpleMaximumFreshProbeAge: 0,
+            SimpleMaximumScrollExposedProbeAge: 0,
+            SimpleMaximumRelocationPendingProbeAge: 0,
+            SimpleMaximumUnpublishedProbeAge: 0,
+            SimpleProbeLifecycleBoundExceededCount: 0,
             SimpleActive: 0,
             SimpleProbeCount: 0,
             SimpleProbesUpdated: 0,
@@ -235,6 +265,12 @@ namespace Njulf.Rendering.Data
         uint SimpleSecondVolumeGatherCount,
         IReadOnlyList<uint>? SimpleVolumePrimaryGatherCounts,
         IReadOnlyList<uint>? SimpleVolumeSampledGatherCounts,
+        IReadOnlyList<uint>? SimpleGatherPrimaryRejectionCounts,
+        IReadOnlyList<uint>? SimpleGatherFallbackRejectionCounts,
+        IReadOnlyList<uint>? SimpleGatherRecoveryRejectionCounts,
+        uint SimpleGatherPrimaryAllFailedCount,
+        uint SimpleGatherFallbackAllFailedCount,
+        uint SimpleGatherRecoveryAllFailedCount,
         uint FarFieldStepBucket0Count,
         uint FarFieldStepBucket1Count,
         uint FarFieldStepBucket2Count,
@@ -257,6 +293,7 @@ namespace Njulf.Rendering.Data
         private int _visibleWarmupIncompleteFrames;
         private int _localWarmupIncompleteFrames;
         private int _cascade0WarmupIncompleteFrames;
+        private int _simpleLifecycleBoundExceededFrames;
 
         public IReadOnlyList<string> Update(
             DdgiRuntimeSnapshot snapshot,
@@ -289,6 +326,10 @@ namespace Njulf.Rendering.Data
             UpdateCounter(ref _cascade0WarmupIncompleteFrames,
                 snapshot.WarmupState is DdgiRuntimeWarmupState.NearCascadeWarmup or DdgiRuntimeWarmupState.Recovery &&
                 snapshot.WarmedCascade0ProbeFraction < 0.80f);
+            UpdateCounter(
+                ref _simpleLifecycleBoundExceededFrames,
+                snapshot.SimpleActive != 0 &&
+                snapshot.SimpleProbeLifecycleBoundExceededCount > 0);
 
             List<string>? warnings = null;
             AddIfPersistent(ref warnings, _coverageVisibleCollapseFrames, persistenceFrames,
@@ -307,6 +348,11 @@ namespace Njulf.Rendering.Data
                 "DDGI local visible probe warmup has remained below 80%.");
             AddIfPersistent(ref warnings, _cascade0WarmupIncompleteFrames, Math.Min(persistenceFrames, 60),
                 "DDGI cascade 0 visible probe warmup has remained below 80%.");
+            AddIfPersistent(
+                ref warnings,
+                _simpleLifecycleBoundExceededFrames,
+                1,
+                "Simple DDGI has visible probes exceeding the bounded fresh/scroll/relocation/publication latency.");
 
             return warnings == null ? Array.Empty<string>() : warnings;
         }

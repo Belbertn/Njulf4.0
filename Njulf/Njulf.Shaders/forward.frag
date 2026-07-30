@@ -4326,6 +4326,8 @@ void main()
     float simpleDdgiSecondVolumeUsed = 0.0;
     float simpleDdgiPrimaryContributionWeight = 0.0;
     float simpleDdgiSecondaryContributionWeight = 0.0;
+    uint simpleDdgiCombinedRejectionMask = 0u;
+    uint simpleDdgiFirstRejectionReason = SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT;
     vec3 ddgiDiffuse = vec3(0.0);
     vec3 finalDdgiDiffuse = vec3(0.0);
     float ddgiCoverage = 0.0;
@@ -4369,6 +4371,8 @@ void main()
         simpleDdgiSecondVolumeUsed = simpleGather.secondVolumeUsed;
         simpleDdgiPrimaryContributionWeight = simpleGather.primaryContributionWeight;
         simpleDdgiSecondaryContributionWeight = simpleGather.secondaryContributionWeight;
+        simpleDdgiCombinedRejectionMask = simpleGather.combinedRejectionMask;
+        simpleDdgiFirstRejectionReason = simpleGather.firstRejectionReason;
         ddgiSample.irradiance = simpleIrradiance;
         ddgiSample.coverage = simpleGather.spatialCoverage;
         ddgiSample.spatialCoverage = simpleGather.spatialCoverage;
@@ -4736,7 +4740,25 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_STATE)
     {
-        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_STATE, vec3(ddgiSample.activeProbe, ddgiSample.supportCoverage, ddgiSample.weight));
+        if (simpleDdgiActive && globalIlluminationEnabled &&
+            simpleDdgiCombinedRejectionMask != 0u)
+        {
+            // R = first failing reason, G/B = low/high portions of the combined
+            // nine-bit mask. Supported receivers retain the legacy state view.
+            WriteDdgiDebugColor(
+                GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_STATE,
+                vec3(
+                    float(min(simpleDdgiFirstRejectionReason, SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT)) /
+                        float(SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT),
+                    float(simpleDdgiCombinedRejectionMask & 0xffu) / 255.0,
+                    float((simpleDdgiCombinedRejectionMask >> 8u) & 0x1u)));
+        }
+        else
+        {
+            WriteDdgiDebugColor(
+                GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_STATE,
+                vec3(ddgiSample.activeProbe, ddgiSample.supportCoverage, ddgiSample.weight));
+        }
         return;
     }
 

@@ -1043,6 +1043,35 @@ public sealed class SampleDdgiBenchmarkSuiteTests
     }
 
     [Test]
+    public void ProductionGate_FailsWhenSimpleProbeLifecycleExceedsItsBound()
+    {
+        SampleBenchmarkReport report = CreateGateReport(WithHealthyPhase10Diagnostics(
+            RendererDiagnostics.Empty with
+            {
+                ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+                GlobalIlluminationEnabled = 1,
+                GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+                GlobalIlluminationDdgiActive = 1,
+                GlobalIlluminationRayQueryActive = 1,
+                DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+                SimpleDdgiProbeLifecycleLatencyTargetFrames = 32,
+                SimpleDdgiOldestVisibleUnsupportedProbeAge = 48,
+                SimpleDdgiVisibleUnsupportedProbeCountAboveLatencyTarget = 2,
+                SimpleDdgiProbeLifecycleBoundExceededCount = 2
+            }));
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Passed, Is.False);
+            Assert.That(
+                gate.Failures.Select(failure => failure.Name),
+                Does.Contain("simple-ddgi-probe-lifecycle-bounded"));
+        });
+    }
+
+    [Test]
     public void ProductionGate_FailsGpuSchedulerOverflowAfterWarmup()
     {
         SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
@@ -1129,7 +1158,7 @@ public sealed class SampleDdgiBenchmarkSuiteTests
         {
             DdgiForwardEstimateCountersReadbackValid = 1,
             DdgiForwardEstimateSampleCount = 1000,
-            DdgiForwardEstimateZeroVisibleButCoveredCount = 10,
+            DdgiForwardEstimateZeroVisibleButCoveredCount = 0,
             DdgiAverageSpatialCoverageEstimate = diagnostics.DdgiAverageSpatialCoverageEstimate > 0.0f ? diagnostics.DdgiAverageSpatialCoverageEstimate : 0.82f,
             DdgiAverageSupportCoverageEstimate = diagnostics.DdgiAverageSupportCoverageEstimate > 0.0f ? diagnostics.DdgiAverageSupportCoverageEstimate : 0.74f,
             DdgiAverageDataConfidenceEstimate = diagnostics.DdgiAverageDataConfidenceEstimate > 0.0f ? diagnostics.DdgiAverageDataConfidenceEstimate : 0.70f,
