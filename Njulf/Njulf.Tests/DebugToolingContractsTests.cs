@@ -56,7 +56,8 @@ namespace Njulf.Tests
                 ("DDGI shadow visibility", RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterBase, RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterCount),
                 ("DDGI layered receivers", RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterBase, RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterCount),
                 ("DDGI thin transport", RendererDiagnosticsBuffer.ThinSurfaceTransportCounterBase, RendererDiagnosticsBuffer.ThinSurfaceTransportCounterCount),
-                ("simple DDGI per-volume energy", RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterBase, RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterCount)
+                ("simple DDGI per-volume energy", RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterBase, RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterCount),
+                ("DDGI effective albedo", RendererDiagnosticsBuffer.DdgiAlbedoCounterBase, RendererDiagnosticsBuffer.DdgiAlbedoCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -92,12 +93,15 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterStride, Is.EqualTo(19));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterCount, Is.EqualTo(
                     GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount * 19));
+                Assert.That(RendererDiagnosticsBuffer.DdgiAlbedoCounterCount, Is.EqualTo(12));
                 Assert.That(simpleSharedShader, Does.Contain(
                     $"SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_BASE = {RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterBase}u"));
                 Assert.That(simpleSharedShader, Does.Contain(
                     $"SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_STRIDE = {RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterStride}u"));
                 Assert.That(commonShader, Does.Contain(
                     $"DDGI_THIN_TRANSPORT_COUNTER_BASE = {RendererDiagnosticsBuffer.ThinSurfaceTransportCounterBase}u"));
+                Assert.That(commonShader, Does.Contain(
+                    $"DDGI_ALBEDO_COUNTER_BASE = {RendererDiagnosticsBuffer.DdgiAlbedoCounterBase}u"));
                 Assert.That(commonShader, Does.Contain("DDGI_THIN_INVALID_TRANSMISSION_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 17u"));
                 Assert.That(RendererDiagnosticsBuffer.DdgiShadowHitDistanceScale, Is.EqualTo(256.0f));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(nextExpectedStart));

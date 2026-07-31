@@ -113,6 +113,40 @@ public sealed class MaterialTransportV2Tests
         });
     }
 
+    [TestCase(GiTransmissionPolicy.Unsupported)]
+    [TestCase(GiTransmissionPolicy.Volume)]
+    public void UnsupportedTransmission_RetainsOpaqueGiDiffuseFallback(
+        GiTransmissionPolicy policy)
+    {
+        MaterialDefinition definition = new()
+        {
+            BaseColorFactor = new Vector4(0.7f, 0.4f, 0.2f, 1.0f),
+            FeatureFlags = MaterialFeatureFlags.Transmission,
+            Extensions = MaterialExtensionDefinition.None with
+            {
+                TransmissionPolicy = policy,
+                TransmissionFactor = 1.0f
+            }
+        };
+
+        CompiledMaterialTransport compiled = MaterialTransportCompiler.Compile(definition);
+        GiSurfaceSample surface = GiMaterialReferenceEvaluator.EvaluateSurface(
+            definition,
+            GiMaterialSampleInputs.Defaults);
+        GiMaterialTransportFlags flags =
+            (GiMaterialTransportFlags)compiled.GpuMaterial.TransportFlags;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(flags.HasFlag(GiMaterialTransportFlags.TransmissionRemovesOpaqueDiffuse), Is.False);
+            Assert.That(flags.HasFlag(GiMaterialTransportFlags.ThinSurfaceTransmission), Is.False);
+            Assert.That(surface.DiffuseReflectance.X, Is.GreaterThan(0.5f));
+            Assert.That(surface.TransmittedDiffuseReflectance, Is.EqualTo(Vector3.Zero));
+            Assert.That(compiled.TransportProfile.MeanDiffuseReflectance.X, Is.GreaterThan(0.5f));
+            Assert.That(compiled.TransportProfile.MeanTransmittedDiffuseReflectance, Is.EqualTo(Vector3.Zero));
+        });
+    }
+
     [Test]
     public void CpuOracle_ImplementsMetalEmissionAoAlphaAndSidednessInvariants()
     {
@@ -736,6 +770,7 @@ public sealed class MaterialTransportV2Tests
                 SheenColorFactor = new Vector3(0.5f, 0.25f, 0.125f),
                 SheenColor = Binding(2),
                 TransmissionFactor = 0.6f,
+                TransmissionPolicy = GiTransmissionPolicy.ThinSurface,
                 Transmission = Binding(3),
                 SpecularFactor = 0.7f,
                 Specular = Binding(4),

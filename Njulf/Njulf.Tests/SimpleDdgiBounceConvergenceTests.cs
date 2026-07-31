@@ -4,6 +4,8 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using Njulf.Core.Math;
 using Njulf.Rendering.Resources;
+using Njulf.Rendering.Data;
+using NjulfHelloGame;
 using NUnit.Framework;
 
 namespace Njulf.Tests;
@@ -12,6 +14,33 @@ namespace Njulf.Tests;
 public sealed class SimpleDdgiBounceConvergenceTests
 {
     private const float ResidualThreshold = 0.025f;
+
+    [TestCase(0.2f)]
+    [TestCase(0.5f)]
+    [TestCase(0.8f)]
+    public void WhiteEnclosureOracle_ConvergesToAnalyticBounceRatio(float albedo)
+    {
+        Vector3 sourceRadiance = Vector3.One;
+        Vector3 reflectance = new(albedo);
+        Vector3 totalRadiance = sourceRadiance;
+
+        // Mirrors blend's radiance-to-irradiance PI and the canonical material
+        // evaluator's single irradiance-to-diffuse 1/PI conversion.
+        for (int generation = 0; generation < 128; generation++)
+        {
+            Vector3 incidentIrradiance = totalRadiance * MathF.PI;
+            Vector3 reflectedBounce =
+                GiMaterialReferenceEvaluator.EvaluateDiffuseFromIrradiance(
+                    incidentIrradiance,
+                    reflectance);
+            totalRadiance = sourceRadiance + reflectedBounce;
+        }
+
+        float measuredBounceToSource = totalRadiance.X - 1.0f;
+        float expected =
+            SampleGlobalIlluminationValidation.ExpectedWhiteEnclosureBounceToSourceRatio(albedo);
+        Assert.That(measuredBounceToSource, Is.EqualTo(expected).Within(expected * 0.05f + 1e-5f));
+    }
 
     [Test]
     public void FixedPointResidual_PreservesDimAndChromaticTransportChanges()

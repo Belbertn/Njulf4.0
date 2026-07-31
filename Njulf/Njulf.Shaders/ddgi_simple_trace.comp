@@ -66,6 +66,7 @@ uint simpleDdgiCurrentVolumeCascade;
 bool simpleDdgiCurrentDetailedDiagnostics;
 uint simpleDdgiCurrentVolumeIndex;
 uint simpleDdgiCurrentReceiverInstanceIndex;
+uint simpleDdgiCurrentReceiverPrimitiveIndex;
 #define DDGI_HIT_DIRECT_LIGHT_CAP simpleDdgiCurrentMaxShadedLights
 #define DDGI_HIT_MAX_SHADED_LIGHTS simpleDdgiCurrentMaxShadedLights
 #define DDGI_HIT_MATERIAL_TEXTURE_MAX_CASCADE simpleDdgiCurrentMaterialTextureMaxCascade
@@ -77,6 +78,7 @@ uint simpleDdgiCurrentReceiverInstanceIndex;
 #define DDGI_HIT_VOLUME_ENERGY_COUNTER_STRIDE SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_STRIDE
 #define DDGI_HIT_VOLUME_INDEX simpleDdgiCurrentVolumeIndex
 #define DDGI_HIT_RECEIVER_INSTANCE_INDEX simpleDdgiCurrentReceiverInstanceIndex
+#define DDGI_HIT_RECEIVER_PRIMITIVE_INDEX simpleDdgiCurrentReceiverPrimitiveIndex
 #include "ddgi_hit_shading.glsl"
 
 void WriteSimpleRayResult(
@@ -179,6 +181,7 @@ void main()
     SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, updateProbeOffset);
     simpleDdgiCurrentVolumeIndex = update.volumeIndex;
     simpleDdgiCurrentReceiverInstanceIndex = 0xffffffffu;
+    simpleDdgiCurrentReceiverPrimitiveIndex = 0xffffffffu;
     uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
     if (rayIndex >= activeRayCount)
         return;
@@ -339,6 +342,7 @@ void main()
             uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(query, true);
             simpleDdgiCurrentReceiverInstanceIndex = instanceIndex;
             uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
+            simpleDdgiCurrentReceiverPrimitiveIndex = primitiveIndex;
             vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, true);
             vec3 hitPosition = probePosition + direction * hitDistance;
             GPUDdgiRayQueryInstance hitInstance = ReadDdgiRayQueryInstance(instanceIndex);
@@ -355,6 +359,7 @@ void main()
                     params,
                     pc.CurrentFrameIndex,
                     update.volumeIndex);
+                AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ONE_SIDED_BACKFACE_COUNT_COUNTER, 1u);
             }
             else
             {
@@ -421,6 +426,31 @@ void main()
                 cacheAlbedo = surface.DiffuseReflectance;
                 cacheTransmission = surface.TransmittedDiffuseReflectance;
                 traceSurfaceFlags = surface.Flags;
+                float albedoLuminance = dot(
+                    max(surface.DiffuseReflectance, vec3(0.0)),
+                    vec3(0.2126, 0.7152, 0.0722));
+                uint albedoCounter = DDGI_TRACE_OPAQUE_ALBEDO_LUMINANCE_COUNTER;
+                uint albedoCountCounter = DDGI_TRACE_OPAQUE_COUNT_COUNTER;
+                if (!GiMaterialHasFlag(surface.Flags, GI_MATERIAL_REFLECTS_INDIRECT_DIFFUSE))
+                {
+                    albedoCounter = DDGI_TRACE_REFLECT_DISABLED_ALBEDO_LUMINANCE_COUNTER;
+                    albedoCountCounter = DDGI_TRACE_REFLECT_DISABLED_COUNT_COUNTER;
+                }
+                else if (GiMaterialHasFlag(surface.Flags, GI_MATERIAL_THIN_SURFACE_TRANSMISSION))
+                {
+                    albedoCounter = DDGI_TRACE_THIN_ALBEDO_LUMINANCE_COUNTER;
+                    albedoCountCounter = DDGI_TRACE_THIN_COUNT_COUNTER;
+                }
+                else if (GiMaterialHasFlag(surface.Flags, GI_MATERIAL_TRANSMISSION_REMOVES_OPAQUE_DIFFUSE))
+                {
+                    albedoCounter = DDGI_TRACE_UNSUPPORTED_ALBEDO_LUMINANCE_COUNTER;
+                    albedoCountCounter = DDGI_TRACE_UNSUPPORTED_COUNT_COUNTER;
+                }
+                AddRendererDiagnostic(
+                    pc.CurrentFrameIndex,
+                    albedoCounter,
+                    uint(round(clamp(albedoLuminance, 0.0, 16.0) * 4096.0)));
+                AddRendererDiagnostic(pc.CurrentFrameIndex, albedoCountCounter, 1u);
                 cacheMaterialOcclusion = surface.MaterialOcclusion;
                 if (dot(max(directDiffuse, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) > 0.0001)
                     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_DIRECT_LIGHT_HIT_COUNTER, 1u);
@@ -515,7 +545,9 @@ void main()
             cacheNormal = safeFarNormal;
             cacheAlbedo = farSurface.DiffuseReflectance;
             cacheMaterialOcclusion = farSurface.MaterialOcclusion;
-            hitKind = dot(direction, safeFarNormal) > 0.0 ? 2.0 : 1.0;
+            hitKind = dot(direction, safeFarNormal) > 0.0
+                ? SIMPLE_DDGI_RAY_HIT_KIND_FAR_FIELD_BACK_FACE
+                : SIMPLE_DDGI_RAY_HIT_KIND_FRONT_FACE;
         }
         else if (farStepExhausted)
         {

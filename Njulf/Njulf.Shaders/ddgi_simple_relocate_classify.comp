@@ -113,7 +113,10 @@ void main()
         if (distance <= closeDistance)
             closeCount++;
 
-        if (hitKind > 1.5)
+        bool solidBackface =
+            abs(hitKind - SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE) < 0.25 ||
+            abs(hitKind - SIMPLE_DDGI_RAY_HIT_KIND_FAR_FIELD_BACK_FACE) < 0.25;
+        if (solidBackface)
         {
             backfaceCount++;
             if (distance < nearestBackfaceDistance)

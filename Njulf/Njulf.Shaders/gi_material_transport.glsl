@@ -411,11 +411,18 @@ GiSurfaceSample EvaluateGiTexturedSurface(
 
     if (GiMaterialHasFlag(flags, GI_MATERIAL_REFLECTS_INDIRECT_DIFFUSE))
     {
+        // Unsupported/volume transmission has no GI transmitted lobe yet.
+        // Preserve an opaque diffuse fallback instead of removing energy on
+        // both sides of the surface.
+        float transportTransmission =
+            GiMaterialHasFlag(flags, GI_MATERIAL_THIN_SURFACE_TRANSMISSION)
+                ? transmission
+                : 0.0;
         float nDotV = max(dot(surface.ShadingNormal, GiSafeNormal(viewDirection, surface.ShadingNormal)), 0.0);
         surface.DirectionalDiffuseBase = EvaluateGiDirectionalDiffuseBase(
             baseColor.rgb,
             surface.Metallic,
-            transmission,
+            transportTransmission,
             clearcoat,
             sheenColor);
         surface.DielectricF0 = EvaluateGiMaterialDielectricF0(
@@ -428,7 +435,7 @@ GiSurfaceSample EvaluateGiTexturedSurface(
             ior,
             specularFactor,
             specularColor,
-            transmission,
+            transportTransmission,
             clearcoat,
             sheenColor,
             nDotV);

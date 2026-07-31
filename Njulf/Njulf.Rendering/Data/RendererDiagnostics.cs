@@ -923,6 +923,8 @@ namespace Njulf.Rendering.Data
         public float SimpleDdgiTransportResidualThreshold { get; init; }
         public int SimpleDdgiTransportMaximumSolverGenerations { get; init; }
         public int SimpleDdgiTransportSourceRefreshFrames { get; init; }
+        /// <summary>The user-configured floor before convergence-window expansion.</summary>
+        public int SimpleDdgiTransportConfiguredSourceRefreshFrames { get; init; }
         public int SimpleDdgiInactiveProbeCount { get; init; }
         public int SimpleDdgiInactiveProbeSkipCount { get; init; }
         public ulong SimpleDdgiSavedRaysPerFrame { get; init; }
@@ -1110,6 +1112,18 @@ namespace Njulf.Rendering.Data
         public float DdgiForwardEstimateRawDiffuseLuminance { get; init; }
         public float DdgiForwardEstimateFinalDiffuseLuminance { get; init; }
         public float DdgiForwardEstimateEnvironmentFallbackWeight { get; init; }
+        public float DdgiReceiverDiffuseReflectanceLuminance { get; init; }
+        public uint DdgiReceiverDiffuseReflectanceSampleCount { get; init; }
+        public float DdgiTraceOneSidedBackFaceAlbedoLuminance { get; init; }
+        public uint DdgiTraceOneSidedBackFaceHitCount { get; init; }
+        public float DdgiTraceOpaqueAlbedoLuminance { get; init; }
+        public uint DdgiTraceOpaqueHitCount { get; init; }
+        public float DdgiTraceThinSurfaceAlbedoLuminance { get; init; }
+        public uint DdgiTraceThinSurfaceHitCount { get; init; }
+        public float DdgiTraceUnsupportedTransmissionAlbedoLuminance { get; init; }
+        public uint DdgiTraceUnsupportedTransmissionHitCount { get; init; }
+        public float DdgiTraceReflectDisabledAlbedoLuminance { get; init; }
+        public uint DdgiTraceReflectDisabledHitCount { get; init; }
         public uint DdgiSupportRejectedInactiveCount { get; init; }
         public uint DdgiSupportRejectedZeroIrradianceAlphaCount { get; init; }
         public uint DdgiSupportRejectedLowQualityCount { get; init; }
@@ -1203,6 +1217,8 @@ namespace Njulf.Rendering.Data
         public uint DdgiVisibilityZeroTransportCount { get; init; }
         public uint DdgiVisibilityZeroTransportWithIrradianceCount { get; init; }
         public float DdgiAverageRelocationFractionEstimate { get; init; }
+        public float DdgiRelocatedProbeFractionEstimate { get; init; }
+        public float DdgiAverageRelocationDisplacementFractionEstimate { get; init; }
         public int DdgiClassifiedInactiveProbeCountEstimate { get; init; }
         public DdgiSchedulerMode DdgiSchedulerMode { get; init; } = DdgiSchedulerMode.CpuReference;
         public DdgiQualityTier DdgiQualityTier { get; init; } = DdgiQualityTier.DdgiHigh;

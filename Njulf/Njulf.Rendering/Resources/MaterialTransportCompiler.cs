@@ -196,7 +196,8 @@ public static class MaterialTransportCompiler
             ? material.Extensions.SheenColorFactor * ToVector3(
                 sheenEnergy.MeanValid ? sheenEnergy.LinearMean : Vector4.One)
             : Vector3.Zero;
-        float meanTransmission = transmissionEnabled
+        float meanTransmission = transmissionEnabled &&
+            material.Extensions.TransmissionPolicy == GiTransmissionPolicy.ThinSurface
             ? material.Extensions.TransmissionFactor * (transmissionEnergy.MeanValid ? transmissionEnergy.LinearMean.X : 1f)
             : 0f;
         float meanSpecularFactor = specularEnabled
@@ -772,13 +773,15 @@ public static class MaterialTransportCompiler
         if (material.DoubleSided)
             flags |= GiMaterialTransportFlags.DoubleSided;
         if (material.FeatureFlags.HasFlag(MaterialFeatureFlags.Transmission) &&
-            material.Extensions.TransmissionFactor > 0f)
-            flags |= GiMaterialTransportFlags.TransmissionRemovesOpaqueDiffuse;
-        if (material.FeatureFlags.HasFlag(MaterialFeatureFlags.Transmission) &&
             material.Extensions.TransmissionFactor > 0f &&
             material.Extensions.TransmissionPolicy == GiTransmissionPolicy.ThinSurface)
         {
-            flags |= GiMaterialTransportFlags.ThinSurfaceTransmission;
+            // Only remove reflected opaque diffuse when the compiler can also
+            // provide the supported transmitted lobe. Unsupported/volume
+            // policies deliberately retain the opaque GI fallback instead of
+            // becoming black on both sides.
+            flags |= GiMaterialTransportFlags.TransmissionRemovesOpaqueDiffuse |
+                GiMaterialTransportFlags.ThinSurfaceTransmission;
             if (diffuseValid)
                 flags |= GiMaterialTransportFlags.TransmissionProfileValid;
             if (material.Extensions.Transmission.IsBound)

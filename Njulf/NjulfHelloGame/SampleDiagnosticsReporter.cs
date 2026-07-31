@@ -435,7 +435,13 @@ internal sealed class SampleDiagnosticsReporter
             $"{diagnostics.DdgiAverageSpatialCoverageEstimate:F3}/{diagnostics.DdgiAverageSupportCoverageEstimate:F3}/{diagnostics.DdgiAverageDataConfidenceEstimate:F3}/" +
             $"{diagnostics.DdgiAverageVisibilityConfidenceEstimate:F3}/{diagnostics.DdgiAverageLeakAttenuationEstimate:F3}/{diagnostics.DdgiAverageEffectiveContributionEstimate:F3}/" +
             $"{diagnostics.DdgiForwardEstimateSampledIrradianceLuminance:F5}/{diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F5}/{diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F5}/{diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight:F3}/{diagnostics.DdgiAverageOwnershipConsumedEstimate:F3}/" +
-            $"{diagnostics.DdgiAverageRelocationFractionEstimate:F3}/{diagnostics.DdgiClassifiedInactiveProbeCountEstimate}, " +
+            $"relocation legacyCount/simpleDisplacement={diagnostics.DdgiRelocatedProbeFractionEstimate:F3}/{diagnostics.DdgiAverageRelocationDisplacementFractionEstimate:F3}/{diagnostics.DdgiClassifiedInactiveProbeCountEstimate}, " +
+            $"ddgiAlbedo receiver={diagnostics.DdgiReceiverDiffuseReflectanceLuminance:F4}/{diagnostics.DdgiReceiverDiffuseReflectanceSampleCount}, " +
+            $"trace oneSided/opaque/thin/unsupported/reflectOff={diagnostics.DdgiTraceOneSidedBackFaceAlbedoLuminance:F4}/{diagnostics.DdgiTraceOneSidedBackFaceHitCount} " +
+            $"{diagnostics.DdgiTraceOpaqueAlbedoLuminance:F4}/{diagnostics.DdgiTraceOpaqueHitCount} " +
+            $"{diagnostics.DdgiTraceThinSurfaceAlbedoLuminance:F4}/{diagnostics.DdgiTraceThinSurfaceHitCount} " +
+            $"{diagnostics.DdgiTraceUnsupportedTransmissionAlbedoLuminance:F4}/{diagnostics.DdgiTraceUnsupportedTransmissionHitCount} " +
+            $"{diagnostics.DdgiTraceReflectDisabledAlbedoLuminance:F4}/{diagnostics.DdgiTraceReflectDisabledHitCount}, " +
             $"ddgiSampledProbeUse currentFrustum/sideRear/staleAge={diagnostics.DdgiSampledProbeCurrentFrustumCount}/{diagnostics.DdgiSampledProbeSideRearCount}/{diagnostics.DdgiSampledProbeStaleAgeCount}, " +
             $"ddgiSupportReject inactive/zeroAlpha/lowQuality={diagnostics.DdgiSupportRejectedInactiveCount}/{diagnostics.DdgiSupportRejectedZeroIrradianceAlphaCount}/{diagnostics.DdgiSupportRejectedLowQualityCount}, " +
             $"ddgiFastGather attempt/accepted/reject spatial/support/data/ownership={diagnostics.DdgiFastGatherAttemptCount}/{diagnostics.DdgiFastGatherAcceptedCount}/{diagnostics.DdgiFastGatherRejectedZeroSpatialCount}/{diagnostics.DdgiFastGatherRejectedZeroSupportCount}/{diagnostics.DdgiFastGatherRejectedZeroDataCount}/{diagnostics.DdgiFastGatherRejectedZeroOwnershipCount}, " +

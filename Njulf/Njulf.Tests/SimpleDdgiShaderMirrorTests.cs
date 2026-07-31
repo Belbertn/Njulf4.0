@@ -1322,6 +1322,11 @@ namespace Njulf.Tests
                 Assert.That(relocate, Does.Not.Contain("float distance = max(radianceDistance.w, 0.0);"));
                 Assert.That(trace, Does.Contain("bool frontFace = rayQueryGetIntersectionFrontFaceEXT(query, true);"));
                 Assert.That(trace, Does.Contain("SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE"));
+                Assert.That(trace, Does.Contain("SIMPLE_DDGI_RAY_HIT_KIND_FAR_FIELD_BACK_FACE"));
+                Assert.That(relocate, Does.Contain("bool solidBackface ="));
+                Assert.That(relocate, Does.Contain("SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE"));
+                Assert.That(relocate, Does.Contain("SIMPLE_DDGI_RAY_HIT_KIND_FAR_FIELD_BACK_FACE"));
+                Assert.That(relocate, Does.Not.Contain("if (hitKind > 1.5)"));
                 Assert.That(trace, Does.Contain("!frontFace && !hitDoubleSided"));
                 Assert.That(blend, Does.Contain("SimpleDdgiRayHitKindIsOneSidedBackFace(visibilityHit.y)"));
                 Assert.That(transport, Does.Contain("!SimpleDdgiRayHitKindIsOneSidedBackFace(hitKind)"));

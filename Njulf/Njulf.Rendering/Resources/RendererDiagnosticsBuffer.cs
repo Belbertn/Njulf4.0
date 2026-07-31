@@ -85,8 +85,13 @@ namespace Njulf.Rendering.Resources
         public const int SimpleDdgiVolumeEnergyCounterCount =
             GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount *
             SimpleDdgiVolumeEnergyCounterStride;
-        public const int CounterCount =
+        // Effective diffuse-reflectance evidence. Each class stores a packed
+        // luminance sum followed by its hit/sample count.
+        public const int DdgiAlbedoCounterBase =
             SimpleDdgiVolumeEnergyCounterBase + SimpleDdgiVolumeEnergyCounterCount;
+        public const int DdgiAlbedoCounterCount = 12;
+        public const int CounterCount =
+            DdgiAlbedoCounterBase + DdgiAlbedoCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const float DdgiShadowHitDistanceScale = 256.0f;
@@ -299,6 +304,12 @@ namespace Njulf.Rendering.Resources
             uint traceEarlyOutResolveClipmapRingCount = counters[DdgiTraceEarlyOutCounterBase + 5];
             uint blendEnergySampleCount = counters[DdgiBlendEnergyCounterBase + 0];
             uint simpleDdgiTransportSampleCount = counters[SimpleDdgiTransportCounterBase + 0];
+            uint receiverAlbedoSampleCount = counters[DdgiAlbedoCounterBase + 1];
+            uint traceOneSidedBackFaceCount = counters[DdgiAlbedoCounterBase + 3];
+            uint traceOpaqueCount = counters[DdgiAlbedoCounterBase + 5];
+            uint traceThinCount = counters[DdgiAlbedoCounterBase + 7];
+            uint traceUnsupportedTransmissionCount = counters[DdgiAlbedoCounterBase + 9];
+            uint traceReflectDisabledCount = counters[DdgiAlbedoCounterBase + 11];
             uint traceRingMismatchSampleValid = counters[DdgiTraceRingMismatchSampleBase + 0];
             uint traceRingMismatchCorrectedCount = counters[DdgiTraceRingMismatchSampleBase + 19];
             uint ddgiInvestigationSampleCount = counters[DdgiInvestigationCounterBase + 0];
@@ -478,6 +489,20 @@ namespace Njulf.Rendering.Resources
                     EnvironmentFallbackWeightAverage: counters[DdgiForwardEstimateCounterBase + 42] / DdgiForwardEstimateWeightScale * invSampleCount,
                     OwnershipConsumedAverage: counters[DdgiForwardEstimateCounterBase + 8] / DdgiForwardEstimateWeightScale * invSampleCount,
                     SampledIrradianceLuminanceAverage: counters[DdgiForwardEstimateCounterBase + 41] / DdgiForwardEstimateLuminanceScale * invSampleCount,
+                    ReceiverDiffuseReflectanceLuminanceAverage: counters[DdgiAlbedoCounterBase + 0] /
+                        DdgiForwardEstimateLuminanceScale *
+                        (receiverAlbedoSampleCount > 0 ? 1.0f / receiverAlbedoSampleCount : 0.0f),
+                    ReceiverDiffuseReflectanceSampleCount: receiverAlbedoSampleCount,
+                    TraceOneSidedBackFaceAlbedoLuminanceAverage: ReadAlbedoAverage(counters, 2, traceOneSidedBackFaceCount),
+                    TraceOneSidedBackFaceHitCount: traceOneSidedBackFaceCount,
+                    TraceOpaqueAlbedoLuminanceAverage: ReadAlbedoAverage(counters, 4, traceOpaqueCount),
+                    TraceOpaqueHitCount: traceOpaqueCount,
+                    TraceThinSurfaceAlbedoLuminanceAverage: ReadAlbedoAverage(counters, 6, traceThinCount),
+                    TraceThinSurfaceHitCount: traceThinCount,
+                    TraceUnsupportedTransmissionAlbedoLuminanceAverage: ReadAlbedoAverage(counters, 8, traceUnsupportedTransmissionCount),
+                    TraceUnsupportedTransmissionHitCount: traceUnsupportedTransmissionCount,
+                    TraceReflectDisabledAlbedoLuminanceAverage: ReadAlbedoAverage(counters, 10, traceReflectDisabledCount),
+                    TraceReflectDisabledHitCount: traceReflectDisabledCount,
                     SampleCount: sampleCount,
                     ZeroSupportButSpatiallyCoveredCount: counters[DdgiForwardEstimateCounterBase + 10],
                     ZeroEffectiveButSpatiallyCoveredCount: counters[DdgiForwardEstimateCounterBase + 11],
@@ -647,6 +672,14 @@ namespace Njulf.Rendering.Resources
         private static int DecodeSignedCounter(uint value)
         {
             return unchecked((int)value);
+        }
+
+        private static unsafe float ReadAlbedoAverage(uint* counters, int relativeSumOffset, uint count)
+        {
+            return count > 0
+                ? counters[DdgiAlbedoCounterBase + relativeSumOffset] /
+                    DdgiForwardEstimateLuminanceScale / count
+                : 0.0f;
         }
 
         private static SimpleDdgiVolumeEnergyCounters ReadSimpleDdgiVolumeEnergyCounters(

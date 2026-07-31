@@ -1623,7 +1623,8 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "gi.simpleDdgi.transport.albedoClamp", diagnostics.SimpleDdgiTransportAlbedoClamp);
             AddSetting(settings, "gi.simpleDdgi.transport.residualThreshold", diagnostics.SimpleDdgiTransportResidualThreshold);
             AddSetting(settings, "gi.simpleDdgi.transport.maximumSolverGenerations", diagnostics.SimpleDdgiTransportMaximumSolverGenerations);
-            AddSetting(settings, "gi.simpleDdgi.transport.sourceRefreshFrames", diagnostics.SimpleDdgiTransportSourceRefreshFrames);
+            AddSetting(settings, "gi.simpleDdgi.transport.sourceRefreshFrames.configured", diagnostics.SimpleDdgiTransportConfiguredSourceRefreshFrames);
+            AddSetting(settings, "gi.simpleDdgi.transport.sourceRefreshFrames.effective", diagnostics.SimpleDdgiTransportSourceRefreshFrames);
             AddSetting(settings, "gi.simpleDdgi.transport.solverInvalidationsPerSourceRefresh",
                 diagnostics.SimpleDdgiTransportSolverInvalidationsPerSourceRefresh);
             AddSetting(settings, "gi.simpleDdgi.transport.globalConvergenceElapsedFrames", diagnostics.SimpleDdgiTransportGlobalConvergenceElapsedFrames);

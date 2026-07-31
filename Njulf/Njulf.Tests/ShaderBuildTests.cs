@@ -1051,6 +1051,12 @@ public sealed class ShaderBuildTests
             Assert.That(hitShading, Does.Contain("Sidedness belongs to DdgiCandidatePassesOpacity below."));
             Assert.That(hitShading, Does.Not.Contain("gl_RayFlagsCullBackFacingTrianglesEXT"));
             Assert.That(hitShading, Does.Contain("vec3 offsetNormal = recordAnalyticDirectDiagnostics"));
+            Assert.That(hitShading, Does.Contain("instanceIndex == DDGI_HIT_RECEIVER_INSTANCE_INDEX"));
+            Assert.That(hitShading, Does.Contain("primitiveIndex == DDGI_HIT_RECEIVER_PRIMITIVE_INDEX"));
+            Assert.That(simpleTrace, Does.Contain("#define DDGI_HIT_RECEIVER_PRIMITIVE_INDEX simpleDdgiCurrentReceiverPrimitiveIndex"));
+            Assert.That(forward, Does.Contain("bool rasterTransmissionEnabled ="));
+            Assert.That(forward, Does.Contain("!thinGiTransport;"));
+            Assert.That(forward, Does.Contain("if (rasterTransmissionEnabled)"));
             Assert.That(shader, Does.Contain("float intensity = max(updateParams.z, 0.0);"));
             Assert.That(shader, Does.Contain("bool DdgiRawAtlasRadianceConventionEnabled()"));
             Assert.That(shader, Does.Contain("return true;"));
@@ -1473,6 +1479,8 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("deliveredDdgiLuminance < DDGI_FORWARD_ESTIMATE_LOW_DELIVERED_LUMINANCE_THRESHOLD"));
             Assert.That(shader, Does.Contain("PackDdgiForwardEstimateLuminance(DdgiDiagnosticLuminance(ddgi.irradiance))"));
             Assert.That(shader, Does.Contain("PackDdgiForwardEstimateWeight(hybridDiffuse.environmentFallbackWeight / 4.0)"));
+            Assert.That(shader, Does.Contain("DDGI_RECEIVER_ALBEDO_LUMINANCE_COUNTER"));
+            Assert.That(shader, Does.Contain("hybridDebugDiffuse = ddgiDiffuse;"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiCoverage => 92u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiCascadeSelection => 93u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiCascadeBlendWeight => 94u"));

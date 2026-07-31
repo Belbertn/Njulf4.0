@@ -3168,6 +3168,48 @@ namespace Njulf.Rendering.Resources
                 return;
             }
 
+            // Admit one due source refresh from every volume before allowing a
+            // finer/earlier volume to consume the remaining maintenance share.
+            // QueueWorkClassAcrossVolumes intentionally fills a volume at a
+            // time, which is desirable for ordinary priority work but starved
+            // outer cascades when only a handful of periodic refreshes fit.
+            for (int volumeIndex = 0; volumeIndex < _volumeCount && count < capacity; volumeIndex++)
+            {
+                int quota = volumeIndex < volumeQuotas.Length ? volumeQuotas[volumeIndex] : 0;
+                if (quota <= 0 || volumeUsage[volumeIndex] >= quota)
+                    continue;
+
+                for (int workClassIndex = (int)SimpleDdgiSchedulerWorkClass.NearMaintenance;
+                     workClassIndex < SchedulerWorkClassCount && count < capacity;
+                     workClassIndex++)
+                {
+                    int offset = WorkClassOffset(volumeIndex) + workClassIndex;
+                    if (_volumeSourceRefreshPendingScratch[offset] <=
+                        _volumeSourceRefreshUsageScratch[offset])
+                    {
+                        continue;
+                    }
+
+                    int before = count;
+                    int oneItemClassLimit = Math.Min(
+                        quota,
+                        _volumeWorkClassUsageScratch[offset] + 1);
+                    QueueWorkClassVolume(
+                        ref count,
+                        capacity,
+                        volumeIndex,
+                        quota,
+                        ref volumeUsage[volumeIndex],
+                        (SimpleDdgiSchedulerWorkClass)workClassIndex,
+                        oneItemClassLimit,
+                        ref _volumeWorkClassUsageScratch[offset],
+                        sourceRefreshOnly: true,
+                        cachedSolverOnly: false);
+                    if (count > before)
+                        break;
+                }
+            }
+
             for (int workClassIndex = (int)SimpleDdgiSchedulerWorkClass.NearMaintenance;
                  workClassIndex < SchedulerWorkClassCount && count < capacity;
                  workClassIndex++)

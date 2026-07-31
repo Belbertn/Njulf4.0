@@ -170,12 +170,15 @@ const float SIMPLE_DDGI_RAY_HIT_KIND_MISS = 0.0;
 const float SIMPLE_DDGI_RAY_HIT_KIND_FRONT_FACE = 1.0;
 const float SIMPLE_DDGI_RAY_HIT_KIND_BACK_FACE = 2.0;
 const float SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE = 3.0;
+// Far-field voxels are closed occupancy evidence rather than authored
+// double-sided sheets, so preserve that provenance for relocation.
+const float SIMPLE_DDGI_RAY_HIT_KIND_FAR_FIELD_BACK_FACE = 4.0;
 
 uint PackSimpleDdgiRayVisibilityHit(float visibilityDistance, float hitKind)
 {
     return packHalf2x16(vec2(
         clamp(visibilityDistance, 0.0, 65504.0),
-        clamp(hitKind, 0.0, SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE)));
+        clamp(hitKind, 0.0, SIMPLE_DDGI_RAY_HIT_KIND_FAR_FIELD_BACK_FACE)));
 }
 
 bool SimpleDdgiRayHitKindIsOneSidedBackFace(float hitKind)

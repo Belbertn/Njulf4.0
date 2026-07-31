@@ -2002,6 +2002,7 @@ void AccumulateDdgiForwardEstimateDiagnostics(
     HybridDiffuseGiResult hybridDiffuse,
     DdgiSampleResult ddgi,
     vec3 rawDdgiDiffuse,
+    vec3 diffuseReflectance,
     bool geometryDecal)
 {
     bool opaqueDiagnostic = DdgiForwardEstimateDiagnosticPixel();
@@ -2052,6 +2053,8 @@ void AccumulateDdgiForwardEstimateDiagnostics(
     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_SAMPLE_COUNT_COUNTER, 1u);
     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_SAMPLED_IRRADIANCE_LUMINANCE_COUNTER, PackDdgiForwardEstimateLuminance(DdgiDiagnosticLuminance(ddgi.irradiance)));
     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_ENVIRONMENT_FALLBACK_WEIGHT_COUNTER, PackDdgiForwardEstimateWeight(hybridDiffuse.environmentFallbackWeight / 4.0));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_RECEIVER_ALBEDO_LUMINANCE_COUNTER, PackDdgiForwardEstimateLuminance(DdgiDiagnosticLuminance(diffuseReflectance)));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_RECEIVER_ALBEDO_SAMPLE_COUNT_COUNTER, 1u);
 
     if (spatialCoverage > 0.75 && supportCoverage < 0.0001)
         AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_ZERO_SUPPORT_SPATIAL_COUNTER, 1u);
@@ -3823,6 +3826,19 @@ void main()
     float iridescenceFactor = 0.0;
     float iridescenceThickness = 0.0;
     float dispersion = 0.0;
+    // NJULF's ThinSurface policy is a GI transport contract, not an opt-in to
+    // the forward KHR_materials_transmission approximation. The importer keeps
+    // the transmission feature bit so the factor/texture reaches DDGI, but the
+    // visible opaque cloth must retain its ordinary raster BRDF. Treating the
+    // bit alone as raster transmission removes reflected diffuse and replaces
+    // it with a saturated environment sample, which makes shadowed curtains
+    // look self-lit.
+    bool thinGiTransport = GiMaterialHasFlag(
+        material.TransportFlags,
+        GI_MATERIAL_THIN_SURFACE_TRANSMISSION);
+    bool rasterTransmissionEnabled =
+        (material.FeatureFlags & MATERIAL_FEATURE_TRANSMISSION) != 0u &&
+        !thinGiTransport;
 
     if (hasMaterialExtension)
     {
@@ -3857,13 +3873,13 @@ void main()
             roughness = clamp(mix(roughness, roughness * 0.65, anisotropyStrength), 0.04, 1.0);
         }
 
-        if ((material.FeatureFlags &
-             (MATERIAL_FEATURE_TRANSMISSION | MATERIAL_FEATURE_IOR)) != 0u)
+        if (rasterTransmissionEnabled ||
+            (material.FeatureFlags & MATERIAL_FEATURE_IOR) != 0u)
         {
             ior = clamp(materialExtension.Transmission.y, 1.0, 3.0);
         }
 
-        if ((material.FeatureFlags & MATERIAL_FEATURE_TRANSMISSION) != 0u)
+        if (rasterTransmissionEnabled)
         {
             transmissionFactor = clamp(materialExtension.Transmission.x, 0.0, 1.0);
             if ((material.FeatureFlags & MATERIAL_FEATURE_TRANSMISSION_TEXTURE) != 0u)
@@ -4423,7 +4439,9 @@ void main()
         // out of.  This also gives feature-isolated rendering a stable fallback.
         fallbackWeight = 1.0;
         finalDiffuseIndirect = diffuseIbl * indirectAo;
-        hybridDebugDiffuse = finalDiffuseIndirect;
+        // This view intentionally removes Simple-DDGI ownership/support and
+        // environment substitution so it cannot alias FinalIndirect.
+        hybridDebugDiffuse = ddgiDiffuse;
         hybridSuppressionMask = vec3(0.0);
     }
     else if (simpleDdgiActive)
@@ -4534,6 +4552,7 @@ void main()
             simpleHybridDiagnostics,
             ddgiSample,
             ddgiDiffuse,
+            diffuseReflectance,
             geometryDecal);
         AccumulateDdgiInvestigationForwardDiagnostics(
             true,
@@ -4568,6 +4587,7 @@ void main()
             simpleFallbackDiagnostics,
             ddgiSample,
             vec3(0.0),
+            diffuseReflectance,
             geometryDecal);
         AccumulateDdgiInvestigationForwardDiagnostics(
             true,
@@ -4599,6 +4619,7 @@ void main()
             hybridDiffuse,
             ddgiSample,
             ddgiDiffuse,
+            diffuseReflectance,
             geometryDecal);
         ddgiCoverage = hybridDiffuse.ddgiCoverage;
         fallbackWeight = hybridDiffuse.environmentFallbackWeight;

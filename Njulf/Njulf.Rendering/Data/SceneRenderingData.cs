@@ -685,6 +685,18 @@ namespace Njulf.Rendering.Data
         public float DdgiForwardEstimateRawDiffuseLuminance { get; set; }
         public float DdgiForwardEstimateFinalDiffuseLuminance { get; set; }
         public float DdgiForwardEstimateEnvironmentFallbackWeight { get; set; }
+        public float DdgiReceiverDiffuseReflectanceLuminance { get; set; }
+        public uint DdgiReceiverDiffuseReflectanceSampleCount { get; set; }
+        public float DdgiTraceOneSidedBackFaceAlbedoLuminance { get; set; }
+        public uint DdgiTraceOneSidedBackFaceHitCount { get; set; }
+        public float DdgiTraceOpaqueAlbedoLuminance { get; set; }
+        public uint DdgiTraceOpaqueHitCount { get; set; }
+        public float DdgiTraceThinSurfaceAlbedoLuminance { get; set; }
+        public uint DdgiTraceThinSurfaceHitCount { get; set; }
+        public float DdgiTraceUnsupportedTransmissionAlbedoLuminance { get; set; }
+        public uint DdgiTraceUnsupportedTransmissionHitCount { get; set; }
+        public float DdgiTraceReflectDisabledAlbedoLuminance { get; set; }
+        public uint DdgiTraceReflectDisabledHitCount { get; set; }
         public uint DdgiSupportRejectedInactiveCount { get; set; }
         public uint DdgiSupportRejectedZeroIrradianceAlphaCount { get; set; }
         public uint DdgiSupportRejectedLowQualityCount { get; set; }
@@ -760,6 +772,10 @@ namespace Njulf.Rendering.Data
         public uint DdgiVisibilityZeroTransportCount { get; set; }
         public uint DdgiVisibilityZeroTransportWithIrradianceCount { get; set; }
         public float DdgiAverageRelocationFractionEstimate { get; set; }
+        /// <summary>Fraction of active probes relocated during the legacy DDGI update.</summary>
+        public float DdgiRelocatedProbeFractionEstimate { get; set; }
+        /// <summary>Mean relocation displacement divided by the configured maximum displacement.</summary>
+        public float DdgiAverageRelocationDisplacementFractionEstimate { get; set; }
         public int DdgiClassifiedInactiveProbeCountEstimate { get; set; }
         public DdgiQualityTier DdgiQualityTier { get; set; } = DdgiQualityTier.DdgiHigh;
         public float DdgiAdaptiveBudgetScale { get; set; } = 1.0f;
@@ -807,6 +823,7 @@ namespace Njulf.Rendering.Data
         public float SimpleDdgiTransportResidualThreshold { get; set; }
         public int SimpleDdgiTransportMaximumSolverGenerations { get; set; }
         public int SimpleDdgiTransportSourceRefreshFrames { get; set; }
+        public int SimpleDdgiTransportConfiguredSourceRefreshFrames { get; set; }
         public int SimpleDdgiInactiveProbeCount { get; set; }
         public int SimpleDdgiInactiveProbeSkipCount { get; set; }
         public ulong SimpleDdgiSavedRaysPerFrame { get; set; }
@@ -1958,6 +1975,8 @@ namespace Njulf.Rendering.Data
             DdgiVisibilityZeroTransportCount = 0;
             DdgiVisibilityZeroTransportWithIrradianceCount = 0;
             DdgiAverageRelocationFractionEstimate = 0;
+            DdgiRelocatedProbeFractionEstimate = 0;
+            DdgiAverageRelocationDisplacementFractionEstimate = 0;
             DdgiClassifiedInactiveProbeCountEstimate = 0;
             DdgiQualityTier = DdgiQualityTier.DdgiHigh;
             DdgiAdaptiveBudgetScale = 1.0f;

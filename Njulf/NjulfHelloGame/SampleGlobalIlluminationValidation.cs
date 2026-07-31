@@ -5,6 +5,16 @@ namespace NjulfHelloGame;
 
 public static class SampleGlobalIlluminationValidation
 {
+    public static IReadOnlyList<float> SimpleDdgiWhiteEnclosureAlbedos { get; } =
+        [0.2f, 0.5f, 0.8f];
+
+    public static float ExpectedWhiteEnclosureBounceToSourceRatio(float albedo)
+    {
+        if (!float.IsFinite(albedo) || albedo < 0.0f || albedo >= 1.0f)
+            throw new ArgumentOutOfRangeException(nameof(albedo));
+        return albedo / (1.0f - albedo);
+    }
+
     public const float SimpleDdgiFurnaceAlbedo = 0.5f;
     public const float SimpleDdgiFurnaceEmittedRadiance = 0.25f;
     public const float SimpleDdgiFurnaceExpectedIrradianceLuminance =

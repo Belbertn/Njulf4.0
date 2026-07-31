@@ -67,6 +67,10 @@
 #define DDGI_HIT_RECEIVER_INSTANCE_INDEX 0xffffffffu
 #endif
 
+#ifndef DDGI_HIT_RECEIVER_PRIMITIVE_INDEX
+#define DDGI_HIT_RECEIVER_PRIMITIVE_INDEX 0xffffffffu
+#endif
+
 const uint DDGI_HIT_TOP_LIGHT_LIMIT = 8u;
 const uint DDGI_HIT_LIGHT_CANDIDATE_LIMIT = 64u;
 // Pathological stacks of cutout geometry cannot create unbounded any-hit
@@ -1034,6 +1038,18 @@ vec3 TraceLightVisibility(
             uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(shadowQuery, false);
             vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(shadowQuery, false);
             bool frontFacing = rayQueryGetIntersectionFrontFaceEXT(shadowQuery, false);
+            // The receiver's BSDF/BTDF already accounts for this exact surface
+            // interaction. In particular, a transmitted-light query begins on
+            // the probe-facing side of thin cloth and otherwise crosses the
+            // originating triangle again, squaring its colored transmittance.
+            // Keep other triangles from the same curtain instance eligible so
+            // folds and genuinely stacked cloth layers still attenuate light.
+            if (recordAnalyticDirectDiagnostics &&
+                instanceIndex == DDGI_HIT_RECEIVER_INSTANCE_INDEX &&
+                primitiveIndex == DDGI_HIT_RECEIVER_PRIMITIVE_INDEX)
+            {
+                continue;
+            }
             if (!DdgiCandidatePassesOpacity(instanceIndex, primitiveIndex, barycentrics, frontFacing))
                 continue;
 

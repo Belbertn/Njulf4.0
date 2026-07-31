@@ -2679,7 +2679,7 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiGatherClipmap =>
                 "magenta border; hashed color = selected primary clipmap volume.",
             GlobalIlluminationDebugView.DdgiGatherBlendWeight =>
-                "magenta border; grayscale shader-read primary clipmap blend weight. Magenta means tile read failed.",
+                "magenta border; grayscale coarse-ring contribution share (secondary volume). Magenta means tile read failed.",
             GlobalIlluminationDebugView.DdgiGatherFallback =>
                 "magenta border; red = fallback, green = fast gather.",
             GlobalIlluminationDebugView.DdgiProbeLogicalPosition =>

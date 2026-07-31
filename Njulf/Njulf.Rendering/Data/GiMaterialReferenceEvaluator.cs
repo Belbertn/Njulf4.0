@@ -35,6 +35,8 @@ public static class GiMaterialReferenceEvaluator
         bool clearcoatEnabled = material.FeatureFlags.HasFlag(MaterialFeatureFlags.Clearcoat);
         bool sheenEnabled = material.FeatureFlags.HasFlag(MaterialFeatureFlags.Sheen);
         bool transmissionEnabled = material.FeatureFlags.HasFlag(MaterialFeatureFlags.Transmission);
+        bool supportedThinTransmission = transmissionEnabled &&
+            material.Extensions.TransmissionPolicy == GiTransmissionPolicy.ThinSurface;
         bool specularEnabled = material.FeatureFlags.HasFlag(MaterialFeatureFlags.Specular);
         bool iorEnabled =
             transmissionEnabled ||
@@ -43,7 +45,7 @@ public static class GiMaterialReferenceEvaluator
             ? EvaluateDirectionalDiffuseBase(
                 new Vector3(baseColor.X, baseColor.Y, baseColor.Z),
                 metallic,
-                transmissionEnabled ? material.Extensions.TransmissionFactor : 0f,
+                supportedThinTransmission ? material.Extensions.TransmissionFactor : 0f,
                 clearcoatEnabled ? material.Extensions.ClearcoatFactor : 0f,
                 sheenEnabled ? material.Extensions.SheenColorFactor : Vector3.Zero)
             : Vector3.Zero;
@@ -60,14 +62,13 @@ public static class GiMaterialReferenceEvaluator
                 iorEnabled ? material.Extensions.Ior : 1.5f,
                 specularEnabled ? material.Extensions.SpecularFactor : 1f,
                 specularEnabled ? material.Extensions.SpecularColorFactor : Vector3.One,
-                transmissionEnabled ? material.Extensions.TransmissionFactor : 0f,
+                supportedThinTransmission ? material.Extensions.TransmissionFactor : 0f,
                 clearcoatEnabled ? material.Extensions.ClearcoatFactor : 0f,
                 sheenEnabled ? material.Extensions.SheenColorFactor : Vector3.Zero,
                 inputs.NdotV)
             : Vector3.Zero;
         Vector3 transmittedDiffuse = material.ReflectsIndirectDiffuse &&
-                                     transmissionEnabled &&
-                                     material.Extensions.TransmissionPolicy == GiTransmissionPolicy.ThinSurface
+                                     supportedThinTransmission
             ? EvaluateHemisphericalDiffuseTransmittance(
                 new Vector3(baseColor.X, baseColor.Y, baseColor.Z),
                 metallic,
