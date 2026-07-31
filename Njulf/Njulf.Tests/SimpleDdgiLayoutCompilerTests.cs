@@ -67,6 +67,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(
                 SimpleDdgiMemoryPlan.TransportRayCacheBytes,
                 Is.EqualTo((ulong)Marshal.SizeOf<GPUSimpleDdgiTransportRayCache>()));
+            Assert.That(SimpleDdgiMemoryPlan.TransportRayCacheAbiVersion, Is.EqualTo(2u));
             Assert.That(
                 SimpleDdgiMemoryPlan.ProbeStateBytesPerProbe,
                 Is.EqualTo((ulong)Marshal.SizeOf<GPUSimpleDdgiProbeState>()));
@@ -83,7 +84,10 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(plan.TransportIrradianceBytes, Is.EqualTo((ulong)probes * 512UL));
             Assert.That(
                 plan.TransportSourceCacheBytes,
-                Is.EqualTo((ulong)probes * rays * 32UL));
+                Is.EqualTo(
+                    (ulong)probes *
+                    rays *
+                    SimpleDdgiMemoryPlan.TransportRayCacheBytes));
             Assert.That(plan.ProbeStateBytes, Is.EqualTo((ulong)probes * 32UL));
             Assert.That(plan.UpdateQueueBytes, Is.EqualTo((ulong)updates * 32UL));
             Assert.That(
@@ -300,7 +304,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
         [
             ("low", 2_648, 256, 32, false, 64UL * 1024UL * 1024UL),
             ("medium", 6_892, 768, 64, false, 128UL * 1024UL * 1024UL),
-            ("high", 17_960, 4_096, 128, true, 192UL * 1024UL * 1024UL),
+            ("high", 17_600, 4_096, 128, true, 192UL * 1024UL * 1024UL),
             ("ultra", 23_636, 6_144, 192, true, 384UL * 1024UL * 1024UL)
         ];
 

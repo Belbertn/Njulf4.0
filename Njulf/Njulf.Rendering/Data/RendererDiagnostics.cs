@@ -1147,6 +1147,24 @@ namespace Njulf.Rendering.Data
         public uint DdgiShadowVisibilityOccludedCount { get; init; }
         public uint DdgiShadowVisibilityNearHitCount { get; init; }
         public float DdgiShadowVisibilityCommittedHitDistanceAverage { get; init; }
+        public uint DdgiThinDetailedHitCount { get; init; }
+        public uint DdgiThinCompactHitCount { get; init; }
+        public uint DdgiThinFarFieldExcludedCount { get; init; }
+        public float DdgiThinReflectedDirectLuminance { get; init; }
+        public float DdgiThinTransmittedDirectLuminance { get; init; }
+        public float DdgiThinReflectedRecursiveLuminance { get; init; }
+        public float DdgiThinTransmittedRecursiveLuminance { get; init; }
+        public uint DdgiThinColoredShadowTransmissionRayCount { get; init; }
+        public uint DdgiThinTotalLayersTraversed { get; init; }
+        public uint DdgiThinMaximumLayersTraversed { get; init; }
+        public uint DdgiThinLayerLimitTerminationCount { get; init; }
+        public uint DdgiThinLowTransmittanceTerminationCount { get; init; }
+        public uint DdgiThinZeroRadianceOpaqueHitCount { get; init; }
+        public uint DdgiThinZeroRadianceThinHitCount { get; init; }
+        public uint DdgiThinZeroRadianceUnsupportedHitCount { get; init; }
+        public uint DdgiThinUnsupportedTransmissionHitCount { get; init; }
+        public uint DdgiThinEnergyClampCount { get; init; }
+        public uint DdgiThinInvalidTransmissionCount { get; init; }
         public uint DdgiTraceEarlyOutDisabledCount { get; init; }
         public uint DdgiTraceEarlyOutBeyondRequestCount { get; init; }
         public uint DdgiTraceEarlyOutResolveBoundsCount { get; init; }

@@ -35,6 +35,9 @@ internal static class SharpGltfModelMeshConverter
     internal const string GeometryDecalExtra = "NJULF_geometry_decal";
     internal const string DecalLayerExtra = "NJULF_decal_layer";
     internal const string DecalDepthBiasExtra = "NJULF_decal_depth_bias";
+    internal const string GiTransmissionPolicyExtra = "NJULF_gi_transmission_policy";
+    internal const string ThinTransmissionFactorExtra = "NJULF_thin_transmission_factor";
+    internal const string ThinTransmissionTintExtra = "NJULF_thin_transmission_tint";
 
     public static ModelMesh Import(
         string path,
@@ -288,6 +291,60 @@ internal static class SharpGltfModelMeshConverter
             }
 
             imported.DecalDepthBias = (float)bias;
+        }
+
+        if (objectExtras.TryGetPropertyValue(GiTransmissionPolicyExtra, out JsonNode? policyNode))
+        {
+            if (policyNode is not JsonValue policyValue ||
+                !policyValue.TryGetValue(out string? policyText) ||
+                !Enum.TryParse(policyText, ignoreCase: true, out ModelGiTransmissionPolicy policy))
+            {
+                throw InvalidMaterialExtra(materialIndex, GiTransmissionPolicyExtra,
+                    "one of None, ThinSurface, Volume, or Unsupported");
+            }
+            imported.GiTransmissionPolicy = policy;
+        }
+
+        if (objectExtras.TryGetPropertyValue(ThinTransmissionFactorExtra, out JsonNode? factorNode))
+        {
+            if (!TryReadFiniteUnit(factorNode, out float factor))
+            {
+                throw InvalidMaterialExtra(materialIndex, ThinTransmissionFactorExtra,
+                    "a finite number in [0, 1]");
+            }
+            imported.TransmissionFactor = factor;
+            if (factor > 0f)
+                imported.FeatureFlags |= ModelMaterialFeatureBits.Transmission;
+        }
+
+        if (objectExtras.TryGetPropertyValue(ThinTransmissionTintExtra, out JsonNode? tintNode))
+        {
+            if (tintNode is not JsonArray tint || tint.Count != 3 ||
+                !TryReadFiniteUnit(tint[0], out float r) ||
+                !TryReadFiniteUnit(tint[1], out float g) ||
+                !TryReadFiniteUnit(tint[2], out float b))
+            {
+                throw InvalidMaterialExtra(materialIndex, ThinTransmissionTintExtra,
+                    "an RGB array with finite components in [0, 1]");
+            }
+            imported.ThinTransmissionTint = new CoreVector4(r, g, b, 1f);
+        }
+    }
+
+    private static bool TryReadFiniteUnit(JsonNode? node, out float value)
+    {
+        value = 0f;
+        try
+        {
+            if (node is not JsonValue json || !json.TryGetValue(out double component) ||
+                !double.IsFinite(component) || component is < 0.0 or > 1.0)
+                return false;
+            value = (float)component;
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
         }
     }
 

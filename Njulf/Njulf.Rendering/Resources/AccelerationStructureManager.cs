@@ -702,7 +702,8 @@ namespace Njulf.Rendering.Resources
                     metadata.RenderMode,
                     metadata.IsGeometryDecal,
                     domain,
-                    metadata.DoubleSided);
+                    metadata.DoubleSided,
+                    metadata.TransmissionPolicy);
                 if (!policy.Include)
                     return false;
 
@@ -1520,7 +1521,8 @@ namespace Njulf.Rendering.Resources
             MaterialRenderMode renderMode,
             bool isGeometryDecal,
             AccelerationStructureGeometryDomain domain,
-            bool doubleSided = false)
+            bool doubleSided = false,
+            GiTransmissionPolicy transmissionPolicy = GiTransmissionPolicy.None)
         {
             GeometryInstanceFlagsKHR sidednessFlags = doubleSided
                 ? GeometryInstanceFlagsKHR.TriangleFacingCullDisableBitKhr
@@ -1545,7 +1547,8 @@ namespace Njulf.Rendering.Resources
                     FoliageDdgiExclusionReason);
             }
 
-            if (renderMode == MaterialRenderMode.Blend)
+            bool thinSurface = transmissionPolicy == GiTransmissionPolicy.ThinSurface;
+            if (renderMode == MaterialRenderMode.Blend && !thinSurface)
             {
                 return new DdgiAccelerationStructureGeometryPolicy(
                     false,
@@ -1553,6 +1556,18 @@ namespace Njulf.Rendering.Resources
                     default,
                     DdgiAccelerationStructureVisibilityPolicy.ExcludedTransparent,
                     "transparent blended materials are excluded from DDGI ray-query occlusion");
+            }
+
+            if (thinSurface)
+            {
+                return new DdgiAccelerationStructureGeometryPolicy(
+                    true,
+                    StaticOpaqueInstanceMask,
+                    sidednessFlags,
+                    DdgiAccelerationStructureVisibilityPolicy.ThinSurfaceCandidateTested,
+                    renderMode == MaterialRenderMode.Blend
+                        ? "explicit blended thin surfaces participate in DDGI candidate transport"
+                        : "thin surfaces remain candidate-tested for reflected/transmitted transport");
             }
 
             if (isSkinned || domain == AccelerationStructureGeometryDomain.Skinned)
@@ -1989,7 +2004,8 @@ namespace Njulf.Rendering.Resources
         ExcludedGeometryDecal = 3,
         SkinnedBindPoseProxy = 4,
         FoliageProxyPending = 5,
-        SkinnedAlphaMaskTestedProxy = 6
+        SkinnedAlphaMaskTestedProxy = 6,
+        ThinSurfaceCandidateTested = 7
     }
 
     internal enum TopLevelAccelerationStructureBuildAction

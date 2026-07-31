@@ -551,6 +551,40 @@ public sealed class SimpleDdgiBounceConvergenceTests
         });
     }
 
+    [Test]
+    public void ThinSheetJacobiChain_MatchesAnalyticReflectedAndTransmittedFixedPoint()
+    {
+        const int cellCount = 20;
+        const int sheetCell = 7;
+        const float ordinaryReflectance = 0.78f;
+        const float sheetReflectance = 0.24f;
+        const float sheetTransmittance = 0.46f;
+        const float relaxation = 0.70f;
+        float[] field = new float[cellCount];
+        float[] next = new float[cellCount];
+
+        for (int iteration = 0; iteration < 1_024; iteration++)
+        {
+            for (int cell = 0; cell < cellCount; cell++)
+            {
+                float target;
+                if (cell == 0)
+                    target = 1f;
+                else if (cell == sheetCell)
+                    target = field[cell - 1] * (sheetReflectance + sheetTransmittance);
+                else
+                    target = field[cell - 1] * ordinaryReflectance;
+                next[cell] = field[cell] + (target - field[cell]) * relaxation;
+            }
+            (field, next) = (next, field);
+        }
+
+        float expected =
+            MathF.Pow(ordinaryReflectance, cellCount - 2) *
+            (sheetReflectance + sheetTransmittance);
+        Assert.That(field[^1], Is.EqualTo(expected).Within(expected * 0.01f));
+    }
+
     [TestCase(false, false, false)]
     [TestCase(true, false, true)]
     [TestCase(false, true, true)]

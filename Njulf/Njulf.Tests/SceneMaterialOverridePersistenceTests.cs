@@ -305,7 +305,14 @@ public sealed class SceneMaterialOverridePersistenceTests
                     RenderBlendModeOverride = MaterialBlendMode.PremultipliedAlpha,
                     ShadingModel = MaterialShadingModel.Foliage,
                     DiffuseGiParticipation = GiParticipationOverride.Default,
-                    EmissionGiParticipation = GiParticipationOverride.Disabled
+                    EmissionGiParticipation = GiParticipationOverride.Disabled,
+                    FeatureFlags = MaterialFeatureFlags.Transmission,
+                    Extensions = MaterialExtensionDefinition.None with
+                    {
+                        TransmissionPolicy = GiTransmissionPolicy.ThinSurface,
+                        TransmissionFactor = 0.42f,
+                        ThinTransmissionTint = new Vector3(0.8f, 0.45f, 0.2f)
+                    }
                 });
             var sourceObject = new RenderObject
             {
@@ -369,6 +376,8 @@ public sealed class SceneMaterialOverridePersistenceTests
                     Is.EqualTo(nameof(GiParticipationOverride.Disabled)));
                 Assert.That(persisted.EmitsIntoGi, Is.Null);
                 Assert.That(persisted.ReceivesDiffuseGi, Is.Null);
+                Assert.That(persisted.GiTransmissionPolicy, Is.EqualTo(nameof(GiTransmissionPolicy.ThinSurface)));
+                Assert.That(persisted.ThinTransmissionFactor, Is.EqualTo(0.42f));
 
                 Assert.That(actual.Name, Is.EqualTo("Editor-authored material"));
                 Assert.That(actual.BaseColorFactor, Is.EqualTo(new Vector4(0.1f, 0.2f, 0.3f, 0.4f)));
@@ -394,6 +403,10 @@ public sealed class SceneMaterialOverridePersistenceTests
                 Assert.That(
                     actual.EmissionGiParticipation,
                     Is.EqualTo(GiParticipationOverride.Disabled));
+                Assert.That(actual.Extensions.TransmissionPolicy, Is.EqualTo(GiTransmissionPolicy.ThinSurface));
+                Assert.That(actual.Extensions.TransmissionFactor, Is.EqualTo(0.42f));
+                Assert.That(actual.Extensions.ThinTransmissionTint, Is.EqualTo(new Vector3(0.8f, 0.45f, 0.2f)));
+                Assert.That(actual.FeatureFlags.HasFlag(MaterialFeatureFlags.Transmission), Is.True);
 
                 Assert.That(actual.IsGeometryDecal, Is.True);
                 Assert.That(actual.DecalLayer, Is.EqualTo(7));

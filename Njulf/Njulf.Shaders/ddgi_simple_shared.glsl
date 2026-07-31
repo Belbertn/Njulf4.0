@@ -38,6 +38,8 @@ const uint SIMPLE_DDGI_FLAG_LIGHTING_CHANGE_ACTIVE = 1u << 10;
 // V2 separates traced source transport from cached recursive solve. The
 // canonical published irradiance atlas remains the sole receiver-visible field.
 const uint SIMPLE_DDGI_FLAG_TRANSPORT_V2 = 1u << 11;
+// Bits 12..19 contain the packed second-volume ownership threshold.
+const uint SIMPLE_DDGI_FLAG_THIN_SURFACE_TRANSMISSION = 1u << 20;
 // A normalized [0, 1] second-volume early-out threshold is packed into the
 // otherwise-unused high flag bits. This preserves the fixed params header ABI.
 const uint SIMPLE_DDGI_SECOND_VOLUME_OWNERSHIP_THRESHOLD_SHIFT = 12u;
@@ -46,6 +48,7 @@ const uint SIMPLE_DDGI_IRRADIANCE_TEXELS = 8u;
 const uint SIMPLE_DDGI_VISIBILITY_TEXELS = 16u;
 const uint SIMPLE_DDGI_MAX_RAYS_PER_PROBE = 256u;
 const uint SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS = 8u;
+const uint SIMPLE_DDGI_TRANSPORT_RAY_CACHE_ABI_VERSION = 2u;
 const uint SIMPLE_DDGI_HEADER_WORDS = 52u;
 const uint SIMPLE_DDGI_VOLUME_STRIDE_WORDS = 24u;
 const uint SIMPLE_DDGI_MAX_VOLUME_COUNT = 16u;
@@ -852,7 +855,7 @@ uint SimpleDdgiAtlasWord(uint probeIndex, uint texelIndex, uint texelsPerProbe)
 // deterministic full-sequence ray direction.  `directionRayIndex`, rather than
 // the queue-local maintenance ray index, is the key so a low-rate maintenance
 // subset reuses exactly the source ray that was originally traced.
-const uint SIMPLE_DDGI_TRANSPORT_RAY_CACHE_STRIDE_WORDS = 8u;
+const uint SIMPLE_DDGI_TRANSPORT_RAY_CACHE_STRIDE_WORDS = 9u;
 const uint SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG = 1u << 24u;
 const uint SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG = 1u << 25u;
 const uint SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG = 1u << 26u;
@@ -867,6 +870,7 @@ struct SimpleDdgiTransportRayCache
     vec3 direction;
     vec3 normal;
     vec3 diffuseReflectance;
+    vec3 transmittedDiffuseReflectance;
     float materialOcclusion;
     uint generationAndFlags;
 };
@@ -899,6 +903,7 @@ void WriteSimpleDdgiTransportRayCache(
     vec3 direction,
     vec3 normal,
     vec3 diffuseReflectance,
+    vec3 transmittedDiffuseReflectance,
     float materialOcclusion,
     float hitKind,
     uint probeGeneration)
@@ -916,12 +921,18 @@ void WriteSimpleDdgiTransportRayCache(
         packUnorm4x8(vec4(
             clamp(diffuseReflectance, vec3(0.0), vec3(1.0)),
             clamp(materialOcclusion, 0.0, 1.0))));
+    WriteStorageWord(
+        bufferIndex,
+        baseWord + 7u,
+        packUnorm4x8(vec4(
+            clamp(transmittedDiffuseReflectance, vec3(0.0), vec3(1.0)),
+            0.0)));
     uint flags = SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG |
         (hitKind >= 0.5 ? SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG : 0u) |
         (hitKind > 1.5 ? SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG : 0u);
     WriteStorageWord(
         bufferIndex,
-        baseWord + 7u,
+        baseWord + 8u,
         (probeGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK) | flags);
 }
 
@@ -938,13 +949,14 @@ bool ReadSimpleDdgiTransportRayCache(
     cache.direction = vec3(0.0, 1.0, 0.0);
     cache.normal = vec3(0.0, 1.0, 0.0);
     cache.diffuseReflectance = vec3(0.0);
+    cache.transmittedDiffuseReflectance = vec3(0.0);
     cache.materialOcclusion = 1.0;
     cache.generationAndFlags = 0u;
     if (bufferIndex == 0u || directionRayIndex >= p.raysPerProbe)
         return false;
 
     uint baseWord = SimpleDdgiTransportRayCacheBase(probeIndex, directionRayIndex, p);
-    uint generationAndFlags = ReadStorageWord(bufferIndex, baseWord + 7u);
+    uint generationAndFlags = ReadStorageWord(bufferIndex, baseWord + 8u);
     if ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG) == 0u ||
         (generationAndFlags & SIMPLE_DDGI_UPDATE_GENERATION_MASK) !=
             (expectedProbeGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK))
@@ -959,6 +971,8 @@ bool ReadSimpleDdgiTransportRayCache(
     cache.normal = UnpackSimpleDdgiTransportOctDirection(ReadStorageWord(bufferIndex, baseWord + 5u));
     vec4 packedSurface = unpackUnorm4x8(ReadStorageWord(bufferIndex, baseWord + 6u));
     cache.diffuseReflectance = packedSurface.rgb;
+    cache.transmittedDiffuseReflectance =
+        unpackUnorm4x8(ReadStorageWord(bufferIndex, baseWord + 7u)).rgb;
     cache.materialOcclusion = packedSurface.a;
     cache.generationAndFlags = generationAndFlags;
     return true;

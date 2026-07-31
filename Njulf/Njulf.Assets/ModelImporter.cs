@@ -1343,6 +1343,8 @@ namespace Njulf.Assets
             target.AnisotropyTexturePath = material.AnisotropyTexturePath ?? target.AnisotropyTexturePath;
             target.AnisotropyTexture = material.AnisotropyTexture ?? target.AnisotropyTexture;
             target.TransmissionFactor = material.TransmissionFactor ?? target.TransmissionFactor;
+            target.GiTransmissionPolicy = material.GiTransmissionPolicy ?? target.GiTransmissionPolicy;
+            target.ThinTransmissionTint = material.ThinTransmissionTint ?? target.ThinTransmissionTint;
             target.Ior = material.Ior ?? target.Ior;
             target.ThicknessFactor = material.ThicknessFactor ?? target.ThicknessFactor;
             target.AttenuationDistance = material.AttenuationDistance ?? target.AttenuationDistance;
@@ -2076,6 +2078,48 @@ namespace Njulf.Assets
 
                 material.DecalDepthBias = value;
             }
+
+            if (extras.TryGetProperty(
+                    Gltf.SharpGltfModelMeshConverter.GiTransmissionPolicyExtra,
+                    out JsonElement policy))
+            {
+                if (policy.ValueKind != JsonValueKind.String ||
+                    !Enum.TryParse(policy.GetString(), true, out ModelGiTransmissionPolicy parsed))
+                {
+                    throw new InvalidDataException(
+                        $"glTF material extra '{Gltf.SharpGltfModelMeshConverter.GiTransmissionPolicyExtra}' is invalid.");
+                }
+                material.GiTransmissionPolicy = parsed;
+            }
+
+            if (extras.TryGetProperty(
+                    Gltf.SharpGltfModelMeshConverter.ThinTransmissionFactorExtra,
+                    out JsonElement factor))
+            {
+                if (!factor.TryGetSingle(out float value) ||
+                    !float.IsFinite(value) || value is < 0f or > 1f)
+                {
+                    throw new InvalidDataException(
+                        $"glTF material extra '{Gltf.SharpGltfModelMeshConverter.ThinTransmissionFactorExtra}' must be a finite number in [0, 1].");
+                }
+                material.TransmissionFactor = value;
+                if (value > 0f)
+                    material.FeatureFlags |= ModelMaterialFeatureBits.Transmission;
+            }
+
+            if (extras.TryGetProperty(
+                    Gltf.SharpGltfModelMeshConverter.ThinTransmissionTintExtra,
+                    out JsonElement tint))
+            {
+                if (tint.ValueKind != JsonValueKind.Array || tint.GetArrayLength() != 3)
+                    throw new InvalidDataException(
+                        $"glTF material extra '{Gltf.SharpGltfModelMeshConverter.ThinTransmissionTintExtra}' must be an RGB array.");
+                float[] values = tint.EnumerateArray().Select(static component => component.GetSingle()).ToArray();
+                if (values.Any(static component => !float.IsFinite(component) || component is < 0f or > 1f))
+                    throw new InvalidDataException(
+                        $"glTF material extra '{Gltf.SharpGltfModelMeshConverter.ThinTransmissionTintExtra}' must contain finite components in [0, 1].");
+                material.ThinTransmissionTint = new Vector4(values[0], values[1], values[2], 1f);
+            }
         }
 
         private static void ReadGltfMaterialExtensions(
@@ -2587,6 +2631,12 @@ namespace Njulf.Assets
         public string? AnisotropyTexturePath { get; set; }
         public ModelTextureSlot? AnisotropyTexture { get; set; }
         public float TransmissionFactor { get; set; }
+        /// <summary>
+        /// Explicit renderer-owned GI interpretation. KHR_materials_transmission
+        /// alone remains Unsupported because it may describe thick glass.
+        /// </summary>
+        public ModelGiTransmissionPolicy GiTransmissionPolicy { get; set; } = ModelGiTransmissionPolicy.None;
+        public Vector4 ThinTransmissionTint { get; set; } = Vector4.One;
         public float Ior { get; set; } = 1.5f;
         public float ThicknessFactor { get; set; }
         /// <summary>
@@ -2721,6 +2771,14 @@ namespace Njulf.Assets
         Blend
     }
 
+    public enum ModelGiTransmissionPolicy
+    {
+        None,
+        ThinSurface,
+        Volume,
+        Unsupported
+    }
+
     public sealed class ModelAnimationImportDiagnostics
     {
         internal static ModelAnimationImportDiagnostics Empty { get; } = new(
@@ -2845,6 +2903,8 @@ namespace Njulf.Assets
         public string? AnisotropyTexturePath { get; set; }
         public ModelTextureSlot? AnisotropyTexture { get; set; }
         public float? TransmissionFactor { get; set; }
+        public ModelGiTransmissionPolicy? GiTransmissionPolicy { get; set; }
+        public Vector4? ThinTransmissionTint { get; set; }
         public float? Ior { get; set; }
         public float? ThicknessFactor { get; set; }
         public float? AttenuationDistance { get; set; }

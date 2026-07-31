@@ -73,8 +73,11 @@ namespace Njulf.Rendering.Resources
         public const int DdgiLayeredReceiverCounterBase =
             DdgiShadowVisibilityCounterBase + DdgiShadowVisibilityCounterCount;
         public const int DdgiLayeredReceiverCounterCount = 6;
-        public const int CounterCount =
+        public const int ThinSurfaceTransportCounterBase =
             DdgiLayeredReceiverCounterBase + DdgiLayeredReceiverCounterCount;
+        public const int ThinSurfaceTransportCounterCount = 18;
+        public const int CounterCount =
+            ThinSurfaceTransportCounterBase + ThinSurfaceTransportCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const float DdgiShadowHitDistanceScale = 256.0f;
@@ -91,6 +94,8 @@ namespace Njulf.Rendering.Resources
             new FarFieldMaterialV2Counters[FramesInFlight];
         private readonly MaterialGiGpuCounters[] _lastCompletedMaterialGiCounters =
             new MaterialGiGpuCounters[FramesInFlight];
+        private readonly ThinSurfaceTransportCounters[] _lastCompletedThinSurfaceTransportCounters =
+            new ThinSurfaceTransportCounters[FramesInFlight];
         private bool _disposed;
 
         public RendererDiagnosticsBuffer(VulkanContext context, BufferManager bufferManager)
@@ -128,6 +133,26 @@ namespace Njulf.Rendering.Resources
             ValidateFrameIndex(frameIndex);
             _bufferManager.InvalidateBuffer(_buffers[frameIndex], 0, CounterBufferSize);
             uint* counters = (uint*)_bufferManager.GetMappedPointer(_buffers[frameIndex]);
+
+            _lastCompletedThinSurfaceTransportCounters[frameIndex] = new ThinSurfaceTransportCounters(
+                DetailedHitCount: counters[ThinSurfaceTransportCounterBase + 0],
+                CompactHitCount: counters[ThinSurfaceTransportCounterBase + 1],
+                FarFieldExcludedCount: counters[ThinSurfaceTransportCounterBase + 2],
+                ReflectedDirectLuminance: counters[ThinSurfaceTransportCounterBase + 3] / DdgiForwardEstimateLuminanceScale,
+                TransmittedDirectLuminance: counters[ThinSurfaceTransportCounterBase + 4] / DdgiForwardEstimateLuminanceScale,
+                ReflectedRecursiveLuminance: counters[ThinSurfaceTransportCounterBase + 5] / DdgiForwardEstimateLuminanceScale,
+                TransmittedRecursiveLuminance: counters[ThinSurfaceTransportCounterBase + 6] / DdgiForwardEstimateLuminanceScale,
+                ColoredShadowTransmissionRayCount: counters[ThinSurfaceTransportCounterBase + 7],
+                TotalThinLayersTraversed: counters[ThinSurfaceTransportCounterBase + 8],
+                MaximumThinLayersTraversed: counters[ThinSurfaceTransportCounterBase + 9],
+                LayerLimitTerminationCount: counters[ThinSurfaceTransportCounterBase + 10],
+                LowTransmittanceTerminationCount: counters[ThinSurfaceTransportCounterBase + 11],
+                ZeroRadianceOpaqueHitCount: counters[ThinSurfaceTransportCounterBase + 12],
+                ZeroRadianceThinHitCount: counters[ThinSurfaceTransportCounterBase + 13],
+                ZeroRadianceUnsupportedHitCount: counters[ThinSurfaceTransportCounterBase + 14],
+                UnsupportedTransmissionHitCount: counters[ThinSurfaceTransportCounterBase + 15],
+                EnergyClampCount: counters[ThinSurfaceTransportCounterBase + 16],
+                InvalidTransmissionCount: counters[ThinSurfaceTransportCounterBase + 17]);
 
             _lastCompletedFarFieldMaterialV2Counters[frameIndex] = new FarFieldMaterialV2Counters(
                 ConflictCount: counters[FarFieldMaterialV2CounterBase + 0],
@@ -584,6 +609,12 @@ namespace Njulf.Rendering.Resources
         {
             ValidateFrameIndex(frameIndex);
             return _lastCompletedMaterialGiCounters[frameIndex];
+        }
+
+        public ThinSurfaceTransportCounters GetLastCompletedThinSurfaceTransportCounters(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _lastCompletedThinSurfaceTransportCounters[frameIndex];
         }
 
         private static int DecodeSignedCounter(uint value)

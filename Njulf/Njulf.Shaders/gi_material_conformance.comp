@@ -44,6 +44,7 @@ struct GPUMaterialData
     uint PackedMeanGiDielectricF0Gb;
     vec4 DdgiAverageAlbedo;
     vec4 DdgiAverageEmissive;
+    vec4 DdgiAverageTransmission;
     vec4 DdgiMaterialPolicy;
 };
 

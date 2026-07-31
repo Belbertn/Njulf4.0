@@ -127,6 +127,7 @@ namespace Njulf.Rendering.Resources
         // quality control does not grow the hot params header or shift volumes.
         private const int SecondVolumeOwnershipEarlyOutThresholdShift = 12;
         private const uint SecondVolumeOwnershipEarlyOutThresholdMask = 0xffu << SecondVolumeOwnershipEarlyOutThresholdShift;
+        private const uint ThinSurfaceTransmissionFlag = 1u << 20;
         // Queue-local quality profile.  Probe-state generation uses a different
         // buffer, so bits 3..15 are available to make the trace shader consume
         // actual ring/cascade work limits instead of one global quality value.
@@ -4659,6 +4660,10 @@ namespace Njulf.Rendering.Resources
             hash = AddLayoutFingerprintValue(hash, settings.DdgiAtlasMemoryBudgetBytes, prime);
             hash = AddLayoutFingerprintValue(hash, settings.SimpleDdgiSampledAtlasEnabled ? 1UL : 0UL, prime);
             hash = AddLayoutFingerprintValue(hash, settings.SimpleDdgiTransportV2Enabled ? 1UL : 0UL, prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                settings.SimpleDdgiThinSurfaceTransmissionEnabled ? 1UL : 0UL,
+                prime);
             hash = AddLayoutFingerprintValue(hash, (ulong)ResolveMaximumRingFullRays(settings), prime);
             hash = AddLayoutFingerprintValue(
                 hash,
@@ -6102,6 +6107,8 @@ namespace Njulf.Rendering.Resources
                 flags |= 1u << 10;
             if (settings.SimpleDdgiTransportV2Enabled)
                 flags |= 1u << 11;
+            if (settings.SimpleDdgiThinSurfaceTransmissionEnabled)
+                flags |= ThinSurfaceTransmissionFlag;
             if (farFieldCoverageAvailable && settings.FarFieldSkyVisibilityEnabled)
                 flags |= 1u << 6;
             if (farFieldCoverageAvailable && settings.FarFieldSunShadowEnabled)

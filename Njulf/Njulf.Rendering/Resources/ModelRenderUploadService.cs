@@ -758,6 +758,12 @@ namespace Njulf.Rendering.Resources
             GiMaterialTransportFlags flags = GiMaterialTransportFlags.None;
             if (profile.Validity.HasFlag(GiPrimitiveTransportProfileValidity.Diffuse))
                 flags |= GiMaterialTransportFlags.DiffuseProfileValid;
+            if (profile.Validity.HasFlag(GiPrimitiveTransportProfileValidity.Diffuse) &&
+                profile.GiTransmissionPolicy == ModelGiTransmissionPolicy.ThinSurface)
+            {
+                flags |= GiMaterialTransportFlags.ThinSurfaceTransmission |
+                         GiMaterialTransportFlags.TransmissionProfileValid;
+            }
             if (profile.Validity.HasFlag(GiPrimitiveTransportProfileValidity.Emission))
                 flags |= GiMaterialTransportFlags.EmissionProfileValid;
             if (profile.Validity.HasFlag(GiPrimitiveTransportProfileValidity.AlphaCoverage))
@@ -780,6 +786,9 @@ namespace Njulf.Rendering.Resources
                 MeanDiffuseReflectance = ToFiniteUnitVector3(
                     profile.MeanDiffuseReflectance,
                     nameof(profile.MeanDiffuseReflectance)),
+                MeanTransmittedDiffuseReflectance = ToFiniteUnitVector3(
+                    profile.MeanTransmittedDiffuseReflectance,
+                    nameof(profile.MeanTransmittedDiffuseReflectance)),
                 MeanEmissiveRadiance = ToFiniteNonNegativeVector3(
                     profile.MeanEmission,
                     nameof(profile.MeanEmission)),
@@ -1727,6 +1736,10 @@ namespace Njulf.Rendering.Resources
                     material.AnisotropyTexturePath,
                     ResolveTextureHandle(bindings, bindings.ExtensionTextureIndices.AnisotropyTextureIndex)),
                 TransmissionFactor = material.TransmissionFactor,
+                ThinTransmissionTint = new CoreVector3(
+                    material.ThinTransmissionTint.X,
+                    material.ThinTransmissionTint.Y,
+                    material.ThinTransmissionTint.Z),
                 Ior = material.Ior,
                 ThicknessFactor = material.ThicknessFactor,
                 AttenuationDistance = material.AttenuationDistance,
@@ -1742,9 +1755,17 @@ namespace Njulf.Rendering.Resources
                     material.ThicknessTexture,
                     material.ThicknessTexturePath,
                     ResolveTextureHandle(bindings, bindings.ExtensionTextureIndices.ThicknessTextureIndex)),
-                TransmissionPolicy = material.TransmissionFactor > 0f
-                    ? GiTransmissionPolicy.Unsupported
-                    : GiTransmissionPolicy.None,
+                TransmissionPolicy = material.TransmissionFactor <= 0f
+                    ? GiTransmissionPolicy.None
+                    : material.GiTransmissionPolicy switch
+                    {
+                        ModelGiTransmissionPolicy.ThinSurface => GiTransmissionPolicy.ThinSurface,
+                        ModelGiTransmissionPolicy.Volume => GiTransmissionPolicy.Volume,
+                        ModelGiTransmissionPolicy.Unsupported => GiTransmissionPolicy.Unsupported,
+                        // KHR_materials_transmission is not enough evidence to
+                        // classify a zero-thickness cloth sheet.
+                        _ => GiTransmissionPolicy.Unsupported
+                    },
                 SpecularFactor = material.SpecularFactor,
                 SpecularColorFactor = new CoreVector3(
                     material.SpecularColor.X,
@@ -2079,9 +2100,9 @@ namespace Njulf.Rendering.Resources
                     Math.Max(material.IridescenceThicknessMaximum, 0f)),
                 Dispersion = new CoreVector4(
                     Math.Max(material.Dispersion, 0f),
-                    0f,
-                    0f,
-                    0f),
+                    Math.Clamp(material.ThinTransmissionTint.X, 0f, 1f),
+                    Math.Clamp(material.ThinTransmissionTint.Y, 0f, 1f),
+                    Math.Clamp(material.ThinTransmissionTint.Z, 0f, 1f)),
                 ClearcoatOffsetScale = ToOffsetScale(material.ClearcoatTexture),
                 ClearcoatRoughnessOffsetScale = ToOffsetScale(material.ClearcoatRoughnessTexture),
                 ClearcoatNormalOffsetScale = ToOffsetScale(material.ClearcoatNormalTexture),
@@ -2184,9 +2205,22 @@ namespace Njulf.Rendering.Resources
             if (material.IsGeometryDecal)
                 flags |= MaterialSurfaceFlags.GeometryDecal;
 
+            GiTransmissionPolicy transmissionPolicy = material.TransmissionFactor <= 0f
+                ? GiTransmissionPolicy.None
+                : material.GiTransmissionPolicy switch
+                {
+                    ModelGiTransmissionPolicy.ThinSurface => GiTransmissionPolicy.ThinSurface,
+                    ModelGiTransmissionPolicy.Volume => GiTransmissionPolicy.Volume,
+                    ModelGiTransmissionPolicy.Unsupported => GiTransmissionPolicy.Unsupported,
+                    _ => GiTransmissionPolicy.Unsupported
+                };
+            bool requiresTransparentPass =
+                transmissionPolicy != GiTransmissionPolicy.ThinSurface &&
+                ((MaterialFeatureFlags)material.FeatureFlags).RequiresTransparentPass();
+
             return new MaterialRenderMetadata
             {
-                BlendMode = ((MaterialFeatureFlags)material.FeatureFlags).RequiresTransparentPass()
+                BlendMode = requiresTransparentPass
                     ? MaterialBlendMode.AlphaBlend
                     : material.AlphaMode switch
                     {
@@ -2196,6 +2230,7 @@ namespace Njulf.Rendering.Resources
                     },
                 SurfaceFlags = flags,
                 AlphaCutoff = alphaCutoff,
+                TransmissionPolicy = transmissionPolicy,
                 DecalLayer = material.DecalLayer,
                 DecalDepthBias = Math.Clamp(material.DecalDepthBias, 0f, 0.01f)
             };

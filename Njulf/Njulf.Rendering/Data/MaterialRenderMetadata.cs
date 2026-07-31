@@ -30,6 +30,7 @@ namespace Njulf.Rendering.Data
         public MaterialShadingModel ShadingModel { get; init; } = MaterialShadingModel.Pbr;
         public GiParticipationOverride DiffuseGiParticipation { get; init; } = GiParticipationOverride.Default;
         public GiParticipationOverride EmissionGiParticipation { get; init; } = GiParticipationOverride.Default;
+        public GiTransmissionPolicy TransmissionPolicy { get; init; } = GiTransmissionPolicy.None;
         public int DecalLayer { get; init; }
         public float DecalDepthBias { get; init; }
 
@@ -57,7 +58,14 @@ namespace Njulf.Rendering.Data
                     _ => MaterialBlendMode.Opaque
                 },
                 SurfaceFlags = flags,
-                AlphaCutoff = material.NormalScaleBias.Z
+                AlphaCutoff = material.NormalScaleBias.Z,
+                TransmissionPolicy = (material.TransportFlags &
+                                      (uint)GiMaterialTransportFlags.ThinSurfaceTransmission) != 0u
+                    ? GiTransmissionPolicy.ThinSurface
+                    : (material.TransportFlags &
+                       (uint)GiMaterialTransportFlags.TransmissionRemovesOpaqueDiffuse) != 0u
+                        ? GiTransmissionPolicy.Unsupported
+                        : GiTransmissionPolicy.None
             };
         }
 

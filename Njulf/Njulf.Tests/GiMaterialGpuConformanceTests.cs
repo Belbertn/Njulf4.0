@@ -15,7 +15,7 @@ public sealed class GiMaterialGpuConformanceTests
     {
         Assert.Multiple(() =>
         {
-            Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(304));
+            Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(320));
             Assert.That(
                 Marshal.SizeOf<GPUMaterialExtensionData>(),
                 Is.EqualTo(GiMaterialGpuConformanceContract.MaterialExtensionAbiWords * sizeof(uint)));

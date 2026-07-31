@@ -229,6 +229,7 @@ namespace Njulf.Rendering.Pipeline
         private const uint ReducedBlendEnabledFlag = 1u << 5;
         private const uint CompleteRaySceneFlag = 1u << 6;
         private const uint AlphaMaskTransportEnabledFlag = 1u << 7;
+        private const uint ThinSurfaceTransmissionEnabledFlag = 1u << 8;
 
         private readonly string _shaderName;
         private readonly RenderSettings _settings;
@@ -393,6 +394,8 @@ namespace Njulf.Rendering.Pipeline
                 flags |= CompleteRaySceneFlag;
             if (gi.DdgiAlphaMaskedTransportEnabled)
                 flags |= AlphaMaskTransportEnabledFlag;
+            if (gi.SimpleDdgiThinSurfaceTransmissionEnabled)
+                flags |= ThinSurfaceTransmissionEnabledFlag;
 
             return new GPUSimpleDdgiPushConstants
             {

@@ -65,6 +65,21 @@ public static class GiMaterialReferenceEvaluator
                 sheenEnabled ? material.Extensions.SheenColorFactor : Vector3.Zero,
                 inputs.NdotV)
             : Vector3.Zero;
+        Vector3 transmittedDiffuse = material.ReflectsIndirectDiffuse &&
+                                     transmissionEnabled &&
+                                     material.Extensions.TransmissionPolicy == GiTransmissionPolicy.ThinSurface
+            ? EvaluateHemisphericalDiffuseTransmittance(
+                new Vector3(baseColor.X, baseColor.Y, baseColor.Z),
+                metallic,
+                iorEnabled ? material.Extensions.Ior : 1.5f,
+                specularEnabled ? material.Extensions.SpecularFactor : 1f,
+                specularEnabled ? material.Extensions.SpecularColorFactor : Vector3.One,
+                material.Extensions.TransmissionFactor,
+                material.Extensions.ThinTransmissionTint,
+                clearcoatEnabled ? material.Extensions.ClearcoatFactor : 0f,
+                sheenEnabled ? material.Extensions.SheenColorFactor : Vector3.Zero,
+                inputs.NdotV)
+            : Vector3.Zero;
 
         Vector3 emission = material.EmitsIntoGi
             ? EvaluateEmission(material.EmissiveFactor, inputs.EmissiveTexture, material.EmissiveStrength)
@@ -87,19 +102,59 @@ public static class GiMaterialReferenceEvaluator
             flags |= GiMaterialTransportFlags.ReceivesIndirectDiffuse;
         if (material.ReflectsIndirectDiffuse)
             flags |= GiMaterialTransportFlags.ReflectsIndirectDiffuse;
+        if (material.Extensions.TransmissionPolicy == GiTransmissionPolicy.ThinSurface &&
+            material.Extensions.TransmissionFactor > 0f)
+        {
+            flags |= GiMaterialTransportFlags.ThinSurfaceTransmission |
+                     GiMaterialTransportFlags.TransmissionProfileValid;
+        }
 
         return new GiSurfaceSample(
+            geometricNormal,
             geometricNormal,
             shadingNormal,
             directionalDiffuseBase,
             dielectricF0,
             Clamp01(diffuse),
+            Clamp01(transmittedDiffuse),
             emission,
             occlusion,
             opacity,
             metallic,
             roughness,
             flags);
+    }
+
+    public static Vector3 EvaluateHemisphericalDiffuseTransmittance(
+        Vector3 linearBaseColor,
+        float metallic,
+        float ior,
+        float specularFactor,
+        Vector3? specularColor,
+        float transmission,
+        Vector3 transmissionTint,
+        float clearcoat = 0f,
+        Vector3? sheenColor = null,
+        float nDotV = 1f)
+    {
+        transmission = Saturate(transmission);
+        if (transmission <= 0f)
+            return Vector3.Zero;
+
+        // The same canonical passive budget feeds both lobes. Reflection owns
+        // (1-T), transmission owns T*tint, so their component-wise sum cannot
+        // exceed the equivalent opaque response.
+        Vector3 available = EvaluateHemisphericalDiffuseReflectance(
+            linearBaseColor,
+            metallic,
+            ior,
+            specularFactor,
+            specularColor,
+            0f,
+            clearcoat,
+            sheenColor,
+            nDotV);
+        return Clamp01(available * transmission * Clamp01(transmissionTint));
     }
 
     public static Vector3 EvaluateHemisphericalDiffuseReflectance(
@@ -393,6 +448,10 @@ public static class MaterialDefinitionValidator
             AnisotropyStrength = Saturate(source.Extensions.AnisotropyStrength),
             Anisotropy = ValidateBinding(source.Extensions.Anisotropy, "Extensions.Anisotropy"),
             TransmissionFactor = Saturate(source.Extensions.TransmissionFactor),
+            TransmissionPolicy = source.Extensions.TransmissionFactor <= 0f
+                ? GiTransmissionPolicy.None
+                : source.Extensions.TransmissionPolicy,
+            ThinTransmissionTint = Clamp01(source.Extensions.ThinTransmissionTint),
             Ior = Math.Clamp(source.Extensions.Ior, 1f, 3f),
             ThicknessFactor = Math.Max(source.Extensions.ThicknessFactor, 0f),
             AttenuationDistance = float.IsPositiveInfinity(source.Extensions.AttenuationDistance)
@@ -480,6 +539,7 @@ public static class MaterialDefinitionValidator
         EnsureFinite(extension.AnisotropyStrength, nameof(extension.AnisotropyStrength));
         EnsureFinite(extension.AnisotropyRotation, nameof(extension.AnisotropyRotation));
         EnsureFinite(extension.TransmissionFactor, nameof(extension.TransmissionFactor));
+        EnsureFinite(extension.ThinTransmissionTint, nameof(extension.ThinTransmissionTint));
         EnsureFinite(extension.Ior, nameof(extension.Ior));
         EnsureFinite(extension.ThicknessFactor, nameof(extension.ThicknessFactor));
         if (!float.IsFinite(extension.AttenuationDistance) && !float.IsPositiveInfinity(extension.AttenuationDistance))

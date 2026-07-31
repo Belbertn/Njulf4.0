@@ -402,6 +402,12 @@ public sealed class EditorImGuiPanels
         MaterialShadingModel shadingModel = material.ShadingModel;
         GiParticipationOverride diffuseGi = material.DiffuseGiParticipation;
         GiParticipationOverride emissionGi = material.EmissionGiParticipation;
+        GiTransmissionPolicy transmissionPolicy = material.Extensions.TransmissionPolicy;
+        float transmissionFactor = material.Extensions.TransmissionFactor;
+        NumericsVector3 transmissionTint = new(
+            material.Extensions.ThinTransmissionTint.X,
+            material.Extensions.ThinTransmissionTint.Y,
+            material.Extensions.ThinTransmissionTint.Z);
 
         bool changed = ImGui.InputText("Name##material", ref name, (nuint)256);
         changed |= ImGui.ColorEdit3("Base color", ref baseColor);
@@ -442,6 +448,9 @@ public sealed class EditorImGuiPanels
         ImGui.SeparatorText("GI participation");
         changed |= RenderEnumCombo("Diffuse GI", ref diffuseGi);
         changed |= RenderEnumCombo("Emission GI", ref emissionGi);
+        changed |= RenderEnumCombo("GI transmission", ref transmissionPolicy);
+        changed |= ImGui.DragFloat("Thin transmission", ref transmissionFactor, 0.01f, 0f, 1f);
+        changed |= ImGui.ColorEdit3("Transmission tint", ref transmissionTint);
 
         RenderMaterialTextureBindings(material);
         RenderMaterialTransportState(inspection);
@@ -473,7 +482,19 @@ public sealed class EditorImGuiPanels
             RenderBlendModeOverride = blendOverride,
             ShadingModel = shadingModel,
             DiffuseGiParticipation = diffuseGi,
-            EmissionGiParticipation = emissionGi
+            EmissionGiParticipation = emissionGi,
+            FeatureFlags = transmissionFactor > 0f || transmissionPolicy != GiTransmissionPolicy.None
+                ? material.FeatureFlags | MaterialFeatureFlags.Transmission
+                : material.FeatureFlags,
+            Extensions = material.Extensions with
+            {
+                TransmissionPolicy = transmissionPolicy,
+                TransmissionFactor = transmissionFactor,
+                ThinTransmissionTint = new CoreVector3(
+                    transmissionTint.X,
+                    transmissionTint.Y,
+                    transmissionTint.Z)
+            }
         };
         Run(() => editor.UpdateSelectedMaterialDefinition(updated));
     }

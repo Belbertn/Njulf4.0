@@ -347,6 +347,9 @@ public static class SampleGlobalIlluminationValidation
             // The narrow overlay below is limited to deterministic capture controls.
             SampleSponzaGlobalIlluminationProfile.Configure(settings);
             SampleSponzaGlobalIlluminationProfile.ApplyValidationOverlay(settings);
+            // Exercise the authored curtain path only in the locked A/B
+            // qualification scenario until the hardware acceptance gates pass.
+            settings.GlobalIllumination.SimpleDdgiThinSurfaceTransmissionEnabled = true;
             return;
         }
 

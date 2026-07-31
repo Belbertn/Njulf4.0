@@ -140,7 +140,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUMeshlet>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUObjectData>(), Is.EqualTo(208));
                 Assert.That(Marshal.SizeOf<GPUDebugLineVertex>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(304));
+                Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(320));
                 Assert.That(Marshal.SizeOf<GPUMaterialExtensionData>(), Is.EqualTo(548));
                 Assert.That(Marshal.SizeOf<GPULight>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUSceneData>(), Is.EqualTo(400));
@@ -196,7 +196,7 @@ namespace Njulf.Tests
         {
             Assert.Multiple(() =>
             {
-                Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(304));
+                Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(320));
                 Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.Albedo)).ToInt32(), Is.EqualTo(0));
                 Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.Emissive)).ToInt32(), Is.EqualTo(16));
                 Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.NormalScaleBias)).ToInt32(), Is.EqualTo(32));
@@ -222,7 +222,8 @@ namespace Njulf.Tests
                 Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.PackedMeanGiDielectricF0Gb)).ToInt32(), Is.EqualTo(252));
                 Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.DdgiAverageAlbedo)).ToInt32(), Is.EqualTo(256));
                 Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.DdgiAverageEmissive)).ToInt32(), Is.EqualTo(272));
-                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.DdgiMaterialPolicy)).ToInt32(), Is.EqualTo(288));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.DdgiAverageTransmission)).ToInt32(), Is.EqualTo(288));
+                Assert.That(Marshal.OffsetOf<GPUMaterialData>(nameof(GPUMaterialData.DdgiMaterialPolicy)).ToInt32(), Is.EqualTo(304));
             });
         }
 

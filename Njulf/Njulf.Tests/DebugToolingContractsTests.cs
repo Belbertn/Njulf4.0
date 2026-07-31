@@ -34,6 +34,7 @@ namespace Njulf.Tests
         [Test]
         public void RendererDiagnosticsBuffer_CounterFamiliesAreContiguousAndFullyCounted()
         {
+            string commonShader = ReadRepoText("Njulf.Shaders", "common.glsl");
             var families = new (string Name, int Start, int Count)[]
             {
                 ("meshlet", 0, RendererDiagnosticsBuffer.MeshletCounterCount),
@@ -52,7 +53,8 @@ namespace Njulf.Tests
                 ("simple DDGI gather all failed", RendererDiagnosticsBuffer.SimpleDdgiGatherAllFailedCounterBase, RendererDiagnosticsBuffer.SimpleDdgiGatherAllFailedCounterCount),
                 ("DDGI delivery failure", RendererDiagnosticsBuffer.DdgiDeliveryFailureCounterBase, RendererDiagnosticsBuffer.DdgiDeliveryFailureCounterCount),
                 ("DDGI shadow visibility", RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterBase, RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterCount),
-                ("DDGI layered receivers", RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterBase, RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterCount)
+                ("DDGI layered receivers", RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterBase, RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterCount),
+                ("DDGI thin transport", RendererDiagnosticsBuffer.ThinSurfaceTransportCounterBase, RendererDiagnosticsBuffer.ThinSurfaceTransportCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -84,6 +86,10 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.DdgiDeliveryFailureCounterCount, Is.EqualTo(1));
                 Assert.That(RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterCount, Is.EqualTo(4));
                 Assert.That(RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterCount, Is.EqualTo(6));
+                Assert.That(RendererDiagnosticsBuffer.ThinSurfaceTransportCounterCount, Is.EqualTo(18));
+                Assert.That(commonShader, Does.Contain(
+                    $"DDGI_THIN_TRANSPORT_COUNTER_BASE = {RendererDiagnosticsBuffer.ThinSurfaceTransportCounterBase}u"));
+                Assert.That(commonShader, Does.Contain("DDGI_THIN_INVALID_TRANSMISSION_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 17u"));
                 Assert.That(RendererDiagnosticsBuffer.DdgiShadowHitDistanceScale, Is.EqualTo(256.0f));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(nextExpectedStart));
                 Assert.That(RendererDiagnosticsBuffer.CounterBufferSize, Is.EqualTo((ulong)nextExpectedStart * sizeof(uint)));

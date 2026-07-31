@@ -46,7 +46,7 @@ public readonly record struct MaterialTextureTransportInput(
 
 public sealed record MaterialCompilationContext
 {
-    public const uint CurrentAlgorithmVersion = 3;
+    public const uint CurrentAlgorithmVersion = 4;
 
     public Func<MaterialTextureBinding, MaterialTextureSemantic, MaterialTextureTransportInput>? ResolveTexture { get; init; }
     public GiMaterialTransportProfile? PrimitiveProfile { get; init; }
@@ -225,6 +225,22 @@ public static class MaterialTransportCompiler
                 meanSheenColor,
                 1f)
             : Vector3.Zero;
+        Vector3 meanTransmittedDiffuse =
+            material.ReflectsIndirectDiffuse &&
+            transmissionEnabled &&
+            material.Extensions.TransmissionPolicy == GiTransmissionPolicy.ThinSurface
+                ? GiMaterialReferenceEvaluator.EvaluateHemisphericalDiffuseTransmittance(
+                    new Vector3(meanBase.X, meanBase.Y, meanBase.Z),
+                    meanMetallic,
+                    iorEnabled ? material.Extensions.Ior : 1.5f,
+                    meanSpecularFactor,
+                    meanSpecularColor,
+                    meanTransmission,
+                    material.Extensions.ThinTransmissionTint,
+                    meanClearcoat,
+                    meanSheenColor,
+                    1f)
+                : Vector3.Zero;
 
         Vector3 meanEmission = material.EmitsIntoGi
             ? GiMaterialReferenceEvaluator.EvaluateEmission(
@@ -257,6 +273,8 @@ public static class MaterialTransportCompiler
         {
             if (primitive.Has(GiMaterialTransportFlags.DiffuseProfileValid))
                 meanDiffuse = primitive.MeanDiffuseReflectance;
+            if (primitive.Has(GiMaterialTransportFlags.TransmissionProfileValid))
+                meanTransmittedDiffuse = primitive.MeanTransmittedDiffuseReflectance;
             if (primitive.Has(GiMaterialTransportFlags.EmissionProfileValid))
                 meanEmission = primitive.MeanEmissiveRadiance;
             if (primitive.Has(GiMaterialTransportFlags.AlphaProfileValid))
@@ -272,7 +290,8 @@ public static class MaterialTransportCompiler
                       GiMaterialTransportFlags.DiffuseProfileValid |
                       GiMaterialTransportFlags.EmissionProfileValid |
                       GiMaterialTransportFlags.AlphaProfileValid |
-                      GiMaterialTransportFlags.NormalProfileValid);
+                      GiMaterialTransportFlags.NormalProfileValid |
+                      GiMaterialTransportFlags.TransmissionProfileValid);
         }
 
         // Compact directional lighting needs the pre-Fresnel base share and
@@ -379,6 +398,7 @@ public static class MaterialTransportCompiler
                 PackUnitHalf2(meanDielectricF0.Y, meanDielectricF0.Z),
             DdgiAverageAlbedo = new Vector4(meanDiffuse, meanOcclusion),
             DdgiAverageEmissive = new Vector4(meanEmission, Luminance(meanEmission)),
+            DdgiAverageTransmission = new Vector4(meanTransmittedDiffuse, 0f),
             DdgiMaterialPolicy = new Vector4(
                 (float)material.AlphaMode,
                 preferredLod,
@@ -409,6 +429,7 @@ public static class MaterialTransportCompiler
             Flags = flags,
             Quality = quality,
             MeanDiffuseReflectance = meanDiffuse,
+            MeanTransmittedDiffuseReflectance = meanTransmittedDiffuse,
             MeanEmissiveRadiance = meanEmission,
             EmissiveImportance = Luminance(meanEmission),
             MeanMaterialOcclusion = meanOcclusion,
@@ -462,6 +483,8 @@ public static class MaterialTransportCompiler
             mask |= MaterialChangeMask.DiffuseTransport;
         if (before.EmissionGiParticipation != after.EmissionGiParticipation)
             mask |= MaterialChangeMask.Emission;
+        if (before.Extensions.TransmissionPolicy != after.Extensions.TransmissionPolicy)
+            mask |= MaterialChangeMask.AccelerationStructure;
 
         MaterialFeatureFlags changedFeatures = before.FeatureFlags ^ after.FeatureFlags;
         if (changedFeatures != MaterialFeatureFlags.None)
@@ -590,7 +613,13 @@ public static class MaterialTransportCompiler
                 extension.IridescenceIor,
                 extension.IridescenceThicknessMinimum,
                 extension.IridescenceThicknessMaximum),
-            Dispersion = new Vector4(extension.Dispersion, 0f, 0f, 0f),
+            // Spare extension lanes carry the renderer-owned thin-sheet tint;
+            // volume attenuation remains in AttenuationColor.rgb.
+            Dispersion = new Vector4(
+                extension.Dispersion,
+                extension.ThinTransmissionTint.X,
+                extension.ThinTransmissionTint.Y,
+                extension.ThinTransmissionTint.Z),
             ClearcoatOffsetScale = ToOffsetScale(extension.Clearcoat),
             ClearcoatRoughnessOffsetScale = ToOffsetScale(extension.ClearcoatRoughnessTexture),
             ClearcoatNormalOffsetScale = ToOffsetScale(extension.ClearcoatNormal),
@@ -678,7 +707,8 @@ public static class MaterialTransportCompiler
         return new MaterialRenderMetadata
         {
             BlendMode = material.RenderBlendModeOverride ??
-                        (material.FeatureFlags.RequiresTransparentPass()
+                        (material.FeatureFlags.RequiresTransparentPass() &&
+                         material.Extensions.TransmissionPolicy != GiTransmissionPolicy.ThinSurface
                             ? MaterialBlendMode.AlphaBlend
                             : material.AlphaMode switch
                             {
@@ -691,6 +721,7 @@ public static class MaterialTransportCompiler
             ShadingModel = material.ShadingModel,
             DiffuseGiParticipation = material.DiffuseGiParticipation,
             EmissionGiParticipation = material.EmissionGiParticipation,
+            TransmissionPolicy = material.Extensions.TransmissionPolicy,
             DecalLayer = material.DecalLayer,
             DecalDepthBias = material.DecalDepthBias
         };
@@ -743,6 +774,16 @@ public static class MaterialTransportCompiler
         if (material.FeatureFlags.HasFlag(MaterialFeatureFlags.Transmission) &&
             material.Extensions.TransmissionFactor > 0f)
             flags |= GiMaterialTransportFlags.TransmissionRemovesOpaqueDiffuse;
+        if (material.FeatureFlags.HasFlag(MaterialFeatureFlags.Transmission) &&
+            material.Extensions.TransmissionFactor > 0f &&
+            material.Extensions.TransmissionPolicy == GiTransmissionPolicy.ThinSurface)
+        {
+            flags |= GiMaterialTransportFlags.ThinSurfaceTransmission;
+            if (diffuseValid)
+                flags |= GiMaterialTransportFlags.TransmissionProfileValid;
+            if (material.Extensions.Transmission.IsBound)
+                flags |= GiMaterialTransportFlags.HasTransmissionTexture;
+        }
         if (material.EmitsIntoGi)
             flags |= GiMaterialTransportFlags.EmitsIntoGi;
         if (material.ReceivesIndirectDiffuse)
@@ -775,7 +816,9 @@ public static class MaterialTransportCompiler
                           (flags & GiMaterialTransportFlags.AlphaProfileValid) != 0;
         bool occlusionValid = !material.Occlusion.IsBound ||
                               (flags & GiMaterialTransportFlags.BaseStatisticsValid) != 0;
-        return diffuseValid && emissionValid && alphaValid && occlusionValid;
+        bool transmissionValid = material.Extensions.TransmissionPolicy != GiTransmissionPolicy.ThinSurface ||
+                                 (flags & GiMaterialTransportFlags.TransmissionProfileValid) != 0;
+        return diffuseValid && emissionValid && alphaValid && occlusionValid && transmissionValid;
     }
 
     private static GiTransportProfileQuality ResolveProfileQuality(
@@ -797,6 +840,8 @@ public static class MaterialTransportCompiler
              primitive.Has(GiMaterialTransportFlags.AlphaProfileValid)) &&
             ((!material.MetallicRoughness.IsBound && !material.Occlusion.IsBound) ||
              primitive.Has(GiMaterialTransportFlags.BaseStatisticsValid)) &&
+            (material.Extensions.TransmissionPolicy != GiTransmissionPolicy.ThinSurface ||
+             primitive.Has(GiMaterialTransportFlags.TransmissionProfileValid)) &&
             (!material.Normal.IsBound ||
              primitive.Has(GiMaterialTransportFlags.NormalProfileValid));
         if (primitiveCoversActiveChannels)
@@ -839,6 +884,7 @@ public static class MaterialTransportCompiler
         x.Ior != y.Ior ||
         x.Transmission != y.Transmission ||
         x.TransmissionPolicy != y.TransmissionPolicy ||
+        x.ThinTransmissionTint != y.ThinTransmissionTint ||
         x.SpecularFactor != y.SpecularFactor ||
         x.SpecularColorFactor != y.SpecularColorFactor ||
         x.Specular != y.Specular ||

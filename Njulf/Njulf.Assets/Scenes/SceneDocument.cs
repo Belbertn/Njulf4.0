@@ -89,6 +89,10 @@ public sealed class SceneMaterialOverrideDocument
     /// <see cref="DiffuseGiParticipation"/>.
     /// </summary>
     public bool? ReceivesDiffuseGi { get; init; }
+    /// <summary>None, ThinSurface, Volume, or Unsupported.</summary>
+    public string? GiTransmissionPolicy { get; init; }
+    public float? ThinTransmissionFactor { get; init; }
+    public SceneColor? ThinTransmissionTint { get; init; }
 }
 
 public sealed class SceneLightDocument

@@ -291,6 +291,29 @@ namespace Njulf.Rendering.Data
         public static DdgiInvestigationCounters Empty { get; } = default;
     }
 
+    public readonly record struct ThinSurfaceTransportCounters(
+        uint DetailedHitCount,
+        uint CompactHitCount,
+        uint FarFieldExcludedCount,
+        float ReflectedDirectLuminance,
+        float TransmittedDirectLuminance,
+        float ReflectedRecursiveLuminance,
+        float TransmittedRecursiveLuminance,
+        uint ColoredShadowTransmissionRayCount,
+        uint TotalThinLayersTraversed,
+        uint MaximumThinLayersTraversed,
+        uint LayerLimitTerminationCount,
+        uint LowTransmittanceTerminationCount,
+        uint ZeroRadianceOpaqueHitCount,
+        uint ZeroRadianceThinHitCount,
+        uint ZeroRadianceUnsupportedHitCount,
+        uint UnsupportedTransmissionHitCount,
+        uint EnergyClampCount,
+        uint InvalidTransmissionCount)
+    {
+        public static ThinSurfaceTransportCounters Empty { get; } = default;
+    }
+
     public sealed class DdgiDiagnosticWarningTracker
     {
         public const int DefaultPersistenceFrames = 30;

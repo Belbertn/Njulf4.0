@@ -25,6 +25,9 @@ const uint GI_MATERIAL_LEGACY_V1_FALLBACK = 1u << 15u;
 const uint GI_MATERIAL_UNSUPPORTED_TRANSMISSION = 1u << 16u;
 const uint GI_MATERIAL_COMPACT_TEXTURE_FALLBACK = 1u << 17u;
 const uint GI_MATERIAL_GEOMETRY_DECAL = 1u << 18u;
+const uint GI_MATERIAL_THIN_SURFACE_TRANSMISSION = 1u << 19u;
+const uint GI_MATERIAL_TRANSMISSION_PROFILE_VALID = 1u << 20u;
+const uint GI_MATERIAL_HAS_TRANSMISSION_TEXTURE = 1u << 21u;
 
 const float GI_MATERIAL_PI = 3.14159265358979323846;
 // Cosine-weighted hemispherical average of 1 - SchlickFresnel(F0, NdotL).
@@ -34,6 +37,9 @@ const float GI_MATERIAL_MAXIMUM_FINITE_RADIANCE = 65504.0;
 
 struct GiSurfaceSample
 {
+    // Authored sheet orientation is stable across front/back hits. The regular
+    // geometric normal is face-oriented toward the current outgoing side.
+    vec3 CanonicalGeometricNormal;
     vec3 GeometricNormal;
     vec3 ShadingNormal;
     // DirectionalDiffuseBase is the passive opaque base-layer share before
@@ -42,6 +48,7 @@ struct GiSurfaceSample
     vec3 DirectionalDiffuseBase;
     vec3 DielectricF0;
     vec3 DiffuseReflectance;
+    vec3 TransmittedDiffuseReflectance;
     vec3 EmissiveRadiance;
     float MaterialOcclusion;
     float Opacity;
@@ -166,6 +173,37 @@ vec3 EvaluateGiHemisphericalDiffuseReflectance(
         vec3(1.0));
 }
 
+vec3 EvaluateGiHemisphericalDiffuseTransmittance(
+    vec3 linearBaseColor,
+    float metallic,
+    float ior,
+    float specularFactor,
+    vec3 specularColor,
+    float transmission,
+    vec3 transmissionTint,
+    float clearcoat,
+    vec3 sheenColor,
+    float nDotV)
+{
+    transmission = clamp(transmission, 0.0, 1.0);
+    if (transmission <= 0.0)
+        return vec3(0.0);
+    vec3 available = EvaluateGiHemisphericalDiffuseReflectance(
+        linearBaseColor,
+        metallic,
+        ior,
+        specularFactor,
+        specularColor,
+        0.0,
+        clearcoat,
+        sheenColor,
+        nDotV);
+    return clamp(
+        available * transmission * clamp(transmissionTint, vec3(0.0), vec3(1.0)),
+        vec3(0.0),
+        vec3(1.0));
+}
+
 vec3 EvaluateGiDiffuseBrdf(
     vec3 directionalDiffuseBase,
     vec3 dielectricF0,
@@ -219,11 +257,13 @@ bool EvaluateGiSidedness(bool doubleSided, bool frontFacing)
 GiSurfaceSample EmptyGiSurfaceSample(vec3 geometricNormal, vec3 shadingNormal, uint flags)
 {
     GiSurfaceSample surface;
+    surface.CanonicalGeometricNormal = GiSafeNormal(geometricNormal, vec3(0.0, 1.0, 0.0));
     surface.GeometricNormal = GiSafeNormal(geometricNormal, vec3(0.0, 1.0, 0.0));
     surface.ShadingNormal = CorrectGiShadingNormal(surface.GeometricNormal, shadingNormal);
     surface.DirectionalDiffuseBase = vec3(0.0);
     surface.DielectricF0 = vec3(0.0);
     surface.DiffuseReflectance = vec3(0.0);
+    surface.TransmittedDiffuseReflectance = vec3(0.0);
     surface.EmissiveRadiance = vec3(0.0);
     surface.MaterialOcclusion = 1.0;
     surface.Opacity = 1.0;
@@ -250,6 +290,11 @@ GiSurfaceSample EvaluateGiCompactSurface(
     surface.DiffuseReflectance = reflectsDiffuse
         ? clamp(material.DdgiAverageAlbedo.rgb, vec3(0.0), vec3(1.0))
         : vec3(0.0);
+    surface.TransmittedDiffuseReflectance =
+        GiMaterialHasFlag(flags, GI_MATERIAL_THIN_SURFACE_TRANSMISSION) &&
+        GiMaterialHasFlag(flags, GI_MATERIAL_TRANSMISSION_PROFILE_VALID)
+            ? clamp(material.DdgiAverageTransmission.rgb, vec3(0.0), vec3(1.0))
+            : vec3(0.0);
     if (reflectsDiffuse)
     {
         if (GiMaterialHasFlag(flags, GI_MATERIAL_LEGACY_V1_FALLBACK))
@@ -338,6 +383,7 @@ GiSurfaceSample EvaluateGiTexturedSurface(
     float clearcoat = 0.0;
     vec3 sheenColor = vec3(0.0);
     float emissiveStrength = 1.0;
+    vec3 thinTransmissionTint = vec3(1.0);
     if (hasExtensionData)
     {
         if ((material.FeatureFlags & MATERIAL_FEATURE_EMISSIVE_STRENGTH) != 0u)
@@ -354,6 +400,7 @@ GiSurfaceSample EvaluateGiTexturedSurface(
         if ((material.FeatureFlags & MATERIAL_FEATURE_TRANSMISSION) != 0u)
         {
             transmission = clamp(extensionData.Transmission.x, 0.0, 1.0);
+            thinTransmissionTint = clamp(extensionData.Dispersion.yzw, vec3(0.0), vec3(1.0));
         }
         if ((material.FeatureFlags & MATERIAL_FEATURE_SPECULAR) != 0u)
         {
@@ -385,6 +432,20 @@ GiSurfaceSample EvaluateGiTexturedSurface(
             clearcoat,
             sheenColor,
             nDotV);
+        if (GiMaterialHasFlag(flags, GI_MATERIAL_THIN_SURFACE_TRANSMISSION))
+        {
+            surface.TransmittedDiffuseReflectance = EvaluateGiHemisphericalDiffuseTransmittance(
+                baseColor.rgb,
+                surface.Metallic,
+                ior,
+                specularFactor,
+                specularColor,
+                transmission,
+                thinTransmissionTint,
+                clearcoat,
+                sheenColor,
+                nDotV);
+        }
     }
 
     if (GiMaterialHasFlag(flags, GI_MATERIAL_EMITS_INTO_GI))

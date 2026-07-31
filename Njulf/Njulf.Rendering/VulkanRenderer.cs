@@ -228,6 +228,7 @@ namespace Njulf.Rendering
         private DirectionalShadowReceiverCounters _completedDirectionalShadowReceiverCounters = DirectionalShadowReceiverCounters.Empty;
         private FarFieldMaterialV2Counters _completedFarFieldMaterialV2Counters;
         private MaterialGiGpuCounters _completedMaterialGiCounters;
+        private ThinSurfaceTransportCounters _completedThinSurfaceTransportCounters;
         private GpuParticleCounterSnapshot _completedGpuParticleCounters;
         private FoliageCounterSnapshot _completedFoliageCounters;
         private SceneSubmissionCounterSnapshot _completedSceneSubmissionCounters;
@@ -1141,6 +1142,7 @@ namespace Njulf.Rendering
             _completedDirectionalShadowReceiverCounters = _diagnosticsBuffer.GetLastCompletedDirectionalShadowReceiverCounters(_currentFrame);
             _completedFarFieldMaterialV2Counters = _diagnosticsBuffer.GetLastCompletedFarFieldMaterialV2Counters(_currentFrame);
             _completedMaterialGiCounters = _diagnosticsBuffer.GetLastCompletedMaterialGiCounters(_currentFrame);
+            _completedThinSurfaceTransportCounters = _diagnosticsBuffer.GetLastCompletedThinSurfaceTransportCounters(_currentFrame);
             _completedGpuParticleCounters = _gpuParticleRuntimeManager.GetLastCompletedCounters(_currentFrame);
             _completedFoliageCounters = _foliageManager.GetLastCompletedCounters(_currentFrame);
             _completedSceneSubmissionCounters = _sceneOpaqueCompactionPass?.GetLastCompletedCounters(_currentFrame) ?? SceneSubmissionCounterSnapshot.Invalid;
@@ -4571,6 +4573,24 @@ namespace Njulf.Rendering
                 DdgiShadowVisibilityOccludedCount = giUsesDdgi ? sceneData.DdgiShadowVisibilityOccludedCount : 0u,
                 DdgiShadowVisibilityNearHitCount = giUsesDdgi ? sceneData.DdgiShadowVisibilityNearHitCount : 0u,
                 DdgiShadowVisibilityCommittedHitDistanceAverage = giUsesDdgi ? sceneData.DdgiShadowVisibilityCommittedHitDistanceAverage : 0.0f,
+                DdgiThinDetailedHitCount = giUsesDdgi ? _completedThinSurfaceTransportCounters.DetailedHitCount : 0u,
+                DdgiThinCompactHitCount = giUsesDdgi ? _completedThinSurfaceTransportCounters.CompactHitCount : 0u,
+                DdgiThinFarFieldExcludedCount = giUsesDdgi ? _completedThinSurfaceTransportCounters.FarFieldExcludedCount : 0u,
+                DdgiThinReflectedDirectLuminance = giUsesDdgi ? _completedThinSurfaceTransportCounters.ReflectedDirectLuminance : 0.0f,
+                DdgiThinTransmittedDirectLuminance = giUsesDdgi ? _completedThinSurfaceTransportCounters.TransmittedDirectLuminance : 0.0f,
+                DdgiThinReflectedRecursiveLuminance = giUsesDdgi ? _completedThinSurfaceTransportCounters.ReflectedRecursiveLuminance : 0.0f,
+                DdgiThinTransmittedRecursiveLuminance = giUsesDdgi ? _completedThinSurfaceTransportCounters.TransmittedRecursiveLuminance : 0.0f,
+                DdgiThinColoredShadowTransmissionRayCount = giUsesDdgi ? _completedThinSurfaceTransportCounters.ColoredShadowTransmissionRayCount : 0u,
+                DdgiThinTotalLayersTraversed = giUsesDdgi ? _completedThinSurfaceTransportCounters.TotalThinLayersTraversed : 0u,
+                DdgiThinMaximumLayersTraversed = giUsesDdgi ? _completedThinSurfaceTransportCounters.MaximumThinLayersTraversed : 0u,
+                DdgiThinLayerLimitTerminationCount = giUsesDdgi ? _completedThinSurfaceTransportCounters.LayerLimitTerminationCount : 0u,
+                DdgiThinLowTransmittanceTerminationCount = giUsesDdgi ? _completedThinSurfaceTransportCounters.LowTransmittanceTerminationCount : 0u,
+                DdgiThinZeroRadianceOpaqueHitCount = giUsesDdgi ? _completedThinSurfaceTransportCounters.ZeroRadianceOpaqueHitCount : 0u,
+                DdgiThinZeroRadianceThinHitCount = giUsesDdgi ? _completedThinSurfaceTransportCounters.ZeroRadianceThinHitCount : 0u,
+                DdgiThinZeroRadianceUnsupportedHitCount = giUsesDdgi ? _completedThinSurfaceTransportCounters.ZeroRadianceUnsupportedHitCount : 0u,
+                DdgiThinUnsupportedTransmissionHitCount = giUsesDdgi ? _completedThinSurfaceTransportCounters.UnsupportedTransmissionHitCount : 0u,
+                DdgiThinEnergyClampCount = giUsesDdgi ? _completedThinSurfaceTransportCounters.EnergyClampCount : 0u,
+                DdgiThinInvalidTransmissionCount = giUsesDdgi ? _completedThinSurfaceTransportCounters.InvalidTransmissionCount : 0u,
                 DdgiTraceEarlyOutDisabledCount = giUsesDdgi ? sceneData.DdgiTraceEarlyOutDisabledCount : 0u,
                 DdgiTraceEarlyOutBeyondRequestCount = giUsesDdgi ? sceneData.DdgiTraceEarlyOutBeyondRequestCount : 0u,
                 DdgiTraceEarlyOutResolveBoundsCount = giUsesDdgi ? sceneData.DdgiTraceEarlyOutResolveBoundsCount : 0u,
@@ -10497,6 +10517,7 @@ namespace Njulf.Rendering
             hash = HashAdd(hash, materialData.PackedMeanGiDirectionalDiffuseBaseRg);
             hash = HashAdd(hash, materialData.PackedMeanGiDirectionalDiffuseBaseBAndF0R);
             hash = HashAdd(hash, materialData.PackedMeanGiDielectricF0Gb);
+            hash = HashAdd(hash, materialData.DdgiAverageTransmission);
             hash = HashAdd(hash, materialData.DdgiAverageAlbedo);
             hash = HashAdd(hash, materialData.DdgiAverageEmissive);
             hash = HashAdd(hash, materialData.DdgiMaterialPolicy);

@@ -85,8 +85,8 @@ public sealed record GiPrimitiveTextureBindingSnapshot
 /// </summary>
 public sealed record GiPrimitiveTransportProfile
 {
-    public const int CurrentSchemaVersion = 3;
-    public const uint CurrentAlgorithmVersion = 4;
+    public const int CurrentSchemaVersion = 4;
+    public const uint CurrentAlgorithmVersion = 5;
     // For Schlick Fresnel, the cosine-weighted hemispherical average of
     // 1 - F(NdotL) is (20 / 21) * (1 - F0).
     public const double SchlickCosineWeightedTransmission = 20.0 / 21.0;
@@ -125,6 +125,8 @@ public sealed record GiPrimitiveTransportProfile
     public int SampleCount { get; init; }
     public double SurfaceArea { get; init; }
     public TextureTransportVector4 MeanDiffuseReflectance { get; init; }
+    public TextureTransportVector4 MeanTransmittedDiffuseReflectance { get; init; }
+    public ModelGiTransmissionPolicy GiTransmissionPolicy { get; init; }
     public TextureTransportVector4 MeanEmission { get; init; }
     public double MeanAmbientOcclusion { get; init; }
     public double AlphaCoverage { get; init; }
@@ -180,6 +182,8 @@ public sealed record GiPrimitiveTransportProfile
         }
         if (!AreFinite(MeanDiffuseReflectance))
             errors.Add("Primitive-profile diffuse reflectance contains a non-finite channel.");
+        if (!AreFinite(MeanTransmittedDiffuseReflectance))
+            errors.Add("Primitive-profile transmitted diffuse reflectance contains a non-finite channel.");
         if (!AreFinite(MeanEmission))
             errors.Add("Primitive-profile emission contains a non-finite channel.");
         ValidateUnit(MeanAmbientOcclusion, nameof(MeanAmbientOcclusion), errors);
@@ -193,6 +197,18 @@ public sealed record GiPrimitiveTransportProfile
             !IsUnitRgb(MeanDiffuseReflectance))
         {
             errors.Add("A diffuse-valid primitive profile must have RGB reflectance in [0, 1].");
+        }
+        if (Validity.HasFlag(GiPrimitiveTransportProfileValidity.Diffuse) &&
+            !IsUnitRgb(MeanTransmittedDiffuseReflectance))
+        {
+            errors.Add("A diffuse-valid primitive profile must have RGB transmittance in [0, 1].");
+        }
+        if (GiTransmissionPolicy == ModelGiTransmissionPolicy.ThinSurface &&
+            (MeanDiffuseReflectance.X + MeanTransmittedDiffuseReflectance.X > 1.000001 ||
+             MeanDiffuseReflectance.Y + MeanTransmittedDiffuseReflectance.Y > 1.000001 ||
+             MeanDiffuseReflectance.Z + MeanTransmittedDiffuseReflectance.Z > 1.000001))
+        {
+            errors.Add("A thin-surface primitive profile exceeds the component-wise passive diffuse energy budget.");
         }
         if (Validity.HasFlag(GiPrimitiveTransportProfileValidity.Emission) &&
             (MeanEmission.X < 0.0 || MeanEmission.Y < 0.0 || MeanEmission.Z < 0.0))
@@ -629,6 +645,8 @@ public static class GiPrimitiveTransportProfileGenerator
             SampleCount = sampleCount,
             SurfaceArea = integrated.Weight,
             MeanDiffuseReflectance = result.Diffuse,
+            MeanTransmittedDiffuseReflectance = result.TransmittedDiffuse,
+            GiTransmissionPolicy = material.GiTransmissionPolicy,
             MeanEmission = result.Emission,
             MeanAmbientOcclusion = result.AmbientOcclusion,
             AlphaCoverage = result.Coverage,
@@ -953,7 +971,8 @@ public static class GiPrimitiveTransportProfileGenerator
         double sheenB = sheenEnabled
             ? Math.Clamp(material.SheenColor.Z * sheenColorTexture.Z, 0.0, 1.0)
             : 0.0;
-        double baseDiffuseScale = (1.0 - metallic) * (1.0 - transmission) * (1.0 - clearcoat * 0.04);
+        double baseAvailableScale = (1.0 - metallic) * (1.0 - clearcoat * 0.04);
+        double baseDiffuseScale = baseAvailableScale * (1.0 - transmission);
         double dielectricF0R = dielectricF0 * specularColorR;
         double dielectricF0G = dielectricF0 * specularColorG;
         double dielectricF0B = dielectricF0 * specularColorB;
@@ -978,6 +997,19 @@ public static class GiPrimitiveTransportProfileGenerator
         double diffuseB = material.Unlit
             ? 0.0
             : albedoB * baseDiffuseScale * hemisphericalEnergyB * (1.0 - sheenB);
+        bool thinSurface = material.GiTransmissionPolicy == ModelGiTransmissionPolicy.ThinSurface;
+        double transmittedR = material.Unlit || !thinSurface
+            ? 0.0
+            : albedoR * baseAvailableScale * transmission * hemisphericalEnergyR *
+              (1.0 - sheenR) * material.ThinTransmissionTint.X;
+        double transmittedG = material.Unlit || !thinSurface
+            ? 0.0
+            : albedoG * baseAvailableScale * transmission * hemisphericalEnergyG *
+              (1.0 - sheenG) * material.ThinTransmissionTint.Y;
+        double transmittedB = material.Unlit || !thinSurface
+            ? 0.0
+            : albedoB * baseAvailableScale * transmission * hemisphericalEnergyB *
+              (1.0 - sheenB) * material.ThinTransmissionTint.Z;
         double emissionScale = material.EmissiveStrength;
         double emissionR = material.Unlit ? 0.0 : material.Emissive.X * emissionScale * emissiveTexture.X;
         double emissionG = material.Unlit ? 0.0 : material.Emissive.Y * emissionScale * emissiveTexture.Y;
@@ -1084,6 +1116,9 @@ public static class GiPrimitiveTransportProfileGenerator
             SanitizeUnit(diffuseR),
             SanitizeUnit(diffuseG),
             SanitizeUnit(diffuseB),
+            SanitizeUnit(transmittedR),
+            SanitizeUnit(transmittedG),
+            SanitizeUnit(transmittedB),
             SanitizeUnit(alpha),
             SanitizeHdr(emissionR),
             SanitizeHdr(emissionG),
@@ -1295,6 +1330,10 @@ public static class GiPrimitiveTransportProfileGenerator
         hash.Add(material.SheenColor.Z);
         hash.Add(material.SheenColor.W);
         hash.Add(material.TransmissionFactor);
+        hash.Add((uint)material.GiTransmissionPolicy);
+        hash.Add(material.ThinTransmissionTint.X);
+        hash.Add(material.ThinTransmissionTint.Y);
+        hash.Add(material.ThinTransmissionTint.Z);
         hash.Add(material.Ior);
         hash.Add(material.SpecularFactor);
         hash.Add(material.SpecularColor.X);
@@ -1436,6 +1475,9 @@ public static class GiPrimitiveTransportProfileGenerator
         double DiffuseR,
         double DiffuseG,
         double DiffuseB,
+        double TransmittedDiffuseR,
+        double TransmittedDiffuseG,
+        double TransmittedDiffuseB,
         double Alpha,
         double EmissionR,
         double EmissionG,
@@ -1507,6 +1549,9 @@ public static class GiPrimitiveTransportProfileGenerator
         private double _diffuseR;
         private double _diffuseG;
         private double _diffuseB;
+        private double _transmittedDiffuseR;
+        private double _transmittedDiffuseG;
+        private double _transmittedDiffuseB;
         private double _alpha;
         private double _emissionR;
         private double _emissionG;
@@ -1535,6 +1580,9 @@ public static class GiPrimitiveTransportProfileGenerator
             _diffuseR += sample.DiffuseR * coveredWeight;
             _diffuseG += sample.DiffuseG * coveredWeight;
             _diffuseB += sample.DiffuseB * coveredWeight;
+            _transmittedDiffuseR += sample.TransmittedDiffuseR * coveredWeight;
+            _transmittedDiffuseG += sample.TransmittedDiffuseG * coveredWeight;
+            _transmittedDiffuseB += sample.TransmittedDiffuseB * coveredWeight;
             _alpha += sample.Alpha * weight;
             _emissionR += sample.EmissionR * coveredWeight;
             _emissionG += sample.EmissionG * coveredWeight;
@@ -1570,6 +1618,11 @@ public static class GiPrimitiveTransportProfileGenerator
                     _diffuseB * inverseCoveredWeight,
                     _alpha * inverseWeight),
                 new TextureTransportVector4(
+                    _transmittedDiffuseR * inverseCoveredWeight,
+                    _transmittedDiffuseG * inverseCoveredWeight,
+                    _transmittedDiffuseB * inverseCoveredWeight,
+                    1.0),
+                new TextureTransportVector4(
                     _emissionR * inverseCoveredWeight,
                     _emissionG * inverseCoveredWeight,
                     _emissionB * inverseCoveredWeight,
@@ -1584,6 +1637,7 @@ public static class GiPrimitiveTransportProfileGenerator
 
     private readonly record struct IntegratedResult(
         TextureTransportVector4 Diffuse,
+        TextureTransportVector4 TransmittedDiffuse,
         TextureTransportVector4 Emission,
         double AmbientOcclusion,
         double Coverage,
@@ -1592,10 +1646,14 @@ public static class GiPrimitiveTransportProfileGenerator
         double NormalVariance)
     {
         public bool IsFinite =>
+            AreFinite(Diffuse.X, Diffuse.Y, Diffuse.Z, Diffuse.W) &&
             AreFinite(
-                Diffuse.X, Diffuse.Y, Diffuse.Z, Diffuse.W,
-                Emission.X, Emission.Y, Emission.Z, Emission.W,
-                AmbientOcclusion, Coverage, Metallic, Roughness, NormalVariance);
+                TransmittedDiffuse.X,
+                TransmittedDiffuse.Y,
+                TransmittedDiffuse.Z,
+                TransmittedDiffuse.W) &&
+            AreFinite(Emission.X, Emission.Y, Emission.Z, Emission.W) &&
+            AreFinite(AmbientOcclusion, Coverage, Metallic, Roughness, NormalVariance);
     }
 
     private sealed class StableHash

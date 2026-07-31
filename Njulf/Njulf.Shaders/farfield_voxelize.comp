@@ -748,6 +748,16 @@ void main()
     ivec3 maxVoxel = clamp(WorldToVoxel(triMax, params) + ivec3(1), ivec3(0), ivec3(params.resolution) - ivec3(1));
 
     GPUMaterialData material = ReadMaterial(materialIndex);
+    // Thin sheets need two-sided transmission transport that the current
+    // far-field payload cannot encode. Exclude them explicitly instead of
+    // silently turning them into opaque far-field occluders.
+    if (GiMaterialHasFlag(
+            material.TransportFlags,
+            GI_MATERIAL_THIN_SURFACE_TRANSMISSION))
+    {
+        AddFarFieldDiagnostic(DDGI_THIN_FAR_FIELD_EXCLUDED_COUNTER, 1u);
+        return;
+    }
     vec3 legacyAlbedo = clamp(
         max(material.DdgiAverageAlbedo.rgb, material.Albedo.rgb),
         vec3(0.0),

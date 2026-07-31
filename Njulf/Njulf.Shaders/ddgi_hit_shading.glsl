@@ -35,6 +35,10 @@
 #define DDGI_HIT_CANDIDATE_MATERIAL_TEXTURES_ALLOWED true
 #endif
 
+#ifndef DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED
+#define DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED true
+#endif
+
 #ifndef DDGI_HIT_CURRENT_FRAME_INDEX
 #define DDGI_HIT_CURRENT_FRAME_INDEX pc.CurrentFrameIndex
 #endif
@@ -137,10 +141,12 @@ void RecordAndSanitizeDdgiMaterialSurface(
         any(isnan(material.Emissive)) || any(isinf(material.Emissive)) ||
         any(isnan(material.MetallicRoughnessAO)) || any(isinf(material.MetallicRoughnessAO)) ||
         any(isnan(surface.GeometricNormal)) || any(isinf(surface.GeometricNormal)) ||
+        any(isnan(surface.CanonicalGeometricNormal)) || any(isinf(surface.CanonicalGeometricNormal)) ||
         any(isnan(surface.ShadingNormal)) || any(isinf(surface.ShadingNormal)) ||
         any(isnan(surface.DirectionalDiffuseBase)) || any(isinf(surface.DirectionalDiffuseBase)) ||
         any(isnan(surface.DielectricF0)) || any(isinf(surface.DielectricF0)) ||
         any(isnan(surface.DiffuseReflectance)) || any(isinf(surface.DiffuseReflectance)) ||
+        any(isnan(surface.TransmittedDiffuseReflectance)) || any(isinf(surface.TransmittedDiffuseReflectance)) ||
         any(isnan(surface.EmissiveRadiance)) || any(isinf(surface.EmissiveRadiance)) ||
         isnan(surface.MaterialOcclusion) || isinf(surface.MaterialOcclusion) ||
         isnan(surface.Opacity) || isinf(surface.Opacity) ||
@@ -158,22 +164,40 @@ void RecordAndSanitizeDdgiMaterialSurface(
         any(greaterThan(surface.DielectricF0, vec3(1.0))) ||
         any(lessThan(surface.DiffuseReflectance, vec3(0.0))) ||
         any(greaterThan(surface.DiffuseReflectance, vec3(1.0))) ||
+        any(lessThan(surface.TransmittedDiffuseReflectance, vec3(0.0))) ||
+        any(greaterThan(surface.TransmittedDiffuseReflectance, vec3(1.0))) ||
+        any(greaterThan(
+            surface.DiffuseReflectance + surface.TransmittedDiffuseReflectance,
+            vec3(1.0001))) ||
         any(lessThan(surface.EmissiveRadiance, vec3(0.0))) ||
         any(greaterThan(surface.EmissiveRadiance, vec3(GI_MATERIAL_MAXIMUM_FINITE_RADIANCE))) ||
         surface.MaterialOcclusion < 0.0 || surface.MaterialOcclusion > 1.0 ||
         surface.Opacity < 0.0 || surface.Opacity > 1.0 ||
         surface.Metallic < 0.0 || surface.Metallic > 1.0 ||
         surface.Roughness < GI_MATERIAL_MINIMUM_ROUGHNESS || surface.Roughness > 1.0;
+    bool invalidTransmission =
+        any(isnan(surface.TransmittedDiffuseReflectance)) ||
+        any(isinf(surface.TransmittedDiffuseReflectance));
+    bool transmissionEnergyClamped =
+        any(lessThan(surface.TransmittedDiffuseReflectance, vec3(0.0))) ||
+        any(greaterThan(surface.TransmittedDiffuseReflectance, vec3(1.0))) ||
+        any(greaterThan(
+            surface.DiffuseReflectance + surface.TransmittedDiffuseReflectance,
+            vec3(1.0001)));
 
     if (nonFinite)
     {
         AddRendererDiagnostic(DDGI_HIT_CURRENT_FRAME_INDEX, MATERIAL_GI_NONFINITE_VALUE_COUNTER, 1u);
+        if (invalidTransmission)
+            AddRendererDiagnostic(DDGI_HIT_CURRENT_FRAME_INDEX, DDGI_THIN_INVALID_TRANSMISSION_COUNTER, 1u);
         surface = EmptyGiSurfaceSample(vec3(0.0, 1.0, 0.0), vec3(0.0, 1.0, 0.0), material.TransportFlags);
     }
     else
     {
         if (clamped)
             AddRendererDiagnostic(DDGI_HIT_CURRENT_FRAME_INDEX, MATERIAL_GI_CLAMPED_VALUE_COUNTER, 1u);
+        if (transmissionEnergyClamped)
+            AddRendererDiagnostic(DDGI_HIT_CURRENT_FRAME_INDEX, DDGI_THIN_ENERGY_CLAMP_COUNTER, 1u);
 
         // The hit evaluator deliberately preserves raw scene-linear emission
         // through the checks above. Clamp only now, at the FP16 transport
@@ -430,6 +454,7 @@ bool ResolveCommittedHitSurface(
             vec4(normalize(localShadingNormal), 0.0),
             instance.WorldMatrixInverseTranspose).xyz,
         geometricNormal);
+    vec3 canonicalGeometricNormal = geometricNormal;
     float faceSign = frontFacing ? 1.0 : -1.0;
     geometricNormal *= faceSign;
     shadingNormal *= faceSign;
@@ -442,7 +467,17 @@ bool ResolveCommittedHitSurface(
     if (compactRequested && !compactTextureFallback)
     {
         surface = EvaluateGiCompactSurface(material, geometricNormal, shadingNormal);
+        surface.CanonicalGeometricNormal = canonicalGeometricNormal;
         RecordAndSanitizeDdgiMaterialSurface(material, surface);
+        if (DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED &&
+            DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED &&
+            GiMaterialHasFlag(surface.Flags, GI_MATERIAL_THIN_SURFACE_TRANSMISSION))
+        {
+            AddRendererDiagnostic(
+                DDGI_HIT_CURRENT_FRAME_INDEX,
+                DDGI_THIN_COMPACT_HIT_COUNTER,
+                1u);
+        }
         RecordDdgiMaterialTransportProvenance(
             instanceIndex,
             primitiveIndex,
@@ -736,7 +771,17 @@ bool ResolveCommittedHitSurface(
         shadingNormal,
         normalize(-rayDirection),
         true);
+    surface.CanonicalGeometricNormal = canonicalGeometricNormal;
     RecordAndSanitizeDdgiMaterialSurface(material, surface);
+    if (DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED &&
+        DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED &&
+        GiMaterialHasFlag(surface.Flags, GI_MATERIAL_THIN_SURFACE_TRANSMISSION))
+    {
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_THIN_DETAILED_HIT_COUNTER,
+            1u);
+    }
     RecordDdgiMaterialTransportProvenance(
         instanceIndex,
         primitiveIndex,
@@ -848,7 +893,53 @@ bool DdgiCandidatePassesTwoSidedOpacity(
         false);
 }
 
-float TraceLightVisibility(
+vec3 ResolveDdgiThinCandidateTransmittance(
+    uint instanceIndex,
+    uint primitiveIndex,
+    vec2 barycentrics,
+    GPUMaterialData material,
+    GPUMaterialExtensionData extensionData)
+{
+    float transmission = clamp(extensionData.Transmission.x, 0.0, 1.0);
+    if (DDGI_HIT_CANDIDATE_MATERIAL_TEXTURES_ALLOWED &&
+        GiMaterialHasFlag(material.TransportFlags, GI_MATERIAL_HAS_TRANSMISSION_TEXTURE))
+    {
+        GPUDdgiRayQueryInstance instance = ReadDdgiRayQueryInstance(instanceIndex);
+        uint triangleIndexBase = instance.IndexOffset + primitiveIndex * 3u;
+        uint i0 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 0u);
+        uint i1 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 1u);
+        uint i2 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 2u);
+        uint v0 = instance.VertexOffset + i0;
+        uint v1 = instance.VertexOffset + i1;
+        uint v2 = instance.VertexOffset + i2;
+        vec3 bary = vec3(
+            1.0 - barycentrics.x - barycentrics.y,
+            barycentrics.x,
+            barycentrics.y);
+        vec2 uv0 = ReadSplitVertexTexCoord(v0) * bary.x +
+            ReadSplitVertexTexCoord(v1) * bary.y +
+            ReadSplitVertexTexCoord(v2) * bary.z;
+        vec2 uv1 = ReadSplitVertexTexCoord2(v0) * bary.x +
+            ReadSplitVertexTexCoord2(v1) * bary.y +
+            ReadSplitVertexTexCoord2(v2) * bary.z;
+        vec2 transmissionUv = MaterialDdgiHitUv(
+            uv0,
+            uv1,
+            extensionData.ExtensionTextureTexCoordSets1.z,
+            extensionData.TransmissionOffsetScale,
+            extensionData.ExtensionTextureRotations1.z);
+        transmission *= SampleDdgiMaterialTexture(
+            extensionData.TransmissionTextureIndex,
+            transmissionUv,
+            max(material.DdgiMaterialPolicy.y, 0.0),
+            vec4(1.0)).r;
+    }
+
+    return clamp(extensionData.Dispersion.yzw, vec3(0.0), vec3(1.0)) *
+        clamp(transmission, 0.0, 1.0);
+}
+
+vec3 TraceLightVisibility(
     vec3 worldPosition,
     vec3 normal,
     vec3 lightDirection,
@@ -858,7 +949,10 @@ float TraceLightVisibility(
     float normalOffset = DDGI_PROBE_TRACE_EPSILON * 4.0;
     float rayTMin = DDGI_PROBE_TRACE_EPSILON * 2.0;
     float rayDistance = max(maxDistance - normalOffset, rayTMin);
-    vec3 origin = worldPosition + normal * normalOffset;
+    vec3 offsetNormal = dot(normal, lightDirection) >= 0.0 ? normal : -normal;
+    vec3 origin = worldPosition + offsetNormal * normalOffset;
+    vec3 visibilityRgb = vec3(1.0);
+    uint thinLayerCount = 0u;
 
     if (DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED)
     {
@@ -872,7 +966,7 @@ float TraceLightVisibility(
     rayQueryInitializeEXT(
         shadowQuery,
         SceneTlas,
-        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsCullBackFacingTrianglesEXT,
+        gl_RayFlagsNoneEXT,
         0xff,
         origin,
         rayTMin,
@@ -896,13 +990,55 @@ float TraceLightVisibility(
             uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(shadowQuery, false);
             vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(shadowQuery, false);
             bool frontFacing = rayQueryGetIntersectionFrontFaceEXT(shadowQuery, false);
-            if (DdgiCandidatePassesOpacity(instanceIndex, primitiveIndex, barycentrics, frontFacing))
-                rayQueryConfirmIntersectionEXT(shadowQuery);
+            if (!DdgiCandidatePassesOpacity(instanceIndex, primitiveIndex, barycentrics, frontFacing))
+                continue;
+
+            GPUDdgiRayQueryInstance instance = ReadDdgiRayQueryInstance(instanceIndex);
+            GPUMaterialData material = ReadMaterial(instance.MaterialIndex);
+            bool thin = DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED && GiMaterialHasFlag(
+                material.TransportFlags,
+                GI_MATERIAL_THIN_SURFACE_TRANSMISSION);
+            if (thin && material.ExtensionDataIndex >= 0)
+            {
+                GPUMaterialExtensionData extensionData =
+                    ReadMaterialExtension(uint(material.ExtensionDataIndex));
+                vec3 layerTransmission = ResolveDdgiThinCandidateTransmittance(
+                    instanceIndex,
+                    primitiveIndex,
+                    barycentrics,
+                    material,
+                    extensionData);
+                visibilityRgb *= layerTransmission;
+                thinLayerCount++;
+                if (thinLayerCount >= 8u)
+                {
+                    if (DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED)
+                        AddRendererDiagnostic(DDGI_HIT_CURRENT_FRAME_INDEX, DDGI_THIN_SHADOW_LAYER_LIMIT_COUNTER, 1u);
+                    break;
+                }
+                if (max(visibilityRgb.r, max(visibilityRgb.g, visibilityRgb.b)) < 0.01)
+                {
+                    if (DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED)
+                        AddRendererDiagnostic(DDGI_HIT_CURRENT_FRAME_INDEX, DDGI_THIN_SHADOW_LOW_TRANSMITTANCE_COUNTER, 1u);
+                    break;
+                }
+                continue;
+            }
+
+            rayQueryConfirmIntersectionEXT(shadowQuery);
+            rayQueryTerminateEXT(shadowQuery);
+            break;
         }
     }
 
     uint hitType = rayQueryGetIntersectionTypeEXT(shadowQuery, true);
     bool occluded = hitType != gl_RayQueryCommittedIntersectionNoneEXT;
+    if (thinLayerCount > 0u && DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED)
+    {
+        AddRendererDiagnostic(DDGI_HIT_CURRENT_FRAME_INDEX, DDGI_THIN_SHADOW_TRANSMISSION_RAY_COUNTER, 1u);
+        AddRendererDiagnostic(DDGI_HIT_CURRENT_FRAME_INDEX, DDGI_THIN_SHADOW_TOTAL_LAYER_COUNTER, thinLayerCount);
+        MaxRendererDiagnostic(DDGI_HIT_CURRENT_FRAME_INDEX, DDGI_THIN_SHADOW_MAX_LAYER_COUNTER, thinLayerCount);
+    }
     if (occluded && DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED)
     {
         float committedHitDistance = max(
@@ -925,7 +1061,7 @@ float TraceLightVisibility(
             uint(round(clamp(committedHitDistance, 0.0, 256.0) *
                 DDGI_SHADOW_VISIBILITY_HIT_DISTANCE_SCALE)));
     }
-    return occluded ? 0.0 : 1.0;
+    return occluded ? vec3(0.0) : visibilityRgb;
 }
 
 vec3 RotateDdgiEnvironmentDirection(vec3 direction, float radians)
@@ -980,6 +1116,7 @@ bool TryReadSelectedDdgiDirectionalLight(out GPULight selectedLight)
 bool TryBuildSelectedDdgiLocalLightContribution(
     vec3 worldPosition,
     vec3 normal,
+    bool twoSidedDiffuse,
     out GPULight light,
     out vec3 lightDirection,
     out float distanceToLight,
@@ -1000,7 +1137,9 @@ bool TryBuildSelectedDdgiLocalLightContribution(
         return false;
 
     lightDirection = toLight / max(distanceToLight, 0.0001);
-    float nDotL = max(dot(normal, lightDirection), 0.0);
+    float nDotL = twoSidedDiffuse
+        ? abs(dot(normal, lightDirection))
+        : max(dot(normal, lightDirection), 0.0);
     if (nDotL <= 0.0)
         return false;
 
@@ -1030,27 +1169,49 @@ vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
     out vec3 noShadowDiffuse)
 {
     noShadowDiffuse = vec3(0.0);
-    float nDotL = max(dot(surface.ShadingNormal, lightDirection), 0.0);
+    bool transmitted = DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED &&
+        GiMaterialHasFlag(surface.Flags, GI_MATERIAL_THIN_SURFACE_TRANSMISSION) &&
+        dot(surface.GeometricNormal, lightDirection) < 0.0;
+    float nDotL = transmitted
+        ? max(dot(-surface.ShadingNormal, lightDirection), 0.0)
+        : max(dot(surface.ShadingNormal, lightDirection), 0.0);
     float nDotV = max(dot(surface.ShadingNormal, viewDirection), 0.0);
     if (nDotL <= 0.0)
         return vec3(0.0);
 
     vec3 incomingRadiance = max(light.Color, vec3(0.0)) * max(light.Intensity, 0.0) * attenuation;
-    noShadowDiffuse = incomingRadiance * nDotL *
-        EvaluateGiDiffuseBrdf(
-            surface.DirectionalDiffuseBase,
-            surface.DielectricF0,
-            nDotL,
-            nDotV);
+    noShadowDiffuse = transmitted
+        ? incomingRadiance * nDotL *
+            (surface.TransmittedDiffuseReflectance / GI_MATERIAL_PI)
+        : incomingRadiance * nDotL *
+            EvaluateGiDiffuseBrdf(
+                surface.DirectionalDiffuseBase,
+                surface.DielectricF0,
+                nDotL,
+                nDotV);
+    if (DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED &&
+        GiMaterialHasFlag(surface.Flags, GI_MATERIAL_THIN_SURFACE_TRANSMISSION))
+    {
+        uint luminance = uint(round(clamp(
+            DdgiHitLuminance(noShadowDiffuse) * DDGI_THIN_LUMINANCE_SCALE,
+            0.0,
+            4294967295.0)));
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            transmitted
+                ? DDGI_THIN_TRANSMITTED_DIRECT_LUMINANCE_COUNTER
+                : DDGI_THIN_REFLECTED_DIRECT_LUMINANCE_COUNTER,
+            luminance);
+    }
     if (DdgiHitLuminance(noShadowDiffuse) <= 0.0001)
         return vec3(0.0);
 
     if ((uint(light.ShadowFlags) & GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS) == 0u)
         return noShadowDiffuse;
 
-    float tracedVisibility = TraceLightVisibility(
+    vec3 tracedVisibility = TraceLightVisibility(
         worldPosition,
-        surface.GeometricNormal,
+        surface.CanonicalGeometricNormal,
         lightDirection,
         visibilityDistance,
         receiverProbeSpacing);
@@ -1135,13 +1296,13 @@ vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
 
         if (dominantLuminance <= 0.0001)
             return diffuseRadiance;
-        float dominantVisibility = TraceLightVisibility(
+        vec3 dominantVisibility = TraceLightVisibility(
             worldPosition,
             surface.GeometricNormal,
             dominantLightDirection,
             dominantDistance,
             receiverProbeSpacing);
-        return diffuseRadiance + dominantContribution * (dominantVisibility - 1.0);
+        return diffuseRadiance + dominantContribution * (dominantVisibility - vec3(1.0));
     }
 
     if ((firstFlags & EmissiveSourceTriangleFlag) == 0u)
@@ -1219,7 +1380,7 @@ vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
         surface.DielectricF0,
         receiverCosine,
         nDotV);
-    float visibility = TraceLightVisibility(
+    vec3 visibility = TraceLightVisibility(
         worldPosition,
         surface.GeometricNormal,
         lightDirection,
@@ -1270,9 +1431,13 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
     vec3 localLightDirection;
     float localLightDistance;
     float localLightAttenuation;
+    bool thinSurface = DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED && GiMaterialHasFlag(
+        surface.Flags,
+        GI_MATERIAL_THIN_SURFACE_TRANSMISSION);
     if (TryBuildSelectedDdgiLocalLightContribution(
         worldPosition,
         surface.ShadingNormal,
+        thinSurface,
         localLight,
         localLightDirection,
         localLightDistance,
@@ -1343,7 +1508,11 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
         if (distanceToLight >= light.Range || light.Range <= 0.0)
             continue;
         vec3 lightDirection = toLight / max(distanceToLight, 0.0001);
-        float nDotL = max(dot(surface.ShadingNormal, lightDirection), 0.0);
+        float nDotL = DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED && GiMaterialHasFlag(
+                surface.Flags,
+                GI_MATERIAL_THIN_SURFACE_TRANSMISSION)
+            ? abs(dot(surface.ShadingNormal, lightDirection))
+            : max(dot(surface.ShadingNormal, lightDirection), 0.0);
         if (nDotL <= 0.0)
             continue;
 

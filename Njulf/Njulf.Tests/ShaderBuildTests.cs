@@ -720,13 +720,13 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_DIRECT_LUMINANCE_COUNTER"));
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_DIRECT_NO_SHADOW_LUMINANCE_COUNTER"));
             Assert.That(shader, Does.Contain("directNoShadowDiffuse"));
-            Assert.That(hitShading, Does.Contain("gl_RayFlagsTerminateOnFirstHitEXT"));
+            Assert.That(hitShading, Does.Not.Contain("gl_RayFlagsTerminateOnFirstHitEXT"));
             Assert.That(hitShading, Does.Contain("DdgiCandidatePassesOpacity"));
             Assert.That(hitShading, Does.Contain("DDGI_HIT_CANDIDATE_MATERIAL_TEXTURES_ALLOWED"));
             Assert.That(hitShading, Does.Not.Contain("gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT"));
             Assert.That(hitShading, Does.Contain("float normalOffset = DDGI_PROBE_TRACE_EPSILON * 4.0;"));
             Assert.That(hitShading, Does.Contain("float rayDistance = max(maxDistance - normalOffset, rayTMin);"));
-            Assert.That(hitShading, Does.Contain("vec3 origin = worldPosition + normal * normalOffset;"));
+            Assert.That(hitShading, Does.Contain("vec3 origin = worldPosition + offsetNormal * normalOffset;"));
             Assert.That(hitShading, Does.Not.Contain("directionOffset"));
             Assert.That(hitShading, Does.Not.Contain("worldPosition + normal * normalOffset + lightDirection"));
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_DISABLED_COUNTER, 1u);"));
@@ -1045,7 +1045,7 @@ public sealed class ShaderBuildTests
             Assert.That(hitShading, Does.Contain("vec3 EvaluateDirectDiffuseRadianceAtHit("));
             Assert.That(hitShading, Does.Contain("vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit("));
             Assert.That(hitShading, Does.Contain("vec3 SampleDdgiEnvironmentMissRadianceWithFallback("));
-            Assert.That(hitShading, Does.Contain("float TraceLightVisibility("));
+            Assert.That(hitShading, Does.Contain("vec3 TraceLightVisibility("));
             Assert.That(shader, Does.Contain("float intensity = max(updateParams.z, 0.0);"));
             Assert.That(shader, Does.Contain("bool DdgiRawAtlasRadianceConventionEnabled()"));
             Assert.That(shader, Does.Contain("return true;"));

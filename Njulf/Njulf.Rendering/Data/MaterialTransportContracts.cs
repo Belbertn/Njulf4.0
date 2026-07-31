@@ -83,6 +83,9 @@ public enum GiMaterialTransportFlags : uint
     /// indirect-lighting policy while sharing the transparent draw path.
     /// </summary>
     GeometryDecal = 1u << 18,
+    ThinSurfaceTransmission = 1u << 19,
+    TransmissionProfileValid = 1u << 20,
+    HasTransmissionTexture = 1u << 21,
     QualityShift = 24,
     QualityMask = 0x0f00_0000u
 }
@@ -160,7 +163,12 @@ public sealed record MaterialExtensionDefinition
     public Vector3 AttenuationColor { get; init; } = Vector3.One;
     public MaterialTextureBinding Transmission { get; init; } = MaterialTextureBinding.Missing;
     public MaterialTextureBinding Thickness { get; init; } = MaterialTextureBinding.Missing;
-    public GiTransmissionPolicy TransmissionPolicy { get; init; } = GiTransmissionPolicy.RemoveFromOpaqueDiffuse;
+    public GiTransmissionPolicy TransmissionPolicy { get; init; } = GiTransmissionPolicy.None;
+    /// <summary>
+    /// Renderer-authored diffuse tint for a zero-thickness transmission lobe.
+    /// This is independent of raster alpha and volume attenuation.
+    /// </summary>
+    public Vector3 ThinTransmissionTint { get; init; } = Vector3.One;
 
     public float SpecularFactor { get; init; } = 1f;
     public Vector3 SpecularColorFactor { get; init; } = Vector3.One;
@@ -252,6 +260,7 @@ public sealed record GiMaterialTransportProfile
     public GiMaterialTransportFlags Flags { get; init; }
     public GiTransportProfileQuality Quality { get; init; }
     public Vector3 MeanDiffuseReflectance { get; init; } = Vector3.Zero;
+    public Vector3 MeanTransmittedDiffuseReflectance { get; init; } = Vector3.Zero;
     public Vector3 MeanEmissiveRadiance { get; init; } = Vector3.Zero;
     public float EmissiveImportance { get; init; }
     public float MeanMaterialOcclusion { get; init; } = 1f;
@@ -284,11 +293,13 @@ public sealed record MaterialChangedEvent(
 /// CPU representation of the shared shader surface contract.
 /// </summary>
 public readonly record struct GiSurfaceSample(
+    Vector3 CanonicalGeometricNormal,
     Vector3 GeometricNormal,
     Vector3 ShadingNormal,
     Vector3 DirectionalDiffuseBase,
     Vector3 DielectricF0,
     Vector3 DiffuseReflectance,
+    Vector3 TransmittedDiffuseReflectance,
     Vector3 EmissiveRadiance,
     float MaterialOcclusion,
     float Opacity,

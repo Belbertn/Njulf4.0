@@ -141,7 +141,7 @@ public sealed record SampleSponzaGiVisualMetricGate(
 /// </summary>
 public sealed class SampleSponzaGiCaptureContract
 {
-    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v8";
+    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v9";
     public const string VisualMetricGateSchemaVersion = "realtime-gi-closure-sponza-visual-metrics/v1";
     public const string CoverageOracleSchemaVersion = "realtime-gi-closure-sponza-coverage-oracle/v1";
     public const int LockedWidth = 1600;
@@ -371,6 +371,8 @@ public sealed class SampleSponzaGiCaptureContract
         {
             violations.Add("Simple DDGI must be enabled for the non-direct-only capture outputs.");
         }
+        if (!settings.GlobalIllumination.SimpleDdgiThinSurfaceTransmissionEnabled)
+            violations.Add("Thin-surface transmission must be enabled for the curtain qualification capture.");
         if (!NearlyEqual(settings.GlobalIllumination.IndirectIntensity, 1.0f))
             violations.Add("Sponza physical indirect intensity must be 1.0.");
         if (!NearlyEqual(settings.GlobalIllumination.EnvironmentFallbackIntensity, 1.0f))
@@ -854,9 +856,9 @@ public sealed class SampleSponzaGiCaptureContract
         ValidateBookmark(HighBookmark, nameof(HighBookmark));
         ValidateBounds(SceneBounds, nameof(SceneBounds));
 
-        if (ReceiverRois.Count != 6)
+        if (ReceiverRois.Count != 9)
             throw new InvalidOperationException(
-                "The closure capture requires central façade, both side galleries, right wall, arcade, and outdoor receiver ROIs.");
+                "The closure capture requires the established coverage ROIs plus lit-side, shadowed-side, and adjacent curtain transport ROIs.");
         if (Outputs.Count != 22)
             throw new InvalidOperationException(
                 "The closure capture requires the twenty-two locked beauty/direct/GI attribution outputs.");
@@ -898,7 +900,9 @@ public sealed class SampleSponzaGiCaptureContract
         string[] requiredReceiverRois =
         [
             "central-upper-facade", "right-upper-wall", "left-gallery-interior",
-            "right-gallery-interior", "arcade-interior", "outdoor-reference-patch"
+            "right-gallery-interior", "arcade-interior", "outdoor-reference-patch",
+            "curtain-lit-side-floor", "curtain-shadow-side-receiver",
+            "curtain-adjacent-bounce"
         ];
         if (!ReceiverRois.Select(static roi => roi.Name).OrderBy(static value => value, StringComparer.Ordinal).SequenceEqual(
                 requiredReceiverRois.OrderBy(static value => value, StringComparer.Ordinal), StringComparer.Ordinal))
@@ -1004,6 +1008,24 @@ public sealed class SampleSponzaGiCaptureContract
                     new BoundingBox(new Vector3(-2.0f, 1.0f, 4.0f), new Vector3(2.0f, 3.0f, 7.0f)),
                     3.75f,
                     "Sunlit outdoor/courtyard reference patch for distinguishing transport changes from exposure changes.",
+                    RequireCoarserFallback: true),
+                new SampleSponzaGiReceiverRoi(
+                    "curtain-lit-side-floor",
+                    new BoundingBox(new Vector3(-5.5f, -0.25f, -3.8f), new Vector3(5.5f, 2.25f, -2.35f)),
+                    3.75f,
+                    "Incident-side curtain and floor patch used to attribute reflected cloth transport.",
+                    RequireCoarserFallback: true),
+                new SampleSponzaGiReceiverRoi(
+                    "curtain-shadow-side-receiver",
+                    new BoundingBox(new Vector3(-5.5f, -0.25f, -2.3f), new Vector3(5.5f, 4.5f, -0.75f)),
+                    3.75f,
+                    "Receiver immediately behind the negative-Z curtain row for transmitted direct and indirect light.",
+                    RequireCoarserFallback: true),
+                new SampleSponzaGiReceiverRoi(
+                    "curtain-adjacent-bounce",
+                    new BoundingBox(new Vector3(-6.5f, -0.25f, 2.25f), new Vector3(6.5f, 4.5f, 3.75f)),
+                    3.75f,
+                    "Adjacent wall/floor strip expected to retain the authored colored curtain bounce.",
                     RequireCoarserFallback: true)
             ],
             [

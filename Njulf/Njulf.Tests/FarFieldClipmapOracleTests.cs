@@ -118,7 +118,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiParams>(), Is.EqualTo(208));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiVolume>(), Is.EqualTo(96));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiRayResult>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportRayCache>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportRayCache>(), Is.EqualTo(36));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiProbeState>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiProbeUpdate>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiRelocationClassification>(), Is.EqualTo(48));
@@ -571,6 +571,8 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(clipmap, Does.Contain("bool TraceFarFieldClipmap("));
+                Assert.That(voxelize, Does.Contain("GI_MATERIAL_THIN_SURFACE_TRANSMISSION"));
+                Assert.That(voxelize, Does.Contain("DDGI_THIN_FAR_FIELD_EXCLUDED_COUNTER"));
                 Assert.That(clipmap, Does.Contain("bool TraceFarFieldClipmapDetailed("));
                 Assert.That(clipmap, Does.Contain("bool TraceFarFieldClipmapSphereMarch("));
                 Assert.That(clipmap, Does.Contain("ReadFarFieldDistanceVoxels"));

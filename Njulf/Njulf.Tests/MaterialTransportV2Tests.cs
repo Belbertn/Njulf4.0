@@ -9,6 +9,111 @@ namespace Njulf.Tests;
 public sealed class MaterialTransportV2Tests
 {
     [Test]
+    public void ThinSurfaceOracle_SplitsOpaqueDiffuseBudgetWithoutCreatingEnergy()
+    {
+        Vector3 baseColor = new(0.82f, 0.48f, 0.21f);
+        Vector3 tint = new(0.35f, 0.7f, 1.0f);
+        const float transmission = 0.62f;
+        Vector3 opaque = GiMaterialReferenceEvaluator.EvaluateHemisphericalDiffuseReflectance(
+            baseColor,
+            metallic: 0.0f,
+            ior: 1.5f,
+            specularFactor: 1.0f,
+            specularColor: Vector3.One,
+            transmission: 0.0f);
+        Vector3 reflected = GiMaterialReferenceEvaluator.EvaluateHemisphericalDiffuseReflectance(
+            baseColor,
+            metallic: 0.0f,
+            ior: 1.5f,
+            specularFactor: 1.0f,
+            specularColor: Vector3.One,
+            transmission: transmission);
+        Vector3 transmitted = GiMaterialReferenceEvaluator.EvaluateHemisphericalDiffuseTransmittance(
+            baseColor,
+            metallic: 0.0f,
+            ior: 1.5f,
+            specularFactor: 1.0f,
+            specularColor: Vector3.One,
+            transmission: transmission,
+            transmissionTint: tint);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reflected.X + transmitted.X, Is.LessThanOrEqualTo(opaque.X + 1e-6f));
+            Assert.That(reflected.Y + transmitted.Y, Is.LessThanOrEqualTo(opaque.Y + 1e-6f));
+            Assert.That(reflected.Z + transmitted.Z, Is.LessThanOrEqualTo(opaque.Z + 1e-6f));
+            Assert.That(transmitted.X / transmitted.Z, Is.EqualTo(opaque.X * tint.X / (opaque.Z * tint.Z)).Within(1e-5f));
+        });
+    }
+
+    [Test]
+    public void ThinSurfaceOracle_CoversOpaqueBlackTintAndMetallicPassiveCases()
+    {
+        Vector3 baseColor = new(0.75f, 0.5f, 0.25f);
+        Vector3 opaque = GiMaterialReferenceEvaluator.EvaluateHemisphericalDiffuseReflectance(baseColor, 0f);
+        Vector3 zeroFactor = GiMaterialReferenceEvaluator.EvaluateHemisphericalDiffuseTransmittance(
+            baseColor, 0f, 1.5f, 1f, Vector3.One, 0f, Vector3.One);
+        Vector3 blackTint = GiMaterialReferenceEvaluator.EvaluateHemisphericalDiffuseTransmittance(
+            baseColor, 0f, 1.5f, 1f, Vector3.One, 1f, Vector3.Zero);
+        Vector3 whiteLimit = GiMaterialReferenceEvaluator.EvaluateHemisphericalDiffuseTransmittance(
+            baseColor, 0f, 1.5f, 1f, Vector3.One, 1f, Vector3.One);
+        Vector3 metallic = GiMaterialReferenceEvaluator.EvaluateHemisphericalDiffuseTransmittance(
+            baseColor, 1f, 1.5f, 1f, Vector3.One, 1f, Vector3.One);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(zeroFactor, Is.EqualTo(Vector3.Zero));
+            Assert.That(blackTint, Is.EqualTo(Vector3.Zero));
+            Assert.That(whiteLimit.X, Is.EqualTo(opaque.X).Within(1e-6f));
+            Assert.That(whiteLimit.Y, Is.EqualTo(opaque.Y).Within(1e-6f));
+            Assert.That(whiteLimit.Z, Is.EqualTo(opaque.Z).Within(1e-6f));
+            Assert.That(metallic, Is.EqualTo(Vector3.Zero));
+        });
+    }
+
+    [Test]
+    public void ThinSurfaceCompiler_PublishesPolicyMeanAndOpaqueRasterMode()
+    {
+        var definition = new MaterialDefinition
+        {
+            BaseColorFactor = new Vector4(0.7f, 0.4f, 0.2f, 1f),
+            AlphaMode = MaterialAlphaMode.Opaque,
+            FeatureFlags = MaterialFeatureFlags.Transmission,
+            Extensions = MaterialExtensionDefinition.None with
+            {
+                TransmissionPolicy = GiTransmissionPolicy.ThinSurface,
+                TransmissionFactor = 0.45f,
+                ThinTransmissionTint = new Vector3(1f, 0.5f, 0.25f)
+            }
+        };
+
+        CompiledMaterialTransport compiled = MaterialTransportCompiler.Compile(definition);
+        GiSurfaceSample oracle = GiMaterialReferenceEvaluator.EvaluateSurface(
+            definition,
+            GiMaterialSampleInputs.Defaults);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(compiled.Metadata.RenderMode, Is.EqualTo(MaterialRenderMode.Opaque));
+            Assert.That(compiled.Metadata.TransmissionPolicy, Is.EqualTo(GiTransmissionPolicy.ThinSurface));
+            Assert.That(
+                (((GiMaterialTransportFlags)compiled.GpuMaterial.TransportFlags) &
+                 GiMaterialTransportFlags.ThinSurfaceTransmission) != 0,
+                Is.True);
+            Assert.That(
+                (((GiMaterialTransportFlags)compiled.GpuMaterial.TransportFlags) &
+                 GiMaterialTransportFlags.TransmissionProfileValid) != 0,
+                Is.True);
+            Assert.That(compiled.GpuMaterial.DdgiAverageTransmission.X,
+                Is.EqualTo(oracle.TransmittedDiffuseReflectance.X).Within(1e-6f));
+            Assert.That(compiled.GpuMaterial.DdgiAverageTransmission.Y,
+                Is.EqualTo(oracle.TransmittedDiffuseReflectance.Y).Within(1e-6f));
+            Assert.That(compiled.GpuMaterial.DdgiAverageTransmission.Z,
+                Is.EqualTo(oracle.TransmittedDiffuseReflectance.Z).Within(1e-6f));
+        });
+    }
+
+    [Test]
     public void CpuOracle_ImplementsMetalEmissionAoAlphaAndSidednessInvariants()
     {
         Vector3 metallicDiffuse = GiMaterialReferenceEvaluator.EvaluateHemisphericalDiffuseReflectance(
@@ -271,8 +376,8 @@ public sealed class MaterialTransportV2Tests
             Assert.That(
                 highCompiled.TransportProfile.MeanDiffuseReflectance.X,
                 Is.LessThan(lowCompiled.TransportProfile.MeanDiffuseReflectance.X));
-            Assert.That(MaterialCompilationContext.CurrentAlgorithmVersion, Is.EqualTo(3u));
-            Assert.That(highCompiled.TransportProfile.AlgorithmVersion, Is.EqualTo(3u));
+            Assert.That(MaterialCompilationContext.CurrentAlgorithmVersion, Is.EqualTo(4u));
+            Assert.That(highCompiled.TransportProfile.AlgorithmVersion, Is.EqualTo(4u));
         });
     }
 
@@ -867,10 +972,21 @@ public sealed class MaterialTransportV2Tests
     {
         MaterialDefinition aboveOne = MaterialDefinitionValidator.ValidateAndNormalize(
             new MaterialDefinition { AlphaCutoff = 2f });
+        MaterialDefinition dormantThin = MaterialDefinitionValidator.ValidateAndNormalize(
+            new MaterialDefinition
+            {
+                FeatureFlags = MaterialFeatureFlags.Transmission,
+                Extensions = MaterialExtensionDefinition.None with
+                {
+                    TransmissionPolicy = GiTransmissionPolicy.ThinSurface,
+                    TransmissionFactor = 0f
+                }
+            });
 
         Assert.Multiple(() =>
         {
             Assert.That(aboveOne.AlphaCutoff, Is.EqualTo(2f));
+            Assert.That(dormantThin.Extensions.TransmissionPolicy, Is.EqualTo(GiTransmissionPolicy.None));
             Assert.That(
                 () => MaterialDefinitionValidator.ValidateAndNormalize(
                     new MaterialDefinition { AlphaCutoff = -0.25f }),
@@ -886,6 +1002,19 @@ public sealed class MaterialTransportV2Tests
             Assert.That(
                 () => MaterialDefinitionValidator.ValidateAndNormalize(
                     new MaterialDefinition { MetallicFactor = float.NaN }),
+                Throws.InstanceOf<ArgumentOutOfRangeException>());
+            Assert.That(
+                () => MaterialDefinitionValidator.ValidateAndNormalize(
+                    new MaterialDefinition
+                    {
+                        FeatureFlags = MaterialFeatureFlags.Transmission,
+                        Extensions = MaterialExtensionDefinition.None with
+                        {
+                            TransmissionPolicy = GiTransmissionPolicy.ThinSurface,
+                            TransmissionFactor = 0.5f,
+                            ThinTransmissionTint = new Vector3(float.NaN, 1f, 1f)
+                        }
+                    }),
                 Throws.InstanceOf<ArgumentOutOfRangeException>());
         });
     }

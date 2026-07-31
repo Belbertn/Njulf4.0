@@ -1526,6 +1526,7 @@ namespace Njulf.Rendering.Resources
                 updated.PackedMeanGiDirectionalDiffuseBaseRg = 0;
                 updated.PackedMeanGiDirectionalDiffuseBaseBAndF0R = 0;
                 updated.PackedMeanGiDielectricF0Gb = 0;
+                updated.DdgiAverageTransmission = Vector4.Zero;
                 if (updated.FeatureFlags != slot.Data.FeatureFlags)
                 {
                     throw new InvalidOperationException(
@@ -1849,6 +1850,7 @@ namespace Njulf.Rendering.Resources
                 storedMaterial.PackedMeanGiDirectionalDiffuseBaseRg = 0;
                 storedMaterial.PackedMeanGiDirectionalDiffuseBaseBAndF0R = 0;
                 storedMaterial.PackedMeanGiDielectricF0Gb = 0;
+                storedMaterial.DdgiAverageTransmission = Vector4.Zero;
             }
             ApplyTransportInterpretation(
                 ref storedMaterial,
@@ -4249,6 +4251,7 @@ namespace Njulf.Rendering.Resources
                            y.PackedMeanGiDirectionalDiffuseBaseBAndF0R &&
                        x.PackedMeanGiDielectricF0Gb ==
                            y.PackedMeanGiDielectricF0Gb &&
+                       x.DdgiAverageTransmission.Equals(y.DdgiAverageTransmission) &&
                        x.DdgiAverageAlbedo.Equals(y.DdgiAverageAlbedo) &&
                        x.DdgiAverageEmissive.Equals(y.DdgiAverageEmissive) &&
                        x.DdgiMaterialPolicy.Equals(y.DdgiMaterialPolicy);
@@ -4283,6 +4286,7 @@ namespace Njulf.Rendering.Resources
                 hash.Add(obj.PackedMeanGiDirectionalDiffuseBaseRg);
                 hash.Add(obj.PackedMeanGiDirectionalDiffuseBaseBAndF0R);
                 hash.Add(obj.PackedMeanGiDielectricF0Gb);
+                hash.Add(obj.DdgiAverageTransmission);
                 hash.Add(obj.DdgiAverageAlbedo);
                 hash.Add(obj.DdgiAverageEmissive);
                 hash.Add(obj.DdgiMaterialPolicy);

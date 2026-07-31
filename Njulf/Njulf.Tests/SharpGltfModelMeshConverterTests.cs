@@ -82,6 +82,37 @@ public sealed class SharpGltfModelMeshConverterTests
     }
 
     [Test]
+    public void Import_SponzaCurtains_OptsInOnlyFabricMaterialsToThinTransmission()
+    {
+        string path = FindRepoFile("NjulfHelloGame", "NewSponza_Curtains_glTF.gltf");
+        using var importer = new ModelImporter();
+
+        ModelMesh mesh = importer.Import(
+            path,
+            new ImporterOptions { Backend = ModelImportBackend.SharpGltf });
+
+        ModelMaterial metal = mesh.Materials.Single(material => material.Name == "metal_door");
+        ModelMaterial[] fabric = mesh.Materials
+            .Where(material => material.Name?.StartsWith("curtain_", StringComparison.Ordinal) == true)
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fabric, Has.Length.EqualTo(3));
+            Assert.That(fabric, Is.All.Matches<ModelMaterial>(material =>
+                material.GiTransmissionPolicy == ModelGiTransmissionPolicy.ThinSurface));
+            Assert.That(fabric, Is.All.Matches<ModelMaterial>(material =>
+                Math.Abs(material.TransmissionFactor - 0.35f) < 0.0001f));
+            Assert.That(fabric, Is.All.Matches<ModelMaterial>(material =>
+                Math.Abs(material.ThinTransmissionTint.X - 0.9f) < 0.0001f &&
+                Math.Abs(material.ThinTransmissionTint.Y - 0.9f) < 0.0001f &&
+                Math.Abs(material.ThinTransmissionTint.Z - 0.9f) < 0.0001f));
+            Assert.That(metal.GiTransmissionPolicy, Is.EqualTo(ModelGiTransmissionPolicy.None));
+            Assert.That(metal.TransmissionFactor, Is.Zero);
+        });
+    }
+
+    [Test]
     public void Import_WithSharpGltfBackend_PreservesRepositoryAnimatedCharacterRenderContract()
     {
         string path = FindRepoFile("NjulfHelloGame", "Strut.glb");
@@ -520,7 +551,11 @@ public sealed class SharpGltfModelMeshConverterTests
             Assert.That(material.AnisotropyRotation, Is.EqualTo(0.52f).Within(0.0001f));
             Assert.That(material.AnisotropyTexture, Is.Not.Null);
 
-            Assert.That(material.TransmissionFactor, Is.EqualTo(0.61f).Within(0.0001f));
+            Assert.That(material.TransmissionFactor, Is.EqualTo(0.62f).Within(0.0001f));
+            Assert.That(material.GiTransmissionPolicy, Is.EqualTo(ModelGiTransmissionPolicy.ThinSurface));
+            Assert.That(material.ThinTransmissionTint.X, Is.EqualTo(0.9f).Within(0.0001f));
+            Assert.That(material.ThinTransmissionTint.Y, Is.EqualTo(0.55f).Within(0.0001f));
+            Assert.That(material.ThinTransmissionTint.Z, Is.EqualTo(0.25f).Within(0.0001f));
             Assert.That(material.TransmissionTexture, Is.Not.Null);
             Assert.That(material.ThicknessFactor, Is.EqualTo(0.71f).Within(0.0001f));
             Assert.That(material.AttenuationDistance, Is.EqualTo(7.2f).Within(0.0001f));
@@ -1132,6 +1167,11 @@ public sealed class SharpGltfModelMeshConverterTests
                   {
                     "name": "ExtensionMaterial",
                     "emissiveFactor": [0.1, 0.2, 0.3],
+                    "extras": {
+                      "NJULF_gi_transmission_policy": "ThinSurface",
+                      "NJULF_thin_transmission_factor": 0.62,
+                      "NJULF_thin_transmission_tint": [0.9, 0.55, 0.25]
+                    },
                     "extensions": {
                       "KHR_materials_clearcoat": {
                         "clearcoatFactor": 0.2,

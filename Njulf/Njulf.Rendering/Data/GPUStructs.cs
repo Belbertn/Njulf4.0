@@ -354,13 +354,15 @@ namespace Njulf.Rendering.Data
         public uint TextureContentRevision;
         // Six binary16 transport values occupy the existing 12-byte std430
         // alignment region before the following vec4. Low/high half order:
-        // diffuse base R/G, diffuse base B/F0 R, and F0 G/B. Reusing this
-        // region preserves the measured 304-byte CPU/GPU material ABI.
+        // diffuse base R/G, diffuse base B/F0 R, and F0 G/B. The appended
+        // transmission statistic intentionally advances the material ABI to
+        // 320 bytes while retaining the established offsets above this block.
         public uint PackedMeanGiDirectionalDiffuseBaseRg;
         public uint PackedMeanGiDirectionalDiffuseBaseBAndF0R;
         public uint PackedMeanGiDielectricF0Gb;
         public Vector4 DdgiAverageAlbedo;
         public Vector4 DdgiAverageEmissive;
+        public Vector4 DdgiAverageTransmission;
         public Vector4 DdgiMaterialPolicy;
 
         [Obsolete("Use TransportFlags. This compatibility alias has no GPU storage of its own.")]
@@ -1348,7 +1350,7 @@ namespace Njulf.Rendering.Data
         public Vector4 DirectionHitFlags;
     }
 
-    // 32 bytes. Persistent source transport cache.  A cache entry represents one
+    // 36 bytes. Persistent source transport cache.  A cache entry represents one
     // physical probe slot and one deterministic ray direction, so direct/sky/
     // emissive source tracing can be reused across multiple bounce iterations.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1358,6 +1360,7 @@ namespace Njulf.Rendering.Data
         public uint PackedDirection;
         public uint PackedNormal;
         public uint PackedAlbedo;
+        public uint PackedTransmission;
         public uint GenerationAndFlags;
     }
 

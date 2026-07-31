@@ -447,6 +447,12 @@ internal sealed class SampleDiagnosticsReporter
             $"{diagnostics.DdgiTraceEnergyHitZeroDirectCount}/{diagnostics.DdgiTraceEnergyHitWithDirectCount}, " +
             $"ddgiShadow rays/occluded/near/avgHitDistance=" +
             $"{diagnostics.DdgiShadowVisibilityRayCount}/{diagnostics.DdgiShadowVisibilityOccludedCount}/{diagnostics.DdgiShadowVisibilityNearHitCount}/{diagnostics.DdgiShadowVisibilityCommittedHitDistanceAverage:F3}, " +
+            $"ddgiThin hits detailed/compact/farExcluded={diagnostics.DdgiThinDetailedHitCount}/{diagnostics.DdgiThinCompactHitCount}/{diagnostics.DdgiThinFarFieldExcludedCount}, " +
+            $"direct reflected/transmitted={diagnostics.DdgiThinReflectedDirectLuminance:F5}/{diagnostics.DdgiThinTransmittedDirectLuminance:F5}, " +
+            $"recursive reflected/transmitted={diagnostics.DdgiThinReflectedRecursiveLuminance:F5}/{diagnostics.DdgiThinTransmittedRecursiveLuminance:F5}, " +
+            $"thinShadow rays/layers/max/limit/low={diagnostics.DdgiThinColoredShadowTransmissionRayCount}/{diagnostics.DdgiThinTotalLayersTraversed}/{diagnostics.DdgiThinMaximumLayersTraversed}/{diagnostics.DdgiThinLayerLimitTerminationCount}/{diagnostics.DdgiThinLowTransmittanceTerminationCount}, " +
+            $"thinZero opaque/thin/unsupported={diagnostics.DdgiThinZeroRadianceOpaqueHitCount}/{diagnostics.DdgiThinZeroRadianceThinHitCount}/{diagnostics.DdgiThinZeroRadianceUnsupportedHitCount}, " +
+            $"thinInvalid unsupported/clamp/nonfinite={diagnostics.DdgiThinUnsupportedTransmissionHitCount}/{diagnostics.DdgiThinEnergyClampCount}/{diagnostics.DdgiThinInvalidTransmissionCount}, " +
             $"ddgiDelivery highOwnershipLowIndirect={diagnostics.DdgiForwardEstimateHighOwnershipLowDeliveredIndirectCount}, " +
             $"ddgiLight selectedDir/local/visibility/skippedLocal={diagnostics.DdgiSelectedDirectionalHitCount}/{diagnostics.DdgiSelectedLocalHitCount}/{diagnostics.DdgiVisibilityRayCount}/{diagnostics.DdgiSkippedLocalLightCount}, " +
             $"ddgiBlend diagSamples/irrLum/conf/lowConf/nonzero/nonfinite/firefly=" +

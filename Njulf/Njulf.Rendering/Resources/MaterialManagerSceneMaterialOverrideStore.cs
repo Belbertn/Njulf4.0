@@ -67,6 +67,25 @@ public sealed class MaterialManagerSceneMaterialOverrideStore : ISceneMaterialOv
             source.ReceivesDiffuseGi,
             material.DiffuseGiParticipation,
             nameof(source.DiffuseGiParticipation));
+        GiTransmissionPolicy transmissionPolicy = ParseEnum(
+            source.GiTransmissionPolicy,
+            material.Extensions.TransmissionPolicy,
+            nameof(source.GiTransmissionPolicy));
+        SceneColor? transmissionTint = source.ThinTransmissionTint;
+        MaterialExtensionDefinition extensions = material.Extensions with
+        {
+            TransmissionPolicy = transmissionPolicy,
+            TransmissionFactor = source.ThinTransmissionFactor ?? material.Extensions.TransmissionFactor,
+            ThinTransmissionTint = transmissionTint is { } tint
+                ? new Vector3(tint.R, tint.G, tint.B)
+                : material.Extensions.ThinTransmissionTint
+        };
+        MaterialFeatureFlags featureFlags = material.FeatureFlags;
+        if (extensions.TransmissionFactor > 0f ||
+            extensions.TransmissionPolicy != GiTransmissionPolicy.None)
+        {
+            featureFlags |= MaterialFeatureFlags.Transmission;
+        }
 
         return MaterialDefinitionValidator.ValidateAndNormalize(material with
         {
@@ -89,7 +108,9 @@ public sealed class MaterialManagerSceneMaterialOverrideStore : ISceneMaterialOv
             RenderBlendModeOverride = blendMode,
             ShadingModel = shadingModel,
             EmissionGiParticipation = emissionParticipation,
-            DiffuseGiParticipation = diffuseParticipation
+            DiffuseGiParticipation = diffuseParticipation,
+            FeatureFlags = featureFlags,
+            Extensions = extensions
         });
     }
 
@@ -125,7 +146,14 @@ public sealed class MaterialManagerSceneMaterialOverrideStore : ISceneMaterialOv
                 SceneMaterialOverrideDocument.AutomaticBlendMode,
             ShadingModel = material.ShadingModel.ToString(),
             DiffuseGiParticipation = material.DiffuseGiParticipation.ToString(),
-            EmissionGiParticipation = material.EmissionGiParticipation.ToString()
+            EmissionGiParticipation = material.EmissionGiParticipation.ToString(),
+            GiTransmissionPolicy = material.Extensions.TransmissionPolicy.ToString(),
+            ThinTransmissionFactor = material.Extensions.TransmissionFactor,
+            ThinTransmissionTint = new SceneColor(
+                material.Extensions.ThinTransmissionTint.X,
+                material.Extensions.ThinTransmissionTint.Y,
+                material.Extensions.ThinTransmissionTint.Z,
+                1f)
         };
     }
 

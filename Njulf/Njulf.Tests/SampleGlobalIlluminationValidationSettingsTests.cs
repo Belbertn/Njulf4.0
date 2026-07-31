@@ -74,6 +74,8 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
         var settings = new RenderSettings();
 
         SampleSponzaGlobalIlluminationProfile.Configure(settings);
+
+        Assert.That(settings.GlobalIllumination.SimpleDdgiThinSurfaceTransmissionEnabled, Is.False);
         GlobalIlluminationSettings gi = settings.GlobalIllumination;
         gi.SimpleDdgiAuthoredVolumes.Add(new SimpleDdgiAuthoredVolume(
             new Vector3(-2.0f, 0.0f, -2.0f),
@@ -117,6 +119,7 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(settings.Exposure, Is.EqualTo(1.0f));
             Assert.That(settings.Environment.SkyIntensity, Is.EqualTo(1.0f));
             Assert.That(settings.Diagnostics.DirectionalShadowReceiverCountersEnabled, Is.True);
+            Assert.That(settings.GlobalIllumination.SimpleDdgiThinSurfaceTransmissionEnabled, Is.False);
         });
     }
 

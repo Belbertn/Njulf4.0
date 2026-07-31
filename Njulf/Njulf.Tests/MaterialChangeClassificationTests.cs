@@ -477,6 +477,11 @@ public sealed class MaterialChangeClassificationTests
             nameof(MaterialExtensionDefinition.TransmissionPolicy),
             MaterialFeatureFlags.Transmission,
             extension => extension with { TransmissionPolicy = GiTransmissionPolicy.ThinSurface },
+            DiffuseChange | MaterialChangeMask.AccelerationStructure);
+        yield return ExtensionChange(
+            nameof(MaterialExtensionDefinition.ThinTransmissionTint),
+            MaterialFeatureFlags.Transmission,
+            extension => extension with { ThinTransmissionTint = new Vector3(0.5f, 0.75f, 1f) },
             DiffuseChange);
 
         yield return ExtensionChange(

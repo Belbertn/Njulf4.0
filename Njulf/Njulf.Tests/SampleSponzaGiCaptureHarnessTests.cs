@@ -29,7 +29,7 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(SampleSponzaGiCaptureContract.HighBookmarkStationarySettleFrameCount, Is.EqualTo(2048));
             Assert.That(contract.VerticalPathDurationSeconds, Is.InRange(10, 20));
             Assert.That(contract.VerticalTraversalFrameCount, Is.EqualTo(960));
-            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v8"));
+            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v9"));
             Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(5_188));
             Assert.That(contract.LowBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeLow"));
             Assert.That(contract.LowBookmark.Position.Y, Is.EqualTo(1.35f));
@@ -42,7 +42,10 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                 "left-gallery-interior",
                 "right-gallery-interior",
                 "arcade-interior",
-                "outdoor-reference-patch"
+                "outdoor-reference-patch",
+                "curtain-lit-side-floor",
+                "curtain-shadow-side-receiver",
+                "curtain-adjacent-bounce"
             }));
             Assert.That(contract.Outputs.Select(static output => output.Name), Is.EquivalentTo(new[]
             {
@@ -219,8 +222,9 @@ public sealed class SampleSponzaGiCaptureHarnessTests
     public void CanonicalProfile_SatisfiesCaptureLockAndReceiverCoverageOracle()
     {
         var settings = new RenderSettings();
-        SampleSponzaGlobalIlluminationProfile.Configure(settings);
-        SampleSponzaGlobalIlluminationProfile.ApplyValidationOverlay(settings);
+        SampleGlobalIlluminationValidation.ConfigureRenderSettings(
+            settings,
+            SamplePerformanceScenario.GiSponzaRightWallStationary);
         settings.Particles.Enabled = false;
         settings.Animation.Enabled = false;
         SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;

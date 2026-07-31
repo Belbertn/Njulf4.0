@@ -480,7 +480,7 @@ namespace Njulf.Tests
                 Assert.That(data.AttenuationColor, Is.EqualTo(new Vector4(0.5f, 0f, 2f, 0f)));
                 Assert.That(data.SpecularColor, Is.EqualTo(new Vector4(0.2f, 0.4f, 1.5f, 1f)));
                 Assert.That(data.Iridescence, Is.EqualTo(new Vector4(1f, 3f, 0f, 550f)));
-                Assert.That(data.Dispersion, Is.EqualTo(new Vector4(0.65f, 0f, 0f, 0f)));
+                Assert.That(data.Dispersion, Is.EqualTo(new Vector4(0.65f, 1f, 1f, 1f)));
                 Assert.That(data.SpecularOffsetScale, Is.EqualTo(new Vector4(0.1f, 0.2f, 0.3f, 0.4f)));
                 Assert.That(data.ExtensionTextureRotations2.X, Is.EqualTo(0.5f));
                 Assert.That(data.ExtensionTextureTexCoordSets2.X, Is.EqualTo(1f));
@@ -502,6 +502,25 @@ namespace Njulf.Tests
                 });
 
             Assert.That(metadata.BlendMode, Is.EqualTo(MaterialBlendMode.AlphaBlend));
+        }
+
+        [Test]
+        public void BuildMaterialRenderMetadata_KeepsExplicitThinTransmissionOpaque()
+        {
+            MaterialRenderMetadata metadata = ModelRenderUploadService.BuildMaterialRenderMetadata(
+                new ModelMaterial
+                {
+                    FeatureFlags = (uint)MaterialFeatureFlags.Transmission,
+                    TransmissionFactor = 0.4f,
+                    GiTransmissionPolicy = ModelGiTransmissionPolicy.ThinSurface,
+                    AlphaMode = ModelAlphaMode.Opaque
+                });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(metadata.BlendMode, Is.EqualTo(MaterialBlendMode.Opaque));
+                Assert.That(metadata.TransmissionPolicy, Is.EqualTo(GiTransmissionPolicy.ThinSurface));
+            });
         }
 
         [Test]

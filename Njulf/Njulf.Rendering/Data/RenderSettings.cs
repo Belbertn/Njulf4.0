@@ -2000,6 +2000,12 @@ namespace Njulf.Rendering.Data
         /// </summary>
         public bool SimpleDdgiTransportV2Enabled { get; set; } = true;
         /// <summary>
+        /// Enables explicitly authored zero-thickness diffuse transmission in
+        /// Simple DDGI. Keep this separate from raster blend/opacity policy so
+        /// production captures can run deterministic opaque-versus-thin A/Bs.
+        /// </summary>
+        public bool SimpleDdgiThinSurfaceTransmissionEnabled { get; set; }
+        /// <summary>
         /// Keeps the V2 field entirely camera-clipmap driven.  No authored
         /// volumes participate while this mode is enabled; the near and mid rings
         /// instead use the automatic density policy below.
@@ -4651,6 +4657,7 @@ namespace Njulf.Rendering.Data
             public bool SimpleDdgiDynamicGeometryDirtyBoostEnabled { get; init; } = true;
             public bool SimpleDdgiAdaptiveRaysEnabled { get; init; } = true;
             public bool SimpleDdgiTransportV2Enabled { get; init; } = true;
+            public bool SimpleDdgiThinSurfaceTransmissionEnabled { get; init; }
             public bool SimpleDdgiAutomaticProbeDensityEnabled { get; init; } = true;
             public bool SimpleDdgiStructuredGatherEnabled { get; init; } = true;
             public SimpleDdgiLayoutAdmissionMode SimpleDdgiLayoutAdmissionMode { get; init; } = SimpleDdgiLayoutAdmissionMode.Degrade;
@@ -4859,6 +4866,7 @@ namespace Njulf.Rendering.Data
                     SimpleDdgiDynamicGeometryDirtyBoostEnabled = settings.SimpleDdgiDynamicGeometryDirtyBoostEnabled,
                     SimpleDdgiAdaptiveRaysEnabled = settings.SimpleDdgiAdaptiveRaysEnabled,
                     SimpleDdgiTransportV2Enabled = settings.SimpleDdgiTransportV2Enabled,
+                    SimpleDdgiThinSurfaceTransmissionEnabled = settings.SimpleDdgiThinSurfaceTransmissionEnabled,
                     SimpleDdgiAutomaticProbeDensityEnabled = settings.SimpleDdgiAutomaticProbeDensityEnabled,
                     SimpleDdgiStructuredGatherEnabled = settings.SimpleDdgiStructuredGatherEnabled,
                     SimpleDdgiLayoutAdmissionMode = settings.SimpleDdgiLayoutAdmissionMode,
@@ -5068,6 +5076,7 @@ namespace Njulf.Rendering.Data
                 settings.SimpleDdgiDynamicGeometryDirtyBoostEnabled = SimpleDdgiDynamicGeometryDirtyBoostEnabled;
                 settings.SimpleDdgiAdaptiveRaysEnabled = SimpleDdgiAdaptiveRaysEnabled;
                 settings.SimpleDdgiTransportV2Enabled = SimpleDdgiTransportV2Enabled;
+                settings.SimpleDdgiThinSurfaceTransmissionEnabled = SimpleDdgiThinSurfaceTransmissionEnabled;
                 settings.SimpleDdgiAutomaticProbeDensityEnabled = SimpleDdgiAutomaticProbeDensityEnabled;
                 settings.SimpleDdgiStructuredGatherEnabled = SimpleDdgiStructuredGatherEnabled;
                 settings.SimpleDdgiLayoutAdmissionMode = SimpleDdgiLayoutAdmissionMode;

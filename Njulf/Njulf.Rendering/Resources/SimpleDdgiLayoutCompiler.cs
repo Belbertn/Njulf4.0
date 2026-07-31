@@ -109,7 +109,8 @@ namespace Njulf.Rendering.Resources
             (ulong)(SimpleDdgiVolumeManager.VisibilityTexelsPerProbe *
                 SimpleDdgiVolumeManager.VisibilityTexelsPerProbe) * 8UL;
         public const ulong RayResultBytes = 32;
-        public const ulong TransportRayCacheBytes = 32;
+        public const uint TransportRayCacheAbiVersion = 2;
+        public const ulong TransportRayCacheBytes = 36;
         public const ulong ProbeStateBytesPerProbe = 32;
         public const ulong ProbeUpdateBytes = 32;
         public const ulong RelocationClassificationBytesPerProbe = 48;

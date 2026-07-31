@@ -625,6 +625,8 @@ struct GPUMaterialData
     uint PackedMeanGiDielectricF0Gb;
     vec4 DdgiAverageAlbedo;
     vec4 DdgiAverageEmissive;
+    // xyz = compact canonical thin-sheet diffuse transmittance.
+    vec4 DdgiAverageTransmission;
     vec4 DdgiMaterialPolicy;
 };
 
@@ -1274,7 +1276,7 @@ const int SIZEOF_GPU_PARTICLE_SORT_PUSH_CONSTANTS = 32;
 const int SIZEOF_GPU_MESHLET = 48;
 const int SIZEOF_GPU_OBJECT_DATA = 208;
 const int SIZEOF_GPU_DEBUG_LINE_VERTEX = 32;
-const int SIZEOF_GPU_MATERIAL_DATA = 304;
+const int SIZEOF_GPU_MATERIAL_DATA = 320;
 const int SIZEOF_GPU_MATERIAL_EXTENSION_DATA = 548;
 const int SIZEOF_GPU_LIGHT = 64;
 const int SIZEOF_GPU_SCENE_DATA = 400;
@@ -1857,6 +1859,26 @@ const uint DDGI_SHADOW_VISIBILITY_RAY_COUNTER = DDGI_SHADOW_VISIBILITY_COUNTER_B
 const uint DDGI_SHADOW_VISIBILITY_OCCLUDED_COUNTER = DDGI_SHADOW_VISIBILITY_COUNTER_BASE + 1u;
 const uint DDGI_SHADOW_VISIBILITY_NEAR_HIT_COUNTER = DDGI_SHADOW_VISIBILITY_COUNTER_BASE + 2u;
 const uint DDGI_SHADOW_VISIBILITY_HIT_DISTANCE_COUNTER = DDGI_SHADOW_VISIBILITY_COUNTER_BASE + 3u;
+const uint DDGI_THIN_TRANSPORT_COUNTER_BASE = 303u;
+const uint DDGI_THIN_DETAILED_HIT_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 0u;
+const uint DDGI_THIN_COMPACT_HIT_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 1u;
+const uint DDGI_THIN_FAR_FIELD_EXCLUDED_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 2u;
+const uint DDGI_THIN_REFLECTED_DIRECT_LUMINANCE_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 3u;
+const uint DDGI_THIN_TRANSMITTED_DIRECT_LUMINANCE_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 4u;
+const uint DDGI_THIN_REFLECTED_RECURSIVE_LUMINANCE_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 5u;
+const uint DDGI_THIN_TRANSMITTED_RECURSIVE_LUMINANCE_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 6u;
+const uint DDGI_THIN_SHADOW_TRANSMISSION_RAY_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 7u;
+const uint DDGI_THIN_SHADOW_TOTAL_LAYER_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 8u;
+const uint DDGI_THIN_SHADOW_MAX_LAYER_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 9u;
+const uint DDGI_THIN_SHADOW_LAYER_LIMIT_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 10u;
+const uint DDGI_THIN_SHADOW_LOW_TRANSMITTANCE_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 11u;
+const uint DDGI_THIN_ZERO_RADIANCE_OPAQUE_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 12u;
+const uint DDGI_THIN_ZERO_RADIANCE_THIN_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 13u;
+const uint DDGI_THIN_ZERO_RADIANCE_UNSUPPORTED_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 14u;
+const uint DDGI_THIN_UNSUPPORTED_TRANSMISSION_HIT_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 15u;
+const uint DDGI_THIN_ENERGY_CLAMP_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 16u;
+const uint DDGI_THIN_INVALID_TRANSMISSION_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 17u;
+const float DDGI_THIN_LUMINANCE_SCALE = 4096.0;
 const float DDGI_SHADOW_VISIBILITY_HIT_DISTANCE_SCALE = 256.0;
 const float DIRECTIONAL_SHADOW_RECEIVER_DEPTH_QUANTIZATION_SCALE = 65535.0;
 const int OFFSET_GPU_DDGI_PROBE_CANDIDATE_PROBE_INDEX = 0;
@@ -2579,6 +2601,12 @@ float ReadRowMajorLinearDeterminant(uint bufferIndex, uint matrixWordOffset)
     return dot(x, cross(y, z));
 }
 
+void MaxRendererDiagnostic(uint frameIndex, uint counterIndex, uint value)
+{
+    uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) + frameIndex;
+    atomicMax(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[counterIndex], value);
+}
+
 // A negative-determinant instance reverses projected triangle winding. Mesh
 // shaders restore the authored logical facing before fixed-function culling
 // and gl_FrontFacing so depth, shadow, motion, alpha, and forward passes agree.
@@ -3057,7 +3085,8 @@ GPUMaterialData ReadMaterial(uint materialIndex)
         ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 63u);
     material.DdgiAverageAlbedo = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 64u);
     material.DdgiAverageEmissive = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 68u);
-    material.DdgiMaterialPolicy = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 72u);
+    material.DdgiAverageTransmission = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 72u);
+    material.DdgiMaterialPolicy = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 76u);
     return material;
 }
 

@@ -217,6 +217,20 @@ public sealed unsafe class AccelerationStructureManagerTests
             MaterialRenderMode.Mask,
             isGeometryDecal: false,
             AccelerationStructureGeometryDomain.Foliage);
+        DdgiAccelerationStructureGeometryPolicy opaqueThin = AccelerationStructureManager.ResolveGeometryPolicy(
+            isSkinned: false,
+            MaterialRenderMode.Opaque,
+            isGeometryDecal: false,
+            AccelerationStructureGeometryDomain.Static,
+            doubleSided: true,
+            transmissionPolicy: GiTransmissionPolicy.ThinSurface);
+        DdgiAccelerationStructureGeometryPolicy blendThin = AccelerationStructureManager.ResolveGeometryPolicy(
+            isSkinned: false,
+            MaterialRenderMode.Blend,
+            isGeometryDecal: false,
+            AccelerationStructureGeometryDomain.Dynamic,
+            doubleSided: true,
+            transmissionPolicy: GiTransmissionPolicy.ThinSurface);
 
         Assert.Multiple(() =>
         {
@@ -233,6 +247,15 @@ public sealed unsafe class AccelerationStructureManagerTests
             Assert.That(foliage.Include, Is.False);
             Assert.That(foliage.VisibilityPolicy, Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.FoliageProxyPending));
             Assert.That(foliage.Reason, Is.EqualTo(AccelerationStructureManager.FoliageDdgiExclusionReason));
+            Assert.That(opaqueThin.Include, Is.True);
+            Assert.That(blendThin.Include, Is.True);
+            Assert.That(opaqueThin.VisibilityPolicy,
+                Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.ThinSurfaceCandidateTested));
+            Assert.That(blendThin.VisibilityPolicy,
+                Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.ThinSurfaceCandidateTested));
+            Assert.That(opaqueThin.InstanceFlags,
+                Is.EqualTo(GeometryInstanceFlagsKHR.TriangleFacingCullDisableBitKhr));
+            Assert.That(opaqueThin.InstanceFlags.HasFlag(GeometryInstanceFlagsKHR.ForceOpaqueBitKhr), Is.False);
         });
     }
 
