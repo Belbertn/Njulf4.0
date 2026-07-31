@@ -70,6 +70,11 @@ namespace Njulf.Rendering.Pipeline
             }
 
             ResetGlobalIlluminationHistoryIfInputsChanged();
+            if (sceneData.GlobalIlluminationDdgiActive != 0 ||
+                sceneData.SimpleDdgiActive != 0)
+            {
+                PublishComputeStorageToFragment(cmd);
+            }
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             bool ssgiEnabled = ShouldApplySsgi(sceneData);
             bool materialTransportProvenanceEnabled =

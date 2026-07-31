@@ -65,11 +65,41 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
         ImGui.InputText("Filter settings", ref _filter, (nuint)256);
         ImGui.TextDisabled($"{PropertyEditors.Count(static item => item.Editable)} writable GI settings; changes apply immediately.");
         RenderScalarSettings(settings);
+        RenderLayeredReceiverSettings(renderSettings, editor.RendererDiagnostics);
         RenderSimpleDdgiAuthoredVolumes(editor, settings);
 
         if (!string.IsNullOrWhiteSpace(_lastError))
             ImGui.TextColored(new System.Numerics.Vector4(1f, 0.35f, 0.25f, 1f), _lastError);
         ImGui.End();
+    }
+
+    private static void RenderLayeredReceiverSettings(
+        RenderSettings settings,
+        RendererDiagnostics? diagnostics)
+    {
+        ImGui.SeparatorText("Transparent and decal receivers");
+        ImGui.TextWrapped(
+            "Layered receivers sample DDGI directly. SSGI-only presets leave these disabled because transparent fragments do not own the opaque depth/trace-source contract.");
+
+        bool transparentGi = settings.Transparency.ReceiveGlobalIllumination;
+        if (ImGui.Checkbox("Transparent materials receive DDGI", ref transparentGi))
+            settings.Transparency.ReceiveGlobalIllumination = transparentGi;
+
+        bool decalGi = settings.Decals.ReceiveGlobalIllumination;
+        if (ImGui.Checkbox("Geometry decals receive DDGI", ref decalGi))
+            settings.Decals.ReceiveGlobalIllumination = decalGi;
+
+        if (diagnostics == null)
+            return;
+
+        ImGui.TextDisabled(
+            $"Transparent samples: {diagnostics.DdgiTransparentReceiverSampleCount:N0}, " +
+            $"irradiance L: {diagnostics.DdgiTransparentReceiverIrradianceLuminanceAverage:0.####}, " +
+            $"final L: {diagnostics.DdgiTransparentReceiverFinalLuminanceAverage:0.####}");
+        ImGui.TextDisabled(
+            $"Decal samples: {diagnostics.DdgiDecalReceiverSampleCount:N0}, " +
+            $"irradiance L: {diagnostics.DdgiDecalReceiverIrradianceLuminanceAverage:0.####}, " +
+            $"final L: {diagnostics.DdgiDecalReceiverFinalLuminanceAverage:0.####}");
     }
 
     private void RenderRuntimeSummary(EditorController editor)

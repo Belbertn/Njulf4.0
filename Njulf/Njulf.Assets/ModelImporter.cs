@@ -1374,6 +1374,9 @@ namespace Njulf.Assets
             target.AlphaCutoff = material.AlphaCutoff ?? target.AlphaCutoff;
             target.DoubleSided = material.DoubleSided;
             target.Unlit = material.Unlit ?? target.Unlit;
+            target.IsGeometryDecal = material.IsGeometryDecal;
+            target.DecalLayer = material.DecalLayer;
+            target.DecalDepthBias = material.DecalDepthBias;
             target.AlbedoTexturePath = material.BaseColorTexturePath ?? target.AlbedoTexturePath;
             target.NormalTexturePath = material.NormalTexturePath ?? target.NormalTexturePath;
             target.MetallicRoughnessTexturePath = material.MetallicRoughnessTexturePath ?? target.MetallicRoughnessTexturePath;
@@ -2019,7 +2022,60 @@ namespace Njulf.Assets
                 ReadGltfMaterialExtensions(material, extensions, textures, imageSources, samplers);
             }
 
+            ReadNjulfMaterialExtras(material, materialElement);
+
             return material;
+        }
+
+        private static void ReadNjulfMaterialExtras(
+            GltfMaterial material,
+            JsonElement materialElement)
+        {
+            if (!materialElement.TryGetProperty("extras", out JsonElement extras))
+                return;
+            if (extras.ValueKind != JsonValueKind.Object)
+                return;
+
+            if (extras.TryGetProperty(
+                    Gltf.SharpGltfModelMeshConverter.GeometryDecalExtra,
+                    out JsonElement decal))
+            {
+                if (decal.ValueKind is not JsonValueKind.True and not JsonValueKind.False)
+                {
+                    throw new InvalidDataException(
+                        $"glTF material extra '{Gltf.SharpGltfModelMeshConverter.GeometryDecalExtra}' must be a boolean.");
+                }
+
+                material.IsGeometryDecal = decal.GetBoolean();
+            }
+
+            if (extras.TryGetProperty(
+                    Gltf.SharpGltfModelMeshConverter.DecalLayerExtra,
+                    out JsonElement layer))
+            {
+                if (!layer.TryGetInt32(out int value) || value is < 0 or > 255)
+                {
+                    throw new InvalidDataException(
+                        $"glTF material extra '{Gltf.SharpGltfModelMeshConverter.DecalLayerExtra}' must be an integer in [0, 255].");
+                }
+
+                material.DecalLayer = value;
+            }
+
+            if (extras.TryGetProperty(
+                    Gltf.SharpGltfModelMeshConverter.DecalDepthBiasExtra,
+                    out JsonElement bias))
+            {
+                if (!bias.TryGetSingle(out float value) ||
+                    !float.IsFinite(value) ||
+                    value is < 0f or > 0.01f)
+                {
+                    throw new InvalidDataException(
+                        $"glTF material extra '{Gltf.SharpGltfModelMeshConverter.DecalDepthBiasExtra}' must be a finite number in [0, 0.01].");
+                }
+
+                material.DecalDepthBias = value;
+            }
         }
 
         private static void ReadGltfMaterialExtensions(
@@ -2820,6 +2876,9 @@ namespace Njulf.Assets
         public float? AlphaCutoff { get; set; }
         public bool DoubleSided { get; set; }
         public bool? Unlit { get; set; }
+        public bool IsGeometryDecal { get; set; }
+        public int DecalLayer { get; set; }
+        public float DecalDepthBias { get; set; }
         public string? BaseColorTexturePath { get; set; }
         public string? NormalTexturePath { get; set; }
         public string? MetallicRoughnessTexturePath { get; set; }

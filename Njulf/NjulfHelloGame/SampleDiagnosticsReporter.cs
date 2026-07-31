@@ -174,13 +174,13 @@ internal sealed class SampleDiagnosticsReporter
             $"materials={diagnostics.MaterialCount}, textures={diagnostics.TextureCount}.");
         Console.WriteLine(
             $"Frame diagnostics transparency/decals: mode={diagnostics.TransparencyMode}, debug={diagnostics.TransparencyDebugView}, " +
-            $"receiveShadows={diagnostics.TransparentReceiveShadows}, solidObjects={diagnostics.SolidObjectCount}, maskedObjects={diagnostics.MaskedObjectCount}, " +
+            $"receiveShadows={diagnostics.TransparentReceiveShadows}, receiveDdgi={diagnostics.TransparentReceiveGlobalIllumination}, solidObjects={diagnostics.SolidObjectCount}, maskedObjects={diagnostics.MaskedObjectCount}, " +
             $"transparentObjects={diagnostics.TransparentObjectCount}, decalObjects={diagnostics.GeometryDecalObjectCount}, solidMeshlets={diagnostics.SolidMeshletCount}, " +
             $"maskedMeshlets={diagnostics.MaskedMeshletCount}, transparentMeshlets={diagnostics.TransparentMeshletCount}, decalMeshlets={diagnostics.GeometryDecalMeshletCount}, " +
             $"maskMaterials={diagnostics.MaskMaterialCount}, blendMaterials={diagnostics.BlendMaterialCount}, decalMaterials={diagnostics.GeometryDecalMaterialCount}, " +
             $"sortCandidates={diagnostics.TransparentSortCandidateCount}, sortUs={diagnostics.TransparentSortMicroseconds}, overflow={diagnostics.TransparentOverflowCount}, " +
             $"weightedOit={diagnostics.WeightedOitEnabled}, oitMiB={diagnostics.WeightedOitRenderTargetBytes / (1024.0 * 1024.0):F1}, " +
-            $"decalDebug={diagnostics.DecalDebugView}, decalsEnabled={diagnostics.GeometryDecalsEnabled}, decalBias={diagnostics.GeometryDecalDepthBias:F5}, " +
+            $"decalDebug={diagnostics.DecalDebugView}, decalsEnabled={diagnostics.GeometryDecalsEnabled}, receiveDdgi={diagnostics.DecalReceiveGlobalIllumination}, decalBias={diagnostics.GeometryDecalDepthBias:F5}, " +
             $"decalSlopeBias={diagnostics.GeometryDecalSlopeScaledDepthBias:F2}.");
         Console.WriteLine(
             $"Frame diagnostics animation: enabled={diagnostics.AnimationEnabled}, skinning={diagnostics.AnimationSkinningMode}, debug={diagnostics.AnimationDebugView}, " +

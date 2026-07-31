@@ -230,7 +230,10 @@ namespace Njulf.Tests
                 model.Materials,
                 Has.Some.Matches<ModelMaterial>(m =>
                     string.Equals(m.Name, "dirt_decal", StringComparison.OrdinalIgnoreCase) &&
-                    m.AlphaMode == ModelAlphaMode.Blend));
+                    m.AlphaMode == ModelAlphaMode.Blend &&
+                    m.IsGeometryDecal &&
+                    m.DecalLayer == 0 &&
+                    Math.Abs(m.DecalDepthBias - 0.0005f) < 0.000001f));
         }
 
         [Test]

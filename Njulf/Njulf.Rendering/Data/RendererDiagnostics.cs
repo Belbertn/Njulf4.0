@@ -333,10 +333,12 @@ namespace Njulf.Rendering.Data
         public TransparencyDebugView TransparencyDebugView { get; init; } = TransparencyDebugView.None;
         public DecalDebugView DecalDebugView { get; init; } = DecalDebugView.None;
         public int TransparentReceiveShadows { get; init; }
+        public int TransparentReceiveGlobalIllumination { get; init; }
         public int WeightedOitEnabled { get; init; }
         public ulong WeightedOitRenderTargetBytes { get; init; }
         public int WeightedOitRenderTargetCount { get; init; }
         public int GeometryDecalsEnabled { get; init; }
+        public int DecalReceiveGlobalIllumination { get; init; }
         public float GeometryDecalDepthBias { get; init; }
         public float GeometryDecalSlopeScaledDepthBias { get; init; }
         public ulong SolidDepthMeshletDrawUploadBytes { get; init; }
@@ -1166,6 +1168,12 @@ namespace Njulf.Rendering.Data
         public float SimpleDdgiTransportBounceLuminanceAverage { get; init; }
         public float SimpleDdgiTransportSourceLuminanceAverage { get; init; }
         public float SimpleDdgiTransportTotalLuminanceAverage { get; init; }
+        public uint DdgiTransparentReceiverSampleCount { get; init; }
+        public float DdgiTransparentReceiverIrradianceLuminanceAverage { get; init; }
+        public float DdgiTransparentReceiverFinalLuminanceAverage { get; init; }
+        public uint DdgiDecalReceiverSampleCount { get; init; }
+        public float DdgiDecalReceiverIrradianceLuminanceAverage { get; init; }
+        public float DdgiDecalReceiverFinalLuminanceAverage { get; init; }
         public float DdgiVisibilityMomentMeanAverage { get; init; }
         public float DdgiVisibilityMomentVarianceAverage { get; init; }
         public float DdgiVisibilityProbeDistanceAverage { get; init; }

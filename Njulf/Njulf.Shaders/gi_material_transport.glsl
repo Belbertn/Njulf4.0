@@ -24,6 +24,7 @@ const uint GI_MATERIAL_HAS_EMISSIVE_TEXTURE = 1u << 14u;
 const uint GI_MATERIAL_LEGACY_V1_FALLBACK = 1u << 15u;
 const uint GI_MATERIAL_UNSUPPORTED_TRANSMISSION = 1u << 16u;
 const uint GI_MATERIAL_COMPACT_TEXTURE_FALLBACK = 1u << 17u;
+const uint GI_MATERIAL_GEOMETRY_DECAL = 1u << 18u;
 
 const float GI_MATERIAL_PI = 3.14159265358979323846;
 // Cosine-weighted hemispherical average of 1 - SchlickFresnel(F0, NdotL).

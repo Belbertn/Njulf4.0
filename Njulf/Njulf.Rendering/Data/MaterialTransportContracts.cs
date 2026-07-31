@@ -77,6 +77,12 @@ public enum GiMaterialTransportFlags : uint
     /// valid.
     /// </summary>
     CompactTextureFallback = 1u << 17,
+    /// <summary>
+    /// The raster surface is an explicitly authored geometry decal. This flag
+    /// is consumed by forward shading so decals can use an independent
+    /// indirect-lighting policy while sharing the transparent draw path.
+    /// </summary>
+    GeometryDecal = 1u << 18,
     QualityShift = 24,
     QualityMask = 0x0f00_0000u
 }

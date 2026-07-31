@@ -311,6 +311,16 @@ bool MaterialTransportProvenanceEnabled()
     return (pc.Push.DiagnosticFlags & 8u) != 0u;
 }
 
+bool ForwardDecalGlobalIlluminationEnabled()
+{
+    return (pc.Push.DiagnosticFlags & 16u) != 0u;
+}
+
+bool DdgiLayeredReceiverCountersEnabled()
+{
+    return (pc.Push.DiagnosticFlags & 32u) != 0u;
+}
+
 bool DdgiSparseDiagnosticPixel()
 {
     uvec2 pixel = uvec2(max(gl_FragCoord.xy, vec2(0.0)));
@@ -391,6 +401,16 @@ const uint DDGI_FORWARD_ESTIMATE_ENVIRONMENT_FALLBACK_WEIGHT_COUNTER = DDGI_FORW
 const uint DDGI_SAMPLED_PROBE_CURRENT_FRUSTUM_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 43u;
 const uint DDGI_SAMPLED_PROBE_SIDE_REAR_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 44u;
 const uint DDGI_SAMPLED_PROBE_STALE_AGE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 45u;
+// Appended after all pre-existing renderer diagnostic families. Each receiver
+// owns sample count, sampled-irradiance luminance, and delivered diffuse
+// luminance, in that order.
+const uint DDGI_LAYERED_RECEIVER_COUNTER_BASE = 297u;
+const uint DDGI_TRANSPARENT_RECEIVER_SAMPLE_COUNT_COUNTER = DDGI_LAYERED_RECEIVER_COUNTER_BASE + 0u;
+const uint DDGI_TRANSPARENT_RECEIVER_IRRADIANCE_LUMINANCE_COUNTER = DDGI_LAYERED_RECEIVER_COUNTER_BASE + 1u;
+const uint DDGI_TRANSPARENT_RECEIVER_FINAL_LUMINANCE_COUNTER = DDGI_LAYERED_RECEIVER_COUNTER_BASE + 2u;
+const uint DDGI_DECAL_RECEIVER_SAMPLE_COUNT_COUNTER = DDGI_LAYERED_RECEIVER_COUNTER_BASE + 3u;
+const uint DDGI_DECAL_RECEIVER_IRRADIANCE_LUMINANCE_COUNTER = DDGI_LAYERED_RECEIVER_COUNTER_BASE + 4u;
+const uint DDGI_DECAL_RECEIVER_FINAL_LUMINANCE_COUNTER = DDGI_LAYERED_RECEIVER_COUNTER_BASE + 5u;
 const uint DDGI_PRIMARY_UPDATE_REASON_AGE_REFRESH = 5u;
 const float DDGI_FORWARD_ESTIMATE_LOW_DELIVERED_LUMINANCE_THRESHOLD = 0.00001;
 
@@ -1978,10 +1998,39 @@ void AccumulateDdgiVisibilityMomentDiagnostics(
         AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_VISIBILITY_ZERO_TRANSPORT_WITH_IRRADIANCE_COUNTER, 1u);
 }
 
-void AccumulateDdgiForwardEstimateDiagnostics(HybridDiffuseGiResult hybridDiffuse, DdgiSampleResult ddgi, vec3 rawDdgiDiffuse)
+void AccumulateDdgiForwardEstimateDiagnostics(
+    HybridDiffuseGiResult hybridDiffuse,
+    DdgiSampleResult ddgi,
+    vec3 rawDdgiDiffuse,
+    bool geometryDecal)
 {
-    if (!DdgiForwardEstimateDiagnosticPixel())
+    bool opaqueDiagnostic = DdgiForwardEstimateDiagnosticPixel();
+    bool layeredDiagnostic =
+        DdgiLayeredReceiverCountersEnabled() && DdgiSparseDiagnosticPixel();
+    if (!opaqueDiagnostic && !layeredDiagnostic)
         return;
+
+    if (layeredDiagnostic)
+    {
+        uint receiverCounterBase = geometryDecal
+            ? DDGI_DECAL_RECEIVER_SAMPLE_COUNT_COUNTER
+            : DDGI_TRANSPARENT_RECEIVER_SAMPLE_COUNT_COUNTER;
+        AddRendererDiagnostic(
+            pc.Push.CurrentFrameIndex,
+            receiverCounterBase,
+            1u);
+        AddRendererDiagnostic(
+            pc.Push.CurrentFrameIndex,
+            receiverCounterBase + 1u,
+            PackDdgiForwardEstimateLuminance(
+                DdgiDiagnosticLuminance(ddgi.irradiance)));
+        AddRendererDiagnostic(
+            pc.Push.CurrentFrameIndex,
+            receiverCounterBase + 2u,
+            PackDdgiForwardEstimateLuminance(
+                DdgiDiagnosticLuminance(hybridDiffuse.diffuse)));
+        return;
+    }
 
     float spatialCoverage = clamp(ddgi.spatialCoverage, 0.0, 1.0);
     float supportCoverage = clamp(ddgi.supportCoverage, 0.0, 1.0);
@@ -3427,6 +3476,8 @@ void WriteForwardColor(vec4 color)
 #endif
 }
 
+float forwardDebugOutputAlpha;
+
 bool IsDdgiDebugView(uint view)
 {
     return view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE &&
@@ -3542,7 +3593,9 @@ vec3 ApplyDdgiDebugIdentity(vec3 color, uint view)
 
 void WriteDdgiDebugColor(uint view, vec3 color)
 {
-    WriteForwardColor(vec4(ApplyDdgiDebugIdentity(color, view), 1.0));
+    WriteForwardColor(vec4(
+        ApplyDdgiDebugIdentity(color, view),
+        forwardDebugOutputAlpha));
 }
 
 void WriteSsgiTraceSource(vec4 color)
@@ -3655,6 +3708,8 @@ void main()
     float alphaMode = materialCoverage.AlphaMode;
     float alphaCutoff = materialCoverage.AlphaCutoff;
     float outputAlpha = materialCoverage.Alpha;
+    forwardDebugOutputAlpha =
+        alphaMode > 0.5 && alphaMode < 1.5 ? 1.0 : outputAlpha;
 
     if (!MaterialCoverageSurvivesForward(materialCoverage))
         discard;
@@ -4329,10 +4384,12 @@ void main()
         directLighting = mix(directLighting, cascadeColor, 0.35);
     }
 
-    // Transparent passes deliberately disable the global-GI flag.  The simple
-    // DDGI path must honour that same contract; previously it ignored the flag
-    // and performed the full eight-probe gather for alpha-blended fragments.
-    bool globalIlluminationEnabled = ForwardGlobalIlluminationEnabled() != 0u;
+    bool geometryDecal = GiMaterialHasFlag(
+        material.TransportFlags,
+        GI_MATERIAL_GEOMETRY_DECAL);
+    bool globalIlluminationEnabled = geometryDecal
+        ? ForwardDecalGlobalIlluminationEnabled()
+        : ForwardGlobalIlluminationEnabled() != 0u;
     SimpleDdgiParams simpleDdgiParams = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
     bool simpleDdgiConfigured = (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_ENABLED) != 0u && simpleDdgiParams.probeCount > 0u;
     bool simpleDdgiActive = simpleDdgiConfigured &&
@@ -4473,7 +4530,11 @@ void main()
         simpleHybridDiagnostics.nearContactSuppression = 1.0 - simpleLeakAttenuation;
         simpleHybridDiagnostics.effectiveDdgiWeight = simpleOwnership;
         simpleHybridDiagnostics.suppressionMask = hybridSuppressionMask;
-        AccumulateDdgiForwardEstimateDiagnostics(simpleHybridDiagnostics, ddgiSample, ddgiDiffuse);
+        AccumulateDdgiForwardEstimateDiagnostics(
+            simpleHybridDiagnostics,
+            ddgiSample,
+            ddgiDiffuse,
+            geometryDecal);
         AccumulateDdgiInvestigationForwardDiagnostics(
             true,
             simpleDdgiParams,
@@ -4503,7 +4564,11 @@ void main()
         simpleFallbackDiagnostics.nearContactSuppression = 0.0;
         simpleFallbackDiagnostics.effectiveDdgiWeight = 0.0;
         simpleFallbackDiagnostics.suppressionMask = vec3(0.0);
-        AccumulateDdgiForwardEstimateDiagnostics(simpleFallbackDiagnostics, ddgiSample, vec3(0.0));
+        AccumulateDdgiForwardEstimateDiagnostics(
+            simpleFallbackDiagnostics,
+            ddgiSample,
+            vec3(0.0),
+            geometryDecal);
         AccumulateDdgiInvestigationForwardDiagnostics(
             true,
             simpleDdgiParams,
@@ -4530,7 +4595,11 @@ void main()
         ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, diffuseReflectance, ambientOcclusion);
         float ddgiEnvironmentFallbackIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 13u), 0.0, 4.0);
         HybridDiffuseGiResult hybridDiffuse = ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo, ddgiEnvironmentFallbackIntensity, debugViewMode);
-        AccumulateDdgiForwardEstimateDiagnostics(hybridDiffuse, ddgiSample, ddgiDiffuse);
+        AccumulateDdgiForwardEstimateDiagnostics(
+            hybridDiffuse,
+            ddgiSample,
+            ddgiDiffuse,
+            geometryDecal);
         ddgiCoverage = hybridDiffuse.ddgiCoverage;
         fallbackWeight = hybridDiffuse.environmentFallbackWeight;
         nearContactSuppression = hybridDiffuse.nearContactSuppression;

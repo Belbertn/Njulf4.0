@@ -281,11 +281,16 @@ public sealed class ShaderBuildTests
         Assert.Multiple(() =>
         {
             Assert.That(shader, Does.Contain("if (dot(normal, lightDirection) <= 0.0)"));
-            Assert.That(shader, Does.Contain("bool globalIlluminationEnabled = ForwardGlobalIlluminationEnabled() != 0u;"));
+            Assert.That(shader, Does.Contain("GI_MATERIAL_GEOMETRY_DECAL"));
+            Assert.That(shader, Does.Contain("? ForwardDecalGlobalIlluminationEnabled()"));
             Assert.That(shader, Does.Contain("if (!globalIlluminationEnabled)"));
             Assert.That(shader, Does.Contain("finalDiffuseIndirect = diffuseIbl * indirectAo;"));
-            Assert.That(sortedTransparency, Does.Contain("globalIlluminationEnabled: false"));
-            Assert.That(weightedTransparency, Does.Contain("globalIlluminationEnabled: false"));
+            Assert.That(sortedTransparency, Does.Contain("sceneData.TransparentReceiveGlobalIllumination"));
+            Assert.That(weightedTransparency, Does.Contain("sceneData.TransparentReceiveGlobalIllumination"));
+            Assert.That(sortedTransparency, Does.Contain("sceneData.DecalReceiveGlobalIllumination"));
+            Assert.That(weightedTransparency, Does.Contain("sceneData.DecalReceiveGlobalIllumination"));
+            Assert.That(shader, Does.Contain("forwardDebugOutputAlpha"));
+            Assert.That(shader, Does.Contain("DdgiLayeredReceiverCountersEnabled()"));
         });
     }
 
@@ -1998,6 +2003,58 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float sampledDepth = texture(BindlessTextures[nonuniformEXT(SPOT_SHADOW_ATLAS_TEXTURE_INDEX)], atlasUv).r;"));
             Assert.That(shader, Does.Contain("radius > 0 && PointShadowFaceEdgeDistance(faceUv) <= seamWidth"));
             Assert.That(shader, Does.Contain("shadow.BiasStrengthTexelSize.z <= 0.0"));
+        });
+    }
+
+    [Test]
+    public void ForwardPasses_PublishComputeAndTransferStorageToFragmentConsumers()
+    {
+        string passBase = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "RenderPassBase.cs");
+        string simplePasses = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "SimpleDdgiPasses.cs");
+        string opaquePass = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "ForwardPlusPass.cs");
+        string sortedPass = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "TransparentForwardPass.cs");
+        string weightedPass = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "WeightedTransparentPass.cs");
+        string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(passBase, Does.Contain(
+                "PipelineStageFlags2.ComputeShaderBit |"));
+            Assert.That(passBase, Does.Contain(
+                "PipelineStageFlags2.TransferBit"));
+            Assert.That(passBase, Does.Contain(
+                "DstStageMask = PipelineStageFlags2.FragmentShaderBit"));
+            Assert.That(passBase, Does.Contain(
+                "DstAccessMask = AccessFlags2.ShaderStorageReadBit"));
+            Assert.That(opaquePass, Does.Contain(
+                "PublishComputeStorageToFragment(cmd)"));
+            Assert.That(sortedPass, Does.Contain(
+                "PublishComputeStorageToFragment(cmd)"));
+            Assert.That(weightedPass, Does.Contain(
+                "PublishComputeStorageToFragment(cmd)"));
+            Assert.That(simplePasses, Does.Contain(
+                "DstStageMask = PipelineStageFlags2.ComputeShaderBit"));
+            Assert.That(simplePasses, Does.Not.Contain(
+                "PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit"));
+            Assert.That(
+                shader,
+                Does.Contain(
+                    $"DDGI_LAYERED_RECEIVER_COUNTER_BASE = {RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterBase}u"));
         });
     }
 

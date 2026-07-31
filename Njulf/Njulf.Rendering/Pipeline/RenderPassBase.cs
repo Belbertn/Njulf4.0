@@ -111,6 +111,33 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdBindDescriptorSets(cmd, bindPoint, layout, 1, 1, &textureSet, 0, null);
         }
 
+        /// <summary>
+        /// Publishes storage written by DDGI compute/transfer work to forward
+        /// fragment consumers. Keeping this at the consumer boundary is valid
+        /// on graphics queues and covers every atlas/state range without
+        /// placing FragmentShaderBit in a compute-only command buffer.
+        /// </summary>
+        protected unsafe void PublishComputeStorageToFragment(CommandBuffer cmd)
+        {
+            var memoryBarrier = new MemoryBarrier2
+            {
+                SType = StructureType.MemoryBarrier2,
+                SrcStageMask = PipelineStageFlags2.ComputeShaderBit |
+                               PipelineStageFlags2.TransferBit,
+                SrcAccessMask = AccessFlags2.ShaderStorageWriteBit |
+                                AccessFlags2.TransferWriteBit,
+                DstStageMask = PipelineStageFlags2.FragmentShaderBit,
+                DstAccessMask = AccessFlags2.ShaderStorageReadBit
+            };
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                MemoryBarrierCount = 1,
+                PMemoryBarriers = &memoryBarrier
+            };
+            _context.Api.CmdPipelineBarrier2(cmd, &dependencyInfo);
+        }
+
         protected static RenderingAttachmentInfo ColorAttachment(
             ImageView view,
             ImageLayout layout,

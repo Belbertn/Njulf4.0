@@ -218,7 +218,13 @@ namespace Njulf.Rendering.Data
         uint SimpleDdgiTransportSourceCacheMissCount,
         float SimpleDdgiTransportBounceLuminanceAverage,
         float SimpleDdgiTransportSourceLuminanceAverage,
-        float SimpleDdgiTransportTotalLuminanceAverage)
+        float SimpleDdgiTransportTotalLuminanceAverage,
+        uint TransparentReceiverSampleCount,
+        float TransparentReceiverIrradianceLuminanceAverage,
+        float TransparentReceiverFinalLuminanceAverage,
+        uint DecalReceiverSampleCount,
+        float DecalReceiverIrradianceLuminanceAverage,
+        float DecalReceiverFinalLuminanceAverage)
     {
         public static DdgiForwardEstimateCounters Empty { get; } = default;
 

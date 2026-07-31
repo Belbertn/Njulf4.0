@@ -839,6 +839,30 @@ public sealed class MaterialTransportV2Tests
     }
 
     [Test]
+    public void Compiler_PublishesGeometryDecalClassificationToRasterAndGpuTransport()
+    {
+        CompiledMaterialTransport compiled = MaterialTransportCompiler.Compile(
+            new MaterialDefinition
+            {
+                AlphaMode = MaterialAlphaMode.Blend,
+                ShadingModel = MaterialShadingModel.Decal,
+                IsGeometryDecal = true,
+                DecalLayer = 4,
+                DecalDepthBias = 0.00075f
+            });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(compiled.Metadata.IsGeometryDecal, Is.True);
+            Assert.That(compiled.Metadata.DecalLayer, Is.EqualTo(4));
+            Assert.That(
+                ((GiMaterialTransportFlags)compiled.GpuMaterial.TransportFlags)
+                .HasFlag(GiMaterialTransportFlags.GeometryDecal),
+                Is.True);
+        });
+    }
+
+    [Test]
     public void Validator_PreservesCutoffAboveOneAndRejectsNegativeOrNonFiniteAuthoredData()
     {
         MaterialDefinition aboveOne = MaterialDefinitionValidator.ValidateAndNormalize(

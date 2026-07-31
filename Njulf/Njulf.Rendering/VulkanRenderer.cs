@@ -1853,8 +1853,13 @@ namespace Njulf.Rendering
             sceneData.TransparencyMode = Settings.Transparency.Mode;
             sceneData.TransparencyDebugView = Settings.Transparency.DebugView;
             sceneData.TransparentReceiveShadows = Settings.Transparency.ReceiveShadows;
+            sceneData.TransparentReceiveGlobalIllumination =
+                Settings.Transparency.ReceiveGlobalIllumination;
+            sceneData.TransparentDdgiReceiverCountersEnabled = false;
             sceneData.DecalDebugView = Settings.Decals.DebugView;
             sceneData.GeometryDecalsEnabled = geometryDecalsEnabled;
+            sceneData.DecalReceiveGlobalIllumination =
+                Settings.Decals.ReceiveGlobalIllumination;
             sceneData.GeometryDecalDepthBias = Settings.Decals.GeometryDepthBias;
             sceneData.GeometryDecalSlopeScaledDepthBias = Settings.Decals.GeometrySlopeScaledDepthBias;
             sceneData.HiZMipCount = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.MipLevels ?? 0u : 0u;
@@ -1877,6 +1882,19 @@ namespace Njulf.Rendering
                 PrepareReflectionProbes(scene, sceneData);
             PrepareAccelerationStructures(scene, sceneData);
             PrepareDdgiProbeVolumes(scene, camera, sceneData, lightSnapshot, hiZDecision.CameraCut);
+            // Transparent shading cannot use the opaque SSGI trace/source
+            // contract. Resolve these receiver policies specifically against
+            // an available DDGI backend after probe preparation has populated
+            // the current-frame counts.
+            bool ddgiAvailableForLayeredReceivers =
+                ForwardPlusPass.ShouldApplyDdgi(sceneData, Settings.GlobalIllumination);
+            sceneData.TransparentReceiveGlobalIllumination &=
+                ddgiAvailableForLayeredReceivers;
+            sceneData.DecalReceiveGlobalIllumination &=
+                ddgiAvailableForLayeredReceivers;
+            sceneData.TransparentDdgiReceiverCountersEnabled =
+                ddgiAvailableForLayeredReceivers &&
+                Settings.Diagnostics.DdgiForwardEstimateCountersEnabled;
             BuildDebugOverlayDrawCommands(scene, sceneData);
             sceneData.DebugDrawSnapshot = _debugDraw.Snapshot();
             ApplyCompletedSceneSubmissionCounters(sceneData, _completedSceneSubmissionCounters);
@@ -4217,6 +4235,8 @@ namespace Njulf.Rendering
                 TransparencyDebugView = sceneData.TransparencyDebugView,
                 DecalDebugView = sceneData.DecalDebugView,
                 TransparentReceiveShadows = sceneData.TransparentReceiveShadows ? 1 : 0,
+                TransparentReceiveGlobalIllumination =
+                    sceneData.TransparentReceiveGlobalIllumination ? 1 : 0,
                 WeightedOitEnabled = sceneData.TransparentPassEnabled && sceneData.TransparencyMode == TransparencyMode.WeightedBlendedOit ? 1 : 0,
                 WeightedOitRenderTargetBytes = _renderTargets?.WeightedOitRenderTargetBytes ?? 0,
                 WeightedOitRenderTargetCount = _renderTargets == null ? 0 : 2,
@@ -4572,6 +4592,12 @@ namespace Njulf.Rendering
                 SimpleDdgiTransportBounceLuminanceAverage = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportBounceLuminanceAverage : 0.0f,
                 SimpleDdgiTransportSourceLuminanceAverage = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceLuminanceAverage : 0.0f,
                 SimpleDdgiTransportTotalLuminanceAverage = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportTotalLuminanceAverage : 0.0f,
+                DdgiTransparentReceiverSampleCount = giUsesDdgi ? sceneData.DdgiTransparentReceiverSampleCount : 0u,
+                DdgiTransparentReceiverIrradianceLuminanceAverage = giUsesDdgi ? sceneData.DdgiTransparentReceiverIrradianceLuminanceAverage : 0.0f,
+                DdgiTransparentReceiverFinalLuminanceAverage = giUsesDdgi ? sceneData.DdgiTransparentReceiverFinalLuminanceAverage : 0.0f,
+                DdgiDecalReceiverSampleCount = giUsesDdgi ? sceneData.DdgiDecalReceiverSampleCount : 0u,
+                DdgiDecalReceiverIrradianceLuminanceAverage = giUsesDdgi ? sceneData.DdgiDecalReceiverIrradianceLuminanceAverage : 0.0f,
+                DdgiDecalReceiverFinalLuminanceAverage = giUsesDdgi ? sceneData.DdgiDecalReceiverFinalLuminanceAverage : 0.0f,
                 DdgiVisibilityMomentMeanAverage = giUsesDdgi ? sceneData.DdgiVisibilityMomentMeanAverage : 0.0f,
                 DdgiVisibilityMomentVarianceAverage = giUsesDdgi ? sceneData.DdgiVisibilityMomentVarianceAverage : 0.0f,
                 DdgiVisibilityProbeDistanceAverage = giUsesDdgi ? sceneData.DdgiVisibilityProbeDistanceAverage : 0.0f,
@@ -4797,6 +4823,8 @@ namespace Njulf.Rendering
                         ? "Emergency GI fallback is active."
                         : sceneData.AccelerationStructureFallbackReason,
                 GeometryDecalsEnabled = sceneData.GeometryDecalsEnabled ? 1 : 0,
+                DecalReceiveGlobalIllumination =
+                    sceneData.DecalReceiveGlobalIllumination ? 1 : 0,
                 GeometryDecalDepthBias = sceneData.GeometryDecalDepthBias,
                 GeometryDecalSlopeScaledDepthBias = sceneData.GeometryDecalSlopeScaledDepthBias,
                 SolidDepthMeshletDrawUploadBytes = sceneData.SolidDepthMeshletDrawUploadBytes,
@@ -10962,6 +10990,12 @@ namespace Njulf.Rendering
                 sceneData.SimpleDdgiTransportBounceLuminanceAverage = 0.0f;
                 sceneData.SimpleDdgiTransportSourceLuminanceAverage = 0.0f;
                 sceneData.SimpleDdgiTransportTotalLuminanceAverage = 0.0f;
+                sceneData.DdgiTransparentReceiverSampleCount = 0;
+                sceneData.DdgiTransparentReceiverIrradianceLuminanceAverage = 0.0f;
+                sceneData.DdgiTransparentReceiverFinalLuminanceAverage = 0.0f;
+                sceneData.DdgiDecalReceiverSampleCount = 0;
+                sceneData.DdgiDecalReceiverIrradianceLuminanceAverage = 0.0f;
+                sceneData.DdgiDecalReceiverFinalLuminanceAverage = 0.0f;
                 sceneData.DdgiVisibilityMomentMeanAverage = 0.0f;
                 sceneData.DdgiVisibilityMomentVarianceAverage = 0.0f;
                 sceneData.DdgiVisibilityProbeDistanceAverage = 0.0f;
@@ -11050,6 +11084,16 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiTransportBounceLuminanceAverage = Math.Max(counters.SimpleDdgiTransportBounceLuminanceAverage, 0.0f);
             sceneData.SimpleDdgiTransportSourceLuminanceAverage = Math.Max(counters.SimpleDdgiTransportSourceLuminanceAverage, 0.0f);
             sceneData.SimpleDdgiTransportTotalLuminanceAverage = Math.Max(counters.SimpleDdgiTransportTotalLuminanceAverage, 0.0f);
+            sceneData.DdgiTransparentReceiverSampleCount = counters.TransparentReceiverSampleCount;
+            sceneData.DdgiTransparentReceiverIrradianceLuminanceAverage =
+                Math.Max(counters.TransparentReceiverIrradianceLuminanceAverage, 0.0f);
+            sceneData.DdgiTransparentReceiverFinalLuminanceAverage =
+                Math.Max(counters.TransparentReceiverFinalLuminanceAverage, 0.0f);
+            sceneData.DdgiDecalReceiverSampleCount = counters.DecalReceiverSampleCount;
+            sceneData.DdgiDecalReceiverIrradianceLuminanceAverage =
+                Math.Max(counters.DecalReceiverIrradianceLuminanceAverage, 0.0f);
+            sceneData.DdgiDecalReceiverFinalLuminanceAverage =
+                Math.Max(counters.DecalReceiverFinalLuminanceAverage, 0.0f);
             sceneData.DdgiForwardGatherFallbackUsed = Math.Max(sceneData.DdgiForwardGatherFallbackUsed, checked((int)Math.Min(int.MaxValue, counters.ShaderGatherFallbackAttemptCount)));
             if (counters.FastGatherAttemptCount > counters.FastGatherAcceptedCount &&
                 counters.ShaderGatherFallbackAttemptCount == 0)

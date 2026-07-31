@@ -2004,6 +2004,8 @@ namespace Njulf.Rendering.Resources
                 flags |= GiMaterialTransportFlags.HasOcclusionTexture;
             if (material.EmissiveTexture != null || !string.IsNullOrWhiteSpace(material.EmissiveTexturePath))
                 flags |= GiMaterialTransportFlags.HasEmissiveTexture;
+            if (material.IsGeometryDecal)
+                flags |= GiMaterialTransportFlags.GeometryDecal;
             return (uint)flags;
         }
 

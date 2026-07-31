@@ -757,6 +757,8 @@ public static class MaterialTransportCompiler
             flags |= GiMaterialTransportFlags.HasOcclusionTexture;
         if (material.Emissive.IsBound)
             flags |= GiMaterialTransportFlags.HasEmissiveTexture;
+        if (material.IsGeometryDecal)
+            flags |= GiMaterialTransportFlags.GeometryDecal;
         flags |= (GiMaterialTransportFlags)((uint)quality << (int)GiMaterialTransportFlags.QualityShift);
         return flags;
     }

@@ -300,6 +300,16 @@ namespace Njulf.Tests
                         3u,
                         materialTransportProvenanceEnabled: true),
                     Is.EqualTo(0x30fu));
+                Assert.That(
+                    GPUForwardPushConstants.PackDiagnosticFlags(
+                        false,
+                        decalGlobalIlluminationEnabled: true) & 16u,
+                    Is.EqualTo(16u));
+                Assert.That(
+                    GPUForwardPushConstants.PackDiagnosticFlags(
+                        false,
+                        ddgiLayeredReceiverCountersEnabled: true) & 32u,
+                    Is.EqualTo(32u));
             });
         }
 

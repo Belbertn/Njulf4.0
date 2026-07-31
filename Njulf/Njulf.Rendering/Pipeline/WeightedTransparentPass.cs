@@ -43,6 +43,11 @@ namespace Njulf.Rendering.Pipeline
             if (!ShouldExecute(frameIndex, sceneData))
                 return;
 
+            if (sceneData.TransparentReceiveGlobalIllumination ||
+                sceneData.DecalReceiveGlobalIllumination)
+            {
+                PublishComputeStorageToFragment(cmd);
+            }
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             SetFullViewportAndScissor(cmd, renderExtent);
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
@@ -107,12 +112,15 @@ namespace Njulf.Rendering.Pipeline
                     transparentReceiveShadows: sceneData.TransparentReceiveShadows,
                     transparencyDebugView: (uint)sceneData.TransparencyDebugView,
                     ambientOcclusionForwardSamplingMode: (uint)AmbientOcclusionForwardSamplingMode.Disabled,
-                    // Weighted OIT has the same per-fragment cost constraint as
-                    // sorted alpha; use its environment fallback rather than DDGI.
-                    globalIlluminationEnabled: false),
+                    globalIlluminationEnabled:
+                        sceneData.TransparentReceiveGlobalIllumination),
                 DiagnosticFlags = GPUForwardPushConstants.PackDiagnosticFlags(
                     ddgiForwardEstimateCountersEnabled: false,
-                    directionalShadowPreviewCascade: (uint)sceneData.DirectionalShadowPreviewCascade)
+                    directionalShadowPreviewCascade: (uint)sceneData.DirectionalShadowPreviewCascade,
+                    decalGlobalIlluminationEnabled:
+                        sceneData.DecalReceiveGlobalIllumination,
+                    ddgiLayeredReceiverCountersEnabled:
+                        sceneData.TransparentDdgiReceiverCountersEnabled)
             };
 
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();

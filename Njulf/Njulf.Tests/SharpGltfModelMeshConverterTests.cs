@@ -325,6 +325,9 @@ public sealed class SharpGltfModelMeshConverterTests
             Assert.That(material.AlphaMode, Is.EqualTo(ModelAlphaMode.Mask));
             Assert.That(material.AlphaCutoff, Is.EqualTo(0.33f).Within(0.0001f));
             Assert.That(material.DoubleSided, Is.True);
+            Assert.That(material.IsGeometryDecal, Is.True);
+            Assert.That(material.DecalLayer, Is.EqualTo(7));
+            Assert.That(material.DecalDepthBias, Is.EqualTo(0.001f).Within(0.000001f));
             Assert.That(material.Albedo.X, Is.EqualTo(0.2f).Within(0.0001f));
             Assert.That(material.Albedo.Y, Is.EqualTo(0.3f).Within(0.0001f));
             Assert.That(material.Albedo.Z, Is.EqualTo(0.4f).Within(0.0001f));
@@ -363,6 +366,25 @@ public sealed class SharpGltfModelMeshConverterTests
             Assert.That(mesh.ImportDiagnostics.TextureTransformCount, Is.EqualTo(1));
             Assert.That(mesh.ImportDiagnostics.ExternalImageCount, Is.EqualTo(2));
         });
+    }
+
+    [Test]
+    public void Import_WithSharpGltfBackend_RejectsMalformedGeometryDecalMetadata()
+    {
+        string path = CreateTexturedMaterialGltf();
+        string json = File.ReadAllText(path).Replace(
+            "\"NJULF_geometry_decal\": true",
+            "\"NJULF_geometry_decal\": \"yes\"",
+            StringComparison.Ordinal);
+        File.WriteAllText(path, json);
+        using var importer = new ModelImporter();
+
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(
+            () => importer.Import(
+                path,
+                new ImporterOptions { Backend = ModelImportBackend.SharpGltf }))!;
+        Assert.That(error.InnerException, Is.TypeOf<InvalidDataException>());
+        Assert.That(error.InnerException!.Message, Does.Contain("NJULF_geometry_decal"));
     }
 
     [Test]
@@ -845,6 +867,11 @@ public sealed class SharpGltfModelMeshConverterTests
                     "alphaMode": "MASK",
                     "alphaCutoff": 0.33,
                     "doubleSided": true,
+                    "extras": {
+                      "NJULF_geometry_decal": true,
+                      "NJULF_decal_layer": 7,
+                      "NJULF_decal_depth_bias": 0.001
+                    },
                     "emissiveFactor": [0.1, 0.2, 0.3],
                     "pbrMetallicRoughness": {
                       "baseColorFactor": [0.2, 0.3, 0.4, 0.5],

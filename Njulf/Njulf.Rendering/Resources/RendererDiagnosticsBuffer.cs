@@ -67,8 +67,14 @@ namespace Njulf.Rendering.Resources
         public const int DdgiShadowVisibilityCounterBase =
             DdgiDeliveryFailureCounterBase + DdgiDeliveryFailureCounterCount;
         public const int DdgiShadowVisibilityCounterCount = 4;
-        public const int CounterCount =
+        // Layered receivers share the transparent draw path but must not be
+        // folded into the opaque 16x16 diagnostic grid. Keep a compact,
+        // appended family with count/irradiance/final-luminance per class.
+        public const int DdgiLayeredReceiverCounterBase =
             DdgiShadowVisibilityCounterBase + DdgiShadowVisibilityCounterCount;
+        public const int DdgiLayeredReceiverCounterCount = 6;
+        public const int CounterCount =
+            DdgiLayeredReceiverCounterBase + DdgiLayeredReceiverCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const float DdgiShadowHitDistanceScale = 256.0f;
@@ -245,6 +251,10 @@ namespace Njulf.Rendering.Resources
             uint sampledProbeCurrentFrustumCount = counters[DdgiForwardEstimateCounterBase + 43];
             uint sampledProbeSideRearCount = counters[DdgiForwardEstimateCounterBase + 44];
             uint sampledProbeStaleAgeCount = counters[DdgiForwardEstimateCounterBase + 45];
+            uint transparentReceiverSampleCount =
+                counters[DdgiLayeredReceiverCounterBase + 0];
+            uint decalReceiverSampleCount =
+                counters[DdgiLayeredReceiverCounterBase + 3];
             uint traceEnergySampleCount = counters[DdgiTraceEnergyCounterBase + 0];
             uint shadowVisibilityOccludedCount = counters[DdgiShadowVisibilityCounterBase + 1];
             uint traceEarlyOutDisabledCount = counters[DdgiTraceEarlyOutCounterBase + 0];
@@ -381,7 +391,9 @@ namespace Njulf.Rendering.Resources
                 blendEnergySampleCount > 0 ||
                 simpleDdgiTransportSampleCount > 0 ||
                 traceRingMismatchSampleValid > 0 ||
-                traceRingMismatchCorrectedCount > 0)
+                traceRingMismatchCorrectedCount > 0 ||
+                transparentReceiverSampleCount > 0 ||
+                decalReceiverSampleCount > 0)
             {
                 float invSampleCount = sampleCount > 0 ? 1.0f / sampleCount : 0.0f;
                 float invVisibilityMomentSampleCount = visibilityMomentSampleCount > 0 ? 1.0f / visibilityMomentSampleCount : 0.0f;
@@ -393,8 +405,16 @@ namespace Njulf.Rendering.Resources
                 float invSimpleDdgiTransportSampleCount = simpleDdgiTransportSampleCount > 0
                     ? 1.0f / simpleDdgiTransportSampleCount
                     : 0.0f;
+                float invTransparentReceiverSampleCount =
+                    transparentReceiverSampleCount > 0
+                        ? 1.0f / transparentReceiverSampleCount
+                        : 0.0f;
+                float invDecalReceiverSampleCount =
+                    decalReceiverSampleCount > 0
+                        ? 1.0f / decalReceiverSampleCount
+                        : 0.0f;
                 _lastCompletedDdgiForwardEstimateCounters[frameIndex] = new DdgiForwardEstimateCounters(
-                    ReadbackValid: sampleCount > 0 || clipmapInfoPrimaryAttemptCount > 0 || traceEnergySampleCount > 0 || traceEarlyOutDisabledCount > 0 || traceEarlyOutBeyondRequestCount > 0 || traceEarlyOutResolveBoundsCount > 0 || traceEarlyOutResolveProbeRangeCount > 0 || traceEarlyOutResolveClipmapCellCount > 0 || traceEarlyOutResolveClipmapRingCount > 0 || blendEnergySampleCount > 0 || simpleDdgiTransportSampleCount > 0 || traceRingMismatchSampleValid > 0 || traceRingMismatchCorrectedCount > 0 ? 1 : 0,
+                    ReadbackValid: sampleCount > 0 || clipmapInfoPrimaryAttemptCount > 0 || traceEnergySampleCount > 0 || traceEarlyOutDisabledCount > 0 || traceEarlyOutBeyondRequestCount > 0 || traceEarlyOutResolveBoundsCount > 0 || traceEarlyOutResolveProbeRangeCount > 0 || traceEarlyOutResolveClipmapCellCount > 0 || traceEarlyOutResolveClipmapRingCount > 0 || blendEnergySampleCount > 0 || simpleDdgiTransportSampleCount > 0 || traceRingMismatchSampleValid > 0 || traceRingMismatchCorrectedCount > 0 || transparentReceiverSampleCount > 0 || decalReceiverSampleCount > 0 ? 1 : 0,
                     SpatialCoverageAverage: counters[DdgiForwardEstimateCounterBase + 0] / DdgiForwardEstimateWeightScale * invSampleCount,
                     SupportCoverageAverage: counters[DdgiForwardEstimateCounterBase + 1] / DdgiForwardEstimateWeightScale * invSampleCount,
                     DataConfidenceAverage: counters[DdgiForwardEstimateCounterBase + 2] / DdgiForwardEstimateWeightScale * invSampleCount,
@@ -497,7 +517,25 @@ namespace Njulf.Rendering.Resources
                     SimpleDdgiTransportSourceCacheMissCount: counters[SimpleDdgiTransportCounterBase + 2],
                     SimpleDdgiTransportBounceLuminanceAverage: counters[SimpleDdgiTransportCounterBase + 3] / DdgiForwardEstimateLuminanceScale * invSimpleDdgiTransportSampleCount,
                     SimpleDdgiTransportSourceLuminanceAverage: counters[SimpleDdgiTransportCounterBase + 4] / DdgiForwardEstimateLuminanceScale * invSimpleDdgiTransportSampleCount,
-                    SimpleDdgiTransportTotalLuminanceAverage: counters[SimpleDdgiTransportCounterBase + 5] / DdgiForwardEstimateLuminanceScale * invSimpleDdgiTransportSampleCount);
+                    SimpleDdgiTransportTotalLuminanceAverage: counters[SimpleDdgiTransportCounterBase + 5] / DdgiForwardEstimateLuminanceScale * invSimpleDdgiTransportSampleCount,
+                    TransparentReceiverSampleCount: transparentReceiverSampleCount,
+                    TransparentReceiverIrradianceLuminanceAverage:
+                        counters[DdgiLayeredReceiverCounterBase + 1] /
+                        DdgiForwardEstimateLuminanceScale *
+                        invTransparentReceiverSampleCount,
+                    TransparentReceiverFinalLuminanceAverage:
+                        counters[DdgiLayeredReceiverCounterBase + 2] /
+                        DdgiForwardEstimateLuminanceScale *
+                        invTransparentReceiverSampleCount,
+                    DecalReceiverSampleCount: decalReceiverSampleCount,
+                    DecalReceiverIrradianceLuminanceAverage:
+                        counters[DdgiLayeredReceiverCounterBase + 4] /
+                        DdgiForwardEstimateLuminanceScale *
+                        invDecalReceiverSampleCount,
+                    DecalReceiverFinalLuminanceAverage:
+                        counters[DdgiLayeredReceiverCounterBase + 5] /
+                        DdgiForwardEstimateLuminanceScale *
+                        invDecalReceiverSampleCount);
             }
             else
             {

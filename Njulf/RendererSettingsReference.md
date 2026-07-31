@@ -402,6 +402,7 @@ Fog debug views:
 | `Mode` | Transparency mode: `SortedAlphaBlend`, `WeightedBlendedOit`. |
 | `DebugView` | Transparency debug view. |
 | `ReceiveShadows` | Transparent surfaces receive shadows. |
+| `ReceiveGlobalIllumination` | Transparent surfaces sample DDGI when a DDGI backend is active. SSGI-only presets disable this because layered fragments do not own the opaque trace-source contract. |
 | `SampleReflections` | Transparent surfaces sample reflections. |
 | `SortPerMeshlet` | Sorts transparency at meshlet granularity. |
 | `MaxTransparentMeshlets` | Transparent meshlet budget. |
@@ -424,12 +425,27 @@ Transparency debug views:
 | --- | --- |
 | `GeometryDecalsEnabled` | Enables geometry decals. |
 | `ProjectedDecalsEnabled` | Enables projected decals. |
+| `ReceiveGlobalIllumination` | Geometry decals sample DDGI independently of ordinary transparent materials. |
 | `DebugView` | Decal debug view. |
 | `GeometryDepthBias` | Geometry decal depth bias. |
 | `GeometrySlopeScaledDepthBias` | Geometry decal slope-scaled depth bias. |
 | `MaxProjectedDecals` | Maximum projected decals. |
 | `MaxProjectedDecalsPerTile` | Maximum projected decals per tile. |
 | `MaxProjectedDecalsPerPixel` | Maximum projected decals per pixel. |
+
+Geometry decals are authored explicitly in glTF material `extras`; names are
+not interpreted:
+
+```json
+"extras": {
+  "NJULF_geometry_decal": true,
+  "NJULF_decal_layer": 0,
+  "NJULF_decal_depth_bias": 0.0005
+}
+```
+
+`NJULF_decal_layer` accepts 0–255 and `NJULF_decal_depth_bias` accepts
+0–0.01. Invalid metadata fails import with a material-specific error.
 
 Decal debug views:
 
@@ -755,7 +771,7 @@ Control-modified chords are also used by the sample:
 | `Ctrl+F11` | Toggle scene GPU compaction. |
 | `Ctrl+F12` | Toggle scene indirect meshlet dispatch. |
 | `Ctrl+Keypad1` | Toggle the editor overlay in debug builds. |
-| `Ctrl+M` | Cycle material debug view. |
+| `Ctrl+K` | Cycle material debug view. |
 | `Ctrl+A` | Cycle animation debug view. |
 | `Ctrl+3` | Cycle lighting mode. |
 | `Ctrl+[` | Toggle auto exposure. |

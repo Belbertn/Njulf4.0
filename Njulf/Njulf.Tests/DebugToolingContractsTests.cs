@@ -51,7 +51,8 @@ namespace Njulf.Tests
                 ("simple DDGI gather rejection", RendererDiagnosticsBuffer.SimpleDdgiGatherRejectionCounterBase, RendererDiagnosticsBuffer.SimpleDdgiGatherRejectionCounterCount),
                 ("simple DDGI gather all failed", RendererDiagnosticsBuffer.SimpleDdgiGatherAllFailedCounterBase, RendererDiagnosticsBuffer.SimpleDdgiGatherAllFailedCounterCount),
                 ("DDGI delivery failure", RendererDiagnosticsBuffer.DdgiDeliveryFailureCounterBase, RendererDiagnosticsBuffer.DdgiDeliveryFailureCounterCount),
-                ("DDGI shadow visibility", RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterBase, RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterCount)
+                ("DDGI shadow visibility", RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterBase, RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterCount),
+                ("DDGI layered receivers", RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterBase, RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -82,6 +83,7 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiGatherRoleCount, Is.EqualTo(3));
                 Assert.That(RendererDiagnosticsBuffer.DdgiDeliveryFailureCounterCount, Is.EqualTo(1));
                 Assert.That(RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterCount, Is.EqualTo(4));
+                Assert.That(RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterCount, Is.EqualTo(6));
                 Assert.That(RendererDiagnosticsBuffer.DdgiShadowHitDistanceScale, Is.EqualTo(256.0f));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(nextExpectedStart));
                 Assert.That(RendererDiagnosticsBuffer.CounterBufferSize, Is.EqualTo((ulong)nextExpectedStart * sizeof(uint)));

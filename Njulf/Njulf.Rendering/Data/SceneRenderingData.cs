@@ -167,8 +167,11 @@ namespace Njulf.Rendering.Data
         public TransparencyMode TransparencyMode { get; set; } = TransparencyMode.SortedAlphaBlend;
         public TransparencyDebugView TransparencyDebugView { get; set; } = TransparencyDebugView.None;
         public bool TransparentReceiveShadows { get; set; } = true;
+        public bool TransparentReceiveGlobalIllumination { get; set; } = true;
+        public bool TransparentDdgiReceiverCountersEnabled { get; set; }
         public DecalDebugView DecalDebugView { get; set; } = DecalDebugView.None;
         public bool GeometryDecalsEnabled { get; set; } = true;
+        public bool DecalReceiveGlobalIllumination { get; set; } = true;
         public float GeometryDecalDepthBias { get; set; } = 0.0005f;
         public float GeometryDecalSlopeScaledDepthBias { get; set; }
         public bool AnimationEnabled { get; set; }
@@ -743,6 +746,12 @@ namespace Njulf.Rendering.Data
         public float SimpleDdgiTransportBounceLuminanceAverage { get; set; }
         public float SimpleDdgiTransportSourceLuminanceAverage { get; set; }
         public float SimpleDdgiTransportTotalLuminanceAverage { get; set; }
+        public uint DdgiTransparentReceiverSampleCount { get; set; }
+        public float DdgiTransparentReceiverIrradianceLuminanceAverage { get; set; }
+        public float DdgiTransparentReceiverFinalLuminanceAverage { get; set; }
+        public uint DdgiDecalReceiverSampleCount { get; set; }
+        public float DdgiDecalReceiverIrradianceLuminanceAverage { get; set; }
+        public float DdgiDecalReceiverFinalLuminanceAverage { get; set; }
         public float DdgiVisibilityMomentMeanAverage { get; set; }
         public float DdgiVisibilityMomentVarianceAverage { get; set; }
         public float DdgiVisibilityProbeDistanceAverage { get; set; }
@@ -1291,8 +1300,11 @@ namespace Njulf.Rendering.Data
             TransparencyMode = TransparencyMode.SortedAlphaBlend;
             TransparencyDebugView = TransparencyDebugView.None;
             TransparentReceiveShadows = true;
+            TransparentReceiveGlobalIllumination = true;
+            TransparentDdgiReceiverCountersEnabled = false;
             DecalDebugView = DecalDebugView.None;
             GeometryDecalsEnabled = true;
+            DecalReceiveGlobalIllumination = true;
             GeometryDecalDepthBias = 0.0005f;
             GeometryDecalSlopeScaledDepthBias = 0f;
             AnimationEnabled = false;
@@ -1932,6 +1944,12 @@ namespace Njulf.Rendering.Data
             SimpleDdgiTransportBounceLuminanceAverage = 0;
             SimpleDdgiTransportSourceLuminanceAverage = 0;
             SimpleDdgiTransportTotalLuminanceAverage = 0;
+            DdgiTransparentReceiverSampleCount = 0;
+            DdgiTransparentReceiverIrradianceLuminanceAverage = 0;
+            DdgiTransparentReceiverFinalLuminanceAverage = 0;
+            DdgiDecalReceiverSampleCount = 0;
+            DdgiDecalReceiverIrradianceLuminanceAverage = 0;
+            DdgiDecalReceiverFinalLuminanceAverage = 0;
             DdgiVisibilityMomentMeanAverage = 0;
             DdgiVisibilityMomentVarianceAverage = 0;
             DdgiVisibilityProbeDistanceAverage = 0;

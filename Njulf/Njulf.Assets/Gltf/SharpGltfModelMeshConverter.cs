@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Njulf.Core.Animation;
 using SharpGLTF.Schema2;
 using SharpGLTF.Runtime;
@@ -31,6 +32,10 @@ namespace Njulf.Assets.Gltf;
 
 internal static class SharpGltfModelMeshConverter
 {
+    internal const string GeometryDecalExtra = "NJULF_geometry_decal";
+    internal const string DecalLayerExtra = "NJULF_decal_layer";
+    internal const string DecalDepthBiasExtra = "NJULF_decal_depth_bias";
+
     public static ModelMesh Import(
         string path,
         ImporterOptions options,
@@ -217,10 +222,80 @@ internal static class SharpGltfModelMeshConverter
             }
 
             ApplyMaterialExtensions(imported, material, assetPath, diagnostics, imageSourceHints);
+            ApplyNjulfMaterialExtras(imported, material.Extras, material.LogicalIndex);
 
             yield return imported;
         }
     }
+
+    private static void ApplyNjulfMaterialExtras(
+        ModelMaterial imported,
+        JsonNode? extras,
+        int materialIndex)
+    {
+        if (extras == null)
+            return;
+        if (extras is not JsonObject objectExtras)
+            return;
+
+        if (objectExtras.TryGetPropertyValue(GeometryDecalExtra, out JsonNode? decalNode))
+        {
+            if (decalNode is not JsonValue decalValue ||
+                !decalValue.TryGetValue(out bool isGeometryDecal))
+            {
+                throw InvalidMaterialExtra(materialIndex, GeometryDecalExtra, "a boolean");
+            }
+
+            imported.IsGeometryDecal = isGeometryDecal;
+        }
+
+        if (objectExtras.TryGetPropertyValue(DecalLayerExtra, out JsonNode? layerNode))
+        {
+            if (layerNode is not JsonValue layerValue ||
+                !layerValue.TryGetValue(out int layer) ||
+                layer is < 0 or > 255)
+            {
+                throw InvalidMaterialExtra(
+                    materialIndex,
+                    DecalLayerExtra,
+                    "an integer in [0, 255]");
+            }
+
+            imported.DecalLayer = layer;
+        }
+
+        if (objectExtras.TryGetPropertyValue(DecalDepthBiasExtra, out JsonNode? biasNode))
+        {
+            double bias;
+            try
+            {
+                bias = biasNode?.GetValue<double>() ?? double.NaN;
+            }
+            catch (InvalidOperationException)
+            {
+                throw InvalidMaterialExtra(
+                    materialIndex,
+                    DecalDepthBiasExtra,
+                    "a finite number in [0, 0.01]");
+            }
+
+            if (!double.IsFinite(bias) || bias is < 0.0 or > 0.01)
+            {
+                throw InvalidMaterialExtra(
+                    materialIndex,
+                    DecalDepthBiasExtra,
+                    "a finite number in [0, 0.01]");
+            }
+
+            imported.DecalDepthBias = (float)bias;
+        }
+    }
+
+    private static InvalidDataException InvalidMaterialExtra(
+        int materialIndex,
+        string property,
+        string expected) =>
+        new($"glTF material {materialIndex} extra '{property}' must be {expected}.");
 
     private static float ValidateAlphaCutoff(float alphaCutoff, int materialIndex)
     {

@@ -544,6 +544,16 @@ public sealed class CookedAssetTests
                             material.AttenuationDistance)),
                 Is.True);
             Assert.That(
+                loaded.Materials.Materials,
+                Has.Some.Matches<ModelMaterial>(
+                    material =>
+                        string.Equals(
+                            material.Name,
+                            "dirt_decal",
+                            StringComparison.OrdinalIgnoreCase) &&
+                        material.AlphaMode == ModelAlphaMode.Blend &&
+                        material.IsGeometryDecal));
+            Assert.That(
                 loaded.Materials.PrimitiveTransportProfiles,
                 Has.Count.EqualTo(loaded.Mesh.SubMeshes.Count));
             Assert.That(

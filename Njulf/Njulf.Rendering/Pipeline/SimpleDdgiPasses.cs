@@ -585,20 +585,17 @@ namespace Njulf.Rendering.Pipeline
 
         private void InsertWriteBarrier(CommandBuffer cmd)
         {
-            // Diagnostic: keep every Simple-DDGI storage write visible both to the
-            // next compute dispatch and to forward fragment gather (irradiance,
-            // visibility, and probe state). Run this experiment on the graphics queue;
-            // FragmentShaderBit is not valid on a compute-only queue family.
-            PipelineStageFlags2 destinationStage =
-                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit;
-            AccessFlags2 destinationAccess = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit;
+            // This pass may execute on a compute-only queue. Publish only to
+            // subsequent compute dispatches here; graphics consumers establish
+            // their fragment visibility at the forward-pass boundary.
             var memoryBarrier = new MemoryBarrier2
             {
                 SType = StructureType.MemoryBarrier2,
                 SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
                 SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
-                DstStageMask = destinationStage,
-                DstAccessMask = destinationAccess
+                DstStageMask = PipelineStageFlags2.ComputeShaderBit,
+                DstAccessMask = AccessFlags2.ShaderStorageReadBit |
+                                AccessFlags2.ShaderStorageWriteBit
             };
             var dependencyInfo = new DependencyInfo
             {

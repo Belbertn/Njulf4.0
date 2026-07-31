@@ -881,6 +881,8 @@ namespace Njulf.Rendering.Data
         private const uint DdgiClipmapCoverageCountersEnabledFlag = 1u << 1;
         private const uint DirectionalShadowReceiverCountersEnabledFlag = 1u << 2;
         private const uint MaterialTransportProvenanceEnabledFlag = 1u << 3;
+        private const uint DecalGlobalIlluminationEnabledFlag = 1u << 4;
+        private const uint DdgiLayeredReceiverCountersEnabledFlag = 1u << 5;
         private const int DirectionalShadowPreviewCascadeShift = 8;
         private const uint DirectionalShadowPreviewCascadeMask = 0x03u;
 
@@ -926,12 +928,16 @@ namespace Njulf.Rendering.Data
             bool ddgiClipmapCoverageCountersEnabled = false,
             bool directionalShadowReceiverCountersEnabled = false,
             uint directionalShadowPreviewCascade = 0u,
-            bool materialTransportProvenanceEnabled = false)
+            bool materialTransportProvenanceEnabled = false,
+            bool decalGlobalIlluminationEnabled = false,
+            bool ddgiLayeredReceiverCountersEnabled = false)
         {
             return (ddgiForwardEstimateCountersEnabled ? DdgiForwardEstimateCountersEnabledFlag : 0u) |
                    (ddgiClipmapCoverageCountersEnabled ? DdgiClipmapCoverageCountersEnabledFlag : 0u) |
                    (directionalShadowReceiverCountersEnabled ? DirectionalShadowReceiverCountersEnabledFlag : 0u) |
                    (materialTransportProvenanceEnabled ? MaterialTransportProvenanceEnabledFlag : 0u) |
+                   (decalGlobalIlluminationEnabled ? DecalGlobalIlluminationEnabledFlag : 0u) |
+                   (ddgiLayeredReceiverCountersEnabled ? DdgiLayeredReceiverCountersEnabledFlag : 0u) |
                    ((directionalShadowPreviewCascade & DirectionalShadowPreviewCascadeMask) <<
                     DirectionalShadowPreviewCascadeShift);
         }

@@ -1133,6 +1133,7 @@ namespace Njulf.Rendering.Data
         public TransparencyMode Mode { get; set; } = TransparencyMode.SortedAlphaBlend;
         public TransparencyDebugView DebugView { get; set; } = TransparencyDebugView.None;
         public bool ReceiveShadows { get; set; } = true;
+        public bool ReceiveGlobalIllumination { get; set; } = true;
         public bool SampleReflections { get; set; } = true;
         public bool SortPerMeshlet { get; set; } = true;
 
@@ -1166,6 +1167,7 @@ namespace Njulf.Rendering.Data
 
         public bool GeometryDecalsEnabled { get; set; } = true;
         public bool ProjectedDecalsEnabled { get; set; }
+        public bool ReceiveGlobalIllumination { get; set; } = true;
         public DecalDebugView DebugView { get; set; } = DecalDebugView.None;
 
         public float GeometryDepthBias
@@ -3973,7 +3975,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 5;
+        public const int SerializationVersion = 6;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -4129,6 +4131,8 @@ namespace Njulf.Rendering.Data
                     Shadows.PointShadowsEnabled = false;
                     Shadows.MaxShadowedPointLights = 0;
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
+                    Transparency.ReceiveGlobalIllumination = false;
+                    Decals.ReceiveGlobalIllumination = false;
                     break;
                 case RenderQualityPreset.Medium:
                     ResolutionScale = 0.9f;
@@ -4187,6 +4191,10 @@ namespace Njulf.Rendering.Data
                     Shadows.MaxShadowedSpotLights = 2;
                     Shadows.MaxShadowedPointLights = 1;
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
+                    // SSGI depends on opaque depth/trace-source ownership and is
+                    // intentionally not sampled by layered forward receivers.
+                    Transparency.ReceiveGlobalIllumination = false;
+                    Decals.ReceiveGlobalIllumination = false;
                     break;
                 case RenderQualityPreset.DdgiHigh:
                     ResolutionScale = 1.0f;
@@ -4239,6 +4247,8 @@ namespace Njulf.Rendering.Data
                     Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 3);
                     Shadows.MaxShadowedPointLights = Math.Max(Shadows.MaxShadowedPointLights, 1);
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
+                    Transparency.ReceiveGlobalIllumination = true;
+                    Decals.ReceiveGlobalIllumination = true;
                     break;
                 case RenderQualityPreset.Ultra:
                     ResolutionScale = 1.0f;
@@ -4291,6 +4301,8 @@ namespace Njulf.Rendering.Data
                     Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 4);
                     Shadows.MaxShadowedPointLights = Math.Max(Shadows.MaxShadowedPointLights, 1);
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
+                    Transparency.ReceiveGlobalIllumination = true;
+                    Decals.ReceiveGlobalIllumination = true;
                     break;
                 default:
                     ResolutionScale = 1.0f;
@@ -4351,6 +4363,8 @@ namespace Njulf.Rendering.Data
                     Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 2);
                     Shadows.MaxShadowedPointLights = Math.Max(Shadows.MaxShadowedPointLights, 1);
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
+                    Transparency.ReceiveGlobalIllumination = true;
+                    Decals.ReceiveGlobalIllumination = true;
                     break;
             }
         }
@@ -4496,7 +4510,8 @@ namespace Njulf.Rendering.Data
             // fields rather than properties and therefore cannot safely be left to
             // the default System.Text.Json contract. Version 5 makes the four
             // material-GI V2 rollout switches fail-closed; release qualification
-            // remains an external, non-persisted policy.
+            // remains an external, non-persisted policy. Version 6 persists the
+            // independently configurable transparent/decal DDGI receiver policy.
             public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
@@ -4512,6 +4527,8 @@ namespace Njulf.Rendering.Data
             public bool ReflectionsEnabled { get; init; } = true;
             public bool ShadowsEnabled { get; init; } = true;
             public bool ParticlesEnabled { get; init; } = true;
+            public bool? TransparentReceiveGlobalIllumination { get; init; }
+            public bool? DecalReceiveGlobalIllumination { get; init; }
             public FoliageFile Foliage { get; init; } = new();
             public SceneSubmissionFile SceneSubmission { get; init; } = new();
             public HiZOcclusionFile HiZOcclusion { get; init; } = new();
@@ -4538,6 +4555,10 @@ namespace Njulf.Rendering.Data
                     ReflectionsEnabled = settings.Reflections.Enabled,
                     ShadowsEnabled = settings.Shadows.DirectionalShadowsEnabled,
                     ParticlesEnabled = settings.Particles.Enabled,
+                    TransparentReceiveGlobalIllumination =
+                        settings.Transparency.ReceiveGlobalIllumination,
+                    DecalReceiveGlobalIllumination =
+                        settings.Decals.ReceiveGlobalIllumination,
                     Foliage = FoliageFile.FromSettings(settings.Foliage),
                     SceneSubmission = SceneSubmissionFile.FromSettings(settings.SceneSubmission),
                     HiZOcclusion = HiZOcclusionFile.FromSettings(settings.HiZOcclusion),
@@ -4567,6 +4588,16 @@ namespace Njulf.Rendering.Data
                 settings.Reflections.Enabled = ReflectionsEnabled;
                 settings.Shadows.DirectionalShadowsEnabled = ShadowsEnabled;
                 settings.Particles.Enabled = ParticlesEnabled;
+                if (TransparentReceiveGlobalIllumination.HasValue)
+                {
+                    settings.Transparency.ReceiveGlobalIllumination =
+                        TransparentReceiveGlobalIllumination.Value;
+                }
+                if (DecalReceiveGlobalIllumination.HasValue)
+                {
+                    settings.Decals.ReceiveGlobalIllumination =
+                        DecalReceiveGlobalIllumination.Value;
+                }
                 Foliage.ApplyTo(settings.Foliage);
                 SceneSubmission.ApplyTo(settings.SceneSubmission);
                 HiZOcclusion.ApplyTo(settings.HiZOcclusion);

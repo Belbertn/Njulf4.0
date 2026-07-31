@@ -58,6 +58,61 @@ public sealed class RenderSettingsFileIoTests
         }
     }
 
+    [Test]
+    public void SaveLoad_PreservesIndependentLayeredReceiverGiPolicies()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "layered-gi.json");
+        try
+        {
+            var settings = new RenderSettings();
+            settings.Transparency.ReceiveGlobalIllumination = false;
+            settings.Decals.ReceiveGlobalIllumination = true;
+
+            settings.Save(path);
+            RenderSettings loaded = RenderSettings.Load(path);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    loaded.Transparency.ReceiveGlobalIllumination,
+                    Is.False);
+                Assert.That(
+                    loaded.Decals.ReceiveGlobalIllumination,
+                    Is.True);
+                Assert.That(
+                    File.ReadAllText(path),
+                    Does.Contain($"\"Version\": {RenderSettings.SerializationVersion}"));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void QualityPresets_EnableLayeredDdgiOnlyWhenDdgiIsAvailable()
+    {
+        var settings = new RenderSettings();
+
+        settings.ApplyQualityPreset(RenderQualityPreset.Low);
+        Assert.That(settings.Transparency.ReceiveGlobalIllumination, Is.False);
+        Assert.That(settings.Decals.ReceiveGlobalIllumination, Is.False);
+
+        settings.ApplyQualityPreset(RenderQualityPreset.Medium);
+        Assert.That(settings.Transparency.ReceiveGlobalIllumination, Is.False);
+        Assert.That(settings.Decals.ReceiveGlobalIllumination, Is.False);
+
+        settings.ApplyQualityPreset(RenderQualityPreset.DdgiHigh);
+        Assert.That(settings.Transparency.ReceiveGlobalIllumination, Is.True);
+        Assert.That(settings.Decals.ReceiveGlobalIllumination, Is.True);
+
+        settings.ApplyQualityPreset(RenderQualityPreset.Ultra);
+        Assert.That(settings.Transparency.ReceiveGlobalIllumination, Is.True);
+        Assert.That(settings.Decals.ReceiveGlobalIllumination, Is.True);
+    }
+
     private static string CreateTemporaryDirectory()
     {
         string directory = Path.Combine(
