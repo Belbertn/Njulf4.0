@@ -11366,6 +11366,8 @@ namespace Njulf.Rendering
         {
             IReadOnlyList<uint>? primaryCounts = counters.SimpleVolumePrimaryGatherCounts;
             IReadOnlyList<uint>? sampledCounts = counters.SimpleVolumeSampledGatherCounts;
+            IReadOnlyList<SimpleDdgiVolumeEnergyCounters>? energyCounts =
+                counters.SimpleVolumeEnergyCounters;
             for (int i = 0; i < sceneData.DdgiVolumeDiagnostics.Count; i++)
             {
                 DdgiVolumeDiagnosticsEntry entry = sceneData.DdgiVolumeDiagnostics[i];
@@ -11375,11 +11377,18 @@ namespace Njulf.Rendering
                     sampledCounts != null &&
                     (uint)volumeIndex < (uint)primaryCounts.Count &&
                     (uint)volumeIndex < (uint)sampledCounts.Count;
+                bool energyCountersValid = counters.ReadbackValid != 0 &&
+                    energyCounts != null &&
+                    (uint)volumeIndex < (uint)energyCounts.Count;
                 sceneData.DdgiVolumeDiagnostics[i] = entry with
                 {
                     GatherCountersReadbackValid = countersValid ? 1 : 0,
                     PrimaryGatherCount = countersValid ? primaryCounts![volumeIndex] : 0u,
-                    SampledGatherCount = countersValid ? sampledCounts![volumeIndex] : 0u
+                    SampledGatherCount = countersValid ? sampledCounts![volumeIndex] : 0u,
+                    EnergyCountersReadbackValid = energyCountersValid ? 1 : 0,
+                    EnergyCounters = energyCountersValid
+                        ? energyCounts![volumeIndex]
+                        : SimpleDdgiVolumeEnergyCounters.Empty
                 };
             }
         }

@@ -61,6 +61,9 @@ namespace Njulf.Rendering.Data
         public uint PrimaryGatherCount { get; init; }
         /// <summary>Simple-DDGI volume gathers performed, including primary and coarser fallback gathers.</summary>
         public uint SampledGatherCount { get; init; }
+        /// <summary>1 when per-volume blend, transport, solver, and shadow energy counters were read back.</summary>
+        public int EnergyCountersReadbackValid { get; init; }
+        public SimpleDdgiVolumeEnergyCounters EnergyCounters { get; init; }
         /// <summary>Exact nearest-rank P95 of the CPU-resident ages for this volume.</summary>
         public float EstimatedAgeP95Frames { get; init; }
         public string DesignPreset { get; init; } = string.Empty;

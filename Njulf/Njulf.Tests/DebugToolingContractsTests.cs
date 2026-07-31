@@ -35,6 +35,7 @@ namespace Njulf.Tests
         public void RendererDiagnosticsBuffer_CounterFamiliesAreContiguousAndFullyCounted()
         {
             string commonShader = ReadRepoText("Njulf.Shaders", "common.glsl");
+            string simpleSharedShader = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
             var families = new (string Name, int Start, int Count)[]
             {
                 ("meshlet", 0, RendererDiagnosticsBuffer.MeshletCounterCount),
@@ -54,7 +55,8 @@ namespace Njulf.Tests
                 ("DDGI delivery failure", RendererDiagnosticsBuffer.DdgiDeliveryFailureCounterBase, RendererDiagnosticsBuffer.DdgiDeliveryFailureCounterCount),
                 ("DDGI shadow visibility", RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterBase, RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterCount),
                 ("DDGI layered receivers", RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterBase, RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterCount),
-                ("DDGI thin transport", RendererDiagnosticsBuffer.ThinSurfaceTransportCounterBase, RendererDiagnosticsBuffer.ThinSurfaceTransportCounterCount)
+                ("DDGI thin transport", RendererDiagnosticsBuffer.ThinSurfaceTransportCounterBase, RendererDiagnosticsBuffer.ThinSurfaceTransportCounterCount),
+                ("simple DDGI per-volume energy", RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterBase, RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -87,6 +89,13 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterCount, Is.EqualTo(4));
                 Assert.That(RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterCount, Is.EqualTo(6));
                 Assert.That(RendererDiagnosticsBuffer.ThinSurfaceTransportCounterCount, Is.EqualTo(18));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterStride, Is.EqualTo(19));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterCount, Is.EqualTo(
+                    GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount * 19));
+                Assert.That(simpleSharedShader, Does.Contain(
+                    $"SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_BASE = {RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterBase}u"));
+                Assert.That(simpleSharedShader, Does.Contain(
+                    $"SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_STRIDE = {RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterStride}u"));
                 Assert.That(commonShader, Does.Contain(
                     $"DDGI_THIN_TRANSPORT_COUNTER_BASE = {RendererDiagnosticsBuffer.ThinSurfaceTransportCounterBase}u"));
                 Assert.That(commonShader, Does.Contain("DDGI_THIN_INVALID_TRANSMISSION_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 17u"));
@@ -666,7 +675,7 @@ namespace Njulf.Tests
                     targets,
                     Does.Not.Contain("CalculateAmbientOcclusionExtent(extent, 0.5f)"));
                 Assert.That(
-                    renderer,
+                    renderer.ReplaceLineEndings("\n"),
                     Does.Contain("Settings.AmbientOcclusion.ResolutionScale,\n                ssgiTargetEnabled"));
                 Assert.That(
                     renderer,

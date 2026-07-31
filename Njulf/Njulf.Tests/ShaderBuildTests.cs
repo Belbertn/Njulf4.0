@@ -1046,6 +1046,11 @@ public sealed class ShaderBuildTests
             Assert.That(hitShading, Does.Contain("vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit("));
             Assert.That(hitShading, Does.Contain("vec3 SampleDdgiEnvironmentMissRadianceWithFallback("));
             Assert.That(hitShading, Does.Contain("vec3 TraceLightVisibility("));
+            Assert.That(hitShading, Does.Contain("surface.GeometricNormal,"));
+            Assert.That(hitShading, Does.Not.Contain("surface.CanonicalGeometricNormal,\n        lightDirection,"));
+            Assert.That(hitShading, Does.Contain("Sidedness belongs to DdgiCandidatePassesOpacity below."));
+            Assert.That(hitShading, Does.Not.Contain("gl_RayFlagsCullBackFacingTrianglesEXT"));
+            Assert.That(hitShading, Does.Contain("vec3 offsetNormal = recordAnalyticDirectDiagnostics"));
             Assert.That(shader, Does.Contain("float intensity = max(updateParams.z, 0.0);"));
             Assert.That(shader, Does.Contain("bool DdgiRawAtlasRadianceConventionEnabled()"));
             Assert.That(shader, Does.Contain("return true;"));

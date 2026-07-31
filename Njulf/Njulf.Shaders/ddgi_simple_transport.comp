@@ -110,12 +110,16 @@ void main()
         RecordSimpleDdgiTransportEnergyDiagnostics(
             params,
             pc.CurrentFrameIndex,
+            update.volumeIndex,
             update.probeIndex,
             directionRayIndex,
             false,
             sourceRadianceDistance.rgb,
             vec3(0.0),
-            sourceRadianceDistance.rgb);
+            sourceRadianceDistance.rgb,
+            0u,
+            0.0,
+            0.0);
         WriteSimpleTransportRayResult(
             globalRay,
             sourceRadianceDistance.rgb,
@@ -131,7 +135,12 @@ void main()
     vec3 bounceRadiance = vec3(0.0);
     vec3 reflectedBounceRadiance = vec3(0.0);
     vec3 transmittedBounceRadiance = vec3(0.0);
-    if (hitKind >= 0.5)
+    uint solverGatherCount = 0u;
+    float solverOwnershipSum = 0.0;
+    float solverFallbackWeightSum = 0.0;
+    bool bounceableSurface = hitKind >= 0.5 &&
+        !SimpleDdgiRayHitKindIsOneSidedBackFace(hitKind);
+    if (bounceableSurface)
     {
         vec3 probePosition = SimpleDdgiProbeLogicalPosition(volume, localProbeIndex) + probeState.relocation;
         vec3 canonicalNormal = length(source.normal) > 0.00001 ? normalize(source.normal) : vec3(0.0, 1.0, 0.0);
@@ -141,10 +150,17 @@ void main()
             vec3(0.0),
             vec3(params.transportAlbedoClamp));
         vec3 hitPosition = probePosition + source.direction * source.distance;
+        float reflectedSolverOwnership;
+        float reflectedFallbackWeight;
         vec3 bouncedIrradiance = SampleSimpleDdgiSolverBounceIrradiance(
             hitPosition + normal * max(0.03, volume.spacing * 0.02),
             normal,
-            -source.direction);
+            -source.direction,
+            reflectedSolverOwnership,
+            reflectedFallbackWeight);
+        solverGatherCount++;
+        solverOwnershipSum += reflectedSolverOwnership;
+        solverFallbackWeightSum += reflectedFallbackWeight;
         // Material AO is a receiver-side approximation. Geometry visibility is
         // already present in the traced field, so applying baked AO at every
         // recursive surface double-counts occlusion and compounds energy loss.
@@ -159,10 +175,17 @@ void main()
             transmittedReflectance = vec3(0.0);
         if (max(transmittedReflectance.r, max(transmittedReflectance.g, transmittedReflectance.b)) > 0.0)
         {
+            float transmittedSolverOwnership;
+            float transmittedFallbackWeight;
             vec3 transmittedIrradiance = SampleSimpleDdgiSolverBounceIrradiance(
                 hitPosition - normal * max(0.03, volume.spacing * 0.02),
                 -normal,
-                source.direction);
+                source.direction,
+                transmittedSolverOwnership,
+                transmittedFallbackWeight);
+            solverGatherCount++;
+            solverOwnershipSum += transmittedSolverOwnership;
+            solverFallbackWeightSum += transmittedFallbackWeight;
             transmittedBounceRadiance = EvaluateGiDiffuseFromIrradiance(
                 transmittedIrradiance,
                 transmittedReflectance);
@@ -194,12 +217,16 @@ void main()
     RecordSimpleDdgiTransportEnergyDiagnostics(
         params,
         pc.CurrentFrameIndex,
+        update.volumeIndex,
         update.probeIndex,
         directionRayIndex,
         true,
         source.sourceRadiance,
         bounceRadiance,
-        totalRadiance);
+        totalRadiance,
+        solverGatherCount,
+        solverOwnershipSum,
+        solverFallbackWeightSum);
 
     vec2 visibilityHit = UnpackSimpleDdgiRayVisibilityHit(
         ReadStorageWord(

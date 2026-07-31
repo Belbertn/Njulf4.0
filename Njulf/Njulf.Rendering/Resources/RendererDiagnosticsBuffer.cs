@@ -76,8 +76,17 @@ namespace Njulf.Rendering.Resources
         public const int ThinSurfaceTransportCounterBase =
             DdgiLayeredReceiverCounterBase + DdgiLayeredReceiverCounterCount;
         public const int ThinSurfaceTransportCounterCount = 18;
-        public const int CounterCount =
+        // Appended to preserve every established counter offset. Each volume
+        // owns blend, transport, solver-ownership, reverse-face, and analytic
+        // shadow-attribution counters.
+        public const int SimpleDdgiVolumeEnergyCounterBase =
             ThinSurfaceTransportCounterBase + ThinSurfaceTransportCounterCount;
+        public const int SimpleDdgiVolumeEnergyCounterStride = 19;
+        public const int SimpleDdgiVolumeEnergyCounterCount =
+            GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount *
+            SimpleDdgiVolumeEnergyCounterStride;
+        public const int CounterCount =
+            SimpleDdgiVolumeEnergyCounterBase + SimpleDdgiVolumeEnergyCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const float DdgiShadowHitDistanceScale = 256.0f;
@@ -304,6 +313,16 @@ namespace Njulf.Rendering.Resources
                     break;
                 }
             }
+            bool volumeEnergyValid = false;
+            for (int i = 0; i < SimpleDdgiVolumeEnergyCounterCount; i++)
+            {
+                if (counters[SimpleDdgiVolumeEnergyCounterBase + i] != 0)
+                {
+                    volumeEnergyValid = true;
+                    investigationValid = true;
+                    break;
+                }
+            }
 
             float invInvestigationSampleCount = ddgiInvestigationSampleCount > 0 ? 1.0f / ddgiInvestigationSampleCount : 0.0f;
             float invSimpleVisibilitySampleCount = simpleVisibilitySampleCount > 0 ? 1.0f / simpleVisibilitySampleCount : 0.0f;
@@ -317,6 +336,9 @@ namespace Njulf.Rendering.Resources
             uint[] simpleVolumeSampledGatherCounts = investigationValid
                 ? new uint[SimpleDdgiVolumeGatherCounterCount]
                 : Array.Empty<uint>();
+            SimpleDdgiVolumeEnergyCounters[] simpleVolumeEnergyCounters = volumeEnergyValid
+                ? new SimpleDdgiVolumeEnergyCounters[SimpleDdgiVolumeGatherCounterCount]
+                : Array.Empty<SimpleDdgiVolumeEnergyCounters>();
             uint[] simpleGatherPrimaryRejectionCounts = investigationValid
                 ? new uint[SimpleDdgiGatherRejectionReasonCount]
                 : Array.Empty<uint>();
@@ -330,6 +352,10 @@ namespace Njulf.Rendering.Resources
             {
                 simpleVolumePrimaryGatherCounts[i] = counters[SimpleDdgiVolumePrimaryGatherCounterBase + i];
                 simpleVolumeSampledGatherCounts[i] = counters[SimpleDdgiVolumeSampledGatherCounterBase + i];
+            }
+            for (int i = 0; i < simpleVolumeEnergyCounters.Length; i++)
+            {
+                simpleVolumeEnergyCounters[i] = ReadSimpleDdgiVolumeEnergyCounters(counters, i);
             }
             for (int reason = 0; reason < simpleGatherPrimaryRejectionCounts.Length; reason++)
             {
@@ -386,6 +412,7 @@ namespace Njulf.Rendering.Resources
                     SimpleSecondVolumeGatherCount: counters[DdgiInvestigationCounterBase + 37],
                     SimpleVolumePrimaryGatherCounts: simpleVolumePrimaryGatherCounts,
                     SimpleVolumeSampledGatherCounts: simpleVolumeSampledGatherCounts,
+                    SimpleVolumeEnergyCounters: simpleVolumeEnergyCounters,
                     SimpleGatherPrimaryRejectionCounts: simpleGatherPrimaryRejectionCounts,
                     SimpleGatherFallbackRejectionCounts: simpleGatherFallbackRejectionCounts,
                     SimpleGatherRecoveryRejectionCounts: simpleGatherRecoveryRejectionCounts,
@@ -620,6 +647,51 @@ namespace Njulf.Rendering.Resources
         private static int DecodeSignedCounter(uint value)
         {
             return unchecked((int)value);
+        }
+
+        private static SimpleDdgiVolumeEnergyCounters ReadSimpleDdgiVolumeEnergyCounters(
+            uint* counters,
+            int volumeIndex)
+        {
+            int counterBase = SimpleDdgiVolumeEnergyCounterBase +
+                volumeIndex * SimpleDdgiVolumeEnergyCounterStride;
+            uint blendSamples = counters[counterBase + 0];
+            uint transportSamples = counters[counterBase + 3];
+            uint solverSamples = counters[counterBase + 7];
+            uint shadowOccluded = counters[counterBase + 12];
+            float invBlend = blendSamples > 0 ? 1.0f / blendSamples : 0.0f;
+            float invTransport = transportSamples > 0 ? 1.0f / transportSamples : 0.0f;
+            float invSolver = solverSamples > 0 ? 1.0f / solverSamples : 0.0f;
+            float invShadowOccluded = shadowOccluded > 0 ? 1.0f / shadowOccluded : 0.0f;
+
+            return new SimpleDdgiVolumeEnergyCounters(
+                BlendSampleCount: blendSamples,
+                BlendIrradianceLuminanceAverage: counters[counterBase + 1] /
+                    DdgiForwardEstimateLuminanceScale * invBlend,
+                BlendConfidenceAverage: counters[counterBase + 2] /
+                    DdgiForwardEstimateWeightScale * invBlend,
+                TransportSampleCount: transportSamples,
+                TransportSourceLuminanceAverage: counters[counterBase + 4] /
+                    DdgiForwardEstimateLuminanceScale * invTransport,
+                TransportBounceLuminanceAverage: counters[counterBase + 5] /
+                    DdgiForwardEstimateLuminanceScale * invTransport,
+                TransportTotalLuminanceAverage: counters[counterBase + 6] /
+                    DdgiForwardEstimateLuminanceScale * invTransport,
+                SolverGatherSampleCount: solverSamples,
+                SolverOwnershipAverage: counters[counterBase + 8] /
+                    DdgiForwardEstimateWeightScale * invSolver,
+                SolverFallbackWeightAverage: counters[counterBase + 9] /
+                    DdgiForwardEstimateWeightScale * invSolver,
+                OneSidedBackFaceRayCount: counters[counterBase + 10],
+                ShadowVisibilityRayCount: counters[counterBase + 11],
+                ShadowVisibilityOccludedCount: shadowOccluded,
+                ShadowVisibilityBelowRayTMinCount: counters[counterBase + 13],
+                ShadowVisibilityBelowDoubleNormalOffsetCount: counters[counterBase + 14],
+                ShadowVisibilityBelowProbeSpacingCount: counters[counterBase + 15],
+                ShadowVisibilityBeyondProbeSpacingCount: counters[counterBase + 16],
+                ShadowVisibilitySameInstanceCount: counters[counterBase + 17],
+                ShadowVisibilityCommittedHitDistanceAverage: counters[counterBase + 18] /
+                    DdgiShadowHitDistanceScale * invShadowOccluded);
         }
 
         public void ResetCounters(CommandBuffer commandBuffer, int frameIndex)

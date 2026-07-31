@@ -3,6 +3,30 @@ using System.Collections.Generic;
 
 namespace Njulf.Rendering.Data
 {
+    public readonly record struct SimpleDdgiVolumeEnergyCounters(
+        uint BlendSampleCount,
+        float BlendIrradianceLuminanceAverage,
+        float BlendConfidenceAverage,
+        uint TransportSampleCount,
+        float TransportSourceLuminanceAverage,
+        float TransportBounceLuminanceAverage,
+        float TransportTotalLuminanceAverage,
+        uint SolverGatherSampleCount,
+        float SolverOwnershipAverage,
+        float SolverFallbackWeightAverage,
+        uint OneSidedBackFaceRayCount,
+        uint ShadowVisibilityRayCount,
+        uint ShadowVisibilityOccludedCount,
+        uint ShadowVisibilityBelowRayTMinCount,
+        uint ShadowVisibilityBelowDoubleNormalOffsetCount,
+        uint ShadowVisibilityBelowProbeSpacingCount,
+        uint ShadowVisibilityBeyondProbeSpacingCount,
+        uint ShadowVisibilitySameInstanceCount,
+        float ShadowVisibilityCommittedHitDistanceAverage)
+    {
+        public static SimpleDdgiVolumeEnergyCounters Empty { get; } = default;
+    }
+
     public enum DdgiRuntimeWarmupState
     {
         Disabled = 0,
@@ -276,6 +300,7 @@ namespace Njulf.Rendering.Data
         uint SimpleSecondVolumeGatherCount,
         IReadOnlyList<uint>? SimpleVolumePrimaryGatherCounts,
         IReadOnlyList<uint>? SimpleVolumeSampledGatherCounts,
+        IReadOnlyList<SimpleDdgiVolumeEnergyCounters>? SimpleVolumeEnergyCounters,
         IReadOnlyList<uint>? SimpleGatherPrimaryRejectionCounts,
         IReadOnlyList<uint>? SimpleGatherFallbackRejectionCounts,
         IReadOnlyList<uint>? SimpleGatherRecoveryRejectionCounts,

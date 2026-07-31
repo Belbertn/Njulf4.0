@@ -148,6 +148,7 @@ namespace Njulf.Rendering.Resources
         // SIMPLE_DDGI_RELOCATION_PENDING_MAX_RETRY_AGE in
         // ddgi_simple_shared.glsl.
         internal const uint RelocationPendingMaximumRetryAge = 32u;
+        internal const uint SourceCacheRadianceDebugViewMode = 125u;
         private const int SchedulerWorkClassCount = (int)SimpleDdgiSchedulerWorkClass.Count;
         private const byte ProbeSchedulingScrollExposedFlag = 1 << 0;
         private const byte ProbeSchedulingRegionalDirtyFlag = 1 << 1;
@@ -1342,7 +1343,7 @@ namespace Njulf.Rendering.Resources
                     // ownership (at receivers and bounce hit points). Valid probe
                     // transport, including trace misses, is intentionally unaffected.
                     ProbeUpdateRange = new Vector4(_updateStartProbe, _probesToUpdate, _volumeCount, gi.EnvironmentFallbackIntensity),
-                    DebugAndBias = new Vector4((float)gi.DebugView, gi.DdgiSelfShadowBiasScale, gi.IndirectIntensity, gi.FarFieldMaxTraceSteps),
+                    DebugAndBias = new Vector4(ResolveSimpleDdgiDebugViewMode(gi.DebugView), gi.DdgiSelfShadowBiasScale, gi.IndirectIntensity, gi.FarFieldMaxTraceSteps),
                     RotationQuaternion = BuildFrameRotation(_frameIndex),
                     BiasAndPadding = new Vector4(gi.SimpleDdgiNormalBias, gi.SimpleDdgiViewBias, gi.SimpleDdgiHysteresisChangeThreshold, gi.SimpleDdgiHysteresisStepThreshold),
                     // yzw describe the optional sampled-atlas mirror.  Keep the
@@ -6046,6 +6047,11 @@ namespace Njulf.Rendering.Resources
         private static bool NearlyEqual(float left, float right, float epsilon) =>
             MathF.Abs(left - right) <= epsilon;
 
+        internal static uint ResolveSimpleDdgiDebugViewMode(GlobalIlluminationDebugView debugView) =>
+            debugView == GlobalIlluminationDebugView.DdgiSourceCacheRadiance
+                ? SourceCacheRadianceDebugViewMode
+                : (uint)debugView;
+
         private GPUSimpleDdgiParams CreateDisabledParams(GlobalIlluminationSettings settings)
         {
             return new GPUSimpleDdgiParams
@@ -6060,7 +6066,7 @@ namespace Njulf.Rendering.Resources
                     settings.FarFieldStartDistance),
                 EnvironmentRadianceAndIntensity = Vector4.Zero,
                 ProbeUpdateRange = Vector4.Zero,
-                DebugAndBias = new Vector4((float)settings.DebugView, settings.DdgiSelfShadowBiasScale, settings.IndirectIntensity, settings.FarFieldMaxTraceSteps),
+                DebugAndBias = new Vector4(ResolveSimpleDdgiDebugViewMode(settings.DebugView), settings.DdgiSelfShadowBiasScale, settings.IndirectIntensity, settings.FarFieldMaxTraceSteps),
                 RotationQuaternion = new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
                 BiasAndPadding = new Vector4(settings.SimpleDdgiNormalBias, settings.SimpleDdgiViewBias, settings.SimpleDdgiHysteresisChangeThreshold, settings.SimpleDdgiHysteresisStepThreshold),
                 Reserved0 = Vector4.Zero,

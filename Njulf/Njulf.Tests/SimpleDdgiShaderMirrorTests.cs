@@ -911,6 +911,22 @@ namespace Njulf.Tests
                 previousRelocation: Vector3.Zero,
                 fresh: true,
                 authored: false);
+            CpuSimpleRayResult[] moderatelyInvalid =
+            [
+                new(Vector3.UnitX, HitKind: 1.0f, Distance: 0.05f),
+                new(-Vector3.UnitX, HitKind: 1.0f, Distance: 0.05f),
+                new(Vector3.UnitY, HitKind: 1.0f, Distance: 0.05f),
+                new(-Vector3.UnitY, HitKind: 1.0f, Distance: 0.05f),
+                new(Vector3.UnitZ, HitKind: 1.0f, Distance: 0.05f),
+                new(-Vector3.UnitZ, HitKind: 1.0f, Distance: 0.05f),
+                new(Vector3.UnitX, HitKind: 1.0f, Distance: 1.0f)
+            ];
+            CpuSimpleRelocationResult invalidBelowActiveFloorRelease = RelocateAndClassify(
+                moderatelyInvalid,
+                spacing: 1.0f,
+                previousRelocation: Vector3.Zero,
+                fresh: true,
+                authored: false);
             CpuSimpleRelocationResult maintenance = RelocateAndClassify(
                 mixed,
                 spacing: 1.0f,
@@ -969,6 +985,9 @@ namespace Njulf.Tests
                 Assert.That(invalidAuthored.Relocation.X, Is.EqualTo(0.12f).Within(1.0e-5f));
                 Assert.That(invalidRing.Active, Is.False);
                 Assert.That(invalidRing.Classification, Is.EqualTo(1));
+                Assert.That(invalidBelowActiveFloorRelease.Active, Is.False);
+                Assert.That(invalidBelowActiveFloorRelease.ActiveWeight, Is.Zero);
+                Assert.That(invalidBelowActiveFloorRelease.Classification, Is.EqualTo(1));
                 Assert.That(maintenance.ActiveWeight, Is.EqualTo(0.6f).Within(1.0e-5f));
                 Assert.That(maintenance.Relocation.X, Is.EqualTo(0.2f).Within(1.0e-5f));
                 Assert.That(deeplyEmbedded.Relocation.X, Is.EqualTo(0.40f).Within(1.0e-5f));
@@ -1175,7 +1194,18 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("DDGI_INVESTIGATION_SKY_VISIBILITY_SAMPLE_COUNTER"));
                 Assert.That(shared, Does.Contain("DDGI_INVESTIGATION_SKY_VISIBILITY_ACCUM_COUNTER"));
                 Assert.That(shared, Does.Contain("vec3 SampleSimpleDdgiUnifiedIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir, bool allowFallback)"));
-                Assert.That(shared, Does.Contain("vec3 SampleSimpleDdgiSolverBounceIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir)"));
+                Assert.That(shared, Does.Contain("vec3 SampleSimpleDdgiSolverBounceIrradiance("));
+                int solverStart = shared.IndexOf(
+                    "vec3 SampleSimpleDdgiSolverBounceIrradiance(",
+                    StringComparison.Ordinal);
+                int solverEnd = shared.IndexOf(
+                    "SimpleDdgiDebugSample SampleSimpleDdgiDebug(",
+                    solverStart,
+                    StringComparison.Ordinal);
+                string solverSource = shared[solverStart..solverEnd];
+                Assert.That(solverSource, Does.Contain("solverOwnershipOut = solverOwnership;"));
+                Assert.That(solverSource, Does.Contain("fallbackWeightOut = fallbackWeight;"));
+                Assert.That(solverSource, Does.Not.Contain("fallback *= EstimateFarFieldSkyVisibility"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_UPDATE_RAY_COUNT_SHIFT"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT"));
                 Assert.That(shared, Does.Contain("bool SimpleDdgiUpdateMatchesProbeGeneration(SimpleDdgiProbeUpdate update, SimpleDdgiProbeState state)"));
@@ -1276,7 +1306,8 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("vec2 UnpackSimpleDdgiRayVisibilityHit("));
                 Assert.That(trace, Does.Contain("bool TraceSimpleDdgiBackfaceVisibilityDistance("));
                 Assert.That(trace, Does.Contain("gl_RayFlagsCullFrontFacingTrianglesEXT"));
-                Assert.That(trace, Does.Contain("gl_RayFlagsCullBackFacingTrianglesEXT"));
+                Assert.That(trace, Does.Not.Contain("gl_RayFlagsCullBackFacingTrianglesEXT"));
+                Assert.That(trace, Does.Contain("gl_RayFlagsNoneEXT"));
                 Assert.That(trace, Does.Contain("backfaceVisibilityDistance < visibilityDistance"));
                 Assert.That(trace, Does.Contain("visibilityHitKind = 2.0;"));
                 Assert.That(trace, Does.Contain("visibilityHitKind);"));
@@ -1290,10 +1321,15 @@ namespace Njulf.Tests
                 Assert.That(relocate, Does.Contain("UnpackSimpleDdgiRayVisibilityHit("));
                 Assert.That(relocate, Does.Not.Contain("float distance = max(radianceDistance.w, 0.0);"));
                 Assert.That(trace, Does.Contain("bool frontFace = rayQueryGetIntersectionFrontFaceEXT(query, true);"));
-                Assert.That(trace, Does.Contain("hitKind = frontFace ? 1.0 : 2.0;"));
+                Assert.That(trace, Does.Contain("SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE"));
+                Assert.That(trace, Does.Contain("!frontFace && !hitDoubleSided"));
+                Assert.That(blend, Does.Contain("SimpleDdgiRayHitKindIsOneSidedBackFace(visibilityHit.y)"));
+                Assert.That(transport, Does.Contain("!SimpleDdgiRayHitKindIsOneSidedBackFace(hitKind)"));
                 Assert.That(shared, Does.Contain($"SIMPLE_DDGI_TRACE_ENERGY_COUNTER_BASE = {RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase}u"));
                 Assert.That(shared, Does.Contain($"SIMPLE_DDGI_BLEND_ENERGY_COUNTER_BASE = {RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase}u"));
                 Assert.That(shared, Does.Contain($"SIMPLE_DDGI_GATHER_REJECTION_COUNTER_BASE = {RendererDiagnosticsBuffer.SimpleDdgiGatherRejectionCounterBase}u"));
+                Assert.That(shared, Does.Contain($"SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_BASE = {RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterBase}u"));
+                Assert.That(shared, Does.Contain("solverOwnershipSum"));
                 Assert.That(shared, Does.Contain("void RecordSimpleDdgiTraceEnergyDiagnostics("));
                 Assert.That(shared, Does.Contain("void RecordSimpleDdgiBlendEnergyDiagnostics("));
                 Assert.That(trace, Does.Contain("RecordSimpleDdgiTraceEnergyDiagnostics("));
@@ -1340,6 +1376,8 @@ namespace Njulf.Tests
                 Assert.That(relocate, Does.Contain("state.luminanceChangeEma = previous.luminanceChangeEma;"));
                 Assert.That(relocate, Does.Contain("float softInvalidProbeScore = max("));
                 Assert.That(relocate, Does.Contain("float activeFloor = (volume.kind == SIMPLE_DDGI_VOLUME_KIND_AUTHORED || hardInvalidProbeScore >= 0.95) ? 0.0 : 0.35;"));
+                Assert.That(relocate, Does.Contain(": hardInvalidProbeScore >= 0.75);"));
+                Assert.That(relocate, Does.Not.Contain("activeWeight <= 0.05 && hardInvalidProbeScore >= 0.75"));
                 Assert.That(relocate, Does.Contain("state.classification = inactiveProbe ? SIMPLE_DDGI_CLASSIFICATION_INACTIVE : SIMPLE_DDGI_CLASSIFICATION_ACTIVE;"));
                 Assert.That(relocate, Does.Contain("nearestBackfaceDistance + targetSurfaceDistance"));
                 Assert.That(relocate, Does.Contain("float localBackfaceRatio = backfaceRatio * backfaceProximity;"));
@@ -1819,7 +1857,9 @@ namespace Njulf.Tests
             if (relocation.Length() > maxRelocation)
                 relocation = Vector3.Normalize(relocation) * maxRelocation;
 
-            bool inactive = !maintenance && activeWeight <= 0.05f && hardInvalidScore >= 0.75f;
+            bool inactive = !maintenance && hardInvalidScore >= 0.75f;
+            if (inactive)
+                activeWeight = 0.0f;
             return new CpuSimpleRelocationResult(
                 relocation,
                 !inactive,

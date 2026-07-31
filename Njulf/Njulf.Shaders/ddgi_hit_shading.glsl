@@ -47,6 +47,26 @@
 #define DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED false
 #endif
 
+#ifndef DDGI_HIT_VOLUME_DIAGNOSTICS_ENABLED
+#define DDGI_HIT_VOLUME_DIAGNOSTICS_ENABLED 0
+#endif
+
+#ifndef DDGI_HIT_VOLUME_ENERGY_COUNTER_BASE
+#define DDGI_HIT_VOLUME_ENERGY_COUNTER_BASE 0u
+#endif
+
+#ifndef DDGI_HIT_VOLUME_ENERGY_COUNTER_STRIDE
+#define DDGI_HIT_VOLUME_ENERGY_COUNTER_STRIDE 0u
+#endif
+
+#ifndef DDGI_HIT_VOLUME_INDEX
+#define DDGI_HIT_VOLUME_INDEX 0xffffffffu
+#endif
+
+#ifndef DDGI_HIT_RECEIVER_INSTANCE_INDEX
+#define DDGI_HIT_RECEIVER_INSTANCE_INDEX 0xffffffffu
+#endif
+
 const uint DDGI_HIT_TOP_LIGHT_LIMIT = 8u;
 const uint DDGI_HIT_LIGHT_CANDIDATE_LIMIT = 64u;
 // Pathological stacks of cutout geometry cannot create unbounded any-hit
@@ -944,28 +964,52 @@ vec3 TraceLightVisibility(
     vec3 normal,
     vec3 lightDirection,
     float maxDistance,
-    float receiverProbeSpacing)
+    float receiverProbeSpacing,
+    bool recordAnalyticDirectDiagnostics)
 {
     float normalOffset = DDGI_PROBE_TRACE_EPSILON * 4.0;
     float rayTMin = DDGI_PROBE_TRACE_EPSILON * 2.0;
     float rayDistance = max(maxDistance - normalOffset, rayTMin);
-    vec3 offsetNormal = dot(normal, lightDirection) >= 0.0 ? normal : -normal;
+    vec3 safeNormal = length(normal) > 0.00001
+        ? normalize(normal)
+        : vec3(0.0, 1.0, 0.0);
+    // Analytic direct injection receives the geometric normal already resolved
+    // from the committed probe-ray facing. Preserve that side: choosing it from
+    // the light direction can move the origin back through the hit surface and
+    // manufacture a same-instance self-shadow. Other visibility callers retain
+    // their historical light-facing policy.
+    vec3 offsetNormal = recordAnalyticDirectDiagnostics
+        ? safeNormal
+        : (dot(safeNormal, lightDirection) >= 0.0 ? safeNormal : -safeNormal);
     vec3 origin = worldPosition + offsetNormal * normalOffset;
     vec3 visibilityRgb = vec3(1.0);
     uint thinLayerCount = 0u;
 
-    if (DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED)
+    bool recordVisibilityDiagnostics =
+        DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED &&
+        recordAnalyticDirectDiagnostics;
+    if (recordVisibilityDiagnostics)
     {
         AddRendererDiagnostic(
             DDGI_HIT_CURRENT_FRAME_INDEX,
             DDGI_SHADOW_VISIBILITY_RAY_COUNTER,
             1u);
+        if (DDGI_HIT_VOLUME_DIAGNOSTICS_ENABLED != 0 &&
+            DDGI_HIT_VOLUME_INDEX != 0xffffffffu)
+        {
+            uint volumeBank = DDGI_HIT_VOLUME_ENERGY_COUNTER_BASE +
+                DDGI_HIT_VOLUME_INDEX * DDGI_HIT_VOLUME_ENERGY_COUNTER_STRIDE;
+            AddRendererDiagnostic(DDGI_HIT_CURRENT_FRAME_INDEX, volumeBank + 11u, 1u);
+        }
     }
 
     rayQueryEXT shadowQuery;
     rayQueryInitializeEXT(
         shadowQuery,
         SceneTlas,
+        // Sidedness belongs to DdgiCandidatePassesOpacity below. Hardware
+        // backface culling would discard the reverse side of authored
+        // double-sided/thin cloth before its transmission can be evaluated.
         gl_RayFlagsNoneEXT,
         0xff,
         origin,
@@ -1039,7 +1083,7 @@ vec3 TraceLightVisibility(
         AddRendererDiagnostic(DDGI_HIT_CURRENT_FRAME_INDEX, DDGI_THIN_SHADOW_TOTAL_LAYER_COUNTER, thinLayerCount);
         MaxRendererDiagnostic(DDGI_HIT_CURRENT_FRAME_INDEX, DDGI_THIN_SHADOW_MAX_LAYER_COUNTER, thinLayerCount);
     }
-    if (occluded && DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED)
+    if (occluded && recordVisibilityDiagnostics)
     {
         float committedHitDistance = max(
             rayQueryGetIntersectionTEXT(shadowQuery, true),
@@ -1060,6 +1104,36 @@ vec3 TraceLightVisibility(
             DDGI_SHADOW_VISIBILITY_HIT_DISTANCE_COUNTER,
             uint(round(clamp(committedHitDistance, 0.0, 256.0) *
                 DDGI_SHADOW_VISIBILITY_HIT_DISTANCE_SCALE)));
+        if (DDGI_HIT_VOLUME_DIAGNOSTICS_ENABLED != 0 &&
+            DDGI_HIT_VOLUME_INDEX != 0xffffffffu)
+        {
+            uint volumeBank = DDGI_HIT_VOLUME_ENERGY_COUNTER_BASE +
+                DDGI_HIT_VOLUME_INDEX * DDGI_HIT_VOLUME_ENERGY_COUNTER_STRIDE;
+            AddRendererDiagnostic(DDGI_HIT_CURRENT_FRAME_INDEX, volumeBank + 12u, 1u);
+            uint distanceBucket = committedHitDistance < rayTMin
+                ? 13u
+                : (committedHitDistance < 2.0 * normalOffset
+                    ? 14u
+                    : (committedHitDistance < max(receiverProbeSpacing, 0.001)
+                        ? 15u
+                        : 16u));
+            AddRendererDiagnostic(
+                DDGI_HIT_CURRENT_FRAME_INDEX,
+                volumeBank + distanceBucket,
+                1u);
+            uint committedInstanceIndex =
+                rayQueryGetIntersectionInstanceCustomIndexEXT(shadowQuery, true);
+            if (DDGI_HIT_RECEIVER_INSTANCE_INDEX != 0xffffffffu &&
+                committedInstanceIndex == DDGI_HIT_RECEIVER_INSTANCE_INDEX)
+            {
+                AddRendererDiagnostic(DDGI_HIT_CURRENT_FRAME_INDEX, volumeBank + 17u, 1u);
+            }
+            AddRendererDiagnostic(
+                DDGI_HIT_CURRENT_FRAME_INDEX,
+                volumeBank + 18u,
+                uint(round(clamp(committedHitDistance, 0.0, 256.0) *
+                    DDGI_SHADOW_VISIBILITY_HIT_DISTANCE_SCALE)));
+        }
     }
     return occluded ? vec3(0.0) : visibilityRgb;
 }
@@ -1211,10 +1285,15 @@ vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
 
     vec3 tracedVisibility = TraceLightVisibility(
         worldPosition,
-        surface.CanonicalGeometricNormal,
+        // GeometricNormal is resolved from the probe ray's committed facing.
+        // CanonicalGeometricNormal is authored orientation and flipping it
+        // toward the light can offset the shadow origin back through the exact
+        // surface the probe ray just hit.
+        surface.GeometricNormal,
         lightDirection,
         visibilityDistance,
-        receiverProbeSpacing);
+        receiverProbeSpacing,
+        true);
     // DDGI is the transport reference: shadow strength is an artistic raster
     // control, not a source of unoccluded direct energy behind geometry.
     return noShadowDiffuse * tracedVisibility;
@@ -1301,7 +1380,8 @@ vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
             surface.GeometricNormal,
             dominantLightDirection,
             dominantDistance,
-            receiverProbeSpacing);
+            receiverProbeSpacing,
+            false);
         return diffuseRadiance + dominantContribution * (dominantVisibility - vec3(1.0));
     }
 
@@ -1385,7 +1465,8 @@ vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
         surface.GeometricNormal,
         lightDirection,
         distanceToSource,
-        receiverProbeSpacing);
+        receiverProbeSpacing,
+        false);
     return contribution * visibility;
 }
 

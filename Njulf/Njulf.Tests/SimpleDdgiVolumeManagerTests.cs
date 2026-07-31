@@ -13,6 +13,21 @@ namespace Njulf.Tests;
 public sealed class SimpleDdgiVolumeManagerTests
 {
     [Test]
+    public void SimpleDdgiDebugView_MapsSourceCacheToForwardShaderAbi()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager.ResolveSimpleDdgiDebugViewMode(GlobalIlluminationDebugView.DdgiSourceCacheRadiance),
+                Is.EqualTo(SimpleDdgiVolumeManager.SourceCacheRadianceDebugViewMode));
+            Assert.That(SimpleDdgiVolumeManager.SourceCacheRadianceDebugViewMode, Is.EqualTo(125u));
+            Assert.That(
+                SimpleDdgiVolumeManager.ResolveSimpleDdgiDebugViewMode(GlobalIlluminationDebugView.None),
+                Is.Zero);
+        });
+    }
+
+    [Test]
     public void DirtyLatencyPercentiles_AreDeterministicAndSaturateTheFinalBucket()
     {
         uint[] histogram = new uint[16];

@@ -163,11 +163,24 @@ const uint SIMPLE_DDGI_UPDATE_SOURCE_REFRESH = 1u << 13;
 const uint SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT = 8u;
 const uint SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK = 0xffffff00u;
 
+// A one-sided shell seen from behind is neither a shadeable surface nor sky.
+// Keep it as a distinct ray outcome so visibility/relocation retain the wall
+// distance while irradiance estimators can leave the direction unrepresented.
+const float SIMPLE_DDGI_RAY_HIT_KIND_MISS = 0.0;
+const float SIMPLE_DDGI_RAY_HIT_KIND_FRONT_FACE = 1.0;
+const float SIMPLE_DDGI_RAY_HIT_KIND_BACK_FACE = 2.0;
+const float SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE = 3.0;
+
 uint PackSimpleDdgiRayVisibilityHit(float visibilityDistance, float hitKind)
 {
     return packHalf2x16(vec2(
         clamp(visibilityDistance, 0.0, 65504.0),
-        clamp(hitKind, 0.0, 2.0)));
+        clamp(hitKind, 0.0, SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE)));
+}
+
+bool SimpleDdgiRayHitKindIsOneSidedBackFace(float hitKind)
+{
+    return hitKind > 2.5;
 }
 
 vec2 UnpackSimpleDdgiRayVisibilityHit(uint packedVisibilityHit)
@@ -263,6 +276,12 @@ const uint SIMPLE_DDGI_BLEND_ENERGY_IRRADIANCE_LUMINANCE_COUNTER = SIMPLE_DDGI_B
 const uint SIMPLE_DDGI_BLEND_ENERGY_CONFIDENCE_COUNTER = SIMPLE_DDGI_BLEND_ENERGY_COUNTER_BASE + 2u;
 const uint SIMPLE_DDGI_BLEND_ENERGY_LOW_CONFIDENCE_COUNTER = SIMPLE_DDGI_BLEND_ENERGY_COUNTER_BASE + 3u;
 const uint SIMPLE_DDGI_BLEND_ENERGY_NONZERO_IRRADIANCE_COUNTER = SIMPLE_DDGI_BLEND_ENERGY_COUNTER_BASE + 4u;
+// Appended renderer diagnostics ABI. One bank per declared Simple-DDGI volume:
+// blend count/luminance/confidence, transport count/source/bounce/total,
+// solver gather count/ownership/fallback, and one-sided reverse-face count.
+const uint SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_BASE = 321u;
+const uint SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_STRIDE = 19u;
+const uint SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_COUNT = 16u;
 const float SIMPLE_DDGI_ENERGY_LUMINANCE_SCALE = 4096.0;
 const float SIMPLE_DDGI_ENERGY_WEIGHT_SCALE = 1024.0;
 
@@ -279,6 +298,11 @@ uint PackSimpleDdgiEnergyLuminance(float value)
 uint PackSimpleDdgiEnergyWeight(float value)
 {
     return uint(round(clamp(value, 0.0, 1.0) * SIMPLE_DDGI_ENERGY_WEIGHT_SCALE));
+}
+
+uint PackSimpleDdgiEnergyWeightSum(float value)
+{
+    return uint(round(clamp(value, 0.0, 16.0) * SIMPLE_DDGI_ENERGY_WEIGHT_SCALE));
 }
 
 bool SimpleDdgiTraceEnergyDiagnosticRay(SimpleDdgiParams params, uint probeIndex, uint rayIndex)
@@ -336,6 +360,7 @@ void RecordSimpleDdgiTraceEnergyDiagnostics(
 void RecordSimpleDdgiBlendEnergyDiagnostics(
     SimpleDdgiParams params,
     uint diagnosticFrame,
+    uint volumeIndex,
     uint probeIndex,
     uint texel,
     vec3 irradiance,
@@ -353,6 +378,15 @@ void RecordSimpleDdgiBlendEnergyDiagnostics(
         AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_BLEND_ENERGY_LOW_CONFIDENCE_COUNTER, 1u);
     if (luminance > 0.00001)
         AddRendererDiagnostic(diagnosticFrame, SIMPLE_DDGI_BLEND_ENERGY_NONZERO_IRRADIANCE_COUNTER, 1u);
+
+    if (volumeIndex < SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_COUNT)
+    {
+        uint bank = SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_BASE +
+            volumeIndex * SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_STRIDE;
+        AddRendererDiagnostic(diagnosticFrame, bank + 0u, 1u);
+        AddRendererDiagnostic(diagnosticFrame, bank + 1u, PackSimpleDdgiEnergyLuminance(luminance));
+        AddRendererDiagnostic(diagnosticFrame, bank + 2u, PackSimpleDdgiEnergyWeight(safeConfidence));
+    }
 }
 
 // V2 traces source radiance and solves the reflected component in a separate
@@ -361,12 +395,16 @@ void RecordSimpleDdgiBlendEnergyDiagnostics(
 void RecordSimpleDdgiTransportEnergyDiagnostics(
     SimpleDdgiParams params,
     uint diagnosticFrame,
+    uint volumeIndex,
     uint probeIndex,
     uint directionRayIndex,
     bool sourceCacheHit,
     vec3 sourceRadiance,
     vec3 bounceRadiance,
-    vec3 totalRadiance)
+    vec3 totalRadiance,
+    uint solverGatherCount,
+    float solverOwnershipSum,
+    float solverFallbackWeightSum)
 {
     if (!SimpleDdgiTraceEnergyDiagnosticRay(params, probeIndex, directionRayIndex))
         return;
@@ -390,6 +428,40 @@ void RecordSimpleDdgiTransportEnergyDiagnostics(
         diagnosticFrame,
         SIMPLE_DDGI_TRANSPORT_TOTAL_LUMINANCE_COUNTER,
         PackSimpleDdgiEnergyLuminance(SimpleDdgiEnergyLuminance(totalRadiance)));
+
+    if (volumeIndex < SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_COUNT)
+    {
+        uint bank = SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_BASE +
+            volumeIndex * SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_STRIDE;
+        AddRendererDiagnostic(diagnosticFrame, bank + 3u, 1u);
+        AddRendererDiagnostic(diagnosticFrame, bank + 4u,
+            PackSimpleDdgiEnergyLuminance(SimpleDdgiEnergyLuminance(sourceRadiance)));
+        AddRendererDiagnostic(diagnosticFrame, bank + 5u,
+            PackSimpleDdgiEnergyLuminance(SimpleDdgiEnergyLuminance(bounceRadiance)));
+        AddRendererDiagnostic(diagnosticFrame, bank + 6u,
+            PackSimpleDdgiEnergyLuminance(SimpleDdgiEnergyLuminance(totalRadiance)));
+        AddRendererDiagnostic(diagnosticFrame, bank + 7u, solverGatherCount);
+        AddRendererDiagnostic(diagnosticFrame, bank + 8u,
+            PackSimpleDdgiEnergyWeightSum(solverOwnershipSum));
+        AddRendererDiagnostic(diagnosticFrame, bank + 9u,
+            PackSimpleDdgiEnergyWeightSum(solverFallbackWeightSum));
+    }
+}
+
+void RecordSimpleDdgiOneSidedBackFaceDiagnostic(
+    SimpleDdgiParams params,
+    uint diagnosticFrame,
+    uint volumeIndex)
+{
+    if (!SimpleDdgiDetailedDiagnosticsEnabled(params) ||
+        volumeIndex >= SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_COUNT)
+    {
+        return;
+    }
+
+    uint bank = SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_BASE +
+        volumeIndex * SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_STRIDE;
+    AddRendererDiagnostic(diagnosticFrame, bank + 10u, 1u);
 }
 
 #ifndef SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT
@@ -2135,11 +2207,20 @@ vec3 SampleSimpleDdgiUnifiedIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir,
     return SampleSimpleDdgiUnifiedIrradiance(worldPos, normal, viewDir, allowFallback, ignoredOwnership);
 }
 
-vec3 SampleSimpleDdgiSolverBounceIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir)
+vec3 SampleSimpleDdgiSolverBounceIrradiance(
+    vec3 worldPos,
+    vec3 normal,
+    vec3 viewDir,
+    out float solverOwnershipOut,
+    out float fallbackWeightOut)
 {
     SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
     if ((p.flags & SIMPLE_DDGI_FLAG_ENABLED) == 0u)
+    {
+        solverOwnershipOut = 0.0;
+        fallbackWeightOut = 0.0;
         return vec3(0.0);
+    }
 
     vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
     SimpleDdgiGatherResult gather = SampleSimpleDdgiGather(worldPos, safeNormal, viewDir);
@@ -2148,6 +2229,7 @@ vec3 SampleSimpleDdgiSolverBounceIrradiance(vec3 worldPos, vec3 normal, vec3 vie
         0.0,
         SIMPLE_DDGI_SOLVER_OWNERSHIP_SUPPORT_RAMP,
         clamp(gather.validSupport, 0.0, 1.0));
+    solverOwnershipOut = solverOwnership;
     // Probe-to-hit visibility already participates in normalized probe
     // selection. Applying the receiver leak clamp again here turns visibility
     // confidence into a per-bounce absorption coefficient (0.35^N in the
@@ -2157,15 +2239,29 @@ vec3 SampleSimpleDdgiSolverBounceIrradiance(vec3 worldPos, vec3 normal, vec3 vie
     vec3 irradiance = gather.irradiance * solverOwnership;
 
     float fallbackWeight = (1.0 - solverOwnership) * p.environmentFallbackIntensity;
+    fallbackWeightOut = fallbackWeight;
     if (fallbackWeight > 0.0001)
     {
+        // This is a fixed-point boundary condition, not receiver-visible sky.
+        // Visibility-gating an ownership deficit makes missing coverage a
+        // per-generation energy sink and prevents a conservative solve.
         vec3 fallback = SimpleDdgiEnvironmentIrradianceFallback(safeNormal, p);
-        if ((p.flags & SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u)
-            fallback *= EstimateFarFieldSkyVisibility(worldPos, safeNormal);
         irradiance += fallback * fallbackWeight;
     }
 
     return clamp(irradiance, vec3(0.0), vec3(64.0));
+}
+
+vec3 SampleSimpleDdgiSolverBounceIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir)
+{
+    float ignoredOwnership;
+    float ignoredFallbackWeight;
+    return SampleSimpleDdgiSolverBounceIrradiance(
+        worldPos,
+        normal,
+        viewDir,
+        ignoredOwnership,
+        ignoredFallbackWeight);
 }
 
 SimpleDdgiDebugSample SampleSimpleDdgiDebug(vec3 worldPos, vec3 normal, vec3 viewDir)
