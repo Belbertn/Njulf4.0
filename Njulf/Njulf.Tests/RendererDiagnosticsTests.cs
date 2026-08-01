@@ -930,6 +930,7 @@ namespace Njulf.Tests
                     "AmbientOcclusionPass",
                     "AmbientOcclusionBlurPass",
                     "TiledLightCullingPass",
+                    "EnvironmentPrefilterPass",
                     "ForwardPlusPass",
                     "SsgiTracePass",
                     "SsgiTemporalPass",
@@ -996,7 +997,7 @@ namespace Njulf.Tests
                 Assert.That(settings.Environment.SpecularIntensity, Is.EqualTo(1.0f));
                 Assert.That(settings.Environment.EnvironmentSize, Is.EqualTo(1024));
                 Assert.That(settings.Environment.IrradianceSize, Is.EqualTo(64));
-                Assert.That(settings.Environment.PrefilteredSize, Is.EqualTo(256));
+                Assert.That(settings.Environment.PrefilteredSize, Is.EqualTo(128));
                 Assert.That(settings.Environment.BrdfLutSize, Is.EqualTo(256));
                 Assert.That(settings.Environment.DebugView, Is.EqualTo(EnvironmentDebugView.None));
                 Assert.That(settings.Environment.DebugMipLevel, Is.EqualTo(0));

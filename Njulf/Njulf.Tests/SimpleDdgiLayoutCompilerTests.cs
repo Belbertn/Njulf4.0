@@ -77,6 +77,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(
                 SimpleDdgiMemoryPlan.RelocationClassificationBytesPerProbe,
                 Is.EqualTo((ulong)Marshal.SizeOf<GPUSimpleDdgiRelocationClassification>()));
+            Assert.That(SimpleDdgiMemoryPlan.ProbeReadbackBytesPerProbe, Is.EqualTo(80UL));
 
             Assert.That(plan.ParamsBytes, Is.EqualTo(208UL + 16UL * 96UL));
             Assert.That(plan.IrradianceAtlasBytes, Is.EqualTo((ulong)probes * 512UL));
@@ -95,7 +96,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
                 Is.EqualTo((ulong)probes * 48UL));
             Assert.That(
                 plan.ProbeStateReadbackBytes,
-                Is.EqualTo((ulong)RenderingConstants.FramesInFlight * probes * 32UL));
+                Is.EqualTo((ulong)RenderingConstants.FramesInFlight * probes * 80UL));
             Assert.That(
                 plan.RayScratchBytes,
                 Is.EqualTo((ulong)updates * rays * 32UL));
@@ -292,8 +293,12 @@ public sealed class SimpleDdgiLayoutCompilerTests
                 low.ProbeStateReadbackBytes,
                 Is.EqualTo(
                     (ulong)RenderingConstants.FramesInFlight *
-                    (ulong)low.ProbeCount *
-                    (ulong)SimpleDdgiMemoryPlan.ProbeStateBytesPerProbe));
+                    ((ulong)low.ProbeCount *
+                        SimpleDdgiMemoryPlan.ProbeStateBytesPerProbe +
+                    (ulong)Math.Min(
+                        low.ProbeCount,
+                        SimpleDdgiMemoryPlan.ClassificationReadbackProbeCapacity) *
+                        SimpleDdgiMemoryPlan.RelocationClassificationBytesPerProbe)));
         });
     }
 

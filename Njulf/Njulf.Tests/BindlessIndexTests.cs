@@ -189,6 +189,8 @@ namespace Njulf.Tests
                 ["FAR_FIELD_CLIPMAP_JUMP_FLOOD_SCRATCH0_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapJumpFloodScratch0Buffer,
                 ["FAR_FIELD_CLIPMAP_JUMP_FLOOD_SCRATCH1_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapJumpFloodScratch1Buffer,
                 ["FAR_FIELD_CLIPMAP_PAGE_TABLE_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapPageTableBuffer,
+                ["ENVIRONMENT_PREFILTER_DATA_BUFFER_INDEX"] = BindlessIndex.EnvironmentPrefilterDataBuffer,
+                ["ENVIRONMENT_GI_DATA_BUFFER_INDEX"] = BindlessIndex.EnvironmentGiDataBuffer,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
@@ -262,6 +264,7 @@ namespace Njulf.Tests
                 ["WEIGHTED_OIT_ACCUMULATION_TEXTURE_INDEX"] = BindlessIndex.WeightedOitAccumulationTexture,
                 ["WEIGHTED_OIT_REVEALAGE_TEXTURE_INDEX"] = BindlessIndex.WeightedOitRevealageTexture,
                 ["MATERIAL_TRANSPORT_PROVENANCE_TEXTURE_INDEX"] = BindlessIndex.MaterialTransportProvenanceTexture,
+                ["PREFILTERED_ENVIRONMENT_NEXT_TEXTURE_INDEX"] = BindlessIndex.PrefilteredEnvironmentNextTexture,
                 ["SIMPLE_DDGI_SAMPLED_ATLAS_TEXTURE_GROUP_COUNT"] = BindlessIndex.MaxSimpleDdgiSampledAtlasTextureGroups,
                 ["SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX"] = BindlessIndex.SimpleDdgiSampledIrradianceTextureBase,
                 ["SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX"] = BindlessIndex.SimpleDdgiSampledVisibilityTextureBase,
@@ -397,7 +400,8 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.WeightedOitAccumulationTexture, Is.EqualTo(BindlessIndex.ReflectionProbeDebugTexture + 1));
             Assert.That(BindlessIndex.WeightedOitRevealageTexture, Is.EqualTo(BindlessIndex.WeightedOitAccumulationTexture + 1));
             Assert.That(BindlessIndex.MaterialTransportProvenanceTexture, Is.EqualTo(BindlessIndex.WeightedOitRevealageTexture + 1));
-            Assert.That(BindlessIndex.SimpleDdgiSampledIrradianceTextureBase, Is.EqualTo(BindlessIndex.MaterialTransportProvenanceTexture + 1));
+            Assert.That(BindlessIndex.PrefilteredEnvironmentNextTexture, Is.EqualTo(BindlessIndex.MaterialTransportProvenanceTexture + 1));
+            Assert.That(BindlessIndex.SimpleDdgiSampledIrradianceTextureBase, Is.EqualTo(BindlessIndex.PrefilteredEnvironmentNextTexture + 1));
             Assert.That(BindlessIndex.SimpleDdgiSampledVisibilityTextureBase,
                 Is.EqualTo(BindlessIndex.SimpleDdgiSampledIrradianceTextureBase + BindlessIndex.MaxSimpleDdgiSampledAtlasTextureGroups));
             Assert.That(BindlessIndex.FirstDynamicTextureIndex,
@@ -657,6 +661,8 @@ namespace Njulf.Tests
             yield return BindlessIndex.FarFieldClipmapJumpFloodScratch0Buffer;
             yield return BindlessIndex.FarFieldClipmapJumpFloodScratch1Buffer;
             yield return BindlessIndex.FarFieldClipmapPageTableBuffer;
+            yield return BindlessIndex.EnvironmentPrefilterDataBuffer;
+            yield return BindlessIndex.EnvironmentGiDataBuffer;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;

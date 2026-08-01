@@ -22,16 +22,6 @@ layout(push_constant) uniform SkyboxPushConstantBlock
     GPUSkyboxPushConstants Push;
 } pc;
 
-vec3 RotateEnvironmentDirection(vec3 direction, float radians)
-{
-    float s = sin(radians);
-    float c = cos(radians);
-    return normalize(vec3(
-        direction.x * c - direction.z * s,
-        direction.y,
-        direction.x * s + direction.z * c));
-}
-
 void main()
 {
     vec2 ndc = fragUv * 2.0 - vec2(1.0);
@@ -39,8 +29,12 @@ void main()
     view.xyz /= max(abs(view.w), 0.00001);
     vec3 viewDirection = normalize(view.xyz);
     vec3 worldDirection = normalize(MulRowMajor(vec4(viewDirection, 0.0), pc.Push.InverseViewMatrix).xyz);
-    worldDirection = RotateEnvironmentDirection(worldDirection, pc.Push.RotationRadians);
-
-    vec3 sky = texture(BindlessCubeTextures[nonuniformEXT(int(pc.Push.EnvironmentTextureIndex))], worldDirection).rgb;
-    outColor = vec4(sky * pc.Push.SkyIntensity, 1.0);
+    GPUEnvironmentData environment = ReadEnvironmentData();
+    vec3 sky = EvaluateEnvironmentRadiance(
+        environment,
+        worldDirection,
+        false,
+        true,
+        true);
+    outColor = vec4(sky, 1.0);
 }

@@ -572,6 +572,13 @@ namespace Njulf.Rendering.Data
         Cubemap = 2
     }
 
+    public enum ProceduralSkySunDriver : uint
+    {
+        SceneDirectionalLight = 0,
+        AstronomicalTime = 1,
+        DirectSunDirection = 2
+    }
+
     public enum EnvironmentTexturePrecision : uint
     {
         Float16 = 0,
@@ -1277,9 +1284,30 @@ namespace Njulf.Rendering.Data
         private float _skyIntensity = 1.0f;
         private float _diffuseIntensity = 1.0f;
         private float _specularIntensity = 1.0f;
+        private float _turbidity = 3.0f;
+        private Vector3 _groundAlbedo = new(0.20f);
+        private float _sunAngularDiameterDegrees = 0.53f;
+        private float _moonAngularDiameterDegrees = 0.52f;
+        private float _timeOfDayHours = 14.0f;
+        private float _latitudeDegrees = 59.9139f;
+        private int _dayOfYear = 172;
+        private float _northOffsetDegrees;
+        private float _timeScale = 60.0f;
+        private Vector3 _directSunDirection = NormalizeDirectSunDirection(
+            new Vector3(-0.3f, 0.72f, 0.62f));
+        private float _atmosphereIntensity = 1.0f;
+        private float _solarIrradianceScale = 14.0f;
+        private float _moonIrradianceScale = 0.12f;
+        private float _starIntensity = 0.025f;
+        private float _airglowIntensity = 0.025f;
+        private float _giSunStepDegrees = 0.25f;
+        private float _giTargetSourceSweepSeconds = 8.0f;
+        private int _specularPrefilterMipsPerFrame = 1;
+        private int _specularPrefilterTransitionFrames = 8;
+        private float _rotationRadians;
         private uint _environmentSize = 1024;
         private uint _irradianceSize = 64;
-        private uint _prefilteredSize = 256;
+        private uint _prefilteredSize = 128;
         private uint _brdfLutSize = 256;
         private int _debugMipLevel;
 
@@ -1287,6 +1315,137 @@ namespace Njulf.Rendering.Data
         public EnvironmentSourceKind SourceKind { get; set; } = EnvironmentSourceKind.ProceduralSky;
         public string? SourcePath { get; set; }
         public EnvironmentTexturePrecision TexturePrecision { get; set; } = EnvironmentTexturePrecision.Float16;
+        public ProceduralSkySunDriver SunDriver { get; set; } =
+            ProceduralSkySunDriver.SceneDirectionalLight;
+        public bool AnimateTimeOfDay { get; set; }
+
+        /// <summary>
+        /// Runtime constant-radiance safety value derived from the active sky's
+        /// diffuse SH. It is deliberately not serialized: normal rendering and
+        /// probe misses use the environment GPU contract, while this value keeps
+        /// exceptional/no-resource paths physically consistent with that contract.
+        /// </summary>
+        [JsonIgnore]
+        public Vector3 TransportFallbackRadiance { get; internal set; }
+
+        public float Turbidity
+        {
+            get => _turbidity;
+            set => _turbidity = Clamp(value, 1.0f, 10.0f);
+        }
+
+        public Vector3 GroundAlbedo
+        {
+            get => _groundAlbedo;
+            set => _groundAlbedo = new Vector3(
+                Clamp(value.X, 0.0f, 1.0f),
+                Clamp(value.Y, 0.0f, 1.0f),
+                Clamp(value.Z, 0.0f, 1.0f));
+        }
+
+        public float SunAngularDiameterDegrees
+        {
+            get => _sunAngularDiameterDegrees;
+            set => _sunAngularDiameterDegrees = Clamp(value, 0.1f, 2.0f);
+        }
+
+        public float MoonAngularDiameterDegrees
+        {
+            get => _moonAngularDiameterDegrees;
+            set => _moonAngularDiameterDegrees = Clamp(value, 0.1f, 2.0f);
+        }
+
+        public float TimeOfDayHours
+        {
+            get => _timeOfDayHours;
+            set => _timeOfDayHours = Clamp(value, 0.0f, 24.0f);
+        }
+
+        public float LatitudeDegrees
+        {
+            get => _latitudeDegrees;
+            set => _latitudeDegrees = Clamp(value, -90.0f, 90.0f);
+        }
+
+        public int DayOfYear
+        {
+            get => _dayOfYear;
+            set => _dayOfYear = Math.Clamp(value, 1, 366);
+        }
+
+        public float NorthOffsetDegrees
+        {
+            get => _northOffsetDegrees;
+            set => _northOffsetDegrees = Clamp(value, -360.0f, 360.0f);
+        }
+
+        /// <summary>Simulated solar seconds advanced per real second.</summary>
+        public float TimeScale
+        {
+            get => _timeScale;
+            set => _timeScale = Clamp(value, 0.0f, 86_400.0f);
+        }
+
+        /// <summary>World-space direction from the scene toward the sun.</summary>
+        public Vector3 DirectSunDirection
+        {
+            get => _directSunDirection;
+            set => _directSunDirection = NormalizeDirectSunDirection(value);
+        }
+
+        public float AtmosphereIntensity
+        {
+            get => _atmosphereIntensity;
+            set => _atmosphereIntensity = Clamp(value, 0.0f, 16.0f);
+        }
+
+        public float SolarIrradianceScale
+        {
+            get => _solarIrradianceScale;
+            set => _solarIrradianceScale = Clamp(value, 0.0f, 128.0f);
+        }
+
+        public float MoonIrradianceScale
+        {
+            get => _moonIrradianceScale;
+            set => _moonIrradianceScale = Clamp(value, 0.0f, 8.0f);
+        }
+
+        public float StarIntensity
+        {
+            get => _starIntensity;
+            set => _starIntensity = Clamp(value, 0.0f, 2.0f);
+        }
+
+        public float AirglowIntensity
+        {
+            get => _airglowIntensity;
+            set => _airglowIntensity = Clamp(value, 0.0f, 2.0f);
+        }
+
+        public float GiSunStepDegrees
+        {
+            get => _giSunStepDegrees;
+            set => _giSunStepDegrees = Clamp(value, 0.02f, 5.0f);
+        }
+
+        public float GiTargetSourceSweepSeconds
+        {
+            get => _giTargetSourceSweepSeconds;
+            set => _giTargetSourceSweepSeconds = Clamp(value, 0.25f, 120.0f);
+        }
+
+        public int SpecularPrefilterMipsPerFrame
+        {
+            get => _specularPrefilterMipsPerFrame;
+            set => _specularPrefilterMipsPerFrame = Math.Clamp(value, 1, 5);
+        }
+
+        public int SpecularPrefilterTransitionFrames
+        {
+            get => _specularPrefilterTransitionFrames;
+            set => _specularPrefilterTransitionFrames = Math.Clamp(value, 1, 120);
+        }
 
         public float SkyIntensity
         {
@@ -1306,7 +1465,11 @@ namespace Njulf.Rendering.Data
             set => _specularIntensity = Clamp(value, 0.0f, 16.0f);
         }
 
-        public float RotationRadians { get; set; }
+        public float RotationRadians
+        {
+            get => _rotationRadians;
+            set => _rotationRadians = float.IsFinite(value) ? value : 0.0f;
+        }
 
         public uint EnvironmentSize
         {
@@ -1362,9 +1525,31 @@ namespace Njulf.Rendering.Data
 
         private static float Clamp(float value, float min, float max)
         {
+            if (!float.IsFinite(value))
+                return min;
             if (value < min)
                 return min;
             return value > max ? max : value;
+        }
+
+        private static Vector3 NormalizeDirectSunDirection(Vector3 value)
+        {
+            float lengthSquared = value.LengthSquared();
+            if (!float.IsFinite(value.X) ||
+                !float.IsFinite(value.Y) ||
+                !float.IsFinite(value.Z) ||
+                !float.IsFinite(lengthSquared) ||
+                lengthSquared <= 0.000001f)
+            {
+                return new Vector3(-0.3f, 0.72f, 0.62f).Normalized();
+            }
+
+            // Preserve an already-normalized serialized value bit-for-bit. This
+            // keeps save/load and quality-tier rollback exact while still making
+            // arbitrary authored directions safe for the atmosphere model.
+            return MathF.Abs(lengthSquared - 1.0f) <= 1.0e-6f
+                ? value
+                : value.Normalized();
         }
     }
 
@@ -3981,7 +4166,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 6;
+        public const int SerializationVersion = 7;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -4518,6 +4703,8 @@ namespace Njulf.Rendering.Data
             // material-GI V2 rollout switches fail-closed; release qualification
             // remains an external, non-persisted policy. Version 6 persists the
             // independently configurable transparent/decal DDGI receiver policy.
+            // Version 7 persists the procedural-atmosphere authoring contract,
+            // including explicit XYZ values for its vector fields.
             public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
@@ -4528,6 +4715,7 @@ namespace Njulf.Rendering.Data
             public AntiAliasingMode AntiAliasingMode { get; init; } = AntiAliasingMode.SmaaMedium;
             public bool BloomEnabled { get; init; } = true;
             public bool AmbientOcclusionEnabled { get; init; } = true;
+            public EnvironmentFile? Environment { get; init; }
             public GlobalIlluminationFile? GlobalIllumination { get; init; }
             public bool FogEnabled { get; init; }
             public bool ReflectionsEnabled { get; init; } = true;
@@ -4556,6 +4744,7 @@ namespace Njulf.Rendering.Data
                     AntiAliasingMode = settings.AntiAliasing.Mode,
                     BloomEnabled = settings.Bloom.Enabled,
                     AmbientOcclusionEnabled = settings.AmbientOcclusion.Enabled,
+                    Environment = EnvironmentFile.FromSettings(settings.Environment),
                     GlobalIllumination = GlobalIlluminationFile.FromSettings(settings.GlobalIllumination),
                     FogEnabled = settings.Fog.Enabled,
                     ReflectionsEnabled = settings.Reflections.Enabled,
@@ -4585,6 +4774,7 @@ namespace Njulf.Rendering.Data
                 settings.AntiAliasing.Mode = AntiAliasingMode;
                 settings.Bloom.Enabled = BloomEnabled;
                 settings.AmbientOcclusion.Enabled = AmbientOcclusionEnabled;
+                Environment?.ApplyTo(settings.Environment);
                 GlobalIllumination?.ApplyTo(settings.GlobalIllumination);
                 // Rollout authority is never persisted. This also clears V2
                 // booleans from current-version files so no raw consumer can
@@ -4613,6 +4803,147 @@ namespace Njulf.Rendering.Data
                 AsyncCompute.ApplyTo(settings.AsyncCompute, missingModeMeansDisabled: !Version.HasValue || Version.Value < 3);
                 settings.Diagnostics.GpuMeshletCountersEnabled = GpuMeshletCountersEnabled;
                 settings.Diagnostics.DdgiForwardEstimateCountersEnabled = DdgiForwardEstimateCountersEnabled;
+            }
+        }
+
+        private sealed record EnvironmentFile
+        {
+            public bool Enabled { get; init; } = true;
+            public EnvironmentSourceKind SourceKind { get; init; } =
+                EnvironmentSourceKind.ProceduralSky;
+            public string? SourcePath { get; init; }
+            public EnvironmentTexturePrecision TexturePrecision { get; init; } =
+                EnvironmentTexturePrecision.Float16;
+            public ProceduralSkySunDriver SunDriver { get; init; } =
+                ProceduralSkySunDriver.SceneDirectionalLight;
+            public bool AnimateTimeOfDay { get; init; }
+            public float Turbidity { get; init; } = 3.0f;
+            public float GroundAlbedoX { get; init; } = 0.2f;
+            public float GroundAlbedoY { get; init; } = 0.2f;
+            public float GroundAlbedoZ { get; init; } = 0.2f;
+            public float SunAngularDiameterDegrees { get; init; } = 0.53f;
+            public float MoonAngularDiameterDegrees { get; init; } = 0.52f;
+            public float TimeOfDayHours { get; init; } = 14.0f;
+            public float LatitudeDegrees { get; init; } = 59.9139f;
+            public int DayOfYear { get; init; } = 172;
+            public float NorthOffsetDegrees { get; init; }
+            public float TimeScale { get; init; } = 60.0f;
+            public float DirectSunDirectionX { get; init; } = -0.3010859f;
+            public float DirectSunDirectionY { get; init; } = 0.7226061f;
+            public float DirectSunDirectionZ { get; init; } = 0.6222441f;
+            public float AtmosphereIntensity { get; init; } = 1.0f;
+            public float SolarIrradianceScale { get; init; } = 14.0f;
+            public float MoonIrradianceScale { get; init; } = 0.12f;
+            public float StarIntensity { get; init; } = 0.025f;
+            public float AirglowIntensity { get; init; } = 0.025f;
+            public float GiSunStepDegrees { get; init; } = 0.25f;
+            public float GiTargetSourceSweepSeconds { get; init; } = 8.0f;
+            public int SpecularPrefilterMipsPerFrame { get; init; } = 1;
+            public int SpecularPrefilterTransitionFrames { get; init; } = 8;
+            public float SkyIntensity { get; init; } = 1.0f;
+            public float DiffuseIntensity { get; init; } = 1.0f;
+            public float SpecularIntensity { get; init; } = 1.0f;
+            public float RotationRadians { get; init; }
+            public uint EnvironmentSize { get; init; } = 1024;
+            public uint IrradianceSize { get; init; } = 64;
+            public uint PrefilteredSize { get; init; } = 128;
+            public uint BrdfLutSize { get; init; } = 256;
+            public EnvironmentDebugView DebugView { get; init; } =
+                EnvironmentDebugView.None;
+            public int DebugMipLevel { get; init; }
+
+            public static EnvironmentFile FromSettings(EnvironmentSettings settings)
+            {
+                Vector3 ground = settings.GroundAlbedo;
+                Vector3 sun = settings.DirectSunDirection;
+                return new EnvironmentFile
+                {
+                    Enabled = settings.Enabled,
+                    SourceKind = settings.SourceKind,
+                    SourcePath = settings.SourcePath,
+                    TexturePrecision = settings.TexturePrecision,
+                    SunDriver = settings.SunDriver,
+                    AnimateTimeOfDay = settings.AnimateTimeOfDay,
+                    Turbidity = settings.Turbidity,
+                    GroundAlbedoX = ground.X,
+                    GroundAlbedoY = ground.Y,
+                    GroundAlbedoZ = ground.Z,
+                    SunAngularDiameterDegrees = settings.SunAngularDiameterDegrees,
+                    MoonAngularDiameterDegrees = settings.MoonAngularDiameterDegrees,
+                    TimeOfDayHours = settings.TimeOfDayHours,
+                    LatitudeDegrees = settings.LatitudeDegrees,
+                    DayOfYear = settings.DayOfYear,
+                    NorthOffsetDegrees = settings.NorthOffsetDegrees,
+                    TimeScale = settings.TimeScale,
+                    DirectSunDirectionX = sun.X,
+                    DirectSunDirectionY = sun.Y,
+                    DirectSunDirectionZ = sun.Z,
+                    AtmosphereIntensity = settings.AtmosphereIntensity,
+                    SolarIrradianceScale = settings.SolarIrradianceScale,
+                    MoonIrradianceScale = settings.MoonIrradianceScale,
+                    StarIntensity = settings.StarIntensity,
+                    AirglowIntensity = settings.AirglowIntensity,
+                    GiSunStepDegrees = settings.GiSunStepDegrees,
+                    GiTargetSourceSweepSeconds = settings.GiTargetSourceSweepSeconds,
+                    SpecularPrefilterMipsPerFrame = settings.SpecularPrefilterMipsPerFrame,
+                    SpecularPrefilterTransitionFrames = settings.SpecularPrefilterTransitionFrames,
+                    SkyIntensity = settings.SkyIntensity,
+                    DiffuseIntensity = settings.DiffuseIntensity,
+                    SpecularIntensity = settings.SpecularIntensity,
+                    RotationRadians = settings.RotationRadians,
+                    EnvironmentSize = settings.EnvironmentSize,
+                    IrradianceSize = settings.IrradianceSize,
+                    PrefilteredSize = settings.PrefilteredSize,
+                    BrdfLutSize = settings.BrdfLutSize,
+                    DebugView = settings.DebugView,
+                    DebugMipLevel = settings.DebugMipLevel
+                };
+            }
+
+            public void ApplyTo(EnvironmentSettings settings)
+            {
+                settings.Enabled = Enabled;
+                settings.SourceKind = SourceKind;
+                settings.SourcePath = SourcePath;
+                settings.TexturePrecision = TexturePrecision;
+                settings.SunDriver = SunDriver;
+                settings.AnimateTimeOfDay = AnimateTimeOfDay;
+                settings.Turbidity = Turbidity;
+                settings.GroundAlbedo = new Vector3(
+                    GroundAlbedoX,
+                    GroundAlbedoY,
+                    GroundAlbedoZ);
+                settings.SunAngularDiameterDegrees = SunAngularDiameterDegrees;
+                settings.MoonAngularDiameterDegrees = MoonAngularDiameterDegrees;
+                settings.TimeOfDayHours = TimeOfDayHours;
+                settings.LatitudeDegrees = LatitudeDegrees;
+                settings.DayOfYear = DayOfYear;
+                settings.NorthOffsetDegrees = NorthOffsetDegrees;
+                settings.TimeScale = TimeScale;
+                settings.DirectSunDirection = new Vector3(
+                    DirectSunDirectionX,
+                    DirectSunDirectionY,
+                    DirectSunDirectionZ);
+                settings.AtmosphereIntensity = AtmosphereIntensity;
+                settings.SolarIrradianceScale = SolarIrradianceScale;
+                settings.MoonIrradianceScale = MoonIrradianceScale;
+                settings.StarIntensity = StarIntensity;
+                settings.AirglowIntensity = AirglowIntensity;
+                settings.GiSunStepDegrees = GiSunStepDegrees;
+                settings.GiTargetSourceSweepSeconds = GiTargetSourceSweepSeconds;
+                settings.SpecularPrefilterMipsPerFrame = SpecularPrefilterMipsPerFrame;
+                settings.SpecularPrefilterTransitionFrames =
+                    SpecularPrefilterTransitionFrames;
+                settings.SkyIntensity = SkyIntensity;
+                settings.DiffuseIntensity = DiffuseIntensity;
+                settings.SpecularIntensity = SpecularIntensity;
+                settings.RotationRadians = RotationRadians;
+                settings.EnvironmentSize = EnvironmentSize;
+                settings.IrradianceSize = IrradianceSize;
+                settings.PrefilteredSize = PrefilteredSize;
+                settings.BrdfLutSize = BrdfLutSize;
+                settings.DebugView = DebugView;
+                settings.DebugMipLevel = DebugMipLevel;
             }
         }
 

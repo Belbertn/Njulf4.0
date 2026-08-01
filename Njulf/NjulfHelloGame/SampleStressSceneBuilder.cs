@@ -1494,6 +1494,10 @@ internal sealed class SampleStressSceneBuilder
             RoughnessFactor = Math.Clamp(roughness, 0.04f, 1.0f),
             AlphaMode = MaterialAlphaMode.Blend,
             ReceivesShadows = false,
+            // This billboard visualizes a point light; the corresponding
+            // LightManager entry owns all emitted transport. Letting the marker
+            // emit into DDGI would create a second, overlapping light source.
+            EmissionGiParticipation = GiParticipationOverride.Disabled,
             RenderBlendModeOverride = MaterialBlendMode.Additive
         };
 

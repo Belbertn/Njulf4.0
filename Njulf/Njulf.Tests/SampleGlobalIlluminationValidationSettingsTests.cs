@@ -100,6 +100,28 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(settings.Environment.Enabled, Is.True);
+            Assert.That(settings.Environment.SourceKind, Is.EqualTo(EnvironmentSourceKind.ProceduralSky));
+            Assert.That(settings.Environment.SourcePath, Is.Null);
+            Assert.That(settings.Environment.SunDriver, Is.EqualTo(ProceduralSkySunDriver.AstronomicalTime));
+            Assert.That(settings.Environment.AnimateTimeOfDay, Is.True);
+            Assert.That(settings.Environment.TimeOfDayHours, Is.EqualTo(SampleSponzaGlobalIlluminationProfile.DefaultSolarTimeHours));
+            Assert.That(settings.Environment.LatitudeDegrees, Is.EqualTo(SampleSponzaGlobalIlluminationProfile.DefaultLatitudeDegrees));
+            Assert.That(settings.Environment.DayOfYear, Is.EqualTo(SampleSponzaGlobalIlluminationProfile.DefaultDayOfYear));
+            Assert.That(settings.Environment.NorthOffsetDegrees, Is.EqualTo(SampleSponzaGlobalIlluminationProfile.DefaultNorthOffsetDegrees));
+            Assert.That(settings.Environment.TimeScale, Is.EqualTo(SampleSponzaGlobalIlluminationProfile.DefaultTimeScale));
+            Assert.That(settings.Environment.Turbidity, Is.EqualTo(SampleSponzaGlobalIlluminationProfile.DefaultTurbidity));
+            Assert.That(settings.Environment.GroundAlbedo, Is.EqualTo(new Vector3(SampleSponzaGlobalIlluminationProfile.DefaultGroundAlbedo)));
+            Assert.That(settings.Environment.AtmosphereIntensity, Is.EqualTo(SampleSponzaGlobalIlluminationProfile.DefaultAtmosphereIntensity));
+            Assert.That(settings.Environment.SolarIrradianceScale, Is.EqualTo(SampleSponzaGlobalIlluminationProfile.DefaultSolarIrradianceScale));
+            Assert.That(settings.Environment.MoonIrradianceScale, Is.GreaterThan(0.0f));
+            Assert.That(settings.Environment.StarIntensity, Is.GreaterThan(0.0f));
+            Assert.That(settings.Environment.AirglowIntensity, Is.GreaterThan(0.0f));
+            Assert.That(settings.Environment.GiSunStepDegrees, Is.EqualTo(0.25f));
+            Assert.That(settings.Environment.GiTargetSourceSweepSeconds, Is.EqualTo(8.0f));
+            Assert.That(settings.Environment.PrefilteredSize, Is.EqualTo(128));
+            Assert.That(settings.Environment.SpecularPrefilterMipsPerFrame, Is.EqualTo(1));
+            Assert.That(settings.Environment.SpecularPrefilterTransitionFrames, Is.EqualTo(8));
             Assert.That(settings.Environment.SkyIntensity, Is.EqualTo(1.0f));
             Assert.That(settings.Environment.DiffuseIntensity, Is.EqualTo(1.0f));
             Assert.That(settings.Environment.SpecularIntensity, Is.EqualTo(1.0f));
@@ -117,9 +139,76 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
         {
             Assert.That(settings.AutoExposure.Enabled, Is.False);
             Assert.That(settings.Exposure, Is.EqualTo(1.0f));
+            Assert.That(settings.Environment.SourceKind, Is.EqualTo(EnvironmentSourceKind.ProceduralSky));
+            Assert.That(settings.Environment.SunDriver, Is.EqualTo(ProceduralSkySunDriver.SceneDirectionalLight));
+            Assert.That(settings.Environment.AnimateTimeOfDay, Is.False);
             Assert.That(settings.Environment.SkyIntensity, Is.EqualTo(1.0f));
             Assert.That(settings.Diagnostics.DirectionalShadowReceiverCountersEnabled, Is.True);
             Assert.That(settings.GlobalIllumination.SimpleDdgiThinSurfaceTransmissionEnabled, Is.False);
+        });
+    }
+
+    [Test]
+    public void SponzaProfile_AstronomicalSunStartsAsHighCourtyardFacingSummerKey()
+    {
+        System.Numerics.Vector3 toSun = SolarPositionCalculator.CalculateToSunDirection(
+            SampleSponzaGlobalIlluminationProfile.DefaultSolarTimeHours,
+            SampleSponzaGlobalIlluminationProfile.DefaultLatitudeDegrees,
+            SampleSponzaGlobalIlluminationProfile.DefaultDayOfYear,
+            SampleSponzaGlobalIlluminationProfile.DefaultNorthOffsetDegrees);
+        System.Numerics.Vector3 expectedToSun = -SampleSponzaLightingProfile.DirectionalKeyDirection;
+        System.Numerics.Vector2 actualAzimuth = System.Numerics.Vector2.Normalize(
+            new System.Numerics.Vector2(toSun.X, toSun.Z));
+        System.Numerics.Vector2 expectedAzimuth = System.Numerics.Vector2.Normalize(
+            new System.Numerics.Vector2(expectedToSun.X, expectedToSun.Z));
+        float elevationDegrees = MathF.Asin(toSun.Y) * 180.0f / MathF.PI;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                System.Numerics.Vector2.Dot(actualAzimuth, expectedAzimuth),
+                Is.GreaterThan(0.999999f));
+            Assert.That(elevationDegrees, Is.InRange(60.0f, 66.0f));
+        });
+    }
+
+    [Test]
+    public void SponzaProfile_DefaultAtmosphereIsClearBlueSummerDay()
+    {
+        var settings = new RenderSettings();
+        SampleSponzaGlobalIlluminationProfile.Configure(settings);
+
+        System.Numerics.Vector3 toSun = SolarPositionCalculator.CalculateToSunDirection(
+            settings.Environment.TimeOfDayHours,
+            settings.Environment.LatitudeDegrees,
+            settings.Environment.DayOfYear,
+            settings.Environment.NorthOffsetDegrees);
+        var model = new HosekWilkieSkyModel();
+        var frame = new ProceduralAtmosphereFrame();
+        model.UpdateFrame(settings.Environment, toSun, authoredSunRadiance: null, frame);
+
+        System.Numerics.Vector3 zenith = model.EvaluateSkyRadiance(
+            System.Numerics.Vector3.UnitY,
+            frame,
+            ProceduralSkyEvaluationMode.Visual,
+            includeCelestialDiscs: false,
+            includeStars: false);
+        System.Numerics.Vector3 skyIrradiance =
+            HosekWilkieSkyModel.EvaluateDiffuseIrradianceSh(
+                System.Numerics.Vector3.UnitY,
+                frame.DiffuseIrradianceSh);
+        System.Numerics.Vector3 directHorizontalIrradiance =
+            frame.SunRadiance * MathF.Max(toSun.Y, 0.0f);
+        float diffuseToDirect = Luminance(skyIrradiance) /
+            MathF.Max(Luminance(directHorizontalIrradiance), 0.000001f);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.Environment.DayOfYear, Is.InRange(152, 243));
+            Assert.That(settings.Environment.Turbidity, Is.LessThanOrEqualTo(2.0f));
+            Assert.That(zenith.Z, Is.GreaterThan(zenith.X * 3.0f));
+            Assert.That(frame.SunRadiance.Z, Is.GreaterThan(frame.SunRadiance.X * 0.75f));
+            Assert.That(diffuseToDirect, Is.InRange(0.20f, 0.32f));
         });
     }
 
@@ -159,4 +248,7 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(gi.SimpleDdgiAuthoredVolumes, Is.Empty);
         });
     }
+
+    private static float Luminance(System.Numerics.Vector3 color) =>
+        color.X * 0.2126f + color.Y * 0.7152f + color.Z * 0.0722f;
 }

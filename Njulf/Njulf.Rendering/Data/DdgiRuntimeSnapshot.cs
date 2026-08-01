@@ -86,7 +86,10 @@ namespace Njulf.Rendering.Data
         ulong SimpleAtlasBytes,
         long SimpleGpuTraceMicroseconds,
         long SimpleGpuTransportMicroseconds,
-        long SimpleGpuBlendMicroseconds)
+        long SimpleGpuBlendMicroseconds,
+        float SimpleAverageBackfaceRatio = 0.0f,
+        float SimpleAverageCloseRatio = 0.0f,
+        float SimpleAverageHardInvalidProbeScore = 0.0f)
     {
         public static DdgiRuntimeSnapshot Empty { get; } = new(
             VolumeCount: 0,

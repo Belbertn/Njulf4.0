@@ -153,6 +153,8 @@ namespace Njulf.Rendering
         private bool _hasDdgiDynamicSignature;
         private bool _hasSimpleDdgiDirtySignature;
         private ulong _lastSimpleDdgiLightSignature;
+        private ulong _lastSimpleDdgiStableLightSignature;
+        private ulong _lastSimpleDdgiAtmosphereStepSignature;
         private ulong _lastSimpleDdgiEmissiveSignature;
         private ulong _lastSimpleDdgiDynamicGeometrySignature;
         private bool _lastReflectionProbeGiReady;
@@ -799,6 +801,12 @@ namespace Njulf.Rendering
             var lightCullingPass = new TiledLightCullingPass(
                 _context, _swapchain, _bindlessHeap, _computePipeline, _bufferManager, _renderTargets!);
             AddPassInstance(lightCullingPass);
+
+            AddPassInstance(new EnvironmentPrefilterPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _environmentManager!));
 
             // Create forward+ rendering pass
             var forwardPass = new ForwardPlusPass(
@@ -1502,14 +1510,10 @@ namespace Njulf.Rendering
             _debugDraw.Enabled = debugEnabled;
             _debugDraw.MaxLineSegments = Settings.Debug.MaxDebugLineSegments;
 
+            _environmentManager?.UpdateFrameLighting(_lightManager);
             _lightManager.UploadToGPU(_stagingRing, _currentCommandBuffer);
             ulong lightUploadBytes = _lightManager.LastUploadBytes;
             LightFrameSnapshot lightSnapshot = _lightManager.GetFrameSnapshot();
-            // The next BeginFrame safely recreates the procedural environment if
-            // this authoritative sun snapshot materially changed. Keeping the
-            // update here ensures sky, DDGI misses, and directional shadows all
-            // derive from the same scene light rather than independent constants.
-            _environmentManager?.UpdateProceduralSkyLighting(lightSnapshot);
             int lightCount = lightSnapshot.Count;
             int directionalLightCount = lightSnapshot.DirectionalLightCount;
             int localLightCount = lightSnapshot.LocalLightCount;
@@ -4284,6 +4288,16 @@ namespace Njulf.Rendering
                 SimpleDdgiTransportV2Active = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportV2Active : 0,
                 SimpleDdgiAutomaticProbeDensityActive = giUsesSimpleDdgi ? sceneData.SimpleDdgiAutomaticProbeDensityActive : 0,
                 SimpleDdgiTransportSourceRefreshProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceRefreshProbeCount : 0,
+                SimpleDdgiTransportSourceRefreshTargetProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceRefreshTargetProbeCount : 0,
+                SimpleDdgiTransportSourceRefreshCapacityShortfall = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceRefreshCapacityShortfall : 0,
+                SimpleDdgiTransportSourceCohortTransitionActive = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceCohortTransitionActive : 0,
+                SimpleDdgiTransportSourceCohortTransitionCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceCohortTransitionCount : 0UL,
+                SimpleDdgiTransportSourceCohortElapsedFrames = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceCohortElapsedFrames : 0,
+                SimpleDdgiTransportSourceStepStaleProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceStepStaleProbeCount : 0,
+                SimpleDdgiTransportSourceStepAgeP95Frames = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceStepAgeP95Frames : 0,
+                SimpleDdgiTransportSourceStepAgeMaximumFrames = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceStepAgeMaximumFrames : 0,
+                SimpleDdgiTransportSourceStepAgeP95Seconds = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceStepAgeP95Seconds : 0.0f,
+                SimpleDdgiTransportSourceStepAgeMaximumSeconds = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceStepAgeMaximumSeconds : 0.0f,
                 SimpleDdgiTransportSourceCacheReuseProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceCacheReuseProbeCount : 0,
                 SimpleDdgiTransportSourceRayCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceRayCount : 0UL,
                 SimpleDdgiTransportSolveRayCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSolveRayCount : 0UL,
@@ -4639,8 +4653,11 @@ namespace Njulf.Rendering
                 DdgiVisibilityZeroTransportCount = giUsesDdgi ? sceneData.DdgiVisibilityZeroTransportCount : 0u,
                 DdgiVisibilityZeroTransportWithIrradianceCount = giUsesDdgi ? sceneData.DdgiVisibilityZeroTransportWithIrradianceCount : 0u,
                 DdgiAverageRelocationFractionEstimate = giUsesDdgi || giUsesSimpleDdgi ? sceneData.DdgiAverageRelocationFractionEstimate : 0.0f,
-                DdgiRelocatedProbeFractionEstimate = giUsesDdgi ? sceneData.DdgiRelocatedProbeFractionEstimate : 0.0f,
+                DdgiRelocatedProbeFractionEstimate = giUsesDdgi || giUsesSimpleDdgi ? sceneData.DdgiRelocatedProbeFractionEstimate : 0.0f,
                 DdgiAverageRelocationDisplacementFractionEstimate = giUsesSimpleDdgi ? sceneData.DdgiAverageRelocationDisplacementFractionEstimate : 0.0f,
+                SimpleDdgiAverageBackfaceRatioEstimate = giUsesSimpleDdgi ? sceneData.SimpleDdgiAverageBackfaceRatioEstimate : 0.0f,
+                SimpleDdgiAverageCloseRatioEstimate = giUsesSimpleDdgi ? sceneData.SimpleDdgiAverageCloseRatioEstimate : 0.0f,
+                SimpleDdgiAverageHardInvalidProbeScoreEstimate = giUsesSimpleDdgi ? sceneData.SimpleDdgiAverageHardInvalidProbeScoreEstimate : 0.0f,
                 DdgiClassifiedInactiveProbeCountEstimate = giUsesDdgi ? sceneData.DdgiClassifiedInactiveProbeCountEstimate : 0,
                 DdgiSchedulerMode = ddgiRequested ? giSettings.DdgiSchedulerMode : DdgiSchedulerMode.CpuReference,
                 DdgiQualityTier = ddgiRequested ? giSettings.DdgiQualityTier : DdgiQualityTier.DdgiHigh,
@@ -6925,6 +6942,10 @@ namespace Njulf.Rendering
                 _lightManager.LightBuffer, queueFamilies, graphicsFamily);
             AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.EnvironmentData, "Environment data",
                 _environmentManager?.EnvironmentBuffer ?? BufferHandle.Invalid, queueFamilies, graphicsFamily);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.EnvironmentData, "Environment prefilter snapshot",
+                _environmentManager?.PrefilterEnvironmentBuffer ?? BufferHandle.Invalid, queueFamilies, graphicsFamily);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.EnvironmentData, "Stepped GI environment data",
+                _environmentManager?.GiEnvironmentBuffer ?? BufferHandle.Invalid, queueFamilies, graphicsFamily);
             AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.DdgiEmissiveSources, "DDGI emissive sources",
                 _ddgiEmissiveSourceBuffer, queueFamilies, graphicsFamily);
             AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.RendererDiagnosticsBuffer, "Renderer diagnostics",
@@ -7617,8 +7638,8 @@ namespace Njulf.Rendering
                 ref totalBytes,
                 MemoryBudgetCategory.EnvironmentMaps,
                 _environmentManager?.EstimatedBytes ?? 0,
-                _environmentManager == null ? 0 : 4,
-                "Environment cubemaps and BRDF LUT");
+                _environmentManager?.TextureResourceCount ?? 0,
+                "Environment maps and BRDF LUT");
             AddMemoryEntry(
                 entries,
                 ref totalBytes,
@@ -8260,7 +8281,8 @@ namespace Njulf.Rendering
                     simpleDdgiDirtySignature.ReasonFlags,
                     simpleDdgiStructuredGatherAvailable,
                     farFieldCoverageAvailable,
-                    layout.DirtyRegions);
+                    layout.DirtyRegions,
+                    simpleDdgiDirtySignature.CohortTransition);
                 // The gather table has one active producer. In simple mode it is
                 // populated directly from the simple volume table; no legacy
                 // payload is uploaded first.
@@ -8614,6 +8636,26 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiAutomaticProbeDensityActive = _simpleDdgiVolumeManager.TransportV2Active &&
                 Settings.GlobalIllumination.SimpleDdgiAutomaticProbeDensityEnabled ? 1 : 0;
             sceneData.SimpleDdgiTransportSourceRefreshProbeCount = _simpleDdgiVolumeManager.SourceRefreshProbeCount;
+            sceneData.SimpleDdgiTransportSourceRefreshTargetProbeCount =
+                _simpleDdgiVolumeManager.SourceRefreshTargetProbeCount;
+            sceneData.SimpleDdgiTransportSourceRefreshCapacityShortfall =
+                _simpleDdgiVolumeManager.SourceRefreshCapacityShortfall;
+            sceneData.SimpleDdgiTransportSourceCohortTransitionActive =
+                _simpleDdgiVolumeManager.SourceCohortTransitionActive ? 1 : 0;
+            sceneData.SimpleDdgiTransportSourceCohortTransitionCount =
+                _simpleDdgiVolumeManager.SourceCohortTransitionCount;
+            sceneData.SimpleDdgiTransportSourceCohortElapsedFrames =
+                _simpleDdgiVolumeManager.SourceCohortTransitionElapsedFrames;
+            sceneData.SimpleDdgiTransportSourceStepStaleProbeCount =
+                _simpleDdgiVolumeManager.SourceStepStaleProbeCount;
+            sceneData.SimpleDdgiTransportSourceStepAgeP95Frames =
+                _simpleDdgiVolumeManager.SourceStepAgeP95Frames;
+            sceneData.SimpleDdgiTransportSourceStepAgeMaximumFrames =
+                _simpleDdgiVolumeManager.SourceStepAgeMaximumFrames;
+            sceneData.SimpleDdgiTransportSourceStepAgeP95Seconds =
+                _simpleDdgiVolumeManager.SourceStepAgeP95Seconds;
+            sceneData.SimpleDdgiTransportSourceStepAgeMaximumSeconds =
+                _simpleDdgiVolumeManager.SourceStepAgeMaximumSeconds;
             sceneData.SimpleDdgiTransportSourceCacheReuseProbeCount = _simpleDdgiVolumeManager.SourceCacheReuseProbeCount;
             sceneData.SimpleDdgiTransportSourceRayCount = _simpleDdgiVolumeManager.ScheduledSourceRayCount;
             sceneData.SimpleDdgiTransportSolveRayCount = _simpleDdgiVolumeManager.ScheduledTransportRayCount;
@@ -8771,7 +8813,19 @@ namespace Njulf.Rendering
             sceneData.DdgiAverageRelocationFractionEstimate = _simpleDdgiVolumeManager.AverageRelocationFractionEstimate;
             sceneData.DdgiAverageRelocationDisplacementFractionEstimate =
                 _simpleDdgiVolumeManager.AverageRelocationFractionEstimate;
-            sceneData.DdgiRelocatedProbeFractionEstimate = 0.0f;
+            sceneData.DdgiRelocatedProbeFractionEstimate = _simpleDdgiVolumeManager.ProbeCount > 0
+                ? Math.Clamp(
+                    _simpleDdgiVolumeManager.ProbeRelocationCount /
+                        (float)_simpleDdgiVolumeManager.ProbeCount,
+                    0.0f,
+                    1.0f)
+                : 0.0f;
+            sceneData.SimpleDdgiAverageBackfaceRatioEstimate =
+                _simpleDdgiVolumeManager.AverageBackfaceRatioEstimate;
+            sceneData.SimpleDdgiAverageCloseRatioEstimate =
+                _simpleDdgiVolumeManager.AverageCloseRatioEstimate;
+            sceneData.SimpleDdgiAverageHardInvalidProbeScoreEstimate =
+                _simpleDdgiVolumeManager.AverageHardInvalidProbeScoreEstimate;
             sceneData.DdgiScrollCount = _simpleDdgiVolumeManager.ScrollCopyCount;
             sceneData.DdgiVolumeDiagnostics.Clear();
             sceneData.DdgiVolumeDiagnostics.AddRange(_simpleDdgiVolumeManager.GetVolumeDiagnostics());
@@ -8920,7 +8974,10 @@ namespace Njulf.Rendering
                 SimpleAtlasBytes: sceneData.SimpleDdgiAtlasBytes,
                 SimpleGpuTraceMicroseconds: sceneData.GpuSimpleDdgiTraceMicroseconds,
                 SimpleGpuTransportMicroseconds: sceneData.GpuSimpleDdgiTransportMicroseconds,
-                SimpleGpuBlendMicroseconds: sceneData.GpuSimpleDdgiBlendMicroseconds);
+                SimpleGpuBlendMicroseconds: sceneData.GpuSimpleDdgiBlendMicroseconds,
+                SimpleAverageBackfaceRatio: sceneData.SimpleDdgiAverageBackfaceRatioEstimate,
+                SimpleAverageCloseRatio: sceneData.SimpleDdgiAverageCloseRatioEstimate,
+                SimpleAverageHardInvalidProbeScore: sceneData.SimpleDdgiAverageHardInvalidProbeScoreEstimate);
         }
 
         private void PopulateDdgiDiagnostics(SceneRenderingData sceneData, DdgiFrameLayout layout, bool ddgiActive)
@@ -10755,6 +10812,21 @@ namespace Njulf.Rendering
             hash = HashAdd(hash, (uint)environment.SourceKind);
             hash = HashAdd(hash, environment.SkyIntensity);
             hash = HashAdd(hash, environment.RotationRadians);
+            hash = HashAdd(hash, (uint)environment.SunDriver);
+            hash = HashAdd(hash, environment.Turbidity);
+            hash = HashAdd(hash, environment.GroundAlbedo.X);
+            hash = HashAdd(hash, environment.GroundAlbedo.Y);
+            hash = HashAdd(hash, environment.GroundAlbedo.Z);
+            hash = HashAdd(hash, environment.SunAngularDiameterDegrees);
+            hash = HashAdd(hash, environment.MoonAngularDiameterDegrees);
+            hash = HashAdd(hash, environment.LatitudeDegrees);
+            hash = HashAdd(hash, environment.DayOfYear);
+            hash = HashAdd(hash, environment.NorthOffsetDegrees);
+            hash = HashAdd(hash, environment.AtmosphereIntensity);
+            hash = HashAdd(hash, environment.SolarIrradianceScale);
+            hash = HashAdd(hash, environment.MoonIrradianceScale);
+            hash = HashAdd(hash, environment.StarIntensity);
+            hash = HashAdd(hash, environment.AirglowIntensity);
             hash = HashAdd(hash, environment.EnvironmentSize);
             hash = HashAdd(hash, environment.IrradianceSize);
             hash = HashAdd(hash, (uint)environment.TexturePrecision);
@@ -10771,10 +10843,22 @@ namespace Njulf.Rendering
             uint emissiveSourceRevision,
             bool farFieldCoverageAvailable)
         {
-            ulong lightSignature = CreateDdgiLightSignature(lightSnapshot);
-            lightSignature = HashAdd(
-                lightSignature,
+            bool steppedAtmosphere =
+                Settings.Environment.Enabled &&
+                Settings.Environment.SourceKind == EnvironmentSourceKind.ProceduralSky &&
+                _environmentManager is { UsesAnalyticSky: true };
+            ulong stableLightSignature = steppedAtmosphere
+                ? CreateSimpleDdgiStableLightSignature(lightSnapshot)
+                : CreateDdgiLightSignature(lightSnapshot);
+            stableLightSignature = HashAdd(
+                stableLightSignature,
                 CreateSimpleDdgiEnvironmentSignature(Settings.Environment));
+            ulong atmosphereStepSignature = steppedAtmosphere
+                ? _environmentManager!.GiLightingSignature
+                : 0UL;
+            ulong lightSignature = HashAdd(
+                stableLightSignature,
+                atmosphereStepSignature);
             GlobalIlluminationSettings gi = Settings.GlobalIllumination;
             lightSignature = HashAdd(lightSignature, gi.EnvironmentFallbackIntensity);
             lightSignature = HashAdd(lightSignature, gi.DdgiSelfShadowBiasScale);
@@ -10802,6 +10886,7 @@ namespace Njulf.Rendering
                 : HashStart;
 
             uint reasonFlags = 0u;
+            bool cohortTransition = false;
             if (_hasSimpleDdgiDirtySignature)
             {
                 if (lightSignature != _lastSimpleDdgiLightSignature)
@@ -10810,9 +10895,17 @@ namespace Njulf.Rendering
                     reasonFlags |= SimpleDdgiDirtyReasonEmissive;
                 if (geometrySignature != _lastSimpleDdgiDynamicGeometrySignature)
                     reasonFlags |= SimpleDdgiDirtyReasonDynamicGeometry;
+
+                cohortTransition = steppedAtmosphere &&
+                    atmosphereStepSignature != _lastSimpleDdgiAtmosphereStepSignature &&
+                    stableLightSignature == _lastSimpleDdgiStableLightSignature &&
+                    emissiveSignature == _lastSimpleDdgiEmissiveSignature &&
+                    geometrySignature == _lastSimpleDdgiDynamicGeometrySignature;
             }
 
             _lastSimpleDdgiLightSignature = lightSignature;
+            _lastSimpleDdgiStableLightSignature = stableLightSignature;
+            _lastSimpleDdgiAtmosphereStepSignature = atmosphereStepSignature;
             _lastSimpleDdgiEmissiveSignature = emissiveSignature;
             _lastSimpleDdgiDynamicGeometrySignature = geometrySignature;
             _hasSimpleDdgiDirtySignature = true;
@@ -10821,7 +10914,45 @@ namespace Njulf.Rendering
             combined = HashAdd(combined, lightSignature);
             combined = HashAdd(combined, emissiveSignature);
             combined = HashAdd(combined, geometrySignature);
-            return new SimpleDdgiDirtySignature(combined, reasonFlags);
+            return new SimpleDdgiDirtySignature(
+                combined,
+                reasonFlags,
+                cohortTransition);
+        }
+
+        private ulong CreateSimpleDdgiStableLightSignature(
+            LightFrameSnapshot lightSnapshot)
+        {
+            ulong hash = HashStart;
+            ReadOnlySpan<Light> lights = lightSnapshot.Lights.Span;
+            int count = Math.Min(lightSnapshot.Count, lights.Length);
+            int primaryDirectionalIndex = SelectPrimaryDdgiDirectionalLight(lightSnapshot);
+            int includedCount = 0;
+            for (int lightIndex = 0; lightIndex < count; lightIndex++)
+            {
+                Light light = lights[lightIndex];
+                bool atmosphereOwned = lightIndex == primaryDirectionalIndex ||
+                    (_environmentManager?.IsManagedAtmosphereLight(
+                        lightIndex,
+                        _lightManager) ?? false);
+                if (!atmosphereOwned)
+                {
+                    hash = HashAddDdgiLight(hash, light);
+                    includedCount++;
+                    continue;
+                }
+
+                // Direction and radiance come from the stepped atmosphere
+                // snapshot, but shadow ownership remains an authored transport
+                // input and must still invalidate if it changes.
+                hash = HashAdd(hash, (int)light.Type);
+                hash = HashAdd(hash, light.CastsShadows);
+                hash = HashAdd(
+                    hash,
+                    QuantizeForHash(light.ShadowStrength, 0.01f));
+            }
+
+            return HashAdd(hash, includedCount);
         }
 
         private ulong CreateSimpleDdgiDynamicGeometrySignature(Scene scene)
@@ -12529,7 +12660,8 @@ namespace Njulf.Rendering
 
         private readonly record struct SimpleDdgiDirtySignature(
             ulong Signature,
-            uint ReasonFlags);
+            uint ReasonFlags,
+            bool CohortTransition);
 
         protected virtual void Dispose(bool disposing)
         {

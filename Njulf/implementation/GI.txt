@@ -8,3 +8,4 @@
 - Emissive mesh
 - RT VFX
 - Maybe reintroduce SSGI at some point
+- HDRI

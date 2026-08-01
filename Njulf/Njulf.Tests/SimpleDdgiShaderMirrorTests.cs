@@ -875,8 +875,8 @@ namespace Njulf.Tests
         {
             CpuSimpleRayResult[] mixed =
             [
-                new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.10f),
-                new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.20f),
+                new(Vector3.UnitX, HitKind: 3.0f, Distance: 0.10f),
+                new(Vector3.UnitX, HitKind: 3.0f, Distance: 0.20f),
                 new(-Vector3.UnitX, HitKind: 1.0f, Distance: 1.50f),
                 new(Vector3.UnitY, HitKind: 0.0f, Distance: 4.00f)
             ];
@@ -894,10 +894,10 @@ namespace Njulf.Tests
                 fresh: false);
             CpuSimpleRayResult[] stronglyInvalid =
             [
-                new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.02f),
-                new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.03f),
-                new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.04f),
-                new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.05f)
+                new(Vector3.UnitX, HitKind: 3.0f, Distance: 0.02f),
+                new(Vector3.UnitX, HitKind: 3.0f, Distance: 0.03f),
+                new(Vector3.UnitX, HitKind: 3.0f, Distance: 0.04f),
+                new(Vector3.UnitX, HitKind: 3.0f, Distance: 0.05f)
             ];
             CpuSimpleRelocationResult invalidAuthored = RelocateAndClassify(
                 stronglyInvalid,
@@ -936,20 +936,20 @@ namespace Njulf.Tests
                 maintenance: true);
             CpuSimpleRelocationResult deeplyEmbedded = RelocateAndClassify(
                 [
-                    new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.30f),
-                    new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.32f),
-                    new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.34f),
-                    new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.36f)
+                    new(Vector3.UnitX, HitKind: 3.0f, Distance: 0.30f),
+                    new(Vector3.UnitX, HitKind: 3.0f, Distance: 0.32f),
+                    new(Vector3.UnitX, HitKind: 3.0f, Distance: 0.34f),
+                    new(Vector3.UnitX, HitKind: 3.0f, Distance: 0.36f)
                 ],
                 spacing: 1.0f,
                 previousRelocation: Vector3.Zero,
                 fresh: true);
             CpuSimpleRelocationResult conflictingDirections = RelocateAndClassify(
                 [
-                    new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.05f),
-                    new(-Vector3.UnitX, HitKind: 2.0f, Distance: 0.20f),
-                    new(-Vector3.UnitX, HitKind: 2.0f, Distance: 0.22f),
-                    new(-Vector3.UnitX, HitKind: 2.0f, Distance: 0.24f)
+                    new(Vector3.UnitX, HitKind: 3.0f, Distance: 0.05f),
+                    new(-Vector3.UnitX, HitKind: 3.0f, Distance: 0.20f),
+                    new(-Vector3.UnitX, HitKind: 3.0f, Distance: 0.22f),
+                    new(-Vector3.UnitX, HitKind: 3.0f, Distance: 0.24f)
                 ],
                 spacing: 1.0f,
                 previousRelocation: Vector3.Zero,
@@ -961,10 +961,10 @@ namespace Njulf.Tests
                 fresh: false);
             CpuSimpleRelocationResult distantBackfaces = RelocateAndClassify(
                 [
-                    new(Vector3.UnitX, HitKind: 2.0f, Distance: 2.0f),
-                    new(Vector3.UnitY, HitKind: 2.0f, Distance: 2.2f),
-                    new(-Vector3.UnitX, HitKind: 2.0f, Distance: 2.4f),
-                    new(-Vector3.UnitY, HitKind: 2.0f, Distance: 2.6f)
+                    new(Vector3.UnitX, HitKind: 3.0f, Distance: 2.0f),
+                    new(Vector3.UnitY, HitKind: 3.0f, Distance: 2.2f),
+                    new(-Vector3.UnitX, HitKind: 3.0f, Distance: 2.4f),
+                    new(-Vector3.UnitY, HitKind: 3.0f, Distance: 2.6f)
                 ],
                 spacing: 1.0f,
                 previousRelocation: Vector3.Zero,
@@ -991,9 +991,10 @@ namespace Njulf.Tests
                 Assert.That(maintenance.ActiveWeight, Is.EqualTo(0.6f).Within(1.0e-5f));
                 Assert.That(maintenance.Relocation.X, Is.EqualTo(0.2f).Within(1.0e-5f));
                 Assert.That(deeplyEmbedded.Relocation.X, Is.EqualTo(0.40f).Within(1.0e-5f));
+                Assert.That(deeplyEmbedded.Active, Is.False);
                 Assert.That(conflictingDirections.Relocation.X, Is.EqualTo(0.15f).Within(1.0e-5f));
                 Assert.That(additiveRetry.Relocation.X, Is.EqualTo(0.118f).Within(1.0e-5f));
-                Assert.That(distantBackfaces.Active, Is.True);
+                Assert.That(distantBackfaces.Active, Is.False);
                 Assert.That(distantBackfaces.Relocation, Is.EqualTo(Vector3.Zero));
             });
         }
@@ -1289,11 +1290,14 @@ namespace Njulf.Tests
                 Assert.That(trace, Does.Contain("vec3 emissiveDiffuse = surface.EmissiveRadiance + emissiveProxyDiffuse;"));
                 Assert.That(trace, Does.Not.Contain("emissiveProxyDiffuse * (1.0 - bounceOwnership)"));
                 Assert.That(trace, Does.Contain("vec3 radiance = SampleDdgiEnvironmentMissRadianceWithFallback"));
-                Assert.That(hitShading, Does.Contain("max(environment.SkyIntensity, 0.0)"));
+                Assert.That(trace, Does.Contain("params.environmentIntensity);"));
+                Assert.That(hitShading, Does.Contain("GPUEnvironmentData environment = ReadGiEnvironmentData();"));
+                Assert.That(hitShading, Does.Contain("max(fallbackIntensity, 0.0) * skyWeight"));
+                Assert.That(hitShading, Does.Contain("EvaluateEnvironmentRadiance("));
                 Assert.That(hitShading, Does.Not.Contain("max(environment.DiffuseIntensity, 0.0)"));
-                Assert.That(shared, Does.Contain("max(environment.SkyIntensity, 0.0)"));
+                Assert.That(shared, Does.Contain("EvaluateEnvironmentTransportIrradiance(environment, safeNormal)"));
                 Assert.That(forward, Does.Contain("diffuseIbl = EvaluateGiDiffuseFromIrradiance("));
-                Assert.That(forward, Does.Contain("irradiance * environment.DiffuseIntensity,"));
+                Assert.That(forward, Does.Contain("vec3 irradiance = EvaluateEnvironmentDiffuseIrradiance(environment, normal);"));
                 Assert.That(simpleManager, Does.Contain("_settings.Environment.Enabled ? _settings.Environment.SkyIntensity : 0.0f"));
                 Assert.That(simpleManager, Does.Contain("_transportSourceCacheRayCapacity != sourceCacheRayCapacity"));
                 Assert.That(simpleManager, Does.Contain("ProbeStateSourceCacheInvalidFlag"));
@@ -1325,7 +1329,7 @@ namespace Njulf.Tests
                 Assert.That(trace, Does.Contain("SIMPLE_DDGI_RAY_HIT_KIND_FAR_FIELD_BACK_FACE"));
                 Assert.That(relocate, Does.Contain("bool solidBackface ="));
                 Assert.That(relocate, Does.Contain("SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE"));
-                Assert.That(relocate, Does.Contain("SIMPLE_DDGI_RAY_HIT_KIND_FAR_FIELD_BACK_FACE"));
+                Assert.That(relocate, Does.Not.Contain("SIMPLE_DDGI_RAY_HIT_KIND_FAR_FIELD_BACK_FACE"));
                 Assert.That(relocate, Does.Not.Contain("if (hitKind > 1.5)"));
                 Assert.That(trace, Does.Contain("!frontFace && !hitDoubleSided"));
                 Assert.That(blend, Does.Contain("SimpleDdgiRayHitKindIsOneSidedBackFace(visibilityHit.y)"));
@@ -1393,7 +1397,8 @@ namespace Njulf.Tests
                 Assert.That(relocate, Does.Contain("relocationWasPending && maintenanceUpdate"));
                 Assert.That(relocate, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING"));
                 Assert.That(relocate, Does.Not.Contain("targetSurfaceDistance - nearestDistance"));
-                Assert.That(relocate, Does.Contain("WriteRelocationClassification(probeIndex, blendedRelocation"));
+                Assert.That(relocate, Does.Contain("WriteRelocationClassification("));
+                Assert.That(relocate, Does.Contain("probeIndex,\n        blendedRelocation,"));
                 Assert.That(shared, Does.Contain("const uint SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING = 1u << 3;"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u"));
                 Assert.That(simpleManager, Does.Contain("ProbeStateRelocationPendingFlag = 1u << 3"));
@@ -1804,7 +1809,7 @@ namespace Njulf.Tests
                 nearestHitDistance = Math.Min(nearestHitDistance, ray.Distance);
                 if (ray.Distance <= spacing * 0.25f)
                     closeCount++;
-                if (ray.HitKind > 1.5f)
+                if (Math.Abs(ray.HitKind - 3.0f) < 0.25f)
                 {
                     backfaceCount++;
                     Vector3 direction = Vector3.Normalize(ray.Direction);
@@ -1829,6 +1834,10 @@ namespace Njulf.Tests
             float hardInvalidScore = Math.Max(
                 SmoothStep(0.70f, 0.90f, closeRatio),
                 SmoothStep(0.55f, 0.75f, localBackfaceRatio));
+            float enclosureScore =
+                SmoothStep(0.60f, 0.85f, backfaceRatio) *
+                (1.0f - SmoothStep(0.0f, 0.05f, missRatio));
+            hardInvalidScore = Math.Max(hardInvalidScore, enclosureScore);
             float hardInvalid = SmoothStep(0.75f, 0.95f, hardInvalidScore);
             float activeFloor = authored || hardInvalidScore >= 0.95f ? 0.0f : 0.35f;
             float targetActive = Math.Max(1.0f - hardInvalid, activeFloor);

@@ -415,6 +415,13 @@ internal sealed class SampleDiagnosticsReporter
 
     private static void PrintGiDiagnostics(RendererDiagnostics diagnostics)
     {
+        ulong simpleOneSidedBackFaceRayCount = 0;
+        foreach (DdgiVolumeDiagnosticsEntry volume in diagnostics.DdgiVolumes)
+        {
+            if (volume.EnergyCountersReadbackValid != 0)
+                simpleOneSidedBackFaceRayCount += volume.EnergyCounters.OneSidedBackFaceRayCount;
+        }
+
         Console.WriteLine(
             $"Frame diagnostics GI: enabled={diagnostics.GlobalIlluminationEnabled}, mode={diagnostics.GlobalIlluminationMode}, debug={diagnostics.GlobalIlluminationDebugView}, " +
             $"rayQuerySupported={diagnostics.GlobalIlluminationRayQuerySupported}, rayQueryActive={diagnostics.GlobalIlluminationRayQueryActive}, " +
@@ -436,6 +443,7 @@ internal sealed class SampleDiagnosticsReporter
             $"{diagnostics.DdgiAverageVisibilityConfidenceEstimate:F3}/{diagnostics.DdgiAverageLeakAttenuationEstimate:F3}/{diagnostics.DdgiAverageEffectiveContributionEstimate:F3}/" +
             $"{diagnostics.DdgiForwardEstimateSampledIrradianceLuminance:F5}/{diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F5}/{diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F5}/{diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight:F3}/{diagnostics.DdgiAverageOwnershipConsumedEstimate:F3}/" +
             $"relocation legacyCount/simpleDisplacement={diagnostics.DdgiRelocatedProbeFractionEstimate:F3}/{diagnostics.DdgiAverageRelocationDisplacementFractionEstimate:F3}/{diagnostics.DdgiClassifiedInactiveProbeCountEstimate}, " +
+            $"simpleClassification backface/close/hardInvalid/oneSidedRays={diagnostics.SimpleDdgiAverageBackfaceRatioEstimate:F3}/{diagnostics.SimpleDdgiAverageCloseRatioEstimate:F3}/{diagnostics.SimpleDdgiAverageHardInvalidProbeScoreEstimate:F3}/{simpleOneSidedBackFaceRayCount}, " +
             $"ddgiAlbedo receiver={diagnostics.DdgiReceiverDiffuseReflectanceLuminance:F4}/{diagnostics.DdgiReceiverDiffuseReflectanceSampleCount}, " +
             $"trace oneSided/opaque/thin/unsupported/reflectOff={diagnostics.DdgiTraceOneSidedBackFaceAlbedoLuminance:F4}/{diagnostics.DdgiTraceOneSidedBackFaceHitCount} " +
             $"{diagnostics.DdgiTraceOpaqueAlbedoLuminance:F4}/{diagnostics.DdgiTraceOpaqueHitCount} " +

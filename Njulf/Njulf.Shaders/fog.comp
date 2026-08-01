@@ -46,7 +46,13 @@ vec3 ResolveSkyFogColor(vec3 viewDirection)
 
     if (pc.Push.ColorMode == FOG_COLOR_SKY)
     {
-        vec3 sky = textureLod(BindlessCubeTextures[nonuniformEXT(int(pc.Push.EnvironmentTextureIndex))], viewDirection, 4.0).rgb;
+        GPUEnvironmentData environment = ReadEnvironmentData();
+        vec3 sky = EvaluateEnvironmentRadiance(
+            environment,
+            viewDirection,
+            false,
+            false,
+            false);
         sky = max(sky, fallback);
         return sky;
     }

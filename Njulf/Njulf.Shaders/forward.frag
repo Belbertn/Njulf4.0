@@ -3174,11 +3174,13 @@ vec3 EvaluateReflectionSpecular(
     if (!reflectionsEnabled)
         return vec3(0.0);
 
-    vec3 globalDirection = RotateEnvironmentDirection(reflectionDirection, environment.RotationRadians);
-    vec3 globalReflection = textureLod(
-        BindlessCubeTextures[nonuniformEXT(environment.PrefilteredTextureIndex)],
-        globalDirection,
-        lod).rgb * header.GlobalFallbackIntensity;
+    vec3 globalDirection = EnvironmentUsesAnalyticSky(environment)
+        ? normalize(reflectionDirection)
+        : RotateEnvironmentDirection(reflectionDirection, environment.RotationRadians);
+    vec3 globalReflection = SampleEnvironmentPrefilteredRadiance(
+        environment,
+        reflectionDirection,
+        lod) * header.GlobalFallbackIntensity;
 
     vec3 localReflection = vec3(0.0);
     vec3 firstWeightColor = vec3(0.0);
@@ -3272,11 +3274,10 @@ vec3 EvaluateGlobalReflectionSpecular(
     if (!reflectionsEnabled)
         return vec3(0.0);
 
-    vec3 globalDirection = RotateEnvironmentDirection(reflectionDirection, environment.RotationRadians);
-    vec3 globalReflection = textureLod(
-        BindlessCubeTextures[nonuniformEXT(environment.PrefilteredTextureIndex)],
-        globalDirection,
-        lod).rgb * header.GlobalFallbackIntensity * header.Intensity;
+    vec3 globalReflection = SampleEnvironmentPrefilteredRadiance(
+        environment,
+        reflectionDirection,
+        lod) * header.GlobalFallbackIntensity * header.Intensity;
 
     return globalReflection * (fresnel * brdf.x + brdf.y) * environment.SpecularIntensity * specularOcclusion;
 }
@@ -3307,8 +3308,7 @@ void EvaluateIbl(
     vec3 f0 = mix(dielectricF0, albedo, metallic);
     float nDotV = max(dot(normal, viewDirection), 0.0);
     vec3 fresnel = FresnelSchlickRoughness(nDotV, f0, roughness);
-    vec3 irradianceDirection = RotateEnvironmentDirection(normal, environment.RotationRadians);
-    vec3 irradiance = texture(BindlessCubeTextures[nonuniformEXT(environment.IrradianceTextureIndex)], irradianceDirection).rgb;
+    vec3 irradiance = EvaluateEnvironmentDiffuseIrradiance(environment, normal);
     // Diffuse IBL is an irradiance-derived radiance field.  AO is applied once by
     // indirect composition to the environment-owned share; DDGI retains its own
     // probe visibility instead of receiving a second screen-space occlusion term.
@@ -3316,7 +3316,7 @@ void EvaluateIbl(
     // sources and the procedural sky. Convert that incident irradiance to
     // outgoing Lambertian radiance exactly once, matching DDGI receivers.
     diffuseIbl = EvaluateGiDiffuseFromIrradiance(
-        irradiance * environment.DiffuseIntensity,
+        irradiance,
         diffuseReflectance);
 
     vec3 reflectionDirection = reflect(-viewDirection, normal);
@@ -5128,12 +5128,11 @@ void main()
         if (clearcoatFactor > 0.0 && extensionEnvironment.Enabled != 0u)
         {
             vec3 clearcoatReflection = reflect(-viewDirection, normal);
-            clearcoatReflection = RotateEnvironmentDirection(clearcoatReflection, extensionEnvironment.RotationRadians);
             float clearcoatMaxLod = max(float(extensionEnvironment.PrefilteredMipCount) - 1.0, 0.0);
-            vec3 clearcoatPrefiltered = textureLod(
-                BindlessCubeTextures[nonuniformEXT(extensionEnvironment.PrefilteredTextureIndex)],
+            vec3 clearcoatPrefiltered = SampleEnvironmentPrefilteredRadiance(
+                extensionEnvironment,
                 clearcoatReflection,
-                clearcoatRoughness * clearcoatMaxLod).rgb;
+                clearcoatRoughness * clearcoatMaxLod);
             vec3 clearcoatFresnel = FresnelSchlickRoughness(nDotV, vec3(0.04), clearcoatRoughness);
             color += clearcoatPrefiltered * clearcoatFresnel * clearcoatFactor * extensionEnvironment.SpecularIntensity * indirectAo;
         }
@@ -5162,19 +5161,25 @@ void main()
 
         if (transmissionFactor > 0.0 && extensionEnvironment.Enabled != 0u)
         {
-            vec3 transmittedDirection = RotateEnvironmentDirection(-normal, extensionEnvironment.RotationRadians);
+            vec3 transmittedDirection = -normal;
             float lod = roughness * max(float(extensionEnvironment.PrefilteredMipCount) - 1.0, 0.0);
-            vec3 transmittedSample = textureLod(
-                BindlessCubeTextures[nonuniformEXT(extensionEnvironment.PrefilteredTextureIndex)],
+            vec3 transmittedSample = SampleEnvironmentPrefilteredRadiance(
+                extensionEnvironment,
                 transmittedDirection,
-                lod).rgb;
+                lod);
             if (dispersion > 0.0)
             {
                 vec3 tangent = normalize(fragWorldTangent.xyz);
                 vec3 redDirection = normalize(transmittedDirection + tangent * dispersion * 0.012);
                 vec3 blueDirection = normalize(transmittedDirection - tangent * dispersion * 0.012);
-                transmittedSample.r = textureLod(BindlessCubeTextures[nonuniformEXT(extensionEnvironment.PrefilteredTextureIndex)], redDirection, lod).r;
-                transmittedSample.b = textureLod(BindlessCubeTextures[nonuniformEXT(extensionEnvironment.PrefilteredTextureIndex)], blueDirection, lod).b;
+                transmittedSample.r = SampleEnvironmentPrefilteredRadiance(
+                    extensionEnvironment,
+                    redDirection,
+                    lod).r;
+                transmittedSample.b = SampleEnvironmentPrefilteredRadiance(
+                    extensionEnvironment,
+                    blueDirection,
+                    lod).b;
             }
 
             vec3 transmitted = transmittedSample * albedo;

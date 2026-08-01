@@ -103,10 +103,9 @@ internal static class SamplePlazaGlobalIllumination
 
     private static void ConfigureSharedLighting(RenderSettings settings)
     {
-        settings.Environment.Enabled = true;
-        settings.Environment.SkyIntensity = 1.0f;
-        settings.Environment.DiffuseIntensity = 1.0f;
-        settings.Environment.SpecularIntensity = 1.0f;
+        // Reduced-memory rendering tiers retain the complete dynamic
+        // atmosphere even when their GI backend has to degrade.
+        SampleSponzaGlobalIlluminationProfile.ConfigureDynamicEnvironment(settings);
         settings.Shadows.SpotShadowsEnabled = false;
         settings.Shadows.MaxShadowedSpotLights = 0;
         settings.Shadows.PointShadowsEnabled = false;

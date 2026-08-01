@@ -1038,6 +1038,8 @@ namespace Njulf.Rendering.Data
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUEnvironmentData
     {
+        // Words 0..11 are the established environment ABI. Keep them stable so
+        // HDR environments and external shader tooling remain compatible.
         public int EnvironmentTextureIndex;
         public int IrradianceTextureIndex;
         public int PrefilteredTextureIndex;
@@ -1050,6 +1052,40 @@ namespace Njulf.Rendering.Data
         public uint Enabled;
         public uint DebugView;
         public uint DebugMipLevel;
+
+        public int NextPrefilteredTextureIndex;
+        public uint SourceKind;
+        public uint AtmosphereFlags;
+        public float PrefilteredBlend;
+
+        public Vector4 SunDirectionAndAngularRadius;
+        public Vector4 SunRadianceAndElevation;
+        public Vector4 MoonDirectionAndAngularRadius;
+        public Vector4 MoonRadianceAndNightBlend;
+        public Vector4 GroundAlbedoAndTurbidity;
+        public Vector4 AtmosphereParameters;
+        public Vector4 GroundRadianceAndAirglow;
+
+        public Vector4 HosekParametersR0;
+        public Vector4 HosekParametersR1;
+        public Vector4 HosekParametersR2;
+        public Vector4 HosekParametersG0;
+        public Vector4 HosekParametersG1;
+        public Vector4 HosekParametersG2;
+        public Vector4 HosekParametersB0;
+        public Vector4 HosekParametersB1;
+        public Vector4 HosekParametersB2;
+        public Vector4 HosekRadiances;
+
+        public Vector4 DiffuseIrradianceSh0;
+        public Vector4 DiffuseIrradianceSh1;
+        public Vector4 DiffuseIrradianceSh2;
+        public Vector4 DiffuseIrradianceSh3;
+        public Vector4 DiffuseIrradianceSh4;
+        public Vector4 DiffuseIrradianceSh5;
+        public Vector4 DiffuseIrradianceSh6;
+        public Vector4 DiffuseIrradianceSh7;
+        public Vector4 DiffuseIrradianceSh8;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1498,7 +1534,7 @@ namespace Njulf.Rendering.Data
         public uint TransportReadIrradianceAtlasBufferIndex;
         public uint TransportWriteIrradianceAtlasBufferIndex;
         public uint TransportGeneration;
-        public uint Padding0;
+        public uint PrimaryDirectionalLightIndex;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

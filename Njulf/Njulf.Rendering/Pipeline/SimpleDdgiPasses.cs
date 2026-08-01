@@ -424,7 +424,10 @@ namespace Njulf.Rendering.Pipeline
                 TransportWriteIrradianceAtlasBufferIndex = gi.SimpleDdgiTransportV2Enabled
                     ? checked((uint)BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer)
                     : checked((uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),
-                TransportGeneration = VolumeManager.TransportGeneration
+                TransportGeneration = VolumeManager.TransportGeneration,
+                PrimaryDirectionalLightIndex = sceneData.DdgiPrimaryDirectionalLightIndex < 0
+                    ? uint.MaxValue
+                    : checked((uint)sceneData.DdgiPrimaryDirectionalLightIndex)
             };
         }
 

@@ -776,6 +776,9 @@ namespace Njulf.Rendering.Data
         public float DdgiRelocatedProbeFractionEstimate { get; set; }
         /// <summary>Mean relocation displacement divided by the configured maximum displacement.</summary>
         public float DdgiAverageRelocationDisplacementFractionEstimate { get; set; }
+        public float SimpleDdgiAverageBackfaceRatioEstimate { get; set; }
+        public float SimpleDdgiAverageCloseRatioEstimate { get; set; }
+        public float SimpleDdgiAverageHardInvalidProbeScoreEstimate { get; set; }
         public int DdgiClassifiedInactiveProbeCountEstimate { get; set; }
         public DdgiQualityTier DdgiQualityTier { get; set; } = DdgiQualityTier.DdgiHigh;
         public float DdgiAdaptiveBudgetScale { get; set; } = 1.0f;
@@ -793,6 +796,16 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiTransportV2Active { get; set; }
         public int SimpleDdgiAutomaticProbeDensityActive { get; set; }
         public int SimpleDdgiTransportSourceRefreshProbeCount { get; set; }
+        public int SimpleDdgiTransportSourceRefreshTargetProbeCount { get; set; }
+        public int SimpleDdgiTransportSourceRefreshCapacityShortfall { get; set; }
+        public int SimpleDdgiTransportSourceCohortTransitionActive { get; set; }
+        public ulong SimpleDdgiTransportSourceCohortTransitionCount { get; set; }
+        public int SimpleDdgiTransportSourceCohortElapsedFrames { get; set; }
+        public int SimpleDdgiTransportSourceStepStaleProbeCount { get; set; }
+        public int SimpleDdgiTransportSourceStepAgeP95Frames { get; set; }
+        public int SimpleDdgiTransportSourceStepAgeMaximumFrames { get; set; }
+        public float SimpleDdgiTransportSourceStepAgeP95Seconds { get; set; }
+        public float SimpleDdgiTransportSourceStepAgeMaximumSeconds { get; set; }
         public int SimpleDdgiTransportSourceCacheReuseProbeCount { get; set; }
         public ulong SimpleDdgiTransportSourceRayCount { get; set; }
         public ulong SimpleDdgiTransportSolveRayCount { get; set; }
@@ -1977,6 +1990,9 @@ namespace Njulf.Rendering.Data
             DdgiAverageRelocationFractionEstimate = 0;
             DdgiRelocatedProbeFractionEstimate = 0;
             DdgiAverageRelocationDisplacementFractionEstimate = 0;
+            SimpleDdgiAverageBackfaceRatioEstimate = 0;
+            SimpleDdgiAverageCloseRatioEstimate = 0;
+            SimpleDdgiAverageHardInvalidProbeScoreEstimate = 0;
             DdgiClassifiedInactiveProbeCountEstimate = 0;
             DdgiQualityTier = DdgiQualityTier.DdgiHigh;
             DdgiAdaptiveBudgetScale = 1.0f;
@@ -1993,6 +2009,16 @@ namespace Njulf.Rendering.Data
             SimpleDdgiTransportV2Active = 0;
             SimpleDdgiAutomaticProbeDensityActive = 0;
             SimpleDdgiTransportSourceRefreshProbeCount = 0;
+            SimpleDdgiTransportSourceRefreshTargetProbeCount = 0;
+            SimpleDdgiTransportSourceRefreshCapacityShortfall = 0;
+            SimpleDdgiTransportSourceCohortTransitionActive = 0;
+            SimpleDdgiTransportSourceCohortTransitionCount = 0;
+            SimpleDdgiTransportSourceCohortElapsedFrames = 0;
+            SimpleDdgiTransportSourceStepStaleProbeCount = 0;
+            SimpleDdgiTransportSourceStepAgeP95Frames = 0;
+            SimpleDdgiTransportSourceStepAgeMaximumFrames = 0;
+            SimpleDdgiTransportSourceStepAgeP95Seconds = 0;
+            SimpleDdgiTransportSourceStepAgeMaximumSeconds = 0;
             SimpleDdgiTransportSourceCacheReuseProbeCount = 0;
             SimpleDdgiTransportSourceRayCount = 0;
             SimpleDdgiTransportSolveRayCount = 0;

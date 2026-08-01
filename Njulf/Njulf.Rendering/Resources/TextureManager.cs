@@ -3044,6 +3044,61 @@ namespace Njulf.Rendering.Resources
             return GetTextureInfo(handle).View;
         }
 
+        /// <summary>
+        /// Creates a non-owning view over a validated texture subresource. The
+        /// caller must destroy the view before destroying the texture and only
+        /// after work referencing it has completed.
+        /// </summary>
+        public ImageView CreateTextureSubresourceView(
+            TextureHandle handle,
+            uint baseMipLevel,
+            uint levelCount,
+            uint baseArrayLayer,
+            uint layerCount,
+            ImageViewType viewType)
+        {
+            ThrowIfDisposed();
+            lock (_lock)
+            {
+                _lifecycle.ThrowIfDisposedUnderGate(_lock);
+                TextureInfo info = GetTextureInfoLocked(handle);
+                if (levelCount == 0 ||
+                    baseMipLevel >= info.MipLevels ||
+                    levelCount > info.MipLevels - baseMipLevel)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(levelCount));
+                }
+                if (layerCount == 0 ||
+                    baseArrayLayer >= info.ArrayLayers ||
+                    layerCount > info.ArrayLayers - baseArrayLayer)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(layerCount));
+                }
+
+                return CreateImageView(
+                    info.Image,
+                    info.Format,
+                    ImageAspectFlags.ColorBit,
+                    levelCount,
+                    layerCount,
+                    viewType,
+                    baseMipLevel,
+                    baseArrayLayer);
+            }
+        }
+
+        public void DestroyTextureSubresourceView(ImageView view)
+        {
+            ThrowIfDisposed();
+            if (view.Handle == 0)
+                return;
+            lock (_lock)
+            {
+                _lifecycle.ThrowIfDisposedUnderGate(_lock);
+                _context.Api.DestroyImageView(_context.Device, view, null);
+            }
+        }
+
         public int GetBindlessTextureIndex(TextureHandle handle)
         {
             ThrowIfDisposed();
@@ -3993,7 +4048,9 @@ namespace Njulf.Rendering.Resources
             ImageAspectFlags aspectMask,
             uint mipLevels = 1,
             uint arrayLayers = 1,
-            ImageViewType viewType = ImageViewType.Type2D)
+            ImageViewType viewType = ImageViewType.Type2D,
+            uint baseMipLevel = 0,
+            uint baseArrayLayer = 0)
         {
             var viewInfo = new ImageViewCreateInfo
             {
@@ -4004,9 +4061,9 @@ namespace Njulf.Rendering.Resources
                 SubresourceRange = new ImageSubresourceRange
                 {
                     AspectMask = aspectMask,
-                    BaseMipLevel = 0,
+                    BaseMipLevel = baseMipLevel,
                     LevelCount = mipLevels,
-                    BaseArrayLayer = 0,
+                    BaseArrayLayer = baseArrayLayer,
                     LayerCount = arrayLayers
                 }
             };

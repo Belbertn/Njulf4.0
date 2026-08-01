@@ -896,6 +896,16 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiTransportV2Active { get; init; }
         public int SimpleDdgiAutomaticProbeDensityActive { get; init; }
         public int SimpleDdgiTransportSourceRefreshProbeCount { get; init; }
+        public int SimpleDdgiTransportSourceRefreshTargetProbeCount { get; init; }
+        public int SimpleDdgiTransportSourceRefreshCapacityShortfall { get; init; }
+        public int SimpleDdgiTransportSourceCohortTransitionActive { get; init; }
+        public ulong SimpleDdgiTransportSourceCohortTransitionCount { get; init; }
+        public int SimpleDdgiTransportSourceCohortElapsedFrames { get; init; }
+        public int SimpleDdgiTransportSourceStepStaleProbeCount { get; init; }
+        public int SimpleDdgiTransportSourceStepAgeP95Frames { get; init; }
+        public int SimpleDdgiTransportSourceStepAgeMaximumFrames { get; init; }
+        public float SimpleDdgiTransportSourceStepAgeP95Seconds { get; init; }
+        public float SimpleDdgiTransportSourceStepAgeMaximumSeconds { get; init; }
         public int SimpleDdgiTransportSourceCacheReuseProbeCount { get; init; }
         public ulong SimpleDdgiTransportSourceRayCount { get; init; }
         public ulong SimpleDdgiTransportSolveRayCount { get; init; }
@@ -1219,6 +1229,9 @@ namespace Njulf.Rendering.Data
         public float DdgiAverageRelocationFractionEstimate { get; init; }
         public float DdgiRelocatedProbeFractionEstimate { get; init; }
         public float DdgiAverageRelocationDisplacementFractionEstimate { get; init; }
+        public float SimpleDdgiAverageBackfaceRatioEstimate { get; init; }
+        public float SimpleDdgiAverageCloseRatioEstimate { get; init; }
+        public float SimpleDdgiAverageHardInvalidProbeScoreEstimate { get; init; }
         public int DdgiClassifiedInactiveProbeCountEstimate { get; init; }
         public DdgiSchedulerMode DdgiSchedulerMode { get; init; } = DdgiSchedulerMode.CpuReference;
         public DdgiQualityTier DdgiQualityTier { get; init; } = DdgiQualityTier.DdgiHigh;

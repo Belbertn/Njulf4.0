@@ -31,7 +31,7 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint TransportReadIrradianceAtlasBufferIndex;
     uint TransportWriteIrradianceAtlasBufferIndex;
     uint TransportGeneration;
-    uint Padding0;
+    uint PrimaryDirectionalLightIndex;
 } pc;
 
 const float SIMPLE_DDGI_RELOCATION_TARGET_DISTANCE = 0.10;
@@ -50,12 +50,26 @@ uint ReadSimpleRayVisibilityHit(uint rayResultIndex)
         rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 7u);
 }
 
-void WriteRelocationClassification(uint probeIndex, vec3 relocation, float relocationDistance, float activeWeight, float invalidScore, float closeRatio, float backfaceRatio, float nearestHitDistance, float missRatio, float hitRatio)
+void WriteRelocationClassification(
+    uint probeIndex,
+    vec3 relocation,
+    float relocationDistance,
+    float activeWeight,
+    float softInvalidScore,
+    float hardInvalidScore,
+    float closeRatio,
+    float backfaceRatio,
+    float nearestHitDistance,
+    float missRatio,
+    float hitRatio)
 {
     uint baseWord = probeIndex * SIMPLE_DDGI_RELOCATION_CLASSIFICATION_STRIDE_WORDS;
     WriteStorageVec4(pc.RelocationClassificationBufferIndex, baseWord, vec4(relocation, relocationDistance));
-    WriteStorageVec4(pc.RelocationClassificationBufferIndex, baseWord + 4u, vec4(activeWeight, invalidScore, closeRatio, backfaceRatio));
-    WriteStorageVec4(pc.RelocationClassificationBufferIndex, baseWord + 8u, vec4(nearestHitDistance, missRatio, 0.0, hitRatio));
+    WriteStorageVec4(pc.RelocationClassificationBufferIndex, baseWord + 4u, vec4(activeWeight, softInvalidScore, closeRatio, backfaceRatio));
+    // Statistics.z was previously unused. Keeping the hard score alongside the
+    // raw ratios makes the production classifier observable without changing
+    // the 48-byte ABI consumed by debug tooling and readback.
+    WriteStorageVec4(pc.RelocationClassificationBufferIndex, baseWord + 8u, vec4(nearestHitDistance, missRatio, hardInvalidScore, hitRatio));
 }
 
 void main()
@@ -113,9 +127,11 @@ void main()
         if (distance <= closeDistance)
             closeCount++;
 
+        // Only an authored one-sided reverse face is evidence that the probe is
+        // embedded. Far-field voxels are closed, coarse occupancy and their
+        // reconstructed normal is not reliable enough to classify a probe.
         bool solidBackface =
-            abs(hitKind - SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE) < 0.25 ||
-            abs(hitKind - SIMPLE_DDGI_RAY_HIT_KIND_FAR_FIELD_BACK_FACE) < 0.25;
+            abs(hitKind - SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE) < 0.25;
         if (solidBackface)
         {
             backfaceCount++;
@@ -146,6 +162,15 @@ void main()
     float hardInvalidProbeScore = max(
         smoothstep(0.70, 0.90, closeRatio),
         smoothstep(0.55, 0.75, localBackfaceRatio));
+    // Distance is useful for relocation, but not for recognizing a probe that
+    // is deeply enclosed by one-sided geometry. Such probes see almost all
+    // reverse faces and no escape directions. An open probe behind a distant
+    // shell still resolves front faces or sky misses and therefore fails this
+    // enclosure test.
+    float enclosureScore =
+        smoothstep(0.60, 0.85, backfaceRatio) *
+        (1.0 - smoothstep(0.0, 0.05, missRatio));
+    hardInvalidProbeScore = max(hardInvalidProbeScore, enclosureScore);
     bool maintenanceUpdate = SimpleDdgiUpdateIsMaintenance(update);
 
     float previousActive = clamp(previous.activeWeight, 0.0, 1.0);
@@ -250,5 +275,16 @@ void main()
     WriteSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex, state);
 
     float nearestDistance = nearestHitDistance < 3.0e+38 ? nearestHitDistance : 0.0;
-    WriteRelocationClassification(probeIndex, blendedRelocation, length(blendedRelocation), state.activeWeight, softInvalidProbeScore, closeRatio, backfaceRatio, nearestDistance, missRatio, hitRatio);
+    WriteRelocationClassification(
+        probeIndex,
+        blendedRelocation,
+        length(blendedRelocation),
+        state.activeWeight,
+        softInvalidProbeScore,
+        hardInvalidProbeScore,
+        closeRatio,
+        backfaceRatio,
+        nearestDistance,
+        missRatio,
+        hitRatio);
 }

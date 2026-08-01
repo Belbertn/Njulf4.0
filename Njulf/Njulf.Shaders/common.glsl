@@ -223,7 +223,9 @@ const int FAR_FIELD_CLIPMAP_DISTANCE_BUFFER_INDEX = 182;
 const int FAR_FIELD_CLIPMAP_JUMP_FLOOD_SCRATCH0_BUFFER_INDEX = 183;
 const int FAR_FIELD_CLIPMAP_JUMP_FLOOD_SCRATCH1_BUFFER_INDEX = 184;
 const int FAR_FIELD_CLIPMAP_PAGE_TABLE_BUFFER_INDEX = 185;
-const int STATIC_BUFFER_COUNT = 186;
+const int ENVIRONMENT_PREFILTER_DATA_BUFFER_INDEX = 186;
+const int ENVIRONMENT_GI_DATA_BUFFER_INDEX = 187;
+const int STATIC_BUFFER_COUNT = 188;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -291,13 +293,14 @@ const int REFLECTION_PROBE_DEBUG_TEXTURE_INDEX = 47;
 const int WEIGHTED_OIT_ACCUMULATION_TEXTURE_INDEX = 48;
 const int WEIGHTED_OIT_REVEALAGE_TEXTURE_INDEX = 49;
 const int MATERIAL_TRANSPORT_PROVENANCE_TEXTURE_INDEX = 50;
+const int PREFILTERED_ENVIRONMENT_NEXT_TEXTURE_INDEX = 51;
 // Optional sampled-image Simple-DDGI atlas migration. The two bounded ranges
 // stay fixed so the runtime can use device-safe 2D-array groups without
 // consuming dynamically allocated material texture slots.
 const int SIMPLE_DDGI_SAMPLED_ATLAS_TEXTURE_GROUP_COUNT = 128;
-const int SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX = 51;
-const int SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX = 179;
-const int FIRST_DYNAMIC_TEXTURE_INDEX = 307;
+const int SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX = 52;
+const int SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX = 180;
+const int FIRST_DYNAMIC_TEXTURE_INDEX = 308;
 
 // ============================================
 // GPU STRUCT DEFINITIONS
@@ -1170,6 +1173,36 @@ struct GPUEnvironmentData
     uint Enabled;
     uint DebugView;
     uint DebugMipLevel;
+    int NextPrefilteredTextureIndex;
+    uint SourceKind;
+    uint AtmosphereFlags;
+    float PrefilteredBlend;
+    vec4 SunDirectionAndAngularRadius;
+    vec4 SunRadianceAndElevation;
+    vec4 MoonDirectionAndAngularRadius;
+    vec4 MoonRadianceAndNightBlend;
+    vec4 GroundAlbedoAndTurbidity;
+    vec4 AtmosphereParameters;
+    vec4 GroundRadianceAndAirglow;
+    vec4 HosekParametersR0;
+    vec4 HosekParametersR1;
+    vec4 HosekParametersR2;
+    vec4 HosekParametersG0;
+    vec4 HosekParametersG1;
+    vec4 HosekParametersG2;
+    vec4 HosekParametersB0;
+    vec4 HosekParametersB1;
+    vec4 HosekParametersB2;
+    vec4 HosekRadiances;
+    vec4 DiffuseIrradianceSh0;
+    vec4 DiffuseIrradianceSh1;
+    vec4 DiffuseIrradianceSh2;
+    vec4 DiffuseIrradianceSh3;
+    vec4 DiffuseIrradianceSh4;
+    vec4 DiffuseIrradianceSh5;
+    vec4 DiffuseIrradianceSh6;
+    vec4 DiffuseIrradianceSh7;
+    vec4 DiffuseIrradianceSh8;
 };
 
 struct GPUReflectionProbeHeader
@@ -3245,22 +3278,366 @@ int ReadLocalPointShadowIndex(uint lightIndex)
     return int(ReadStorageWord(uint(LOCAL_LIGHT_SHADOW_INDEX_BUFFER_INDEX), baseWord + 1u));
 }
 
-GPUEnvironmentData ReadEnvironmentData()
+GPUEnvironmentData ReadEnvironmentDataFrom(uint bufferIndex)
 {
     GPUEnvironmentData environment;
-    environment.EnvironmentTextureIndex = int(ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 0u));
-    environment.IrradianceTextureIndex = int(ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 1u));
-    environment.PrefilteredTextureIndex = int(ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 2u));
-    environment.BrdfLutTextureIndex = int(ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 3u));
-    environment.SkyIntensity = ReadStorageFloat(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 4u);
-    environment.DiffuseIntensity = ReadStorageFloat(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 5u);
-    environment.SpecularIntensity = ReadStorageFloat(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 6u);
-    environment.RotationRadians = ReadStorageFloat(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 7u);
-    environment.PrefilteredMipCount = ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 8u);
-    environment.Enabled = ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 9u);
-    environment.DebugView = ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 10u);
-    environment.DebugMipLevel = ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 11u);
+    environment.EnvironmentTextureIndex = int(ReadStorageWord(bufferIndex, 0u));
+    environment.IrradianceTextureIndex = int(ReadStorageWord(bufferIndex, 1u));
+    environment.PrefilteredTextureIndex = int(ReadStorageWord(bufferIndex, 2u));
+    environment.BrdfLutTextureIndex = int(ReadStorageWord(bufferIndex, 3u));
+    environment.SkyIntensity = ReadStorageFloat(bufferIndex, 4u);
+    environment.DiffuseIntensity = ReadStorageFloat(bufferIndex, 5u);
+    environment.SpecularIntensity = ReadStorageFloat(bufferIndex, 6u);
+    environment.RotationRadians = ReadStorageFloat(bufferIndex, 7u);
+    environment.PrefilteredMipCount = ReadStorageWord(bufferIndex, 8u);
+    environment.Enabled = ReadStorageWord(bufferIndex, 9u);
+    environment.DebugView = ReadStorageWord(bufferIndex, 10u);
+    environment.DebugMipLevel = ReadStorageWord(bufferIndex, 11u);
+    environment.NextPrefilteredTextureIndex = int(ReadStorageWord(bufferIndex, 12u));
+    environment.SourceKind = ReadStorageWord(bufferIndex, 13u);
+    environment.AtmosphereFlags = ReadStorageWord(bufferIndex, 14u);
+    environment.PrefilteredBlend = ReadStorageFloat(bufferIndex, 15u);
+    environment.SunDirectionAndAngularRadius = ReadStorageVec4(bufferIndex, 16u);
+    environment.SunRadianceAndElevation = ReadStorageVec4(bufferIndex, 20u);
+    environment.MoonDirectionAndAngularRadius = ReadStorageVec4(bufferIndex, 24u);
+    environment.MoonRadianceAndNightBlend = ReadStorageVec4(bufferIndex, 28u);
+    environment.GroundAlbedoAndTurbidity = ReadStorageVec4(bufferIndex, 32u);
+    environment.AtmosphereParameters = ReadStorageVec4(bufferIndex, 36u);
+    environment.GroundRadianceAndAirglow = ReadStorageVec4(bufferIndex, 40u);
+    environment.HosekParametersR0 = ReadStorageVec4(bufferIndex, 44u);
+    environment.HosekParametersR1 = ReadStorageVec4(bufferIndex, 48u);
+    environment.HosekParametersR2 = ReadStorageVec4(bufferIndex, 52u);
+    environment.HosekParametersG0 = ReadStorageVec4(bufferIndex, 56u);
+    environment.HosekParametersG1 = ReadStorageVec4(bufferIndex, 60u);
+    environment.HosekParametersG2 = ReadStorageVec4(bufferIndex, 64u);
+    environment.HosekParametersB0 = ReadStorageVec4(bufferIndex, 68u);
+    environment.HosekParametersB1 = ReadStorageVec4(bufferIndex, 72u);
+    environment.HosekParametersB2 = ReadStorageVec4(bufferIndex, 76u);
+    environment.HosekRadiances = ReadStorageVec4(bufferIndex, 80u);
+    environment.DiffuseIrradianceSh0 = ReadStorageVec4(bufferIndex, 84u);
+    environment.DiffuseIrradianceSh1 = ReadStorageVec4(bufferIndex, 88u);
+    environment.DiffuseIrradianceSh2 = ReadStorageVec4(bufferIndex, 92u);
+    environment.DiffuseIrradianceSh3 = ReadStorageVec4(bufferIndex, 96u);
+    environment.DiffuseIrradianceSh4 = ReadStorageVec4(bufferIndex, 100u);
+    environment.DiffuseIrradianceSh5 = ReadStorageVec4(bufferIndex, 104u);
+    environment.DiffuseIrradianceSh6 = ReadStorageVec4(bufferIndex, 108u);
+    environment.DiffuseIrradianceSh7 = ReadStorageVec4(bufferIndex, 112u);
+    environment.DiffuseIrradianceSh8 = ReadStorageVec4(bufferIndex, 116u);
     return environment;
+}
+
+GPUEnvironmentData ReadEnvironmentData()
+{
+    return ReadEnvironmentDataFrom(uint(ENVIRONMENT_DATA_BUFFER_INDEX));
+}
+
+GPUEnvironmentData ReadGiEnvironmentData()
+{
+    return ReadEnvironmentDataFrom(uint(ENVIRONMENT_GI_DATA_BUFFER_INDEX));
+}
+
+const uint ENVIRONMENT_ATMOSPHERE_FLAG_ANALYTIC = 1u << 0;
+const uint ENVIRONMENT_ATMOSPHERE_FLAG_PREFILTER_READY = 1u << 1;
+
+bool EnvironmentUsesAnalyticSky(GPUEnvironmentData environment)
+{
+    return (environment.AtmosphereFlags & ENVIRONMENT_ATMOSPHERE_FLAG_ANALYTIC) != 0u;
+}
+
+vec3 RotateEnvironmentSampleDirection(vec3 direction, float radians)
+{
+    float cosine = cos(radians);
+    float sine = sin(radians);
+    return vec3(
+        direction.x * cosine - direction.z * sine,
+        direction.y,
+        direction.x * sine + direction.z * cosine);
+}
+
+float EvaluateHosekWilkieChannel(
+    float directionY,
+    float gamma,
+    vec4 parameters0,
+    vec4 parameters1,
+    vec4 parameters2,
+    float radianceScale)
+{
+    float cosGamma = cos(gamma);
+    float cosGamma2 = cosGamma * cosGamma;
+    float cosTheta = abs(directionY);
+    float exponentialM = exp(parameters1.x * gamma);
+    float mieDenominator = pow(max(
+        1.0 + parameters2.x * parameters2.x -
+        2.0 * parameters2.x * cosGamma,
+        0.00001), 1.5);
+    float mieM = (1.0 + cosGamma2) / mieDenominator;
+    float lhs = 1.0 + parameters0.x *
+        exp(parameters0.y / (cosTheta + 0.01));
+    float rhs = parameters0.z +
+        parameters0.w * exponentialM +
+        parameters1.y * cosGamma2 +
+        parameters1.z * mieM +
+        parameters1.w * sqrt(cosTheta);
+    return radianceScale * lhs * rhs;
+}
+
+float EnvironmentHash13(vec3 value)
+{
+    value = fract(value * 0.1031);
+    value += dot(value, value.yzx + 33.33);
+    return fract((value.x + value.y) * value.z);
+}
+
+vec3 EvaluateEnvironmentDisc(
+    vec3 direction,
+    vec3 toDisc,
+    float angularRadius,
+    vec3 irradiance)
+{
+    float radius = clamp(angularRadius, 0.0005, 0.05);
+    float disc = smoothstep(
+        cos(radius * 1.08),
+        cos(radius * 0.92),
+        dot(direction, toDisc));
+    float solidAngle = 2.0 * 3.14159265359 * (1.0 - cos(radius));
+    return min(
+        max(irradiance, vec3(0.0)) / max(solidAngle, 0.000001),
+        vec3(60000.0)) * disc;
+}
+
+vec3 EvaluateProceduralEnvironmentRadiance(
+    GPUEnvironmentData environment,
+    vec3 direction,
+    bool diffuseTransport,
+    bool includeCelestialDiscs,
+    bool includeStars)
+{
+    vec3 safeDirection = length(direction) > 0.00001
+        ? normalize(direction)
+        : vec3(0.0, 1.0, 0.0);
+    if (safeDirection.y < 0.0)
+    {
+        return max(environment.GroundRadianceAndAirglow.xyz, vec3(0.0)) *
+            max(environment.SkyIntensity, 0.0);
+    }
+
+    vec3 toSun = normalize(environment.SunDirectionAndAngularRadius.xyz);
+    float gamma = acos(clamp(dot(safeDirection, toSun), -1.0, 1.0));
+    vec3 daylight = vec3(
+        EvaluateHosekWilkieChannel(
+            safeDirection.y,
+            gamma,
+            environment.HosekParametersR0,
+            environment.HosekParametersR1,
+            environment.HosekParametersR2,
+            environment.HosekRadiances.x),
+        EvaluateHosekWilkieChannel(
+            safeDirection.y,
+            gamma,
+            environment.HosekParametersG0,
+            environment.HosekParametersG1,
+            environment.HosekParametersG2,
+            environment.HosekRadiances.y),
+        EvaluateHosekWilkieChannel(
+            safeDirection.y,
+            gamma,
+            environment.HosekParametersB0,
+            environment.HosekParametersB1,
+            environment.HosekParametersB2,
+            environment.HosekRadiances.z));
+    daylight = max(daylight, vec3(0.0)) *
+        environment.AtmosphereParameters.y *
+        environment.AtmosphereParameters.x;
+    if (diffuseTransport)
+    {
+        daylight *= smoothstep(
+            radians(3.0),
+            radians(10.0),
+            gamma);
+    }
+
+    float horizonBand = exp(-safeDirection.y * 7.0);
+    vec2 directionAzimuth = length(safeDirection.xz) > 0.00001
+        ? normalize(safeDirection.xz)
+        : vec2(0.0, 1.0);
+    vec2 sunAzimuth = length(toSun.xz) > 0.00001
+        ? normalize(toSun.xz)
+        : vec2(0.0, 1.0);
+    float towardSun = pow(max(dot(directionAzimuth, sunAzimuth), 0.0), 4.0);
+    vec3 twilightColor = mix(
+        vec3(0.012, 0.024, 0.080),
+        vec3(1.15, 0.18, 0.025),
+        towardSun);
+    vec3 twilight = twilightColor *
+        environment.AtmosphereParameters.z *
+        (0.12 + 0.88 * horizonBand) *
+        environment.AtmosphereParameters.x;
+
+    float nightBlend = environment.MoonRadianceAndNightBlend.w;
+    vec3 nightGradient = mix(
+        vec3(0.12, 0.18, 0.34),
+        vec3(0.018, 0.035, 0.095),
+        sqrt(clamp(safeDirection.y, 0.0, 1.0)));
+    vec3 result = daylight + twilight +
+        nightGradient * environment.GroundRadianceAndAirglow.w * nightBlend;
+
+    if (includeCelestialDiscs)
+    {
+        result += EvaluateEnvironmentDisc(
+            safeDirection,
+            toSun,
+            environment.SunDirectionAndAngularRadius.w,
+            environment.SunRadianceAndElevation.xyz);
+        result += EvaluateEnvironmentDisc(
+            safeDirection,
+            normalize(environment.MoonDirectionAndAngularRadius.xyz),
+            environment.MoonDirectionAndAngularRadius.w,
+            environment.MoonRadianceAndNightBlend.xyz);
+    }
+
+    if (includeStars && nightBlend > 0.0)
+    {
+        vec3 starCell = floor(safeDirection * 4096.0);
+        float selector = EnvironmentHash13(starCell);
+        float star = pow(smoothstep(0.9985, 1.0, selector), 6.0);
+        vec3 starColor = mix(
+            vec3(0.62, 0.75, 1.0),
+            vec3(1.0),
+            EnvironmentHash13(starCell.yzx + 17.0));
+        result += starColor * star * environment.AtmosphereParameters.w * nightBlend;
+    }
+
+    return max(result, vec3(0.0)) * max(environment.SkyIntensity, 0.0);
+}
+
+vec3 EvaluateEnvironmentRadiance(
+    GPUEnvironmentData environment,
+    vec3 direction,
+    bool diffuseTransport,
+    bool includeCelestialDiscs,
+    bool includeStars)
+{
+    if (environment.Enabled == 0u)
+        return vec3(0.0);
+    if (EnvironmentUsesAnalyticSky(environment))
+    {
+        return EvaluateProceduralEnvironmentRadiance(
+            environment,
+            direction,
+            diffuseTransport,
+            includeCelestialDiscs,
+            includeStars);
+    }
+    if (environment.EnvironmentTextureIndex < 0)
+        return vec3(0.0);
+    vec3 sampleDirection = RotateEnvironmentSampleDirection(
+        direction,
+        environment.RotationRadians);
+    return max(textureLod(
+        BindlessCubeTextures[nonuniformEXT(environment.EnvironmentTextureIndex)],
+        sampleDirection,
+        0.0).rgb, vec3(0.0)) * max(environment.SkyIntensity, 0.0);
+}
+
+void EvaluateEnvironmentShBasis(vec3 direction, out float basis[9])
+{
+    vec3 d = normalize(direction);
+    basis[0] = 0.2820947918;
+    basis[1] = 0.4886025119 * d.z;
+    basis[2] = 0.4886025119 * d.y;
+    basis[3] = 0.4886025119 * d.x;
+    basis[4] = 1.0925484306 * d.x * d.z;
+    basis[5] = 1.0925484306 * d.z * d.y;
+    basis[6] = 0.3153915653 * (3.0 * d.y * d.y - 1.0);
+    basis[7] = 1.0925484306 * d.x * d.y;
+    basis[8] = 0.5462742153 * (d.x * d.x - d.z * d.z);
+}
+
+vec3 EvaluateEnvironmentDiffuseIrradianceUnscaled(
+    GPUEnvironmentData environment,
+    vec3 normal)
+{
+    if (environment.Enabled == 0u)
+        return vec3(0.0);
+    if (!EnvironmentUsesAnalyticSky(environment))
+    {
+        if (environment.IrradianceTextureIndex < 0)
+            return vec3(0.0);
+        vec3 sampleDirection = RotateEnvironmentSampleDirection(
+            normal,
+            environment.RotationRadians);
+        return max(texture(
+            BindlessCubeTextures[nonuniformEXT(environment.IrradianceTextureIndex)],
+            sampleDirection).rgb, vec3(0.0));
+    }
+
+    float basis[9];
+    EvaluateEnvironmentShBasis(normal, basis);
+    vec3 irradiance =
+        environment.DiffuseIrradianceSh0.xyz * basis[0] +
+        environment.DiffuseIrradianceSh1.xyz * basis[1] +
+        environment.DiffuseIrradianceSh2.xyz * basis[2] +
+        environment.DiffuseIrradianceSh3.xyz * basis[3] +
+        environment.DiffuseIrradianceSh4.xyz * basis[4] +
+        environment.DiffuseIrradianceSh5.xyz * basis[5] +
+        environment.DiffuseIrradianceSh6.xyz * basis[6] +
+        environment.DiffuseIrradianceSh7.xyz * basis[7] +
+        environment.DiffuseIrradianceSh8.xyz * basis[8];
+    return max(irradiance, vec3(0.0));
+}
+
+vec3 EvaluateEnvironmentDiffuseIrradiance(
+    GPUEnvironmentData environment,
+    vec3 normal)
+{
+    return EvaluateEnvironmentDiffuseIrradianceUnscaled(environment, normal) *
+        max(environment.DiffuseIntensity, 0.0);
+}
+
+vec3 EvaluateEnvironmentTransportIrradiance(
+    GPUEnvironmentData environment,
+    vec3 normal)
+{
+    return EvaluateEnvironmentDiffuseIrradianceUnscaled(environment, normal) *
+        max(environment.SkyIntensity, 0.0);
+}
+
+vec3 SampleEnvironmentPrefilteredRadiance(
+    GPUEnvironmentData environment,
+    vec3 direction,
+    float lod)
+{
+    if (environment.Enabled == 0u)
+        return vec3(0.0);
+    if (EnvironmentUsesAnalyticSky(environment) &&
+        (environment.AtmosphereFlags & ENVIRONMENT_ATMOSPHERE_FLAG_PREFILTER_READY) == 0u)
+    {
+        return EvaluateProceduralEnvironmentRadiance(
+            environment,
+            direction,
+            false,
+            true,
+            true);
+    }
+    if (environment.PrefilteredTextureIndex < 0)
+        return vec3(0.0);
+    vec3 sampleDirection = EnvironmentUsesAnalyticSky(environment)
+        ? normalize(direction)
+        : RotateEnvironmentSampleDirection(direction, environment.RotationRadians);
+    vec3 current = textureLod(
+        BindlessCubeTextures[nonuniformEXT(environment.PrefilteredTextureIndex)],
+        sampleDirection,
+        lod).rgb;
+    if (environment.NextPrefilteredTextureIndex < 0 ||
+        environment.NextPrefilteredTextureIndex == environment.PrefilteredTextureIndex)
+    {
+        return max(current, vec3(0.0));
+    }
+    vec3 next = textureLod(
+        BindlessCubeTextures[nonuniformEXT(environment.NextPrefilteredTextureIndex)],
+        sampleDirection,
+        lod).rgb;
+    return max(mix(current, next, clamp(environment.PrefilteredBlend, 0.0, 1.0)), vec3(0.0));
 }
 
 GPUReflectionProbeHeader ReadReflectionProbeHeader()

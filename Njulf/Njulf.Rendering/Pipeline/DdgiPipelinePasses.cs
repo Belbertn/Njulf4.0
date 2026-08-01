@@ -304,9 +304,9 @@ namespace Njulf.Rendering.Pipeline
             return new GPUDdgiUpdatePushConstants
             {
                 EnvironmentRadianceAndIntensity = new Vector4(
-                    Math.Max(sceneData.ClearColor.X, 0.0f) * environmentIntensity,
-                    Math.Max(sceneData.ClearColor.Y, 0.0f) * environmentIntensity,
-                    Math.Max(sceneData.ClearColor.Z, 0.0f) * environmentIntensity,
+                    _settings.Environment.TransportFallbackRadiance.X,
+                    _settings.Environment.TransportFallbackRadiance.Y,
+                    _settings.Environment.TransportFallbackRadiance.Z,
                     environmentIntensity),
                 ProbeCount = checked((uint)Math.Max(0, sceneData.DdgiProbeCount)),
                 VolumeCount = checked((uint)Math.Max(0, sceneData.DdgiProbeVolumeCount)),

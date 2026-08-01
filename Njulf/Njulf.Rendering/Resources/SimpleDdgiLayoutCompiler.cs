@@ -114,6 +114,14 @@ namespace Njulf.Rendering.Resources
         public const ulong ProbeStateBytesPerProbe = 32;
         public const ulong ProbeUpdateBytes = 32;
         public const ulong RelocationClassificationBytesPerProbe = 48;
+        // Classification is diagnostics-only. Read a bounded, rotating window
+        // rather than triplicating the complete 48-byte production buffer for
+        // every frame in flight. Probe state remains a complete readback because
+        // it drives scheduling and convergence, while the window still samples
+        // every classification record over time.
+        public const int ClassificationReadbackProbeCapacity = 4_096;
+        public const ulong ProbeReadbackBytesPerProbe =
+            ProbeStateBytesPerProbe + RelocationClassificationBytesPerProbe;
 
         public ulong CanonicalAtlasBytes =>
             checked(IrradianceAtlasBytes + VisibilityAtlasBytes);
@@ -184,12 +192,17 @@ namespace Njulf.Rendering.Resources
                 checked(updateCount64 * ProbeUpdateBytes));
             ulong relocationBytes = AtLeastOneAllocation(
                 checked(probeCount64 * RelocationClassificationBytesPerProbe));
+            ulong classificationReadbackProbeCount = checked((ulong)Math.Min(
+                probes,
+                ClassificationReadbackProbeCapacity));
             ulong readbackBytes = readbacks == 0
                 ? 0UL
                 : checked(
                     (ulong)readbacks *
                     AtLeastOneAllocation(checked(
-                        probeCount64 * ProbeStateBytesPerProbe)));
+                        probeCount64 * ProbeStateBytesPerProbe +
+                        classificationReadbackProbeCount *
+                        RelocationClassificationBytesPerProbe)));
             ulong rayScratchBytes = AtLeastOneAllocation(checked(
                 updateCount64 * rayCount64 * RayResultBytes));
             ulong sampledImageBytes = checked(

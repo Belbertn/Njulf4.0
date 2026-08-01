@@ -104,7 +104,18 @@ public sealed class SamplePlazaGlobalIlluminationTests
 
         ConfigurePlazaRenderSettings(settings, profileName);
 
-        Assert.That(settings.GlobalIllumination.SimpleDdgiAuthoredVolumes, Is.Empty);
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.GlobalIllumination.SimpleDdgiAuthoredVolumes, Is.Empty);
+            Assert.That(settings.Environment.Enabled, Is.True);
+            Assert.That(settings.Environment.SourceKind, Is.EqualTo(EnvironmentSourceKind.ProceduralSky));
+            Assert.That(settings.Environment.SunDriver, Is.EqualTo(ProceduralSkySunDriver.AstronomicalTime));
+            Assert.That(settings.Environment.AnimateTimeOfDay, Is.True);
+            Assert.That(settings.Environment.MoonIrradianceScale, Is.GreaterThan(0.0f));
+            Assert.That(settings.Environment.StarIntensity, Is.GreaterThan(0.0f));
+            Assert.That(settings.Environment.AirglowIntensity, Is.GreaterThan(0.0f));
+            Assert.That(settings.Environment.SpecularIntensity, Is.EqualTo(1.0f));
+        });
     }
 
     [Test]

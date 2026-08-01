@@ -1,4 +1,5 @@
 using System;
+using Njulf.Core.Math;
 using Njulf.Rendering.Data;
 
 namespace NjulfHelloGame;
@@ -11,6 +12,20 @@ namespace NjulfHelloGame;
 /// </summary>
 public static class SampleSponzaGlobalIlluminationProfile
 {
+    // Sponza Palace is in Dubrovnik. Start in the early afternoon on the summer
+    // solstice, with the solar azimuth still aligned to the courtyard-facing
+    // canonical key. The higher sun is spectrally closer to neutral daylight
+    // and retains useful, readable shadows inside the galleries.
+    public const float DefaultSolarTimeHours = 13.5f;
+    public const float DefaultLatitudeDegrees = 42.6507f;
+    public const int DefaultDayOfYear = 172;
+    public const float DefaultNorthOffsetDegrees = -152.10127f;
+    public const float DefaultTimeScale = 60.0f;
+    public const float DefaultTurbidity = 2.0f;
+    public const float DefaultGroundAlbedo = 0.16f;
+    public const float DefaultAtmosphereIntensity = 0.30f;
+    public const float DefaultSolarIrradianceScale = 34.0f;
+
     /// <summary>
     /// Restores the generic DdgiHigh camera-relative layout. Reapplying the
     /// profile is idempotent and cannot retain authored coverage from another
@@ -59,17 +74,66 @@ public static class SampleSponzaGlobalIlluminationProfile
         settings.GlobalIllumination.SimpleDdgiLayoutAdmissionMode = SimpleDdgiLayoutAdmissionMode.Reject;
         settings.Diagnostics.DdgiForwardEstimateCountersEnabled = true;
         settings.Diagnostics.DirectionalShadowReceiverCountersEnabled = true;
+        // Locked captures compare a single, immutable authored key. Normal
+        // Sponza uses the astronomical driver configured below; the capture
+        // overlay is the deliberate deterministic exception.
+        settings.Environment.SunDriver = ProceduralSkySunDriver.SceneDirectionalLight;
+        settings.Environment.AnimateTimeOfDay = false;
+    }
+
+    internal static void ConfigureDynamicEnvironment(RenderSettings settings)
+    {
+        if (settings == null)
+            throw new ArgumentNullException(nameof(settings));
+
+        EnvironmentSettings environment = settings.Environment;
+        environment.Enabled = true;
+        environment.SourceKind = EnvironmentSourceKind.ProceduralSky;
+        environment.SourcePath = null;
+        environment.TexturePrecision = EnvironmentTexturePrecision.Float16;
+        environment.SunDriver = ProceduralSkySunDriver.AstronomicalTime;
+        environment.AnimateTimeOfDay = true;
+
+        environment.TimeOfDayHours = DefaultSolarTimeHours;
+        environment.LatitudeDegrees = DefaultLatitudeDegrees;
+        environment.DayOfYear = DefaultDayOfYear;
+        environment.NorthOffsetDegrees = DefaultNorthOffsetDegrees;
+        environment.TimeScale = DefaultTimeScale;
+
+        // Clear maritime summer air. Hosek-Wilkie's RGB sky radiance and the
+        // directional solar irradiance use independent scales; this calibrated
+        // pair keeps initial horizontal diffuse skylight near one quarter of
+        // direct sunlight. That produces a blue dome and crisp solar modeling
+        // without materially increasing the scene's total daylight energy.
+        environment.Turbidity = DefaultTurbidity;
+        environment.GroundAlbedo = new Vector3(DefaultGroundAlbedo);
+        environment.SunAngularDiameterDegrees = 0.53f;
+        environment.MoonAngularDiameterDegrees = 0.52f;
+        environment.AtmosphereIntensity = DefaultAtmosphereIntensity;
+        environment.SolarIrradianceScale = DefaultSolarIrradianceScale;
+        environment.MoonIrradianceScale = 0.12f;
+        environment.StarIntensity = 0.025f;
+        environment.AirglowIntensity = 0.025f;
+
+        environment.GiSunStepDegrees = 0.25f;
+        environment.GiTargetSourceSweepSeconds = 8.0f;
+        environment.PrefilteredSize = 128;
+        environment.SpecularPrefilterMipsPerFrame = 1;
+        environment.SpecularPrefilterTransitionFrames = 8;
+        environment.DebugView = EnvironmentDebugView.None;
+        environment.RotationRadians = 0.0f;
+
+        // DDGI owns probe-covered diffuse transport. Keep every environment
+        // channel physically authored at unity; ownership composition prevents
+        // diffuse IBL from being counted twice at valid DDGI receivers.
+        environment.SkyIntensity = 1.0f;
+        environment.DiffuseIntensity = 1.0f;
+        environment.SpecularIntensity = 1.0f;
     }
 
     private static void ConfigureReferenceOutput(RenderSettings settings)
     {
-        settings.Environment.Enabled = true;
-        // DDGI owns probe-covered diffuse transport. Keep every environment
-        // channel physically authored at unity; ownership composition prevents
-        // diffuse IBL from being counted twice at valid DDGI receivers.
-        settings.Environment.SkyIntensity = 1.0f;
-        settings.Environment.DiffuseIntensity = 1.0f;
-        settings.Environment.SpecularIntensity = 1.0f;
+        ConfigureDynamicEnvironment(settings);
         // Interactive presentation follows the camera into shaded galleries.
         // ApplyValidationOverlay intentionally overrides this for deterministic
         // linear-light validation captures.

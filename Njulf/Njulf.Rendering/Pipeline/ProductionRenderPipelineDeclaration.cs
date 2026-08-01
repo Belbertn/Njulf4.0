@@ -26,6 +26,7 @@ internal sealed class ProductionRenderPipelineDeclaration
         "AmbientOcclusionPass",
         "AmbientOcclusionBlurPass",
         "TiledLightCullingPass",
+        "EnvironmentPrefilterPass",
         "ForwardPlusPass",
         "SsgiTracePass",
         "SsgiTemporalPass",
@@ -126,7 +127,12 @@ internal sealed class ProductionRenderPipelineDeclaration
             WriteComputeStorage(RenderGraphResourceId.AmbientOcclusionBlurred, ImageLayout.ShaderReadOnlyOptimal)),
             Pass("TiledLightCullingPass",
             ReadComputeDepth(RenderGraphResourceId.SceneDepth),
-            Write(RenderGraphResourceId.LightTiles))
+            Write(RenderGraphResourceId.LightTiles)),
+            // The pass performs exact per-mip image barriers internally because
+            // the environment chain also contains immutable HDR/BRDF images.
+            // It restores each written mip to shader-read layout before return.
+            Pass("EnvironmentPrefilterPass",
+            ReadComputeBuffer(RenderGraphResourceId.EnvironmentData))
         ]);
 
         declarations.Add(includeSsgi

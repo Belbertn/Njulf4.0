@@ -548,6 +548,19 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Bounded virtual-page table for the streamed far-field cache.</summary>
         public const int FarFieldClipmapPageTableBuffer = FarFieldClipmapJumpFloodScratch1Buffer + 1;
 
+        /// <summary>
+        /// Immutable atmosphere snapshot used while an amortized specular
+        /// prefilter build spans multiple frames.
+        /// </summary>
+        public const int EnvironmentPrefilterDataBuffer = FarFieldClipmapPageTableBuffer + 1;
+
+        /// <summary>
+        /// Quantized atmosphere snapshot used only by DDGI source transport.
+        /// Visible sky, raster lighting, and shadows continue to use the
+        /// continuous environment and light buffers.
+        /// </summary>
+        public const int EnvironmentGiDataBuffer = EnvironmentPrefilterDataBuffer + 1;
+
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
         // ============================================
@@ -684,6 +697,10 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Fixed sampled per-pixel material transport source-path diagnostic</summary>
         public const int MaterialTransportProvenanceTexture = WeightedOitRevealageTexture + 1;
 
+        /// <summary>Second half of the procedural-environment specular double buffer.</summary>
+        public const int PrefilteredEnvironmentNextTexture =
+            MaterialTransportProvenanceTexture + 1;
+
         /// <summary>
         /// Number of fixed sampled-image Simple-DDGI atlas groups reserved for the
         /// optional A/B migration path.  Each group is a 2D-array texture and the
@@ -693,7 +710,7 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>First fixed sampled Simple-DDGI irradiance atlas texture group.</summary>
         public const int SimpleDdgiSampledIrradianceTextureBase =
-            MaterialTransportProvenanceTexture + 1;
+            PrefilteredEnvironmentNextTexture + 1;
 
         /// <summary>First fixed sampled Simple-DDGI visibility atlas texture group.</summary>
         public const int SimpleDdgiSampledVisibilityTextureBase =
@@ -711,7 +728,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
 
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = FarFieldClipmapPageTableBuffer + 1;
+        public const int StaticBufferCount = EnvironmentGiDataBuffer + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -913,6 +930,8 @@ namespace Njulf.Rendering.Descriptors
                     FarFieldClipmapJumpFloodScratch0Buffer => nameof(FarFieldClipmapJumpFloodScratch0Buffer),
                     FarFieldClipmapJumpFloodScratch1Buffer => nameof(FarFieldClipmapJumpFloodScratch1Buffer),
                     FarFieldClipmapPageTableBuffer => nameof(FarFieldClipmapPageTableBuffer),
+                    EnvironmentPrefilterDataBuffer => nameof(EnvironmentPrefilterDataBuffer),
+                    EnvironmentGiDataBuffer => nameof(EnvironmentGiDataBuffer),
                     _ => "Unknown"
                 };
             }

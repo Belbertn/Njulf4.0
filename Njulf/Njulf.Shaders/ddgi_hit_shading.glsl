@@ -1154,40 +1154,85 @@ vec3 TraceLightVisibility(
     return occluded ? vec3(0.0) : visibilityRgb;
 }
 
-vec3 RotateDdgiEnvironmentDirection(vec3 direction, float radians)
-{
-    float s = sin(radians);
-    float c = cos(radians);
-    return normalize(vec3(
-        direction.x * c - direction.z * s,
-        direction.y,
-        direction.x * s + direction.z * c));
-}
-
-vec3 SampleDdgiEnvironmentMissRadianceWithFallback(vec3 direction, vec3 fallbackRadianceBase)
+vec3 SampleDdgiEnvironmentMissRadianceWithFallback(
+    vec3 direction,
+    vec3 fallbackRadianceBase,
+    float fallbackIntensity)
 {
     float skyWeight = clamp(direction.y * 0.5 + 0.5, 0.0, 1.0);
-    vec3 fallbackRadiance = fallbackRadianceBase * skyWeight;
-    GPUEnvironmentData environment = ReadEnvironmentData();
-    if (environment.Enabled == 0u || environment.EnvironmentTextureIndex < 0)
+    vec3 fallbackRadiance = fallbackRadianceBase *
+        max(fallbackIntensity, 0.0) * skyWeight;
+    GPUEnvironmentData environment = ReadGiEnvironmentData();
+    if (environment.Enabled == 0u)
         return fallbackRadiance;
-
-    vec3 environmentDirection = RotateDdgiEnvironmentDirection(direction, environment.RotationRadians);
-    vec3 environmentRadiance = textureLod(
-        BindlessCubeTextures[nonuniformEXT(environment.EnvironmentTextureIndex)],
-        environmentDirection,
-        0.0).rgb;
     // A probe miss is physical transport from the visible sky, not the
     // screen-space diffuse IBL complement.  Keep it radiometrically consistent
     // with the skybox even when DiffuseIntensity is reduced to avoid double
     // counting ambient light at receivers already owned by DDGI.
-    return max(environmentRadiance, vec3(0.0)) * max(environment.SkyIntensity, 0.0);
+    vec3 environmentRadiance = EvaluateEnvironmentRadiance(
+        environment,
+        direction,
+        true,
+        false,
+        false);
+    return max(environmentRadiance, vec3(0.0));
+}
+
+void ApplyDdgiSteppedAtmosphereDirectionalLight(
+    uint lightIndex,
+    inout GPULight light)
+{
+    if (light.Type != 1)
+        return;
+
+    GPUEnvironmentData currentEnvironment = ReadEnvironmentData();
+    GPUEnvironmentData giEnvironment = ReadGiEnvironmentData();
+    if (currentEnvironment.Enabled == 0u ||
+        giEnvironment.Enabled == 0u ||
+        !EnvironmentUsesAnalyticSky(currentEnvironment) ||
+        !EnvironmentUsesAnalyticSky(giEnvironment))
+    {
+        return;
+    }
+
+    if (lightIndex == pc.PrimaryDirectionalLightIndex)
+    {
+        light.Direction = -normalize(giEnvironment.SunDirectionAndAngularRadius.xyz);
+        light.Color = max(giEnvironment.SunRadianceAndElevation.xyz, vec3(0.0));
+        light.Intensity = 1.0;
+        return;
+    }
+
+    // The atmosphere-owned moon has no dedicated public light slot in the
+    // scene ABI. Match both its continuous direction and radiance before
+    // substituting the stepped snapshot, so an authored fill light that merely
+    // points in a similar direction is never captured by this policy.
+    vec3 currentMoonDirection = -normalize(
+        currentEnvironment.MoonDirectionAndAngularRadius.xyz);
+    vec3 currentMoonRadiance = max(
+        currentEnvironment.MoonRadianceAndNightBlend.xyz,
+        vec3(0.0));
+    vec3 lightRadiance = max(light.Color, vec3(0.0)) *
+        max(light.Intensity, 0.0);
+    float radianceTolerance = max(0.001, length(currentMoonRadiance) * 0.02);
+    bool atmosphereMoon = dot(normalize(light.Direction), currentMoonDirection) >
+            cos(radians(0.05)) &&
+        length(lightRadiance - currentMoonRadiance) <= radianceTolerance;
+    if (!atmosphereMoon)
+        return;
+
+    light.Direction = -normalize(giEnvironment.MoonDirectionAndAngularRadius.xyz);
+    light.Color = max(giEnvironment.MoonRadianceAndNightBlend.xyz, vec3(0.0));
+    light.Intensity = 1.0;
 }
 
 #if DDGI_HIT_ENABLE_ENVIRONMENT_WRAPPER
 vec3 SampleDdgiEnvironmentMissRadiance(vec3 direction)
 {
-    return SampleDdgiEnvironmentMissRadianceWithFallback(direction, pc.EnvironmentRadianceAndIntensity.rgb);
+    return SampleDdgiEnvironmentMissRadianceWithFallback(
+        direction,
+        pc.EnvironmentRadianceAndIntensity.rgb,
+        pc.EnvironmentRadianceAndIntensity.w);
 }
 #endif
 
@@ -1200,6 +1245,9 @@ bool TryReadSelectedDdgiDirectionalLight(out GPULight selectedLight)
         return false;
 
     selectedLight = ReadLight(pc.PrimaryDirectionalLightIndex);
+    ApplyDdgiSteppedAtmosphereDirectionalLight(
+        pc.PrimaryDirectionalLightIndex,
+        selectedLight);
     return selectedLight.Type == 1;
 }
 
@@ -1568,6 +1616,7 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
         GPULight light = ReadLight(i);
         if (light.Type != 1)
             continue;
+        ApplyDdgiSteppedAtmosphereDirectionalLight(i, light);
 
         vec3 lightNoShadowDiffuse;
         directDiffuseRadiance += EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(

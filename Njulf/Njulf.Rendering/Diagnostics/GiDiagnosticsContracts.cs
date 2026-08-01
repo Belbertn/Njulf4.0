@@ -51,6 +51,8 @@ namespace Njulf.Rendering.Diagnostics
         SimpleDdgiLayoutDegraded,
         /// <summary>The resolved detailed ray-query resident set could not be represented completely.</summary>
         AccelerationStructureIncomplete,
+        /// <summary>The stepped-sun source cohort cannot meet, or has exceeded, its declared sweep budget.</summary>
+        SourceSweepBudgetExceeded,
         /// <summary>A requested or live GI component exceeded its declared hard budget.</summary>
         GiBudgetOverrun
     }
@@ -727,6 +729,10 @@ namespace Njulf.Rendering.Diagnostics
                     : "V2 source/solve transport is active; source cache warmup is pending.";
                 if (diagnostics.SimpleDdgiTransportGlobalConvergencePending != 0)
                     progress += $" Field-wide minimum-bounce convergence is still in progress ({diagnostics.SimpleDdgiTransportGlobalConvergenceElapsedFrames} DDGI frames).";
+                if (diagnostics.SimpleDdgiTransportSourceCohortTransitionActive != 0)
+                    progress += $" A stepped-sun source cohort is draining ({diagnostics.SimpleDdgiTransportSourceStepStaleProbeCount} stale probes, P95 age {diagnostics.SimpleDdgiTransportSourceStepAgeP95Seconds:F2}s).";
+                if (diagnostics.SimpleDdgiTransportSourceRefreshCapacityShortfall > 0)
+                    progress += $" The current update cap is {diagnostics.SimpleDdgiTransportSourceRefreshCapacityShortfall} source probes/frame below the declared sweep target.";
                 return new GiFeatureState("simple-ddgi-transport-v2", true, true, true, true, GiFeatureStateStatus.Active, progress);
             }
 
@@ -1341,6 +1347,59 @@ namespace Njulf.Rendering.Diagnostics
                     "rays",
                     "Treat this as a scheduler correctness failure; reject the work before trace dispatch rather than redefining the tier from current output.");
             }
+
+            if (diagnostics.SimpleDdgiTransportSourceCohortTransitionActive != 0)
+            {
+                int targetPerFrame = Math.Max(
+                    diagnostics.SimpleDdgiTransportSourceRefreshTargetProbeCount,
+                    0);
+                int capacityShortfall = Math.Max(
+                    diagnostics.SimpleDdgiTransportSourceRefreshCapacityShortfall,
+                    0);
+                if (capacityShortfall > 0)
+                {
+                    warnings.Add(new GiDiagnosticWarning(
+                        GiDiagnosticWarningCode.SourceSweepBudgetExceeded,
+                        GiDiagnosticSeverity.Warning,
+                        "The configured Simple DDGI update cap cannot deliver the declared stepped-sun source sweep.",
+                        "simple-ddgi-source-sweep-capacity",
+                        targetPerFrame,
+                        Math.Max(targetPerFrame - capacityShortfall, 0),
+                        "source probes/frame",
+                        GiMetricFreshness.CurrentFrame,
+                        diagnostics.ActiveBudgetProfileName,
+                        diagnostics.CaptureRun.Scenario,
+                        diagnostics.DdgiCameraMovementClass.ToString(),
+                        diagnostics.CaptureFrame.FrameSerial,
+                        diagnostics.CaptureCamera.CameraCutSerial,
+                        "Increase the Simple DDGI update/ray budget, reclaim inactive probes, or explicitly lengthen the authored GI source-sweep target."));
+                }
+
+                int targetFrames = Math.Max(
+                    diagnostics.SimpleDdgiTransportSourceRefreshFrames,
+                    0);
+                int p95AgeFrames = Math.Max(
+                    diagnostics.SimpleDdgiTransportSourceStepAgeP95Frames,
+                    0);
+                if (targetFrames > 0 && p95AgeFrames > targetFrames)
+                {
+                    warnings.Add(new GiDiagnosticWarning(
+                        GiDiagnosticWarningCode.SourceSweepBudgetExceeded,
+                        GiDiagnosticSeverity.Warning,
+                        "The P95 stepped-sun source age exceeds the declared Simple DDGI sweep budget.",
+                        "simple-ddgi-source-sweep-lag",
+                        p95AgeFrames,
+                        targetFrames,
+                        "frames",
+                        GiMetricFreshness.DelayedReadback,
+                        diagnostics.ActiveBudgetProfileName,
+                        diagnostics.CaptureRun.Scenario,
+                        diagnostics.DdgiCameraMovementClass.ToString(),
+                        diagnostics.CaptureFrame.FrameSerial,
+                        diagnostics.CaptureCamera.CameraCutSerial,
+                        "Capture the source-cohort telemetry, then increase refresh throughput or reduce the sun-step rate before qualifying dynamic time of day."));
+                }
+            }
         }
 
         private static void AddBudgetWarning(
@@ -1625,6 +1684,16 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "gi.simpleDdgi.transport.maximumSolverGenerations", diagnostics.SimpleDdgiTransportMaximumSolverGenerations);
             AddSetting(settings, "gi.simpleDdgi.transport.sourceRefreshFrames.configured", diagnostics.SimpleDdgiTransportConfiguredSourceRefreshFrames);
             AddSetting(settings, "gi.simpleDdgi.transport.sourceRefreshFrames.effective", diagnostics.SimpleDdgiTransportSourceRefreshFrames);
+            AddSetting(settings, "gi.simpleDdgi.transport.sourceRefresh.targetProbesPerFrame", diagnostics.SimpleDdgiTransportSourceRefreshTargetProbeCount);
+            AddSetting(settings, "gi.simpleDdgi.transport.sourceRefresh.capacityShortfall", diagnostics.SimpleDdgiTransportSourceRefreshCapacityShortfall);
+            AddSetting(settings, "gi.simpleDdgi.transport.sourceCohort.active", diagnostics.SimpleDdgiTransportSourceCohortTransitionActive);
+            AddSetting(settings, "gi.simpleDdgi.transport.sourceCohort.transitionCount", diagnostics.SimpleDdgiTransportSourceCohortTransitionCount);
+            AddSetting(settings, "gi.simpleDdgi.transport.sourceCohort.elapsedFrames", diagnostics.SimpleDdgiTransportSourceCohortElapsedFrames);
+            AddSetting(settings, "gi.simpleDdgi.transport.sourceStep.staleProbeCount", diagnostics.SimpleDdgiTransportSourceStepStaleProbeCount);
+            AddSetting(settings, "gi.simpleDdgi.transport.sourceStep.ageP95Frames", diagnostics.SimpleDdgiTransportSourceStepAgeP95Frames);
+            AddSetting(settings, "gi.simpleDdgi.transport.sourceStep.ageMaximumFrames", diagnostics.SimpleDdgiTransportSourceStepAgeMaximumFrames);
+            AddSetting(settings, "gi.simpleDdgi.transport.sourceStep.ageP95Seconds", diagnostics.SimpleDdgiTransportSourceStepAgeP95Seconds);
+            AddSetting(settings, "gi.simpleDdgi.transport.sourceStep.ageMaximumSeconds", diagnostics.SimpleDdgiTransportSourceStepAgeMaximumSeconds);
             AddSetting(settings, "gi.simpleDdgi.transport.solverInvalidationsPerSourceRefresh",
                 diagnostics.SimpleDdgiTransportSolverInvalidationsPerSourceRefresh);
             AddSetting(settings, "gi.simpleDdgi.transport.globalConvergenceElapsedFrames", diagnostics.SimpleDdgiTransportGlobalConvergenceElapsedFrames);

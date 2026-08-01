@@ -56,7 +56,7 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint TransportReadIrradianceAtlasBufferIndex;
     uint TransportWriteIrradianceAtlasBufferIndex;
     uint TransportGeneration;
-    uint Padding0;
+    uint PrimaryDirectionalLightIndex;
 } pc;
 
 // Atlas diagnostics can execute once per texel.  Preserve them for explicit
@@ -550,6 +550,40 @@ void main()
     if (!SimpleDdgiUpdateMatchesProbeGeneration(update, initialState))
         return;
     uint local = gl_LocalInvocationID.x;
+    // Classification is a publication decision, not merely a gather hint.
+    // Clear the private V2 target (or canonical V1 atlas) so a later publish can
+    // never resurrect stale irradiance from an embedded probe. Forward gather
+    // rejects the state immediately; the zeroed payload makes that invariant
+    // survive readback latency, atlas mirroring, and a future reactivation.
+    bool inactiveProbe =
+        (initialState.flags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u ||
+        initialState.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE ||
+        initialState.activeWeight <= 0.001;
+    if (inactiveProbe)
+    {
+        uint irradianceWriteBuffer = SimpleDdgiIrradianceWriteBuffer(params);
+        uint irradianceTexelCount = params.irradianceTexels * params.irradianceTexels;
+        for (uint texel = local; texel < irradianceTexelCount; texel += gl_WorkGroupSize.x)
+        {
+            WriteSimpleDdgiAtlasTexel(
+                irradianceWriteBuffer,
+                probeIndex,
+                texel,
+                params.irradianceTexels,
+                vec4(0.0));
+        }
+        uint visibilityTexelCount = params.visibilityTexels * params.visibilityTexels;
+        for (uint texel = local; texel < visibilityTexelCount; texel += gl_WorkGroupSize.x)
+        {
+            WriteSimpleDdgiAtlasTexel(
+                pc.VisibilityAtlasBufferIndex,
+                probeIndex,
+                texel,
+                params.visibilityTexels,
+                vec4(0.0));
+        }
+        return;
+    }
     // Relocation committed a position different from the origin used by this
     // update's rays. Do not publish a spatially mismatched atlas. The pending
     // state also keeps forward gather on its environment/coarser fallback until

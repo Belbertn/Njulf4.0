@@ -33,7 +33,7 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint TransportReadIrradianceAtlasBufferIndex;
     uint TransportWriteIrradianceAtlasBufferIndex;
     uint TransportGeneration;
-    uint Padding0;
+    uint PrimaryDirectionalLightIndex;
 } pc;
 
 void WriteSimpleTransportRayResult(

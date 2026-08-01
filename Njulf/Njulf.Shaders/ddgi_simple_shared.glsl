@@ -183,7 +183,10 @@ uint PackSimpleDdgiRayVisibilityHit(float visibilityDistance, float hitKind)
 
 bool SimpleDdgiRayHitKindIsOneSidedBackFace(float hitKind)
 {
-    return hitKind > 2.5;
+    // Coarse far-field occupancy is a closed solid and already has a shaded
+    // radiance result. Its reconstructed normal may face either way, so only
+    // the explicit authored one-sided reverse-face outcome is non-publishable.
+    return abs(hitKind - SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE) < 0.25;
 }
 
 vec2 UnpackSimpleDdgiRayVisibilityHit(uint packedVisibilityHit)
@@ -1774,26 +1777,16 @@ vec3 SimpleDdgiResolveInterpolationPosition(
     return clamp(biased, volume.origin, latticeMaximum);
 }
 
-vec3 SimpleDdgiRotateEnvironmentDirection(vec3 direction, float radians)
-{
-    float s = sin(radians);
-    float c = cos(radians);
-    return normalize(vec3(
-        direction.x * c - direction.z * s,
-        direction.y,
-        direction.x * s + direction.z * c));
-}
-
 vec3 SimpleDdgiEnvironmentIrradianceFallback(vec3 safeNormal, SimpleDdgiParams p)
 {
-    GPUEnvironmentData environment = ReadEnvironmentData();
-    if (environment.Enabled != 0u && environment.IrradianceTextureIndex >= 0)
+    GPUEnvironmentData environment = ReadGiEnvironmentData();
+    if (environment.Enabled != 0u &&
+        (EnvironmentUsesAnalyticSky(environment) ||
+            environment.IrradianceTextureIndex >= 0))
     {
-        vec3 irradianceDirection = SimpleDdgiRotateEnvironmentDirection(safeNormal, environment.RotationRadians);
-        vec3 irradiance = texture(BindlessCubeTextures[nonuniformEXT(environment.IrradianceTextureIndex)], irradianceDirection).rgb;
         // This fallback feeds probe bounce/transport.  DiffuseIntensity is the
         // forward ambient-IBL complement and must not dim the sky seen by GI.
-        return max(irradiance, vec3(0.0)) * max(environment.SkyIntensity, 0.0);
+        return EvaluateEnvironmentTransportIrradiance(environment, safeNormal);
     }
 
     float skyWeight = clamp(safeNormal.y * 0.5 + 0.5, 0.0, 1.0);

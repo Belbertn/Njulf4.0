@@ -235,6 +235,41 @@ public sealed class GiFeatureStateFactoryTests
     }
 
     [Test]
+    public void Create_SteppedSunLagBeyondDeclaredSweepEmitsStructuredWarning()
+    {
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            SimpleDdgiActive = 1,
+            SimpleDdgiTransportV2Active = 1,
+            SimpleDdgiTransportSourceCohortTransitionActive = 1,
+            SimpleDdgiTransportSourceRefreshTargetProbeCount = 12,
+            SimpleDdgiTransportSourceRefreshCapacityShortfall = 3,
+            SimpleDdgiTransportSourceRefreshFrames = 240,
+            SimpleDdgiTransportSourceStepAgeP95Frames = 310
+        };
+
+        IReadOnlyList<GiDiagnosticWarning> warnings = GiDiagnosticWarningFactory.Create(
+            diagnostics,
+            new GiWarningEvaluator().Evaluate(diagnostics),
+            GiFeatureStateFactory.Create(diagnostics));
+        GiDiagnosticWarning capacity = warnings.Single(warning =>
+            warning.Code == GiDiagnosticWarningCode.SourceSweepBudgetExceeded &&
+            warning.Feature == "simple-ddgi-source-sweep-capacity");
+        GiDiagnosticWarning lag = warnings.Single(warning =>
+            warning.Code == GiDiagnosticWarningCode.SourceSweepBudgetExceeded &&
+            warning.Feature == "simple-ddgi-source-sweep-lag");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(capacity.ObservedValue, Is.EqualTo(12));
+            Assert.That(capacity.Threshold, Is.EqualTo(9));
+            Assert.That(lag.ObservedValue, Is.EqualTo(310));
+            Assert.That(lag.Threshold, Is.EqualTo(240));
+            Assert.That(lag.Freshness, Is.EqualTo(GiMetricFreshness.DelayedReadback));
+        });
+    }
+
+    [Test]
     public void LayoutTelemetryFactory_RetainsRejectedRequestedBytesIncludingSampledAtlasReservation()
     {
         const int configuredUpdates = 4;

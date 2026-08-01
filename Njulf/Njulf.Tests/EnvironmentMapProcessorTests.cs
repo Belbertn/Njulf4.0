@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Numerics;
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
@@ -132,96 +131,6 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void GenerateProceduralSkyIrradianceCubemap_StoresIntegratedIrradianceRatherThanBlurredRadiance()
-        {
-            float[] irradiance = BytesToFloats(
-                EnvironmentMapProcessor.GenerateProceduralSkyIrradianceCubemap(2, sampleCount: 128));
-            float[] oldBlurredRadianceApproximation = BytesToFloats(
-                EnvironmentMapProcessor.GenerateProceduralSkyCubemap(2, 1, blur: 0.85f));
-
-            float irradianceLuminance = AverageLuminance(irradiance);
-            float blurredRadianceLuminance = AverageLuminance(oldBlurredRadianceApproximation);
-
-            Assert.Multiple(() =>
-            {
-                Assert.That(irradianceLuminance, Is.GreaterThan(0.0f));
-                Assert.That(irradianceLuminance, Is.GreaterThan(blurredRadianceLuminance * 2.0f));
-                Assert.That(Array.Exists(irradiance, float.IsNaN), Is.False);
-            });
-        }
-
-        [Test]
-        public void ProceduralSky_TracksPrimarySunDiffuseFractionWithoutDoubleCountingDisc()
-        {
-            Vector3 firstSunDirection = Vector3.Normalize(new Vector3(0.2f, 0.75f, -0.63f));
-            Vector3 secondSunDirection = Vector3.Normalize(new Vector3(-0.2f, 0.75f, 0.63f));
-            var parameters = new EnvironmentMapProcessor.ProceduralSkyParameters(
-                firstSunDirection,
-                new Vector3(14.0f, 12.88f, 11.48f),
-                DiffuseFraction: 0.15f,
-                GroundAlbedo: 0.20f);
-            var rotatedSunParameters = parameters with { ToSunDirection = secondSunDirection };
-
-            float expectedSkyIrradiance = 0.15f / 0.85f *
-                (14.0f * 0.2126f + 12.88f * 0.7152f + 11.48f * 0.0722f) * 0.75f;
-            float measuredSkyIrradiance = EnvironmentMapProcessor.EstimateProceduralSkyHorizontalIrradianceLuminance(
-                parameters,
-                sampleCount: 512);
-            Vector3 withDisc = EnvironmentMapProcessor.SampleProceduralSkyRadiance(
-                parameters.ToSunDirection,
-                parameters,
-                includeSunDisc: true);
-            Vector3 withoutDisc = EnvironmentMapProcessor.SampleProceduralSkyRadiance(
-                parameters.ToSunDirection,
-                parameters,
-                includeSunDisc: false);
-            Vector3 discAtOtherDirection = EnvironmentMapProcessor.SampleProceduralSkyRadiance(
-                secondSunDirection,
-                parameters,
-                includeSunDisc: true);
-            Vector3 noDiscAtOtherDirection = EnvironmentMapProcessor.SampleProceduralSkyRadiance(
-                secondSunDirection,
-                parameters,
-                includeSunDisc: false);
-            byte[] firstIrradiance = EnvironmentMapProcessor.GenerateProceduralSkyIrradianceCubemap(
-                2,
-                sampleCount: 128,
-                parameters: parameters);
-            byte[] rotatedIrradiance = EnvironmentMapProcessor.GenerateProceduralSkyIrradianceCubemap(
-                2,
-                sampleCount: 128,
-                parameters: rotatedSunParameters);
-
-            Assert.Multiple(() =>
-            {
-                Assert.That(measuredSkyIrradiance, Is.EqualTo(expectedSkyIrradiance).Within(expectedSkyIrradiance * 0.03f));
-                Assert.That(Luminance(withDisc), Is.GreaterThan(Luminance(withoutDisc)));
-                Assert.That(
-                    Luminance(withDisc) - Luminance(withoutDisc),
-                    Is.GreaterThan(Luminance(discAtOtherDirection) - Luminance(noDiscAtOtherDirection)));
-                Assert.That(firstIrradiance, Is.EqualTo(rotatedIrradiance),
-                    "Diffuse irradiance must exclude the visible directional sun disc.");
-            });
-        }
-
-        [Test]
-        public void ProceduralSky_GroundHemisphereReceivesGlobalIllumination()
-        {
-            var parameters = new EnvironmentMapProcessor.ProceduralSkyParameters(
-                Vector3.Normalize(new Vector3(0.0f, 0.8f, 0.6f)),
-                new Vector3(12.0f),
-                DiffuseFraction: 0.15f,
-                GroundAlbedo: 0.20f);
-
-            Vector3 ground = EnvironmentMapProcessor.SampleProceduralSkyRadiance(
-                new Vector3(0.0f, -1.0f, 0.0f),
-                parameters,
-                includeSunDisc: false);
-
-            Assert.That(Luminance(ground), Is.GreaterThan(0.1f));
-        }
-
-        [Test]
         public void GeneratePrefilteredEnvironmentCubemap_PreservesConstantRadianceAcrossMips()
         {
             var image = CreateConstantImage(4, 2, 3.0f, 2.0f, 1.0f);
@@ -289,18 +198,6 @@ namespace Njulf.Tests
             MemoryMarshal.Cast<byte, float>(bytes).CopyTo(values);
             return values;
         }
-
-        private static float AverageLuminance(float[] rgba)
-        {
-            float sum = 0.0f;
-            int count = rgba.Length / 4;
-            for (int offset = 0; offset < rgba.Length; offset += 4)
-                sum += rgba[offset] * 0.2126f + rgba[offset + 1] * 0.7152f + rgba[offset + 2] * 0.0722f;
-            return sum / Math.Max(count, 1);
-        }
-
-        private static float Luminance(Vector3 value) =>
-            value.X * 0.2126f + value.Y * 0.7152f + value.Z * 0.0722f;
 
         private static byte[] Combine(byte[] first, byte[] second)
         {

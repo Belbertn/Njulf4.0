@@ -36,7 +36,7 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint TransportReadIrradianceAtlasBufferIndex;
     uint TransportWriteIrradianceAtlasBufferIndex;
     uint TransportGeneration;
-    uint Padding0;
+    uint PrimaryDirectionalLightIndex;
 } pc;
 
 const float PI = SIMPLE_DDGI_PI;
@@ -278,7 +278,10 @@ void main()
     // A valid probe owns its complete low-frequency field, including environment
     // misses. Forward composition evaluates diffuse IBL only for probe ownership
     // gaps, so sky energy is represented exactly once.
-    vec3 radiance = SampleDdgiEnvironmentMissRadianceWithFallback(direction, params.environmentRadiance);
+    vec3 radiance = SampleDdgiEnvironmentMissRadianceWithFallback(
+        direction,
+        params.environmentRadiance,
+        params.environmentIntensity);
     vec3 traceDirectDiffuse = vec3(0.0);
     vec3 traceDirectNoShadowDiffuse = vec3(0.0);
     vec3 traceEmissiveDiffuse = vec3(0.0);
