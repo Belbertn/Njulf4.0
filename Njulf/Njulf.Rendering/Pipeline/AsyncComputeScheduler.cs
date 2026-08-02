@@ -665,7 +665,8 @@ namespace Njulf.Rendering.Pipeline
                                         segment,
                                         previous.Usage,
                                         usage,
-                                        input.QueueCapabilities);
+                                        input.QueueCapabilities,
+                                        input.ResourceBindings.GetCurrentLayout(binding));
                                     transfers.Add(transfer);
                                     previous.Segment.Releases.Add(transfer);
                                     segment.Acquires.Add(transfer);
@@ -688,9 +689,12 @@ namespace Njulf.Rendering.Pipeline
                                         binding,
                                         source,
                                         segment,
-                                        InitialUsage(binding),
+                                        InitialUsage(
+                                            binding,
+                                            input.ResourceBindings.GetCurrentLayout(binding)),
                                         usage,
-                                        input.QueueCapabilities);
+                                        input.QueueCapabilities,
+                                        input.ResourceBindings.GetCurrentLayout(binding));
                                     transfers.Add(transfer);
                                     source.Releases.Add(transfer);
                                     segment.Acquires.Add(transfer);
@@ -717,8 +721,12 @@ namespace Njulf.Rendering.Pipeline
                     lastUse.Segment,
                     terminalGraphics,
                     lastUse.Usage,
-                    FinalGraphicsUsage(lastUse.Binding, lastUse.Usage),
-                    input.QueueCapabilities);
+                    FinalGraphicsUsage(
+                        lastUse.Binding,
+                        lastUse.Usage,
+                        input.ResourceBindings.GetCurrentLayout(lastUse.Binding)),
+                    input.QueueCapabilities,
+                    input.ResourceBindings.GetCurrentLayout(lastUse.Binding));
                 transfers.Add(transfer);
                 lastUse.Segment.Releases.Add(transfer);
                 terminalGraphics.Acquires.Add(transfer);
@@ -745,7 +753,8 @@ namespace Njulf.Rendering.Pipeline
             MutableSegment destination,
             RenderGraphResourceUsage sourceUsage,
             RenderGraphResourceUsage destinationUsage,
-            AsyncComputeQueueCapabilities queues)
+            AsyncComputeQueueCapabilities queues,
+            ImageLayout currentLayout)
         {
             uint sourceFamily = QueueFamily(source.Queue, queues);
             uint destinationFamily = QueueFamily(destination.Queue, queues);
@@ -771,8 +780,8 @@ namespace Njulf.Rendering.Pipeline
                 ResolveSourceAccess(sourceUsage, binding),
                 ResolveDestinationStage(destinationUsage, binding),
                 ResolveDestinationAccess(destinationUsage, binding),
-                binding.Kind == RenderGraphConcreteResourceKind.Image ? ResolveReleaseLayout(sourceUsage, binding.Layout) : ImageLayout.Undefined,
-                binding.Kind == RenderGraphConcreteResourceKind.Image ? ResolveLayout(destinationUsage, binding.Layout) : ImageLayout.Undefined,
+                binding.Kind == RenderGraphConcreteResourceKind.Image ? ResolveReleaseLayout(sourceUsage, currentLayout) : ImageLayout.Undefined,
+                binding.Kind == RenderGraphConcreteResourceKind.Image ? ResolveLayout(destinationUsage, currentLayout) : ImageLayout.Undefined,
                 needsOwnership,
                 concurrent)
             {
@@ -906,7 +915,9 @@ namespace Njulf.Rendering.Pipeline
                 ? capabilities.GraphicsQueueFamily
                 : capabilities.ComputeQueueFamily;
 
-        private static RenderGraphResourceUsage InitialUsage(RenderGraphConcreteResourceBinding binding) =>
+        private static RenderGraphResourceUsage InitialUsage(
+            RenderGraphConcreteResourceBinding binding,
+            ImageLayout currentLayout) =>
             new(
                 binding.Resource,
                 RenderGraphResourceAccess.ReadWrite,
@@ -916,18 +927,19 @@ namespace Njulf.Rendering.Pipeline
                 binding.InitialAccessMask != AccessFlags2.None
                     ? binding.InitialAccessMask
                     : AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit,
-                binding.Layout,
+                currentLayout,
                 RenderGraphQueueIntent.Graphics);
 
         private static RenderGraphResourceUsage FinalGraphicsUsage(
             RenderGraphConcreteResourceBinding binding,
-            RenderGraphResourceUsage sourceUsage) =>
+            RenderGraphResourceUsage sourceUsage,
+            ImageLayout currentLayout) =>
             new(
                 binding.Resource,
                 RenderGraphResourceAccess.Read,
                 PipelineStageFlags2.AllCommandsBit,
                 AccessFlags2.MemoryReadBit,
-                ResolveReleaseLayout(sourceUsage, binding.Layout),
+                ResolveReleaseLayout(sourceUsage, currentLayout),
                 RenderGraphQueueIntent.Graphics);
 
         private static PipelineStageFlags2 ResolveSourceStage(RenderGraphResourceUsage usage, RenderGraphConcreteResourceBinding binding) =>

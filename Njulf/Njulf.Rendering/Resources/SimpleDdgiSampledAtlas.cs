@@ -21,32 +21,34 @@ namespace Njulf.Rendering.Resources
     internal sealed unsafe class SimpleDdgiSampledAtlas : IDisposable
     {
         private const int MaxTextureGroups = BindlessIndex.MaxSimpleDdgiSampledAtlasTextureGroups;
+        // Kept in lockstep with ddgi_simple_publish_sampled.comp. The sampled
+        // mirror is optional; devices that would need a wider storage-image
+        // table retain the canonical SSBO path without CPU publication.
+        internal const int MaxGpuPublishTextureGroups = 16;
         private const int PreferredLayersPerTexture = 2_048;
-        // Large VkBufferImageCopy arrays are disproportionately expensive for
-        // drivers to validate and record. Beyond this point, copying the bounded
-        // canonical group is cheaper than describing hundreds of sparse layers.
-        private const int MaxPartialCopyRegionsPerGroup = 64;
         // Avoid reallocating and idling the device for every small topology
         // adjustment while keeping the reserve below one MiB of atlas data.
         private const int CapacityGrowthQuantum = 256;
         private const ulong AtlasTexelStride = 8;
 
         private readonly VulkanContext _context;
+        private readonly int _resolvedLayersPerTexture;
         private AtlasGroup[] _groups = Array.Empty<AtlasGroup>();
-        private BufferImageCopy[] _regionScratch = Array.Empty<BufferImageCopy>();
-        private int[] _orderedUpdateProbeIndices = Array.Empty<int>();
-        private readonly int[] _groupRegionCounts = new int[MaxTextureGroups];
-        private readonly int[] _groupRegionOffsets = new int[MaxTextureGroups];
-        private readonly int[] _groupRegionCursors = new int[MaxTextureGroups];
         private Sampler _sampler;
         private int _probeCapacity;
         private int _layersPerTexture;
+        private ulong _allocationGeneration;
+        private BindlessHeap? _publishedHeap;
+        private ulong _publishedGeneration;
         private bool _requiresFullSync;
         private bool _disposed;
 
         public SimpleDdgiSampledAtlas(VulkanContext context)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
+            // The physical-device limit is immutable for this context. Resolve it
+            // once so the per-frame stable-capacity path never enters the driver.
+            _resolvedLayersPerTexture = ResolveLayersPerTexture();
             ValidateFormatSupport();
             CreateSampler();
         }
@@ -60,8 +62,9 @@ namespace Njulf.Rendering.Resources
         public bool RequiresFullSync => _requiresFullSync;
         public string LastFailureReason { get; private set; } = string.Empty;
         public ulong EstimatedImageBytes { get; private set; }
+        public ulong AllocationGeneration => _allocationGeneration;
 
-        public bool EnsureCapacity(int requiredProbeCount, BindlessHeap? bindlessHeap)
+        public bool EnsureCapacity(int requiredProbeCount)
         {
             ThrowIfDisposed();
             if (requiredProbeCount <= 0)
@@ -70,7 +73,7 @@ namespace Njulf.Rendering.Resources
                 return false;
             }
 
-            int layersPerTexture = ResolveLayersPerTexture();
+            int layersPerTexture = _resolvedLayersPerTexture;
             int maxProbeCapacity = checked(MaxTextureGroups * layersPerTexture);
             if (requiredProbeCount > maxProbeCapacity)
             {
@@ -82,6 +85,13 @@ namespace Njulf.Rendering.Resources
 
             int provisionedProbeCount = CalculateProvisionedProbeCapacity(requiredProbeCount, layersPerTexture);
             int requiredGroups = DivideRoundUp(provisionedProbeCount, layersPerTexture);
+            if (requiredGroups > MaxGpuPublishTextureGroups)
+            {
+                LastFailureReason =
+                    $"sampled-atlas-needs-{requiredGroups}-gpu-publish-groups-exceeding-{MaxGpuPublishTextureGroups}";
+                Release();
+                return false;
+            }
             if (requiredGroups > MaxTextureGroups)
             {
                 LastFailureReason =
@@ -97,16 +107,12 @@ namespace Njulf.Rendering.Resources
                     _layersPerTexture,
                     layersPerTexture))
             {
-                if (bindlessHeap != null)
-                    Register(bindlessHeap);
                 return true;
             }
 
             // Allocation changes are exceptional (tier or scene-topology changes).
             // Retire all previously submitted image work before rebinding fixed
             // descriptors to new image views.
-            if (IsReady)
-                _context.WaitIdle();
             DestroyImageResources();
 
             var groups = new AtlasGroup[requiredGroups];
@@ -138,8 +144,9 @@ namespace Njulf.Rendering.Resources
             _requiresFullSync = true;
             LastFailureReason = string.Empty;
             EstimatedImageBytes = CalculateEstimatedImageBytes(groups);
-            if (bindlessHeap != null)
-                Register(bindlessHeap);
+            _allocationGeneration++;
+            if (_allocationGeneration == 0)
+                _allocationGeneration = 1;
             return true;
         }
 
@@ -157,6 +164,9 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentNullException(nameof(bindlessHeap));
             if (!IsReady)
                 return;
+            if (ReferenceEquals(_publishedHeap, bindlessHeap) &&
+                _publishedGeneration == _allocationGeneration)
+                return;
 
             for (int groupIndex = 0; groupIndex < _groups.Length; groupIndex++)
             {
@@ -172,12 +182,84 @@ namespace Njulf.Rendering.Resources
                     _sampler,
                     ImageLayout.ShaderReadOnlyOptimal);
             }
+
+            _publishedHeap = bindlessHeap;
+            _publishedGeneration = _allocationGeneration;
         }
 
         public void MarkFullSyncRequired()
         {
             if (IsReady)
                 _requiresFullSync = true;
+        }
+
+        /// <summary>
+        /// Binds every sampled-atlas image as a storage-image publication target.
+        /// Unused descriptor slots alias group zero so the dynamically indexed
+        /// shader table is fully initialized without partially-bound descriptors.
+        /// </summary>
+        public void UpdateGpuPublishDescriptors(DescriptorSet descriptorSet)
+        {
+            if (!IsReady || descriptorSet.Handle == 0)
+                return;
+
+            DescriptorImageInfo* irradiance = stackalloc DescriptorImageInfo[MaxGpuPublishTextureGroups];
+            DescriptorImageInfo* visibility = stackalloc DescriptorImageInfo[MaxGpuPublishTextureGroups];
+            AtlasGroup fallback = _groups[0];
+            for (int index = 0; index < MaxGpuPublishTextureGroups; index++)
+            {
+                AtlasGroup group = index < _groups.Length ? _groups[index] : fallback;
+                irradiance[index] = new DescriptorImageInfo
+                {
+                    ImageView = group.IrradianceView,
+                    ImageLayout = ImageLayout.General
+                };
+                visibility[index] = new DescriptorImageInfo
+                {
+                    ImageView = group.VisibilityView,
+                    ImageLayout = ImageLayout.General
+                };
+            }
+
+            WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[2];
+            writes[0] = new WriteDescriptorSet
+            {
+                SType = StructureType.WriteDescriptorSet,
+                DstSet = descriptorSet,
+                DstBinding = 0,
+                DescriptorCount = MaxGpuPublishTextureGroups,
+                DescriptorType = DescriptorType.StorageImage,
+                PImageInfo = irradiance
+            };
+            writes[1] = new WriteDescriptorSet
+            {
+                SType = StructureType.WriteDescriptorSet,
+                DstSet = descriptorSet,
+                DstBinding = 1,
+                DescriptorCount = MaxGpuPublishTextureGroups,
+                DescriptorType = DescriptorType.StorageImage,
+                PImageInfo = visibility
+            };
+            _context.Api.UpdateDescriptorSets(_context.Device, 2, writes, 0, null);
+        }
+
+        public void BeginGpuPublication(CommandBuffer commandBuffer)
+        {
+            if (!IsReady)
+                return;
+            TransitionImages(
+                commandBuffer,
+                ImageLayout.General,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit);
+        }
+
+        public void EndGpuPublication(CommandBuffer commandBuffer)
+        {
+            if (!IsReady)
+                return;
+            TransitionImagesToShaderRead(commandBuffer);
+            _requiresFullSync = false;
         }
 
         public void CopyAll(
@@ -234,85 +316,6 @@ namespace Njulf.Rendering.Resources
                 visibilityBuffer,
                 visibilityBufferBytes);
             _requiresFullSync = false;
-        }
-
-        public void CopyUpdated(
-            CommandBuffer commandBuffer,
-            VkBuffer irradianceBuffer,
-            ulong irradianceBufferBytes,
-            VkBuffer visibilityBuffer,
-            ulong visibilityBufferBytes,
-            ReadOnlySpan<GPUSimpleDdgiProbeUpdate> updates)
-        {
-            if (!IsReady || updates.Length == 0)
-                return;
-
-            int validUpdateCount = BuildGroupedUpdateIndexRanges(updates);
-            if (validUpdateCount == 0)
-                return;
-
-            EnsureRegionScratchCapacity(updates.Length);
-            TransitionSourceBuffers(
-                commandBuffer,
-                irradianceBuffer,
-                irradianceBufferBytes,
-                visibilityBuffer,
-                visibilityBufferBytes,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit);
-            TransitionImagesToTransferDestination(commandBuffer);
-
-            for (int groupIndex = 0; groupIndex < _groups.Length; groupIndex++)
-            {
-                int updateCount = _groupRegionCounts[groupIndex];
-                if (updateCount == 0)
-                    continue;
-                ReadOnlySpan<int> updatedProbeIndices = new(
-                    _orderedUpdateProbeIndices,
-                    _groupRegionOffsets[groupIndex],
-                    updateCount);
-                int contiguousRunCount = CountContiguousProbeRuns(updatedProbeIndices);
-                if (ShouldCopyWholeGroup(contiguousRunCount))
-                {
-                    CopyBoundedContiguousGroup(
-                        commandBuffer,
-                        irradianceBuffer,
-                        irradianceBufferBytes,
-                        _groups[groupIndex].IrradianceImage,
-                        groupIndex,
-                        SimpleDdgiVolumeManager.IrradianceTexelsPerProbe);
-                    CopyBoundedContiguousGroup(
-                        commandBuffer,
-                        visibilityBuffer,
-                        visibilityBufferBytes,
-                        _groups[groupIndex].VisibilityImage,
-                        groupIndex,
-                        SimpleDdgiVolumeManager.VisibilityTexelsPerProbe);
-                    continue;
-                }
-
-                int regionCount = BuildUpdatedRegions(
-                    updatedProbeIndices,
-                    groupIndex,
-                    SimpleDdgiVolumeManager.IrradianceTexelsPerProbe);
-                if (regionCount > 0)
-                    CopyRegions(commandBuffer, irradianceBuffer, _groups[groupIndex].IrradianceImage, regionCount);
-
-                regionCount = BuildUpdatedRegions(
-                    updatedProbeIndices,
-                    groupIndex,
-                    SimpleDdgiVolumeManager.VisibilityTexelsPerProbe);
-                if (regionCount > 0)
-                    CopyRegions(commandBuffer, visibilityBuffer, _groups[groupIndex].VisibilityImage, regionCount);
-            }
-
-            TransitionImagesToShaderRead(commandBuffer);
-            TransitionSourceBuffersForNextShaderUse(
-                commandBuffer,
-                irradianceBuffer,
-                irradianceBufferBytes,
-                visibilityBuffer,
-                visibilityBufferBytes);
         }
 
         public void Release()
@@ -393,10 +396,24 @@ namespace Njulf.Rendering.Resources
                 ArrayLayers = checked((uint)layerCount),
                 Samples = SampleCountFlags.Count1Bit,
                 Tiling = ImageTiling.Optimal,
-                Usage = ImageUsageFlags.SampledBit | ImageUsageFlags.TransferDstBit,
-                SharingMode = SharingMode.Exclusive,
+                Usage = ImageUsageFlags.SampledBit | ImageUsageFlags.StorageBit | ImageUsageFlags.TransferDstBit,
                 InitialLayout = ImageLayout.Undefined
             };
+            uint* queueFamilies = stackalloc uint[2]
+            {
+                _context.GraphicsQueueFamilyIndex,
+                _context.ComputeQueueFamilyIndex
+            };
+            if (_context.GraphicsQueueFamilyIndex != _context.ComputeQueueFamilyIndex)
+            {
+                imageInfo.SharingMode = SharingMode.Concurrent;
+                imageInfo.QueueFamilyIndexCount = 2;
+                imageInfo.PQueueFamilyIndices = queueFamilies;
+            }
+            else
+            {
+                imageInfo.SharingMode = SharingMode.Exclusive;
+            }
             var allocationInfo = new GpuAllocator.AllocationCreateInfo
             {
                 Usage = GpuAllocator.MemoryUsage.AutoPreferDevice,
@@ -497,216 +514,6 @@ namespace Njulf.Rendering.Resources
                 ImageLayout.TransferDstOptimal,
                 1,
                 &region);
-        }
-
-        private void CopyBoundedContiguousGroup(
-            CommandBuffer commandBuffer,
-            VkBuffer source,
-            ulong sourceBytes,
-            Image destination,
-            int groupIndex,
-            int texelsPerProbe)
-        {
-            ulong bytesPerProbe = BytesPerProbe(texelsPerProbe);
-            int sourceProbeCount = checked((int)Math.Min(
-                (ulong)_probeCapacity,
-                sourceBytes / bytesPerProbe));
-            int firstProbe = checked(groupIndex * _layersPerTexture);
-            int layerCount = Math.Min(
-                _groups[groupIndex].LayerCount,
-                Math.Max(0, sourceProbeCount - firstProbe));
-            if (layerCount <= 0)
-                return;
-
-            CopyContiguousGroup(
-                commandBuffer,
-                source,
-                destination,
-                firstProbe,
-                layerCount,
-                texelsPerProbe);
-        }
-
-        private int BuildUpdatedRegions(
-            ReadOnlySpan<int> updatedProbeIndices,
-            int groupIndex,
-            int texelsPerProbe)
-        {
-            ulong bytesPerProbe = BytesPerProbe(texelsPerProbe);
-            int regionCount = 0;
-            int firstProbe = checked(groupIndex * _layersPerTexture);
-            int runStart = -1;
-            int runEnd = -1;
-            for (int orderedIndex = 0; orderedIndex < updatedProbeIndices.Length; orderedIndex++)
-            {
-                int probeIndex = updatedProbeIndices[orderedIndex];
-                int layerIndex = checked(probeIndex - firstProbe);
-                if ((uint)layerIndex >= (uint)_groups[groupIndex].LayerCount)
-                    continue;
-
-                if (runStart < 0)
-                {
-                    runStart = probeIndex;
-                    runEnd = probeIndex;
-                    continue;
-                }
-
-                if (probeIndex <= runEnd)
-                    continue;
-                if (probeIndex == runEnd + 1)
-                {
-                    runEnd = probeIndex;
-                    continue;
-                }
-
-                WriteUpdatedRegion(
-                    regionCount++,
-                    runStart,
-                    runEnd,
-                    firstProbe,
-                    bytesPerProbe,
-                    texelsPerProbe);
-                runStart = probeIndex;
-                runEnd = probeIndex;
-            }
-
-            if (runStart >= 0)
-            {
-                WriteUpdatedRegion(
-                    regionCount++,
-                    runStart,
-                    runEnd,
-                    firstProbe,
-                    bytesPerProbe,
-                    texelsPerProbe);
-            }
-
-            return regionCount;
-        }
-
-        private void WriteUpdatedRegion(
-            int regionIndex,
-            int runStartProbe,
-            int runEndProbe,
-            int firstGroupProbe,
-            ulong bytesPerProbe,
-            int texelsPerProbe)
-        {
-            int layerCount = checked(runEndProbe - runStartProbe + 1);
-            _regionScratch[regionIndex] = new BufferImageCopy
-            {
-                BufferOffset = checked((ulong)runStartProbe * bytesPerProbe),
-                BufferRowLength = 0,
-                BufferImageHeight = 0,
-                ImageSubresource = new ImageSubresourceLayers
-                {
-                    AspectMask = ImageAspectFlags.ColorBit,
-                    MipLevel = 0,
-                    BaseArrayLayer = checked((uint)(runStartProbe - firstGroupProbe)),
-                    LayerCount = checked((uint)layerCount)
-                },
-                ImageOffset = new Offset3D { X = 0, Y = 0, Z = 0 },
-                ImageExtent = new Extent3D
-                {
-                    Width = checked((uint)texelsPerProbe),
-                    Height = checked((uint)texelsPerProbe),
-                    Depth = 1
-                }
-            };
-        }
-
-        private int BuildGroupedUpdateIndexRanges(ReadOnlySpan<GPUSimpleDdgiProbeUpdate> updates)
-        {
-            Array.Clear(_groupRegionCounts, 0, _groups.Length);
-            int validUpdateCount = 0;
-            for (int updateIndex = 0; updateIndex < updates.Length; updateIndex++)
-            {
-                if (!TryGetUpdateGroupIndex(updates[updateIndex].ProbeIndex, out int groupIndex))
-                    continue;
-
-                _groupRegionCounts[groupIndex]++;
-                validUpdateCount++;
-            }
-
-            EnsureOrderedUpdateIndexCapacity(validUpdateCount);
-            int offset = 0;
-            for (int groupIndex = 0; groupIndex < _groups.Length; groupIndex++)
-            {
-                _groupRegionOffsets[groupIndex] = offset;
-                _groupRegionCursors[groupIndex] = offset;
-                offset += _groupRegionCounts[groupIndex];
-            }
-
-            for (int updateIndex = 0; updateIndex < updates.Length; updateIndex++)
-            {
-                if (!TryGetUpdateGroupIndex(updates[updateIndex].ProbeIndex, out int groupIndex))
-                    continue;
-
-                _orderedUpdateProbeIndices[_groupRegionCursors[groupIndex]++] =
-                    checked((int)updates[updateIndex].ProbeIndex);
-            }
-
-            for (int groupIndex = 0; groupIndex < _groups.Length; groupIndex++)
-            {
-                int count = _groupRegionCounts[groupIndex];
-                if (count > 1)
-                    Array.Sort(_orderedUpdateProbeIndices, _groupRegionOffsets[groupIndex], count);
-            }
-
-            return validUpdateCount;
-        }
-
-        internal static int CountContiguousProbeRuns(ReadOnlySpan<int> sortedProbeIndices)
-        {
-            int runCount = 0;
-            int previous = -2;
-            for (int index = 0; index < sortedProbeIndices.Length; index++)
-            {
-                int probeIndex = sortedProbeIndices[index];
-                if (probeIndex == previous)
-                    continue;
-                if (probeIndex != previous + 1)
-                    runCount++;
-                previous = probeIndex;
-            }
-
-            return runCount;
-        }
-
-        internal static bool ShouldCopyWholeGroup(int contiguousRunCount) =>
-            contiguousRunCount > MaxPartialCopyRegionsPerGroup;
-
-        private bool TryGetUpdateGroupIndex(uint probeIndex, out int groupIndex)
-        {
-            groupIndex = 0;
-            if (probeIndex > int.MaxValue ||
-                !TryResolveProbeLayer(
-                    (int)probeIndex,
-                    _layersPerTexture,
-                    _groups.Length,
-                    out groupIndex,
-                    out int layerIndex) ||
-                layerIndex >= _groups[groupIndex].LayerCount)
-            {
-                groupIndex = 0;
-                return false;
-            }
-
-            return true;
-        }
-
-        private void CopyRegions(CommandBuffer commandBuffer, VkBuffer source, Image destination, int regionCount)
-        {
-            fixed (BufferImageCopy* regions = _regionScratch)
-            {
-                _context.Api.CmdCopyBufferToImage(
-                    commandBuffer,
-                    source,
-                    destination,
-                    ImageLayout.TransferDstOptimal,
-                    checked((uint)regionCount),
-                    regions);
-            }
         }
 
         private void TransitionSourceBuffers(
@@ -810,7 +617,11 @@ namespace Njulf.Rendering.Resources
             TransitionImages(
                 commandBuffer,
                 ImageLayout.ShaderReadOnlyOptimal,
-                PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit,
+                // Publication can run on a compute-only queue while the atlas is
+                // later sampled by graphics. ALL_COMMANDS is valid on both queue
+                // types and lets the semaphore dependency carry visibility to
+                // whichever shader stages consume the image next.
+                PipelineStageFlags2.AllCommandsBit,
                 AccessFlags2.ShaderSampledReadBit);
         }
 
@@ -864,8 +675,10 @@ namespace Njulf.Rendering.Resources
             {
                 ImageLayout.Undefined => (PipelineStageFlags2.None, AccessFlags2.None),
                 ImageLayout.TransferDstOptimal => (PipelineStageFlags2.TransferBit, AccessFlags2.TransferWriteBit),
+                ImageLayout.General =>
+                    (PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageWriteBit),
                 ImageLayout.ShaderReadOnlyOptimal =>
-                    (PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderSampledReadBit),
+                    (PipelineStageFlags2.AllCommandsBit, AccessFlags2.ShaderSampledReadBit),
                 _ => (PipelineStageFlags2.AllCommandsBit, AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit)
             };
             return new ImageMemoryBarrier2
@@ -907,11 +720,21 @@ namespace Njulf.Rendering.Resources
                 &properties);
             const FormatFeatureFlags required =
                 FormatFeatureFlags.SampledImageBit |
-                FormatFeatureFlags.SampledImageFilterLinearBit;
+                FormatFeatureFlags.SampledImageFilterLinearBit |
+                FormatFeatureFlags.StorageImageBit;
             if ((properties.OptimalTilingFeatures & required) != required)
             {
                 throw new VulkanException(
-                    "R16G16B16A16 sampled DDGI atlases require optimal-tiling linear filtered sampling support.");
+                    "R16G16B16A16 sampled DDGI atlases require optimal-tiling linear filtered sampling and storage-image support.");
+            }
+
+            PhysicalDeviceProperties deviceProperties = default;
+            _context.Api.GetPhysicalDeviceProperties(_context.PhysicalDevice, &deviceProperties);
+            uint requiredStorageImages = 2u * MaxGpuPublishTextureGroups;
+            if (deviceProperties.Limits.MaxPerStageDescriptorStorageImages < requiredStorageImages)
+            {
+                throw new VulkanException(
+                    $"Simple DDGI GPU publication requires {requiredStorageImages} per-stage storage-image descriptors.");
             }
         }
 
@@ -935,18 +758,6 @@ namespace Njulf.Rendering.Resources
             if (result != Result.Success)
                 throw new VulkanException("Failed to create Simple DDGI sampled atlas sampler", result);
             _context.SetDebugName(_sampler.Handle, ObjectType.Sampler, "Simple DDGI Sampled Atlas Linear Clamp Sampler");
-        }
-
-        private void EnsureRegionScratchCapacity(int count)
-        {
-            if (_regionScratch.Length < count)
-                _regionScratch = new BufferImageCopy[count];
-        }
-
-        private void EnsureOrderedUpdateIndexCapacity(int count)
-        {
-            if (_orderedUpdateProbeIndices.Length < count)
-                _orderedUpdateProbeIndices = new int[count];
         }
 
         private void DestroyImageResources()

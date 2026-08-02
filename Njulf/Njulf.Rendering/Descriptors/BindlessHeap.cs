@@ -34,6 +34,12 @@ namespace Njulf.Rendering.Descriptors
         // Texture index allocator and durable Vulkan ownership
         private readonly BindlessTextureIndexAllocator _textureIndexAllocator;
         private readonly BindlessHeapRetirementLedger _retirementLedger = new();
+        private readonly DescriptorPublicationSlot<BufferDescriptorIdentity>[] _publishedStorageBuffers =
+            new DescriptorPublicationSlot<BufferDescriptorIdentity>[MaxStorageBuffers];
+        private readonly DescriptorPublicationSlot<ImageDescriptorIdentity>[] _publishedTextures =
+            new DescriptorPublicationSlot<ImageDescriptorIdentity>[MaxTextures];
+        private long _descriptorDesiredChangeCount;
+        private long _descriptorNoOpRegistrationCount;
         private long _descriptorWriteCount;
 
         // 0 = active, 1 = disposal started/retryable, 2 = fully disposed.
@@ -401,7 +407,7 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>
         /// Registers a storage buffer at a fixed index.
         /// </summary>
-        public void RegisterStorageBuffer(int index, VkBuffer buffer, ulong offset, ulong range)
+        public DescriptorPublicationResult RegisterStorageBuffer(int index, VkBuffer buffer, ulong offset, ulong range)
         {
             ThrowIfNotActive();
             lock (_lock)
@@ -409,6 +415,19 @@ namespace Njulf.Rendering.Descriptors
                 ThrowIfNotActive();
                 if (!BindlessIndex.IsStaticBufferIndex(index))
                     throw new ArgumentOutOfRangeException(nameof(index), $"Index must be a static buffer index (0-{BindlessIndex.StaticBufferCount - 1})");
+                if (buffer.Handle == 0)
+                    throw new ArgumentException("A valid buffer is required for a bindless storage descriptor.", nameof(buffer));
+                if (range == 0)
+                    throw new ArgumentOutOfRangeException(nameof(range), "A non-zero descriptor range is required.");
+
+                var identity = new BufferDescriptorIdentity(buffer.Handle, offset, range);
+                if (!_publishedStorageBuffers[index].RequiresPublication(identity))
+                {
+                    Interlocked.Increment(ref _descriptorNoOpRegistrationCount);
+                    return DescriptorPublicationResult.Unchanged;
+                }
+
+                Interlocked.Increment(ref _descriptorDesiredChangeCount);
 
                 var bufferInfo = new DescriptorBufferInfo
                 {
@@ -429,7 +448,9 @@ namespace Njulf.Rendering.Descriptors
                 };
 
                 _context.Api.UpdateDescriptorSets(_context.Device, 1, &write, 0, null);
+                _publishedStorageBuffers[index].Commit(identity);
                 Interlocked.Increment(ref _descriptorWriteCount);
+                return DescriptorPublicationResult.Published;
             }
         }
 
@@ -457,7 +478,7 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>
         /// Registers a texture at a specific index.
         /// </summary>
-        public void RegisterTexture(
+        public DescriptorPublicationResult RegisterTexture(
             int index,
             ImageView view,
             Sampler sampler = default,
@@ -467,11 +488,11 @@ namespace Njulf.Rendering.Descriptors
             lock (_lock)
             {
                 ThrowIfNotActive();
-                RegisterTextureLocked(index, view, sampler, imageLayout);
+                return RegisterTextureLocked(index, view, sampler, imageLayout);
             }
         }
 
-        private void RegisterTextureLocked(
+        private DescriptorPublicationResult RegisterTextureLocked(
             int index,
             ImageView view,
             Sampler sampler = default,
@@ -485,6 +506,19 @@ namespace Njulf.Rendering.Descriptors
             if (sampler.Handle == 0)
                 sampler = _defaultSampler;
 
+            int descriptorIndex = index - BindlessIndex.FirstTextureIndex;
+            var identity = new ImageDescriptorIdentity(
+                view.Handle,
+                sampler.Handle,
+                imageLayout);
+            if (!_publishedTextures[descriptorIndex].RequiresPublication(identity))
+            {
+                Interlocked.Increment(ref _descriptorNoOpRegistrationCount);
+                return DescriptorPublicationResult.Unchanged;
+            }
+
+            Interlocked.Increment(ref _descriptorDesiredChangeCount);
+
             var imageInfo = new DescriptorImageInfo
             {
                 Sampler = sampler,
@@ -497,14 +531,25 @@ namespace Njulf.Rendering.Descriptors
                 SType = StructureType.WriteDescriptorSet,
                 DstSet = _textureSamplerSet,
                 DstBinding = 0,
-                DstArrayElement = (uint)(index - BindlessIndex.FirstTextureIndex),
+                DstArrayElement = (uint)descriptorIndex,
                 DescriptorCount = 1,
                 DescriptorType = DescriptorType.CombinedImageSampler,
                 PImageInfo = &imageInfo
             };
 
             _context.Api.UpdateDescriptorSets(_context.Device, 1, &write, 0, null);
+            _publishedTextures[descriptorIndex].Commit(identity);
             Interlocked.Increment(ref _descriptorWriteCount);
+            return DescriptorPublicationResult.Published;
+        }
+
+        public DescriptorPublicationMetrics GetPublicationMetrics()
+        {
+            ThrowIfNotActive();
+            return new DescriptorPublicationMetrics(
+                DesiredChanges: Math.Max(0L, Interlocked.Read(ref _descriptorDesiredChangeCount)),
+                NoOpRegistrations: Math.Max(0L, Interlocked.Read(ref _descriptorNoOpRegistrationCount)),
+                ActualWrites: Math.Max(0L, Interlocked.Read(ref _descriptorWriteCount)));
         }
 
         /// <summary>
@@ -545,6 +590,8 @@ namespace Njulf.Rendering.Descriptors
             {
                 ThrowIfNotActive();
                 _textureIndexAllocator.Free(index);
+                int descriptorIndex = index - BindlessIndex.FirstTextureIndex;
+                _publishedTextures[descriptorIndex].Invalidate();
             }
         }
 
@@ -613,6 +660,27 @@ namespace Njulf.Rendering.Descriptors
                 throw new ObjectDisposedException(nameof(BindlessHeap));
         }
 
+        private readonly record struct BufferDescriptorIdentity(
+            ulong Buffer,
+            ulong Offset,
+            ulong Range);
+
+        private readonly record struct ImageDescriptorIdentity(
+            ulong ImageView,
+            ulong Sampler,
+            ImageLayout Layout);
+
     }
+
+    public enum DescriptorPublicationResult
+    {
+        Unchanged = 0,
+        Published = 1
+    }
+
+    public readonly record struct DescriptorPublicationMetrics(
+        long DesiredChanges,
+        long NoOpRegistrations,
+        long ActualWrites);
 
 }

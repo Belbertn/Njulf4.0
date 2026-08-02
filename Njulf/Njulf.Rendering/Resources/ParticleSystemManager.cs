@@ -39,6 +39,7 @@ namespace Njulf.Rendering.Resources
         private ParticleBuffer[] _instanceBuffers = [];
         private ParticleBuffer[] _batchBuffers = [];
         private ParticleBuffer[] _frameDataBuffers = [];
+        private ulong _resourceGeneration;
         private BindlessHeap? _registeredBindlessHeap;
 
         public ParticleSimulationFrame LastFrame => _frame;
@@ -62,6 +63,31 @@ namespace Njulf.Rendering.Resources
                 _instanceBuffers[i] = CreateBuffer(InitialParticleCapacity, ParticleStride, $"Particle.InstanceBuffer.Frame{i}");
                 _batchBuffers[i] = CreateBuffer(InitialBatchCapacity, BatchStride, $"Particle.BatchBuffer.Frame{i}");
                 _frameDataBuffers[i] = CreateBuffer(1, FrameDataStride, $"Particle.FrameDataBuffer.Frame{i}");
+            }
+            _resourceGeneration = 1;
+        }
+
+        /// <summary>Changes only when one of the per-frame GPU allocations is replaced.</summary>
+        public ulong ResourceGeneration
+        {
+            get
+            {
+                lock (_lock)
+                    return _resourceGeneration;
+            }
+        }
+
+        public ParticleAsyncResourceSet GetAsyncResourceSet(int frameIndex)
+        {
+            if ((uint)frameIndex >= (uint)_frameDataBuffers.Length)
+                throw new ArgumentOutOfRangeException(nameof(frameIndex));
+
+            lock (_lock)
+            {
+                return new ParticleAsyncResourceSet(
+                    _frameDataBuffers[frameIndex].Handle,
+                    _instanceBuffers[frameIndex].Handle,
+                    _batchBuffers[frameIndex].Handle);
             }
         }
 
@@ -960,6 +986,7 @@ namespace Njulf.Rendering.Resources
             if (!buffer.Handle.IsValid)
             {
                 buffer = CreateBuffer(Math.Max(1u, requiredElements), stride, debugName);
+                AdvanceResourceGeneration();
                 return;
             }
 
@@ -975,6 +1002,14 @@ namespace Njulf.Rendering.Resources
 
             DestroyIfValid(buffer.Handle);
             buffer = CreateBuffer(newCapacity, stride, debugName);
+            AdvanceResourceGeneration();
+        }
+
+        private void AdvanceResourceGeneration()
+        {
+            _resourceGeneration++;
+            if (_resourceGeneration == 0)
+                _resourceGeneration = 1;
         }
 
         private unsafe ulong UploadSpan<T>(ReadOnlySpan<T> data, BufferHandle destination, CommandBuffer commandBuffer)
@@ -1254,6 +1289,11 @@ namespace Njulf.Rendering.Resources
             public uint ElementCapacity { get; }
             public ulong ByteSize { get; }
         }
+
+        public readonly record struct ParticleAsyncResourceSet(
+            BufferHandle FrameDataBuffer,
+            BufferHandle InstanceBuffer,
+            BufferHandle BatchBuffer);
 
         private sealed class InstanceState
         {

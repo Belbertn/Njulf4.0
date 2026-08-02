@@ -125,6 +125,8 @@ namespace Njulf.Rendering.Resources
             { get; } = new();
         }
 
+        private ulong _resourceGeneration = 1;
+
         private sealed class PendingTextureRetirement
         {
             public PendingTextureRetirement(
@@ -188,6 +190,20 @@ namespace Njulf.Rendering.Resources
         /// live descriptor alias so material dependency keys remain exact.
         /// </summary>
         public event Action<TextureContentChangedEvent>? TextureContentChanged;
+
+        /// <summary>Changes when an existing texture identity publishes a new physical image.</summary>
+        public ulong ResourceGeneration
+        {
+            get
+            {
+                ThrowIfDisposed();
+                lock (_lock)
+                {
+                    _lifecycle.ThrowIfDisposedUnderGate(_lock);
+                    return _resourceGeneration;
+                }
+            }
+        }
 
         public TextureHandle DefaultWhiteTexture
         {
@@ -3035,6 +3051,10 @@ namespace Njulf.Rendering.Resources
             if (target.WasDownscaled)
                 _downscaledTextureCount++;
 
+            _resourceGeneration++;
+            if (_resourceGeneration == 0)
+                _resourceGeneration = 1;
+
             return notifications;
         }
 
@@ -4528,7 +4548,7 @@ namespace Njulf.Rendering.Resources
                     textureInfo.Extent,
                     textureInfo.MipLevels,
                     textureInfo.ArrayLayers,
-                    textureInfo.Generation);
+                    textureInfo.SharedImage?.ContentRevision ?? textureInfo.Generation);
                 return true;
             }
         }

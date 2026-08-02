@@ -37,6 +37,7 @@ namespace Njulf.Tests
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "SimpleDdgiRelocateClassifyPass"), Is.False);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "SimpleDdgiTransportPass"), Is.False);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "SimpleDdgiBlendPass"), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "SimpleDdgiPublishPass"), Is.False);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "DdgiSchedulePass"), Is.False);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "DdgiTracePass"), Is.False);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "DdgiBlendPass"), Is.False);
@@ -71,6 +72,7 @@ namespace Njulf.Tests
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "SimpleDdgiRelocateClassifyPass"), Is.True);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "SimpleDdgiTransportPass"), Is.True);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "SimpleDdgiBlendPass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "SimpleDdgiPublishPass"), Is.True);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "DdgiSchedulePass"), Is.True);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "DdgiTracePass"), Is.True);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "DdgiBlendPass"), Is.True);

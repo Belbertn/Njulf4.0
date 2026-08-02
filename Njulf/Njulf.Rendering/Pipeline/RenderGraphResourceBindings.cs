@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
 using Silk.NET.Vulkan;
 using Buffer = Silk.NET.Vulkan.Buffer;
@@ -31,6 +32,15 @@ namespace Njulf.Rendering.Pipeline
         int FrameIndex,
         int HistoryIndex,
         ulong AllocationGeneration);
+
+    /// <summary>
+    /// Typed logical identity for a binding inside one resource plan. Debug names are deliberately
+    /// excluded: they are diagnostics, not synchronization identity, and formatting them into keys
+    /// made every plan rebuild allocate a large number of short-lived strings.
+    /// </summary>
+    public readonly record struct RenderGraphBindingIdentity(
+        RenderGraphResourceId Resource,
+        RenderGraphAllocationIdentity Allocation);
 
     /// <summary>
     /// Resolves an abstract render-graph resource to one Vulkan allocation.  A graph resource may
@@ -73,14 +83,18 @@ namespace Njulf.Rendering.Pipeline
         public RenderGraphResourceLifetime Lifetime { get; init; } = RenderGraphResourceLifetime.Imported;
         /// <summary>Updates an owning image wrapper after an externally emitted sync2 layout barrier.</summary>
         public Action<ImageLayout>? LayoutTracker { get; init; }
+        /// <summary>
+        /// Reads layout state owned by an imported image wrapper. Resource plans are immutable and
+        /// can outlive a frame, while image layouts continue to change as commands are recorded.
+        /// Keeping that state behind a provider avoids rebuilding otherwise-identical bindings.
+        /// </summary>
+        public Func<ImageLayout>? LayoutProvider { get; init; }
 
         /// <summary>
-        /// Stable logical binding identity used to reject duplicate registrations within one
-        /// resource-plan refresh. Physical ownership is tracked by <see cref="AllocationIdentity"/>.
+        /// Stable typed identity used to reject duplicate registrations within one immutable plan.
+        /// Physical ownership is tracked by <see cref="AllocationIdentity"/>.
         /// </summary>
-        public string Key => Kind == RenderGraphConcreteResourceKind.Buffer
-            ? $"{Resource}:{Name}:{Kind}:{Buffer.Handle}:{ByteOffset}:{ByteSize}:{AllocationSize}:{FrameIndex}:{HistoryIndex}:{AllocationGeneration}"
-            : $"{Resource}:{Name}:{Kind}:{Image.Handle}:{SubresourceRange.AspectMask}:{SubresourceRange.BaseMipLevel}:{SubresourceRange.LevelCount}:{SubresourceRange.BaseArrayLayer}:{SubresourceRange.LayerCount}:{FrameIndex}:{HistoryIndex}:{AllocationGeneration}";
+        public RenderGraphBindingIdentity Identity => new(Resource, AllocationIdentity);
 
         /// <summary>
         /// Identifies the physical allocation range independently of its graph-resource view.
@@ -132,7 +146,8 @@ namespace Njulf.Rendering.Pipeline
             Action<ImageLayout>? layoutTracker = null,
             ulong allocationSize = 0,
             PipelineStageFlags2 initialStageMask = PipelineStageFlags2.None,
-            AccessFlags2 initialAccessMask = AccessFlags2.None)
+            AccessFlags2 initialAccessMask = AccessFlags2.None,
+            Func<ImageLayout>? layoutProvider = null)
         {
             return new RenderGraphConcreteResourceBinding
             {
@@ -146,13 +161,14 @@ namespace Njulf.Rendering.Pipeline
                 InitialStageMask = initialStageMask,
                 InitialAccessMask = initialAccessMask,
                 SharingMode = sharingMode,
-                PermittedQueueFamilies = permittedQueueFamilies ?? Array.Empty<uint>(),
+                PermittedQueueFamilies = CopyQueueFamilies(permittedQueueFamilies),
                 InitialOwnerQueueFamily = initialOwnerQueueFamily,
                 FrameIndex = frameIndex,
                 HistoryIndex = historyIndex,
                 AllocationGeneration = allocationGeneration,
                 Lifetime = lifetime,
-                LayoutTracker = layoutTracker
+                LayoutTracker = layoutTracker,
+                LayoutProvider = layoutProvider
             };
         }
 
@@ -171,7 +187,8 @@ namespace Njulf.Rendering.Pipeline
             RenderGraphResourceLifetime lifetime = RenderGraphResourceLifetime.Imported,
             Action<ImageLayout>? layoutTracker = null,
             PipelineStageFlags2 initialStageMask = PipelineStageFlags2.None,
-            AccessFlags2 initialAccessMask = AccessFlags2.None)
+            AccessFlags2 initialAccessMask = AccessFlags2.None,
+            Func<ImageLayout>? layoutProvider = null)
         {
             return new RenderGraphConcreteResourceBinding
             {
@@ -184,14 +201,26 @@ namespace Njulf.Rendering.Pipeline
                 InitialStageMask = initialStageMask,
                 InitialAccessMask = initialAccessMask,
                 SharingMode = sharingMode,
-                PermittedQueueFamilies = permittedQueueFamilies ?? Array.Empty<uint>(),
+                PermittedQueueFamilies = CopyQueueFamilies(permittedQueueFamilies),
                 InitialOwnerQueueFamily = initialOwnerQueueFamily,
                 FrameIndex = frameIndex,
                 HistoryIndex = historyIndex,
                 AllocationGeneration = allocationGeneration,
                 Lifetime = lifetime,
-                LayoutTracker = layoutTracker
+                LayoutTracker = layoutTracker,
+                LayoutProvider = layoutProvider
             };
+        }
+
+        private static IReadOnlyList<uint> CopyQueueFamilies(IReadOnlyList<uint>? queueFamilies)
+        {
+            if (queueFamilies == null || queueFamilies.Count == 0)
+                return Array.Empty<uint>();
+
+            var copy = new uint[queueFamilies.Count];
+            for (int index = 0; index < copy.Length; index++)
+                copy[index] = queueFamilies[index];
+            return Array.AsReadOnly(copy);
         }
 
         internal void Validate()
@@ -227,6 +256,8 @@ namespace Njulf.Rendering.Pipeline
 
             if (Kind == RenderGraphConcreteResourceKind.Buffer)
             {
+                if (LayoutProvider != null)
+                    throw new InvalidOperationException($"Concrete buffer binding '{Name}' for '{Resource}' cannot declare an image-layout provider.");
                 if (Buffer.Handle == 0)
                     throw new InvalidOperationException($"Concrete buffer binding '{Name}' for '{Resource}' has no Vulkan buffer handle.");
                 if (ByteSize == 0)
@@ -259,77 +290,40 @@ namespace Njulf.Rendering.Pipeline
     }
 
     /// <summary>
-    /// Mutable owner-state lives separately from immutable binding descriptions.  The scheduler can
-    /// therefore reject a plan without mutating ownership, then atomically commit the accepted
-    /// plan only after all command buffers were recorded successfully.
+    /// Fully validated immutable lookup plan. Construction performs all duplicate, range, alias,
+    /// and overlap checks once; frame execution only indexes precomputed read-only arrays.
     /// </summary>
-    public sealed class RenderGraphResourceBindings
+    public sealed class RenderGraphResourcePlan
     {
-        private readonly Dictionary<RenderGraphResourceId, List<RenderGraphConcreteResourceBinding>> _bindings = new();
-        private readonly Dictionary<(RenderGraphResourceId Resource, int FrameIndex), IReadOnlyList<RenderGraphConcreteResourceBinding>> _frameBindingCache = new();
-        private readonly Dictionary<RenderGraphAllocationIdentity, uint> _owners = new();
-        private ulong _generation;
-        private int _stalePlanRejectionCount;
+        private readonly Guid _ownerId;
+        private readonly IReadOnlyDictionary<RenderGraphResourceId, IReadOnlyList<RenderGraphConcreteResourceBinding>> _bindings;
+        private readonly IReadOnlyDictionary<(RenderGraphResourceId Resource, int FrameIndex), IReadOnlyList<RenderGraphConcreteResourceBinding>> _frameBindings;
+        private readonly IReadOnlyDictionary<RenderGraphResourceId, IReadOnlyList<RenderGraphConcreteResourceBinding>> _staticBindings;
 
-        public ulong Generation => _generation;
-        public int StalePlanRejectionCount => _stalePlanRejectionCount;
-        public int BindingCount => _bindings.Values.Sum(list => list.Count);
-
-        public IReadOnlyList<RenderGraphConcreteResourceBinding> GetBindings(
-            RenderGraphResourceId resource,
-            int frameIndex = -1)
+        internal RenderGraphResourcePlan(
+            Guid ownerId,
+            ulong generation,
+            IEnumerable<RenderGraphConcreteResourceBinding> bindings)
         {
-            if (!_bindings.TryGetValue(resource, out List<RenderGraphConcreteResourceBinding>? candidates))
-                return Array.Empty<RenderGraphConcreteResourceBinding>();
-
-            if (frameIndex < 0)
-                return candidates.ToArray();
-
-            var key = (resource, frameIndex);
-            if (_frameBindingCache.TryGetValue(key, out IReadOnlyList<RenderGraphConcreteResourceBinding>? cached))
-                return cached;
-
-            RenderGraphConcreteResourceBinding[] resolved = candidates
-                .Where(binding => binding.FrameIndex < 0 || binding.FrameIndex == frameIndex)
-                .ToArray();
-            _frameBindingCache.Add(key, resolved);
-            return resolved;
-        }
-
-        public bool HasCompleteBinding(RenderGraphResourceId resource, int frameIndex = -1) =>
-            GetBindings(resource, frameIndex).Count > 0;
-
-        public uint? GetCurrentOwner(RenderGraphConcreteResourceBinding binding)
-        {
-            if (binding == null)
-                throw new ArgumentNullException(nameof(binding));
-
-            if (binding.SharingMode == SharingMode.Concurrent)
-                return null;
-            return _owners.TryGetValue(binding.AllocationIdentity, out uint owner)
-                ? owner
-                : binding.InitialOwnerQueueFamily;
-        }
-
-        public bool IsCurrent(RenderGraphConcreteResourceBinding binding) =>
-            binding != null && binding.ResourcePlanGeneration == _generation;
-
-        public void Replace(IEnumerable<RenderGraphConcreteResourceBinding> bindings)
-        {
-            if (bindings == null)
-                throw new ArgumentNullException(nameof(bindings));
+            _ownerId = ownerId;
+            Generation = generation;
 
             var replacement = new Dictionary<RenderGraphResourceId, List<RenderGraphConcreteResourceBinding>>();
-            var keys = new HashSet<string>(StringComparer.Ordinal);
-            ulong nextGeneration = checked(_generation + 1UL);
+            var identities = new HashSet<RenderGraphBindingIdentity>();
+            var flattened = new List<RenderGraphConcreteResourceBinding>();
             foreach (RenderGraphConcreteResourceBinding binding in bindings)
             {
                 if (binding == null)
                     throw new InvalidOperationException("A concrete render-graph binding cannot be null.");
+
                 binding.Validate();
-                RenderGraphConcreteResourceBinding stamped = binding with { ResourcePlanGeneration = nextGeneration };
-                if (!keys.Add(stamped.Key))
-                    throw new InvalidOperationException($"Duplicate concrete binding key '{stamped.Key}'.");
+                RenderGraphConcreteResourceBinding stamped = binding with { ResourcePlanGeneration = generation };
+                if (!identities.Add(stamped.Identity))
+                {
+                    throw new InvalidOperationException(
+                        $"Duplicate concrete binding identity '{stamped.Identity}' ({stamped.Name}).");
+                }
+
                 if (!replacement.TryGetValue(stamped.Resource, out List<RenderGraphConcreteResourceBinding>? list))
                 {
                     list = new List<RenderGraphConcreteResourceBinding>();
@@ -337,73 +331,143 @@ namespace Njulf.Rendering.Pipeline
                 }
 
                 list.Add(stamped);
+                flattened.Add(stamped);
             }
 
-            ValidateNoOverlappingBindings(replacement);
+            ValidateNoOverlappingBindings(flattened);
 
-            _bindings.Clear();
-            foreach ((RenderGraphResourceId resource, List<RenderGraphConcreteResourceBinding> list) in replacement)
-                _bindings.Add(resource, list);
-            _frameBindingCache.Clear();
-            _owners.Clear();
-            _generation = nextGeneration;
-        }
+            Bindings = AsReadOnly(flattened);
+            BindingCount = flattened.Count;
 
-        public void Invalidate()
-        {
-            _bindings.Clear();
-            _frameBindingCache.Clear();
-            _owners.Clear();
-            _generation = checked(_generation + 1UL);
-        }
-
-        public void RecordStalePlanRejection() => _stalePlanRejectionCount++;
-
-        public void CommitOwner(RenderGraphConcreteResourceBinding binding, uint ownerQueueFamily)
-        {
-            if (binding == null)
-                throw new ArgumentNullException(nameof(binding));
-            if (!IsCurrent(binding))
+            var immutableBindings = new Dictionary<RenderGraphResourceId, IReadOnlyList<RenderGraphConcreteResourceBinding>>(replacement.Count);
+            var staticBindings = new Dictionary<RenderGraphResourceId, IReadOnlyList<RenderGraphConcreteResourceBinding>>(replacement.Count);
+            var selectedBindings = new Dictionary<(RenderGraphResourceId Resource, int FrameIndex), IReadOnlyList<RenderGraphConcreteResourceBinding>>();
+            var frameIndices = new HashSet<int>();
+            foreach (RenderGraphConcreteResourceBinding binding in flattened)
             {
-                RecordStalePlanRejection();
-                throw new InvalidOperationException(
-                    $"Cannot commit ownership for stale binding '{binding.Name}' (plan {binding.ResourcePlanGeneration}, current {_generation}).");
+                if (binding.FrameIndex >= 0)
+                    frameIndices.Add(binding.FrameIndex);
             }
-            if (binding.SharingMode == SharingMode.Concurrent)
-                return;
-            if (!binding.PermittedQueueFamilies.Contains(ownerQueueFamily))
-                throw new InvalidOperationException($"Queue family {ownerQueueFamily} is not permitted for binding '{binding.Name}'.");
 
-            _owners[binding.AllocationIdentity] = ownerQueueFamily;
+            foreach ((RenderGraphResourceId resource, List<RenderGraphConcreteResourceBinding> list) in replacement)
+            {
+                immutableBindings.Add(resource, AsReadOnly(list));
+                staticBindings.Add(resource, AsReadOnly(list.Where(static binding => binding.FrameIndex < 0)));
+                foreach (int frameIndex in frameIndices)
+                {
+                    selectedBindings.Add(
+                        (resource, frameIndex),
+                        AsReadOnly(list.Where(binding => binding.FrameIndex < 0 || binding.FrameIndex == frameIndex)));
+                }
+            }
+
+            _bindings = new ReadOnlyDictionary<RenderGraphResourceId, IReadOnlyList<RenderGraphConcreteResourceBinding>>(immutableBindings);
+            _staticBindings = new ReadOnlyDictionary<RenderGraphResourceId, IReadOnlyList<RenderGraphConcreteResourceBinding>>(staticBindings);
+            _frameBindings = new ReadOnlyDictionary<(RenderGraphResourceId Resource, int FrameIndex), IReadOnlyList<RenderGraphConcreteResourceBinding>>(selectedBindings);
+        }
+
+        public ulong Generation { get; }
+        public int BindingCount { get; }
+        public IReadOnlyList<RenderGraphConcreteResourceBinding> Bindings { get; }
+
+        internal bool BelongsTo(Guid ownerId) => _ownerId == ownerId;
+
+        public IReadOnlyList<RenderGraphConcreteResourceBinding> GetBindings(
+            RenderGraphResourceId resource,
+            int frameIndex = -1)
+        {
+            if (!_bindings.TryGetValue(resource, out IReadOnlyList<RenderGraphConcreteResourceBinding>? all))
+                return Array.Empty<RenderGraphConcreteResourceBinding>();
+            if (frameIndex < 0)
+                return all;
+            if (_frameBindings.TryGetValue((resource, frameIndex), out IReadOnlyList<RenderGraphConcreteResourceBinding>? selected))
+                return selected;
+            return _staticBindings[resource];
+        }
+
+        private static IReadOnlyList<RenderGraphConcreteResourceBinding> AsReadOnly(
+            IEnumerable<RenderGraphConcreteResourceBinding> bindings)
+        {
+            RenderGraphConcreteResourceBinding[] array = bindings as RenderGraphConcreteResourceBinding[] ?? bindings.ToArray();
+            return array.Length == 0
+                ? Array.Empty<RenderGraphConcreteResourceBinding>()
+                : Array.AsReadOnly(array);
         }
 
         private static void ValidateNoOverlappingBindings(
-            IReadOnlyDictionary<RenderGraphResourceId, List<RenderGraphConcreteResourceBinding>> bindings)
+            IReadOnlyList<RenderGraphConcreteResourceBinding> bindings)
         {
-            // Partially overlapping aliases cannot safely share one ownership timeline because
-            // the scheduler has no subrange-splitting model for arbitrary aliases. Exact aliases
-            // are permitted only when their synchronization contracts are identical; they share
-            // AllocationIdentity owner state and are treated as one physical range by the scheduler.
-            RenderGraphConcreteResourceBinding[] allBindings = bindings
-                .SelectMany(pair => pair.Value)
-                .ToArray();
-            for (int firstIndex = 0; firstIndex < allBindings.Length; firstIndex++)
+            // Validate exact aliases once and collapse them before the range sweep. This keeps a
+            // material/environment alias set from turning validation back into quadratic work.
+            var physicalRanges = new List<RenderGraphConcreteResourceBinding>(bindings.Count);
+            foreach (IGrouping<RenderGraphAllocationIdentity, RenderGraphConcreteResourceBinding> aliasGroup in
+                     bindings.GroupBy(static binding => binding.AllocationIdentity))
             {
-                RenderGraphConcreteResourceBinding first = allBindings[firstIndex];
-                for (int secondIndex = firstIndex + 1; secondIndex < allBindings.Length; secondIndex++)
+                RenderGraphConcreteResourceBinding first = aliasGroup.First();
+                foreach (RenderGraphConcreteResourceBinding alias in aliasGroup.Skip(1))
                 {
-                    RenderGraphConcreteResourceBinding second = allBindings[secondIndex];
-                    if (!Overlaps(first, second))
-                        continue;
+                    if (!AreCompatibleExactAliases(first, alias))
+                        ThrowOverlap(first, alias);
+                }
 
-                    if (AreCompatibleExactAliases(first, second))
-                        continue;
+                physicalRanges.Add(first);
+            }
 
-                    throw new InvalidOperationException(
-                        $"Concrete bindings '{first.Name}' ({first.Resource}) and '{second.Name}' ({second.Resource}) overlap. " +
-                        "Split the declaration into disjoint ranges or expose one explicitly synchronized allocation group.");
+            foreach (IGrouping<PhysicalHandleIdentity, RenderGraphConcreteResourceBinding> handleGroup in
+                     physicalRanges.GroupBy(static binding => new PhysicalHandleIdentity(
+                         binding.Kind,
+                         binding.Kind == RenderGraphConcreteResourceKind.Buffer
+                             ? binding.Buffer.Handle
+                             : binding.Image.Handle)))
+            {
+                RenderGraphConcreteResourceBinding[] sorted = handleGroup
+                    .OrderBy(static binding => PrimaryOffset(binding))
+                    .ThenBy(static binding => SecondaryOffset(binding))
+                    .ToArray();
+                var active = new List<RenderGraphConcreteResourceBinding>();
+                foreach (RenderGraphConcreteResourceBinding current in sorted)
+                {
+                    ulong currentStart = PrimaryOffset(current);
+                    for (int activeIndex = active.Count - 1; activeIndex >= 0; activeIndex--)
+                    {
+                        RenderGraphConcreteResourceBinding candidate = active[activeIndex];
+                        if (PrimaryEnd(candidate) <= currentStart)
+                        {
+                            active.RemoveAt(activeIndex);
+                            continue;
+                        }
+
+                        if (Overlaps(candidate, current))
+                            ThrowOverlap(candidate, current);
+                    }
+
+                    active.Add(current);
                 }
             }
+        }
+
+        private static ulong PrimaryOffset(RenderGraphConcreteResourceBinding binding) =>
+            binding.Kind == RenderGraphConcreteResourceKind.Buffer
+                ? binding.ByteOffset
+                : binding.SubresourceRange.BaseMipLevel;
+
+        private static ulong SecondaryOffset(RenderGraphConcreteResourceBinding binding) =>
+            binding.Kind == RenderGraphConcreteResourceKind.Buffer
+                ? 0UL
+                : binding.SubresourceRange.BaseArrayLayer;
+
+        private static ulong PrimaryEnd(RenderGraphConcreteResourceBinding binding) =>
+            binding.Kind == RenderGraphConcreteResourceKind.Buffer
+                ? checked(binding.ByteOffset + binding.ByteSize)
+                : checked((ulong)binding.SubresourceRange.BaseMipLevel + binding.SubresourceRange.LevelCount);
+
+        private static void ThrowOverlap(
+            RenderGraphConcreteResourceBinding first,
+            RenderGraphConcreteResourceBinding second)
+        {
+            throw new InvalidOperationException(
+                $"Concrete bindings '{first.Name}' ({first.Resource}) and '{second.Name}' ({second.Resource}) overlap. " +
+                "Split the declaration into disjoint ranges or expose one explicitly synchronized allocation group.");
         }
 
         private static bool AreCompatibleExactAliases(
@@ -423,10 +487,9 @@ namespace Njulf.Rendering.Pipeline
                 return false;
             }
 
-            // If an image wrapper tracks layout externally, each alias must update the same
-            // tracker. Otherwise one logical view could retain a stale layout after a handoff.
             if (first.Kind == RenderGraphConcreteResourceKind.Image &&
-                !Equals(first.LayoutTracker, second.LayoutTracker))
+                (!Equals(first.LayoutTracker, second.LayoutTracker) ||
+                 !Equals(first.LayoutProvider, second.LayoutProvider)))
             {
                 return false;
             }
@@ -452,14 +515,7 @@ namespace Njulf.Rendering.Pipeline
             }
 
             if (first.Kind == RenderGraphConcreteResourceKind.Buffer)
-            {
-                if (first.Buffer.Handle != second.Buffer.Handle)
-                    return false;
                 return RangesOverlap(first.ByteOffset, first.ByteSize, second.ByteOffset, second.ByteSize);
-            }
-
-            if (first.Image.Handle != second.Image.Handle)
-                return false;
 
             ImageSubresourceRange a = first.SubresourceRange;
             ImageSubresourceRange b = second.SubresourceRange;
@@ -473,12 +529,162 @@ namespace Njulf.Rendering.Pipeline
 
         private static bool RangesOverlap(ulong firstOffset, ulong firstSize, ulong secondOffset, ulong secondSize)
         {
-            if (firstSize == 0 || secondSize == 0)
-                return false;
-
             ulong firstEnd = checked(firstOffset + firstSize);
             ulong secondEnd = checked(secondOffset + secondSize);
             return firstOffset < secondEnd && secondOffset < firstEnd;
+        }
+
+        private readonly record struct PhysicalHandleIdentity(
+            RenderGraphConcreteResourceKind Kind,
+            ulong Handle);
+    }
+
+    /// <summary>
+    /// Mutable owner-state lives separately from immutable binding descriptions.  The scheduler can
+    /// therefore reject a plan without mutating ownership, then atomically commit the accepted
+    /// plan only after all command buffers were recorded successfully.
+    /// </summary>
+    public sealed class RenderGraphResourceBindings
+    {
+        private readonly Guid _planOwnerId = Guid.NewGuid();
+        private readonly Dictionary<RenderGraphAllocationIdentity, uint> _owners = new();
+        private readonly Dictionary<RenderGraphAllocationIdentity, ImageLayout> _layouts = new();
+        private RenderGraphResourcePlan _currentPlan;
+        private ulong _nextGeneration;
+        private int _stalePlanRejectionCount;
+
+        public RenderGraphResourceBindings()
+        {
+            _currentPlan = new RenderGraphResourcePlan(
+                _planOwnerId,
+                generation: 0,
+                Array.Empty<RenderGraphConcreteResourceBinding>());
+        }
+
+        public ulong Generation => _currentPlan.Generation;
+        public int StalePlanRejectionCount => _stalePlanRejectionCount;
+        public int BindingCount => _currentPlan.BindingCount;
+        public RenderGraphResourcePlan CurrentPlan => _currentPlan;
+
+        public IReadOnlyList<RenderGraphConcreteResourceBinding> GetBindings(
+            RenderGraphResourceId resource,
+            int frameIndex = -1)
+        {
+            return _currentPlan.GetBindings(resource, frameIndex);
+        }
+
+        public bool HasCompleteBinding(RenderGraphResourceId resource, int frameIndex = -1) =>
+            GetBindings(resource, frameIndex).Count > 0;
+
+        public uint? GetCurrentOwner(RenderGraphConcreteResourceBinding binding)
+        {
+            if (binding == null)
+                throw new ArgumentNullException(nameof(binding));
+
+            if (binding.SharingMode == SharingMode.Concurrent)
+                return null;
+            return _owners.TryGetValue(binding.AllocationIdentity, out uint owner)
+                ? owner
+                : binding.InitialOwnerQueueFamily;
+        }
+
+        public bool IsCurrent(RenderGraphConcreteResourceBinding binding) =>
+            binding != null && binding.ResourcePlanGeneration == Generation;
+
+        public ImageLayout GetCurrentLayout(RenderGraphConcreteResourceBinding binding)
+        {
+            if (binding == null)
+                throw new ArgumentNullException(nameof(binding));
+            if (binding.Kind != RenderGraphConcreteResourceKind.Image)
+                return ImageLayout.Undefined;
+            if (binding.LayoutProvider != null)
+                return binding.LayoutProvider();
+            return _layouts.TryGetValue(binding.AllocationIdentity, out ImageLayout layout)
+                ? layout
+                : binding.Layout;
+        }
+
+        internal RenderGraphResourcePlan CreatePlan(IEnumerable<RenderGraphConcreteResourceBinding> bindings)
+        {
+            if (bindings == null)
+                throw new ArgumentNullException(nameof(bindings));
+
+            ulong generation = checked(_nextGeneration + 1UL);
+            RenderGraphResourcePlan plan = new(_planOwnerId, generation, bindings);
+            _nextGeneration = generation;
+            return plan;
+        }
+
+        internal void Activate(RenderGraphResourcePlan plan, bool resetState)
+        {
+            if (plan == null)
+                throw new ArgumentNullException(nameof(plan));
+            if (!plan.BelongsTo(_planOwnerId))
+                throw new InvalidOperationException("A concrete resource plan can only be activated by the binding catalog that created it.");
+
+            _currentPlan = plan;
+            if (!resetState)
+                return;
+
+            _owners.Clear();
+            _layouts.Clear();
+        }
+
+        public void Replace(IEnumerable<RenderGraphConcreteResourceBinding> bindings)
+        {
+            if (bindings == null)
+                throw new ArgumentNullException(nameof(bindings));
+
+            RenderGraphResourcePlan plan = CreatePlan(bindings);
+            Activate(plan, resetState: true);
+        }
+
+        public void Invalidate()
+        {
+            ulong generation = checked(_nextGeneration + 1UL);
+            _nextGeneration = generation;
+            _currentPlan = new RenderGraphResourcePlan(
+                _planOwnerId,
+                generation,
+                Array.Empty<RenderGraphConcreteResourceBinding>());
+            _owners.Clear();
+            _layouts.Clear();
+        }
+
+        public void RecordStalePlanRejection() => _stalePlanRejectionCount++;
+
+        public void CommitOwner(RenderGraphConcreteResourceBinding binding, uint ownerQueueFamily)
+        {
+            if (binding == null)
+                throw new ArgumentNullException(nameof(binding));
+            if (!IsCurrent(binding))
+            {
+                RecordStalePlanRejection();
+                throw new InvalidOperationException(
+                    $"Cannot commit ownership for stale binding '{binding.Name}' (plan {binding.ResourcePlanGeneration}, current {Generation}).");
+            }
+            if (binding.SharingMode == SharingMode.Concurrent)
+                return;
+            if (!binding.PermittedQueueFamilies.Contains(ownerQueueFamily))
+                throw new InvalidOperationException($"Queue family {ownerQueueFamily} is not permitted for binding '{binding.Name}'.");
+
+            _owners[binding.AllocationIdentity] = ownerQueueFamily;
+        }
+
+        public void CommitLayout(RenderGraphConcreteResourceBinding binding, ImageLayout layout)
+        {
+            if (binding == null)
+                throw new ArgumentNullException(nameof(binding));
+            if (!IsCurrent(binding))
+            {
+                RecordStalePlanRejection();
+                throw new InvalidOperationException(
+                    $"Cannot commit layout for stale binding '{binding.Name}' (plan {binding.ResourcePlanGeneration}, current {Generation}).");
+            }
+            if (binding.Kind != RenderGraphConcreteResourceKind.Image)
+                throw new InvalidOperationException($"Buffer binding '{binding.Name}' cannot commit an image layout.");
+
+            _layouts[binding.AllocationIdentity] = layout;
         }
     }
 }

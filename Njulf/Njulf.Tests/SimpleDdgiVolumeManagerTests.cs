@@ -408,20 +408,63 @@ public sealed class SimpleDdgiVolumeManagerTests
     }
 
     [Test]
-    public void SchedulerPriorityClasses_AdvanceIndependentRoundRobinCursors()
+    public void SchedulerPriorityClasses_UsePersistentIncrementalRoundRobinQueues()
     {
         string source = File.ReadAllText(FindSourceFile(
             "Njulf.Rendering",
             "Resources",
             "SimpleDdgiVolumeManager.cs"));
+        string queues = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiPersistentProbeQueues.cs"));
 
         Assert.Multiple(() =>
         {
-            Assert.That(source, Does.Contain("VolumeWorkClassCursorKey(volume, workClass)"));
-            Assert.That(source, Does.Contain("_volumeWorkClassRoundRobinCursors.TryGetValue(cursorKey"));
-            Assert.That(source, Does.Contain("int local = (int)((cursor + (long)visited * stride) % probeCount);"));
-            Assert.That(source, Does.Contain("_volumeWorkClassRoundRobinCursors[cursorKey] = probeCount > 0"));
-            Assert.That(source, Does.Not.Contain("int local = maintenance"));
+            Assert.That(source, Does.Contain("private readonly SimpleDdgiPersistentProbeQueues _schedulerWorkQueues;"));
+            Assert.That(source, Does.Contain("queues.TryRotateNext(queueIndex, out int probeIndex)"));
+            Assert.That(source, Does.Contain("_schedulerWorkQueues.GetQueueCount(queueIndex)"));
+            Assert.That(source, Does.Not.Contain("_volumeWorkClassRoundRobinCursors"));
+            Assert.That(queues, Does.Contain("public void MoveToQueue(int probeIndex, int queueIndex)"));
+            Assert.That(queues, Does.Contain("public bool TryRotateNext(int queueIndex, out int probeIndex)"));
+        });
+    }
+
+    [Test]
+    public void SchedulerHotPath_DoesNotAgeOrClassifyTheEntireProbePool()
+    {
+        string source = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiVolumeManager.cs"));
+        int queueStart = source.IndexOf(
+            "private int BuildUpdateQueue(",
+            StringComparison.Ordinal);
+        int queueEnd = source.IndexOf(
+            "private void ResolveSourceRefreshThroughputTarget(",
+            queueStart,
+            StringComparison.Ordinal);
+        int reservationStart = source.IndexOf(
+            "private void BuildWorkClassReservations(",
+            StringComparison.Ordinal);
+        int reservationEnd = source.IndexOf(
+            "internal static void AllocateSchedulerClassQuotas(",
+            reservationStart,
+            StringComparison.Ordinal);
+
+        Assert.That(queueStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(queueEnd, Is.GreaterThan(queueStart));
+        Assert.That(reservationStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(reservationEnd, Is.GreaterThan(reservationStart));
+        string queueBuilder = source[queueStart..queueEnd];
+        string reservations = source[reservationStart..reservationEnd];
+        Assert.Multiple(() =>
+        {
+            Assert.That(queueBuilder, Does.Not.Contain("_probeAges"));
+            Assert.That(queueBuilder, Does.Not.Contain("for (int probeIndex = 0; probeIndex < _probeCount"));
+            Assert.That(reservations, Does.Not.Contain("for (int local = 0; local < probeCount"));
+            Assert.That(reservations, Does.Contain("_schedulerWorkQueues.GetQueueCount(queueIndex)"));
+            Assert.That(source, Does.Contain("private uint[] _probeLastUpdatedFrames"));
         });
     }
 

@@ -6,6 +6,22 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class RendererValidationSettingsTests
 {
+    [Test]
+    public void DebugUtilsAndLabelsRemainEnabledWhenValidationIsOff()
+    {
+        RendererValidationSettings settings = RendererValidationSettings.Default with
+        {
+            Mode = RendererValidationMode.Off
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.EnableValidation, Is.False);
+            Assert.That(settings.EnableDebugUtils, Is.True);
+            Assert.That(settings.EnableDebugLabels, Is.True);
+        });
+    }
+
     [TestCase("off", RendererValidationMode.Off)]
     [TestCase("standard", RendererValidationMode.Standard)]
     [TestCase("gpu", RendererValidationMode.GpuAssisted)]

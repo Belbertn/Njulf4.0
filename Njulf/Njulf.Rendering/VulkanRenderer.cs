@@ -186,6 +186,7 @@ namespace Njulf.Rendering
         private SimpleDdgiRelocateClassifyPass? _simpleDdgiRelocateClassifyPass;
         private SimpleDdgiTransportPass? _simpleDdgiTransportPass;
         private SimpleDdgiBlendPass? _simpleDdgiBlendPass;
+        private SimpleDdgiPublishPass? _simpleDdgiPublishPass;
         private SkinningPass _skinningPass = null!;
         private GpuParticleResetPass _gpuParticleResetPass = null!;
         private GpuParticleSimulatePass _gpuParticleSimulatePass = null!;
@@ -272,6 +273,8 @@ namespace Njulf.Rendering
         private AsyncComputeMode? _lastAsyncComputeTimingMode;
         private AsyncComputePlan? _frameAsyncComputePlan;
         private AsyncComputeSubmissionPlan? _frameAsyncComputeSubmissionPlan;
+        private AsyncComputeResourcePlanGeneration? _asyncComputeResourcePlanGeneration;
+        private RenderGraphResourcePlan? _asyncComputeResourcePlan;
         private readonly AsyncComputeRecoverablePlanRetryGate _asyncComputeRecoverablePlanRetryGate = new();
         private bool _asyncComputeEmergencyFallbackLatched;
         private string _asyncComputeLastFallbackReason = string.Empty;
@@ -900,6 +903,15 @@ namespace Njulf.Rendering
                 _farFieldClipmapManager!);
             _simpleDdgiBlendPass = simpleDdgiBlendPass;
             AddPassInstance(simpleDdgiBlendPass);
+
+            var simpleDdgiPublishPass = new SimpleDdgiPublishPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                Settings,
+                _simpleDdgiVolumeManager!);
+            _simpleDdgiPublishPass = simpleDdgiPublishPass;
+            AddPassInstance(simpleDdgiPublishPass);
 
             var ddgiSchedulePass = new DdgiSchedulePass(
                 _context,
@@ -6065,6 +6077,12 @@ namespace Njulf.Rendering
                         foreach (RenderGraphConcreteResourceBinding binding in transfer.AllBindings)
                             _renderGraph.ConcreteResourceBindings.CommitOwner(binding, transfer.DestinationQueueFamily);
                     }
+
+                    if (transfer.IsImage)
+                    {
+                        foreach (RenderGraphConcreteResourceBinding binding in transfer.AllBindings)
+                            _renderGraph.ConcreteResourceBindings.CommitLayout(binding, transfer.NewLayout);
+                    }
                 }
 
                 ulong maxTimelineValue = plan.Segments
@@ -6547,7 +6565,7 @@ namespace Njulf.Rendering
             // unsupported devices and after the emergency kill switch has already selected the
             // graphics-only path; neither case can legally submit a compute segment.
             if (supported && effectiveMode != AsyncComputeMode.Disabled)
-                RefreshAsyncComputeResourceBindings(sceneData);
+                EnsureAsyncComputeResourceBindings();
             var retryScope = new AsyncComputePlanRetryScope(
                 _renderGraph.ConcreteResourceBindings.Generation,
                 settingsSignature);
@@ -6798,14 +6816,105 @@ namespace Njulf.Rendering
         }
 
         /// <summary>
-        /// Resolves graph resources to the exact Vulkan allocations used by this frame. Imported
-        /// buffer families are deliberately bound at allocation granularity; a bindless index or
-        /// a broad BufferSet is never treated as a queue-ownership target.
+        /// Captures allocation-bearing manager generations and typed handle sets without walking
+        /// render targets, materials, textures, or acceleration-structure collections.
         /// </summary>
-        private void RefreshAsyncComputeResourceBindings(SceneRenderingData sceneData)
+        private AsyncComputeResourcePlanGeneration CaptureAsyncComputeResourcePlanGeneration()
         {
-            if (sceneData == null)
-                throw new ArgumentNullException(nameof(sceneData));
+            var coreBuffers = new AsyncCoreBufferIdentity(
+                _meshManager.VertexPositionBuffer,
+                _meshManager.VertexNormalTangentBuffer,
+                _meshManager.VertexUvColorBuffer,
+                _meshManager.IndexBuffer,
+                _meshManager.MeshMetadataBuffer,
+                _materialManager.MaterialBuffer,
+                _materialManager.MaterialExtensionBuffer,
+                _lightManager.LightBuffer,
+                _environmentManager?.EnvironmentBuffer ?? BufferHandle.Invalid,
+                _environmentManager?.PrefilterEnvironmentBuffer ?? BufferHandle.Invalid,
+                _environmentManager?.GiEnvironmentBuffer ?? BufferHandle.Invalid,
+                _ddgiEmissiveSourceBuffer);
+
+            FarFieldClipmapManager? farField = _farFieldClipmapManager;
+            var farFieldBuffers = farField == null
+                ? default
+                : new FarFieldAsyncBufferIdentity(
+                    farField.ParamsBuffer,
+                    farField.VoxelBuffer,
+                    farField.BakeVoxelBuffer,
+                    farField.InstanceBuffer,
+                    farField.DistanceBuffer,
+                    farField.JumpFloodScratch0Buffer,
+                    farField.JumpFloodScratch1Buffer,
+                    farField.PageTableBuffer);
+
+            SimpleDdgiVolumeManager? simpleDdgi = _simpleDdgiVolumeManager;
+            var simpleDdgiBuffers = simpleDdgi == null
+                ? default
+                : new SimpleDdgiAsyncBufferIdentity(
+                    simpleDdgi.ParamsBuffer,
+                    simpleDdgi.IrradianceAtlasBuffer,
+                    simpleDdgi.TransportIrradianceAtlasBuffer,
+                    simpleDdgi.TransportSourceCacheBuffer,
+                    simpleDdgi.VisibilityAtlasBuffer,
+                    simpleDdgi.RayResultScratchBuffer,
+                    simpleDdgi.ProbeStateBuffer,
+                    simpleDdgi.ProbeUpdateQueueBuffer,
+                    simpleDdgi.RelocationClassificationBuffer);
+
+            DdgiProbeVolumeManager? fullDdgi = _ddgiProbeVolumeManager;
+            var fullDdgiBuffers = fullDdgi == null
+                ? default
+                : new FullDdgiAsyncBufferIdentity(
+                    fullDdgi.VolumeMetadataBuffer,
+                    fullDdgi.ProbeStateBuffer,
+                    fullDdgi.ProbeUpdateQueueBuffer,
+                    fullDdgi.ProbeRelocationClassificationBuffer,
+                    fullDdgi.IrradianceAtlasBuffer,
+                    fullDdgi.VisibilityAtlasBuffer,
+                    fullDdgi.RayResultScratchBuffer,
+                    fullDdgi.SchedulerConstantsBuffer,
+                    fullDdgi.DirtyRegionBuffer,
+                    fullDdgi.ProbeCandidateBuffer,
+                    fullDdgi.SchedulerGroupCountBuffer,
+                    fullDdgi.SchedulerPrefixBuffer,
+                    fullDdgi.SchedulerCounterBuffer,
+                    fullDdgi.TraceIndirectDispatchBuffer,
+                    fullDdgi.GetSchedulerCounterReadbackBuffer(0),
+                    fullDdgi.GetSchedulerCounterReadbackBuffer(1));
+
+            return new AsyncComputeResourcePlanGeneration(
+                _renderGraph.ResourceAllocationGeneration,
+                _renderTargets?.ResizeCount ?? 0,
+                _swapchain.ResourceGeneration,
+                _materialManager.ReferencedTextureSetGeneration,
+                _textureManager.ResourceGeneration,
+                _environmentManager?.PrefilterResourceGeneration ?? 0,
+                _particleSystemManager.ResourceGeneration,
+                _gpuParticleRuntimeManager.ResourceGeneration,
+                _accelerationStructureManager?.ResourceGeneration ?? 0,
+                _context.GraphicsQueueFamilyIndex,
+                _context.ComputeQueueFamilyIndex,
+                _hizDepthPyramid?.Image.Handle ?? 0,
+                coreBuffers,
+                farFieldBuffers,
+                simpleDdgiBuffers,
+                fullDdgiBuffers);
+        }
+
+        /// <summary>
+        /// Resolves every frame/history slot to exact Vulkan allocations only when its generation
+        /// key changes. A bindless index or broad BufferSet is never an ownership target.
+        /// </summary>
+        private void EnsureAsyncComputeResourceBindings()
+        {
+            AsyncComputeResourcePlanGeneration generation = CaptureAsyncComputeResourcePlanGeneration();
+            if (_asyncComputeResourcePlanGeneration == generation && _asyncComputeResourcePlan != null)
+            {
+                if (!ReferenceEquals(_renderGraph.ConcreteResourceBindings.CurrentPlan, _asyncComputeResourcePlan))
+                    _renderGraph.ActivateConcreteResourcePlan(_asyncComputeResourcePlan, resetState: true);
+                return;
+            }
 
             var bindings = new List<RenderGraphConcreteResourceBinding>();
             uint graphicsFamily = _context.GraphicsQueueFamilyIndex;
@@ -6877,15 +6986,20 @@ namespace Njulf.Rendering
                     SharingMode.Exclusive,
                     allocationGeneration: hiz.Image.Handle,
                     lifetime: RenderGraphResourceLifetime.Persistent,
-                    layoutTracker: layout => hiz.Layout = layout));
+                    layoutTracker: layout => hiz.Layout = layout,
+                    layoutProvider: () => hiz.Layout));
             }
 
-            if (_imageIndex < _swapchain.Images.Length && _swapchain.Images[_imageIndex].Handle != 0)
+            for (int imageIndex = 0; imageIndex < _swapchain.Images.Length; imageIndex++)
             {
-                Image swapchainImage = _swapchain.Images[_imageIndex];
+                Image swapchainImage = _swapchain.Images[imageIndex];
+                if (swapchainImage.Handle == 0)
+                    continue;
+
+                int capturedImageIndex = imageIndex;
                 bindings.Add(RenderGraphConcreteResourceBinding.ForImage(
                     RenderGraphResourceId.SwapchainColor,
-                    $"Swapchain image {_imageIndex}",
+                    $"Swapchain image {imageIndex}",
                     swapchainImage,
                     new ImageSubresourceRange
                     {
@@ -6895,14 +7009,14 @@ namespace Njulf.Rendering
                         BaseArrayLayer = 0,
                         LayerCount = 1
                     },
-                    _swapchain.GetImageLayout(_imageIndex),
+                    _swapchain.GetImageLayout((uint)imageIndex),
                     queueFamilies,
                     graphicsFamily,
                     SharingMode.Exclusive,
-                    frameIndex: _currentFrame,
                     allocationGeneration: swapchainImage.Handle,
                     lifetime: RenderGraphResourceLifetime.Imported,
-                    layoutTracker: layout => _swapchain.SetImageLayout(_imageIndex, layout)));
+                    layoutTracker: layout => _swapchain.SetImageLayout((uint)capturedImageIndex, layout),
+                    layoutProvider: () => _swapchain.GetImageLayout((uint)capturedImageIndex)));
             }
 
             if (_accelerationStructureManager != null)
@@ -6948,14 +7062,19 @@ namespace Njulf.Rendering
                 _environmentManager?.GiEnvironmentBuffer ?? BufferHandle.Invalid, queueFamilies, graphicsFamily);
             AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.DdgiEmissiveSources, "DDGI emissive sources",
                 _ddgiEmissiveSourceBuffer, queueFamilies, graphicsFamily);
-            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.RendererDiagnosticsBuffer, "Renderer diagnostics",
-                _diagnosticsBuffer.GetBufferHandle(_currentFrame), queueFamilies, graphicsFamily, frameIndex: _currentFrame);
-            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.ParticleBuffers, "Particle frame data",
-                sceneData.ParticleFrameDataBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
-            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.ParticleBuffers, "Particle instances",
-                sceneData.ParticleInstanceBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
-            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.ParticleBuffers, "Particle batches",
-                sceneData.ParticleBatchBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
+            for (int frameIndex = 0; frameIndex < FramesInFlight; frameIndex++)
+            {
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.RendererDiagnosticsBuffer, "Renderer diagnostics",
+                    _diagnosticsBuffer.GetBufferHandle(frameIndex), queueFamilies, graphicsFamily, frameIndex: frameIndex);
+                ParticleSystemManager.ParticleAsyncResourceSet particleResources =
+                    _particleSystemManager.GetAsyncResourceSet(frameIndex);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.ParticleBuffers, "Particle frame data",
+                    particleResources.FrameDataBuffer, queueFamilies, graphicsFamily, frameIndex: frameIndex);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.ParticleBuffers, "Particle instances",
+                    particleResources.InstanceBuffer, queueFamilies, graphicsFamily, frameIndex: frameIndex);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.ParticleBuffers, "Particle batches",
+                    particleResources.BatchBuffer, queueFamilies, graphicsFamily, frameIndex: frameIndex);
+            }
 
             if (_farFieldClipmapManager != null)
             {
@@ -7052,34 +7171,43 @@ namespace Njulf.Rendering
                     _ddgiProbeVolumeManager.SchedulerCounterBuffer, queueFamilies, graphicsFamily);
                 AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI trace indirect dispatch",
                     _ddgiProbeVolumeManager.TraceIndirectDispatchBuffer, queueFamilies, graphicsFamily);
-                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI scheduler counter readback",
-                    _ddgiProbeVolumeManager.GetSchedulerCounterReadbackBuffer(_currentFrame), queueFamilies, graphicsFamily,
-                    frameIndex: _currentFrame);
+                for (int frameIndex = 0; frameIndex < FramesInFlight; frameIndex++)
+                {
+                    AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI scheduler counter readback",
+                        _ddgiProbeVolumeManager.GetSchedulerCounterReadbackBuffer(frameIndex), queueFamilies, graphicsFamily,
+                        frameIndex: frameIndex);
+                }
             }
 
-            GpuParticleAsyncResourceSet particleResources = _gpuParticleRuntimeManager.GetAsyncResourceSet(_currentFrame);
-            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleState, "GPU particle state",
-                particleResources.StateBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
-            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleIndices, "GPU particle alive indices",
-                particleResources.AliveIndexBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
+            GpuParticleAsyncResourceSet firstParticleResources =
+                _gpuParticleRuntimeManager.GetAsyncResourceSet(0);
             AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleIndices, "GPU particle dead indices",
-                particleResources.DeadIndexBuffer, queueFamilies, graphicsFamily);
-            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleEmitterData, "GPU particle emitters",
-                particleResources.EmitterBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
-            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleEmitterData, "GPU particle curves",
-                particleResources.CurveSampleBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
-            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleCounters, "GPU particle counters",
-                particleResources.CounterBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
-            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleUnsortedOutput, "GPU particle unsorted output",
-                particleResources.UnsortedRenderInstanceBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
-            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleRenderOutput, "GPU particle render output",
-                particleResources.RenderInstanceBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
-            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleIndirectArguments, "GPU particle indirect arguments",
-                particleResources.IndirectDrawBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
-            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleSortKeys, "GPU particle sort keys",
-                particleResources.SortKeyBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
-            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleCounterReadback, "GPU particle counter readback",
-                particleResources.CounterReadbackBuffer, queueFamilies, graphicsFamily, frameIndex: _currentFrame);
+                firstParticleResources.DeadIndexBuffer, queueFamilies, graphicsFamily);
+            for (int frameIndex = 0; frameIndex < FramesInFlight; frameIndex++)
+            {
+                GpuParticleAsyncResourceSet particleResources =
+                    _gpuParticleRuntimeManager.GetAsyncResourceSet(frameIndex);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleState, "GPU particle state",
+                    particleResources.StateBuffer, queueFamilies, graphicsFamily, frameIndex: frameIndex);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleIndices, "GPU particle alive indices",
+                    particleResources.AliveIndexBuffer, queueFamilies, graphicsFamily, frameIndex: frameIndex);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleEmitterData, "GPU particle emitters",
+                    particleResources.EmitterBuffer, queueFamilies, graphicsFamily, frameIndex: frameIndex);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleEmitterData, "GPU particle curves",
+                    particleResources.CurveSampleBuffer, queueFamilies, graphicsFamily, frameIndex: frameIndex);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleCounters, "GPU particle counters",
+                    particleResources.CounterBuffer, queueFamilies, graphicsFamily, frameIndex: frameIndex);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleUnsortedOutput, "GPU particle unsorted output",
+                    particleResources.UnsortedRenderInstanceBuffer, queueFamilies, graphicsFamily, frameIndex: frameIndex);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleRenderOutput, "GPU particle render output",
+                    particleResources.RenderInstanceBuffer, queueFamilies, graphicsFamily, frameIndex: frameIndex);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleIndirectArguments, "GPU particle indirect arguments",
+                    particleResources.IndirectDrawBuffer, queueFamilies, graphicsFamily, frameIndex: frameIndex);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleSortKeys, "GPU particle sort keys",
+                    particleResources.SortKeyBuffer, queueFamilies, graphicsFamily, frameIndex: frameIndex);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.GpuParticleCounterReadback, "GPU particle counter readback",
+                    particleResources.CounterReadbackBuffer, queueFamilies, graphicsFamily, frameIndex: frameIndex);
+            }
 
             // Deduplicate within a logical set only. The same texture can be reachable through
             // both environment and material descriptors; RenderGraphResourceBindings models
@@ -7097,7 +7225,10 @@ namespace Njulf.Rendering
                     [_textureManager.DefaultWhiteTexture], queueFamilies, graphicsFamily, new HashSet<ulong>());
             }
 
-            _renderGraph.ReplaceConcreteResourceBindings(bindings);
+            RenderGraphResourcePlan plan = _renderGraph.CreateConcreteResourcePlan(bindings);
+            _renderGraph.ActivateConcreteResourcePlan(plan, resetState: true);
+            _asyncComputeResourcePlan = plan;
+            _asyncComputeResourcePlanGeneration = generation;
         }
 
         private static void AddRenderTargetBinding(
@@ -7136,7 +7267,8 @@ namespace Njulf.Rendering
                 historyIndex: historyIndex,
                 allocationGeneration: target.Image.Handle,
                 lifetime: lifetime,
-                layoutTracker: target.SetTrackedLayout));
+                layoutTracker: target.SetTrackedLayout,
+                layoutProvider: () => target.Layout));
         }
 
         private void AddAsyncComputeBufferBinding(
@@ -7427,7 +7559,7 @@ namespace Njulf.Rendering
 
         private static AsyncComputePath? GetAsyncComputePath(string passName) => passName switch
         {
-            "SimpleDdgiTracePass" or "SimpleDdgiRelocateClassifyPass" or "SimpleDdgiTransportPass" or "SimpleDdgiBlendPass" => AsyncComputePath.SimpleDdgiUpdate,
+            "SimpleDdgiTracePass" or "SimpleDdgiRelocateClassifyPass" or "SimpleDdgiTransportPass" or "SimpleDdgiBlendPass" or "SimpleDdgiPublishPass" => AsyncComputePath.SimpleDdgiUpdate,
             "DdgiSchedulePass" or "DdgiTracePass" or "DdgiBlendPass" or "DdgiRelocateClassifyPass" or "DdgiPublishPass" => AsyncComputePath.FullDdgiUpdate,
             "FarFieldClipmapBakePass" => AsyncComputePath.FarFieldClipmapBake,
             "AmbientOcclusionBlurPass" => AsyncComputePath.AmbientOcclusionBlur,
@@ -7541,6 +7673,77 @@ namespace Njulf.Rendering
             plan.Accepted &&
             plan.ContainsAsyncCompute &&
             plan.Paths.Any(path => path.Active && path.Path is AsyncComputePath.SimpleDdgiUpdate or AsyncComputePath.FullDdgiUpdate);
+
+        private readonly record struct AsyncComputeResourcePlanGeneration(
+            ulong GraphResourceGeneration,
+            int RenderTargetGeneration,
+            ulong SwapchainGeneration,
+            ulong MaterialTextureSetGeneration,
+            ulong TextureGeneration,
+            uint EnvironmentGeneration,
+            ulong ParticleGeneration,
+            ulong GpuParticleGeneration,
+            ulong AccelerationStructureGeneration,
+            uint GraphicsQueueFamily,
+            uint ComputeQueueFamily,
+            ulong HiZImage,
+            AsyncCoreBufferIdentity CoreBuffers,
+            FarFieldAsyncBufferIdentity FarFieldBuffers,
+            SimpleDdgiAsyncBufferIdentity SimpleDdgiBuffers,
+            FullDdgiAsyncBufferIdentity FullDdgiBuffers);
+
+        private readonly record struct AsyncCoreBufferIdentity(
+            BufferHandle MeshPositions,
+            BufferHandle MeshNormalTangents,
+            BufferHandle MeshUvColors,
+            BufferHandle MeshIndices,
+            BufferHandle MeshMetadata,
+            BufferHandle Materials,
+            BufferHandle MaterialExtensions,
+            BufferHandle Lights,
+            BufferHandle Environment,
+            BufferHandle PrefilterEnvironment,
+            BufferHandle GiEnvironment,
+            BufferHandle DdgiEmissiveSources);
+
+        private readonly record struct FarFieldAsyncBufferIdentity(
+            BufferHandle Parameters,
+            BufferHandle Voxels,
+            BufferHandle BakeVoxels,
+            BufferHandle Instances,
+            BufferHandle Distance,
+            BufferHandle JumpFloodScratch0,
+            BufferHandle JumpFloodScratch1,
+            BufferHandle PageTable);
+
+        private readonly record struct SimpleDdgiAsyncBufferIdentity(
+            BufferHandle Parameters,
+            BufferHandle IrradianceAtlas,
+            BufferHandle TransportIrradianceAtlas,
+            BufferHandle TransportSourceCache,
+            BufferHandle VisibilityAtlas,
+            BufferHandle RayScratch,
+            BufferHandle ProbeState,
+            BufferHandle UpdateQueue,
+            BufferHandle RelocationClassification);
+
+        private readonly record struct FullDdgiAsyncBufferIdentity(
+            BufferHandle VolumeMetadata,
+            BufferHandle ProbeState,
+            BufferHandle UpdateQueue,
+            BufferHandle RelocationClassification,
+            BufferHandle IrradianceAtlas,
+            BufferHandle VisibilityAtlas,
+            BufferHandle RayScratch,
+            BufferHandle SchedulerConstants,
+            BufferHandle DirtyRegions,
+            BufferHandle ProbeCandidates,
+            BufferHandle SchedulerGroupCounts,
+            BufferHandle SchedulerPrefix,
+            BufferHandle SchedulerCounters,
+            BufferHandle TraceIndirectDispatch,
+            BufferHandle CounterReadbackFrame0,
+            BufferHandle CounterReadbackFrame1);
 
         private sealed record AsyncComputePlan(
             AsyncComputeMode RequestedMode,
@@ -7859,6 +8062,7 @@ namespace Njulf.Rendering
             return HasCompletedGpuTiming(timings, "SimpleDdgiTracePass") ||
                 HasCompletedGpuTiming(timings, "SimpleDdgiTransportPass") ||
                 HasCompletedGpuTiming(timings, "SimpleDdgiBlendPass") ||
+                HasCompletedGpuTiming(timings, "SimpleDdgiPublishPass") ||
                 HasCompletedGpuTiming(timings, "SimpleDdgiRelocateClassifyPass");
         }
 
@@ -7903,13 +8107,15 @@ namespace Njulf.Rendering
             sceneData.GpuSimpleDdgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiTracePass");
             sceneData.GpuSimpleDdgiTransportMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiTransportPass");
             sceneData.GpuSimpleDdgiBlendMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiBlendPass");
+            long gpuSimpleDdgiPublishMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiPublishPass");
             sceneData.GpuFarFieldUpdateMicroseconds = timings.GetGpuMicrosecondsOrZero("FarFieldClipmapBakePass");
             sceneData.GpuFarFieldUpdateTimingValid = HasCompletedGpuTiming(timings, "FarFieldClipmapBakePass") ? 1 : 0;
             long gpuSimpleDdgiRelocateClassifyMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiRelocateClassifyPass");
             if (sceneData.GpuSimpleDdgiTraceMicroseconds > 0 ||
                 gpuSimpleDdgiRelocateClassifyMicroseconds > 0 ||
                 sceneData.GpuSimpleDdgiTransportMicroseconds > 0 ||
-                sceneData.GpuSimpleDdgiBlendMicroseconds > 0)
+                sceneData.GpuSimpleDdgiBlendMicroseconds > 0 ||
+                gpuSimpleDdgiPublishMicroseconds > 0)
             {
                 sceneData.GpuDdgiScheduleMicroseconds = 0;
                 sceneData.GpuDdgiScheduleResetMicroseconds = 0;
@@ -7923,7 +8129,7 @@ namespace Njulf.Rendering
                 sceneData.GpuDdgiBlendMicroseconds = sceneData.GpuSimpleDdgiTransportMicroseconds +
                     sceneData.GpuSimpleDdgiBlendMicroseconds;
                 sceneData.GpuDdgiRelocateClassifyMicroseconds = gpuSimpleDdgiRelocateClassifyMicroseconds;
-                sceneData.GpuDdgiPublishMicroseconds = 0;
+                sceneData.GpuDdgiPublishMicroseconds = gpuSimpleDdgiPublishMicroseconds;
             }
             sceneData.GpuDdgiUpdateMicroseconds =
                 sceneData.GpuDdgiScheduleMicroseconds +

@@ -1,0 +1,58 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
+#include "ddgi_simple_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform SimpleDdgiPublishPushBlock
+{
+    uint ParamsBufferIndex;
+    uint IrradianceAtlasBufferIndex;
+    uint VisibilityAtlasBufferIndex;
+    uint ProbeStateBufferIndex;
+    uint ProbeUpdateQueueBufferIndex;
+    uint TransportIrradianceAtlasBufferIndex;
+    uint SampledAtlasGroupCount;
+    uint SampledAtlasLayersPerTexture;
+} pc;
+
+void main()
+{
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    uint queueOffset = gl_WorkGroupID.x;
+    if ((params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) == 0u ||
+        queueOffset >= params.probesToUpdate || params.probeCount == 0u)
+        return;
+
+    SimpleDdgiProbeUpdate update =
+        ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, queueOffset);
+    if (update.probeIndex >= params.probeCount)
+        return;
+
+    SimpleDdgiProbeState state =
+        ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, update.probeIndex);
+    if (!SimpleDdgiUpdateMatchesProbeGeneration(update, state))
+        return;
+
+    uint texelCount = params.irradianceTexels * params.irradianceTexels;
+    for (uint texel = gl_LocalInvocationID.x;
+         texel < texelCount;
+         texel += gl_WorkGroupSize.x)
+    {
+        vec4 value = ReadSimpleDdgiAtlasTexel(
+            pc.TransportIrradianceAtlasBufferIndex,
+            update.probeIndex,
+            texel,
+            params.irradianceTexels);
+        WriteSimpleDdgiAtlasTexel(
+            pc.IrradianceAtlasBufferIndex,
+            update.probeIndex,
+            texel,
+            params.irradianceTexels,
+            value);
+    }
+}

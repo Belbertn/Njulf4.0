@@ -94,27 +94,6 @@ namespace Njulf.Rendering.Pipeline
             }
 
             base.Execute(cmd, frameIndex, sceneData);
-            // V2 blend wrote its private Jacobi target. Publish only after the
-            // entire blend dispatch completed, before the optional sampled-image
-            // mirror sees the canonical receiver-visible atlas.
-            VolumeManager.PublishTransportAtlasAfterBlend(cmd);
-            // The sampled atlas is deliberately graphics-queue only until its
-            // images are declared render-graph resources with queue ownership
-            // transfers.  Keep the canonical SSBO blend as the producer, then
-            // mirror only the updated probe layers for the A/B sampled path.
-            VolumeManager.SynchronizeSampledAtlasesAfterBlend(cmd);
-            long sampledAtlasSynchronizationMicroseconds = VolumeManager.LastSampledAtlasSynchronizationMicroseconds;
-            // Upload() owns scheduler, state, and initial full-mirror recording.
-            // Account for the post-blend incremental mirror here as well so the
-            // rolling GI CPU P95 includes every sampled-atlas upload command.
-            sceneData.CpuSimpleDdgiRecordMicroseconds = checked(
-                sceneData.CpuSimpleDdgiRecordMicroseconds + sampledAtlasSynchronizationMicroseconds);
-            // Capture the final transaction state, not the pre-transport
-            // relocation snapshot. This includes the just-written residual,
-            // cleared fresh flag, and any V2 cache-repair request emitted by
-            // transport, so scheduling and diagnostics observe the same
-            // generation receivers can consume.
-            VolumeManager.RecordProbeStateReadback(cmd, frameIndex);
             VolumeManager.MarkBlendExecuted();
         }
     }
@@ -216,6 +195,364 @@ namespace Njulf.Rendering.Pipeline
             VolumeManager.MarkRelocateClassifyExecuted();
         }
 
+    }
+
+    /// <summary>
+    /// Publishes the completed private Jacobi target directly from the GPU-visible
+    /// update queue. The optional filtered image mirror is dual-written by a
+    /// second compute dispatch; neither path needs CPU sorting or copy regions.
+    /// </summary>
+    public sealed unsafe class SimpleDdgiPublishPass : RenderPassBase
+    {
+        private const string EntryPoint = "main";
+        private readonly RenderSettings _settings;
+        private readonly SimpleDdgiVolumeManager _volumeManager;
+        private readonly nint _entryPointName;
+        private DescriptorSetLayout _sampledAtlasSetLayout;
+        private DescriptorPool _descriptorPool;
+        private DescriptorSet _sampledAtlasSet;
+        private PipelineLayout _pipelineLayout;
+        private PipelineCache _pipelineCache;
+        private VkPipeline _canonicalPipeline;
+        private VkPipeline _sampledPipeline;
+        private ulong _boundSampledAtlasGeneration;
+        private bool _sampledPublicationSupported;
+
+        public SimpleDdgiPublishPass(
+            VulkanContext context,
+            SwapchainManager swapchain,
+            BindlessHeap bindlessHeap,
+            RenderSettings settings,
+            SimpleDdgiVolumeManager volumeManager)
+            : base("SimpleDdgiPublishPass", context, swapchain, bindlessHeap)
+        {
+            _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _volumeManager = volumeManager ?? throw new ArgumentNullException(nameof(volumeManager));
+            _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
+        }
+
+        public override bool SupportsSecondaryCommandBuffer => true;
+        public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
+        public override bool SupportsAsyncCompute => true;
+        public override string AsyncComputeReason =>
+            "Simple DDGI publication consumes the GPU queue and writes canonical probe storage.";
+
+        public override void Initialize()
+        {
+            PhysicalDeviceProperties properties = default;
+            _context.Api.GetPhysicalDeviceProperties(_context.PhysicalDevice, &properties);
+            _sampledPublicationSupported =
+                _context.ShaderStorageImageArrayNonUniformIndexingSupported &&
+                properties.Limits.MaxPerStageDescriptorStorageImages >=
+                2u * SimpleDdgiSampledAtlas.MaxGpuPublishTextureGroups;
+            CreateSampledAtlasSetLayout();
+            CreateDescriptorSet();
+            CreatePipelineCache();
+            CreatePipelineLayout();
+            _canonicalPipeline = CreatePipeline("ddgi_simple_publish.comp.spv");
+            if (_sampledPublicationSupported)
+                _sampledPipeline = CreatePipeline("ddgi_simple_publish_sampled.comp.spv");
+        }
+
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
+        {
+            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+            if (_canonicalPipeline.Handle == 0 ||
+                !gi.EffectiveUseSimpleDdgi ||
+                !gi.SimpleDdgiStructuredGatherEnabled ||
+                !gi.EffectiveUseRayQueryBackend ||
+                _volumeManager.ProbeCount <= 0 ||
+                _volumeManager.ProbesToUpdate <= 0 ||
+                !_volumeManager.CanSchedulePublishTransaction)
+            {
+                _volumeManager.AbortUpdateTransaction();
+                return false;
+            }
+
+            return true;
+        }
+
+        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        {
+            if (!_volumeManager.CanExecutePublishTransaction)
+            {
+                _volumeManager.AbortUpdateTransaction();
+                return;
+            }
+
+            GPUSimpleDdgiPublishPushConstants pushConstants = CreatePushConstants();
+            uint groupCount = checked((uint)Math.Max(1, _volumeManager.ProbesToUpdate));
+
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _canonicalPipeline);
+            BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
+            PushConstants(cmd, pushConstants);
+            _context.Api.CmdDispatch(cmd, groupCount, 1, 1);
+            InsertComputeStorageBarrier(cmd);
+
+            if (_sampledPublicationSupported &&
+                _sampledPipeline.Handle != 0 &&
+                _volumeManager.SampledAtlasActive)
+            {
+                ulong allocationGeneration = _volumeManager.SampledAtlasAllocationGeneration;
+                if (_boundSampledAtlasGeneration != allocationGeneration)
+                {
+                    _volumeManager.UpdateSampledAtlasGpuPublishDescriptors(_sampledAtlasSet);
+                    _boundSampledAtlasGeneration = allocationGeneration;
+                }
+
+                _volumeManager.BeginSampledAtlasGpuPublication(cmd);
+                _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _sampledPipeline);
+                BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
+                DescriptorSet sampledAtlasSet = _sampledAtlasSet;
+                _context.Api.CmdBindDescriptorSets(
+                    cmd,
+                    PipelineBindPoint.Compute,
+                    _pipelineLayout,
+                    2,
+                    1,
+                    &sampledAtlasSet,
+                    0,
+                    null);
+                PushConstants(cmd, pushConstants);
+                _context.Api.CmdDispatch(cmd, groupCount, 1, 1);
+                _volumeManager.EndSampledAtlasGpuPublication(cmd);
+            }
+
+            // Capture state only after canonical and optional image publication
+            // have been recorded. The transaction is completed at this point.
+            _volumeManager.RecordProbeStateReadback(cmd, frameIndex);
+            _volumeManager.MarkPublishExecuted();
+        }
+
+        public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
+        {
+            yield break;
+        }
+
+        public override void Cleanup()
+        {
+            if (_canonicalPipeline.Handle != 0)
+                _context.Api.DestroyPipeline(_context.Device, _canonicalPipeline, null);
+            if (_sampledPipeline.Handle != 0)
+                _context.Api.DestroyPipeline(_context.Device, _sampledPipeline, null);
+            if (_pipelineLayout.Handle != 0)
+                _context.Api.DestroyPipelineLayout(_context.Device, _pipelineLayout, null);
+            if (_pipelineCache.Handle != 0)
+                _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
+            if (_descriptorPool.Handle != 0)
+                _context.Api.DestroyDescriptorPool(_context.Device, _descriptorPool, null);
+            if (_sampledAtlasSetLayout.Handle != 0)
+                _context.Api.DestroyDescriptorSetLayout(_context.Device, _sampledAtlasSetLayout, null);
+            if (_entryPointName != 0)
+                SilkMarshal.Free(_entryPointName);
+
+            _canonicalPipeline = default;
+            _sampledPipeline = default;
+            _pipelineLayout = default;
+            _pipelineCache = default;
+            _descriptorPool = default;
+            _sampledAtlasSet = default;
+            _sampledAtlasSetLayout = default;
+        }
+
+        private GPUSimpleDdgiPublishPushConstants CreatePushConstants() => new()
+        {
+            ParamsBufferIndex = BindlessIndex.SimpleDdgiParamsBuffer,
+            IrradianceAtlasBufferIndex = BindlessIndex.SimpleDdgiIrradianceAtlasBuffer,
+            VisibilityAtlasBufferIndex = BindlessIndex.SimpleDdgiVisibilityAtlasBuffer,
+            ProbeStateBufferIndex = BindlessIndex.SimpleDdgiProbeStateBuffer,
+            ProbeUpdateQueueBufferIndex = BindlessIndex.SimpleDdgiProbeUpdateQueueBuffer,
+            TransportIrradianceAtlasBufferIndex = BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer,
+            SampledAtlasGroupCount = checked((uint)Math.Max(0, _volumeManager.SampledAtlasGroupCount)),
+            SampledAtlasLayersPerTexture = checked((uint)Math.Max(0, _volumeManager.SampledAtlasLayersPerTexture))
+        };
+
+        private void PushConstants(CommandBuffer cmd, GPUSimpleDdgiPublishPushConstants pushConstants)
+        {
+            _context.Api.CmdPushConstants(
+                cmd,
+                _pipelineLayout,
+                ShaderStageFlags.ComputeBit,
+                0,
+                (uint)Marshal.SizeOf<GPUSimpleDdgiPublishPushConstants>(),
+                &pushConstants);
+        }
+
+        private void CreateSampledAtlasSetLayout()
+        {
+            uint descriptorCount = _sampledPublicationSupported
+                ? SimpleDdgiSampledAtlas.MaxGpuPublishTextureGroups
+                : 1u;
+            DescriptorSetLayoutBinding* bindings = stackalloc DescriptorSetLayoutBinding[2];
+            bindings[0] = new DescriptorSetLayoutBinding
+            {
+                Binding = 0,
+                DescriptorType = DescriptorType.StorageImage,
+                DescriptorCount = descriptorCount,
+                StageFlags = ShaderStageFlags.ComputeBit
+            };
+            bindings[1] = new DescriptorSetLayoutBinding
+            {
+                Binding = 1,
+                DescriptorType = DescriptorType.StorageImage,
+                DescriptorCount = descriptorCount,
+                StageFlags = ShaderStageFlags.ComputeBit
+            };
+            var layoutInfo = new DescriptorSetLayoutCreateInfo
+            {
+                SType = StructureType.DescriptorSetLayoutCreateInfo,
+                BindingCount = 2,
+                PBindings = bindings
+            };
+            Result result = _context.Api.CreateDescriptorSetLayout(
+                _context.Device,
+                &layoutInfo,
+                null,
+                out _sampledAtlasSetLayout);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create Simple DDGI publish image layout", result);
+        }
+
+        private void CreateDescriptorSet()
+        {
+            uint descriptorCount = _sampledPublicationSupported
+                ? 2u * SimpleDdgiSampledAtlas.MaxGpuPublishTextureGroups
+                : 2u;
+            var poolSize = new DescriptorPoolSize
+            {
+                Type = DescriptorType.StorageImage,
+                DescriptorCount = descriptorCount
+            };
+            var poolInfo = new DescriptorPoolCreateInfo
+            {
+                SType = StructureType.DescriptorPoolCreateInfo,
+                PoolSizeCount = 1,
+                PPoolSizes = &poolSize,
+                MaxSets = 1
+            };
+            Result result = _context.Api.CreateDescriptorPool(
+                _context.Device,
+                &poolInfo,
+                null,
+                out _descriptorPool);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create Simple DDGI publish descriptor pool", result);
+
+            DescriptorSetLayout layout = _sampledAtlasSetLayout;
+            var allocationInfo = new DescriptorSetAllocateInfo
+            {
+                SType = StructureType.DescriptorSetAllocateInfo,
+                DescriptorPool = _descriptorPool,
+                DescriptorSetCount = 1,
+                PSetLayouts = &layout
+            };
+            result = _context.Api.AllocateDescriptorSets(
+                _context.Device,
+                &allocationInfo,
+                out _sampledAtlasSet);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to allocate Simple DDGI publish descriptor set", result);
+        }
+
+        private void CreatePipelineCache()
+        {
+            var cacheInfo = new PipelineCacheCreateInfo { SType = StructureType.PipelineCacheCreateInfo };
+            Result result = _context.Api.CreatePipelineCache(
+                _context.Device,
+                &cacheInfo,
+                null,
+                out _pipelineCache);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create Simple DDGI publish pipeline cache", result);
+        }
+
+        private void CreatePipelineLayout()
+        {
+            DescriptorSetLayout* layouts = stackalloc DescriptorSetLayout[3]
+            {
+                _bindlessHeap.StorageBufferSetLayout,
+                _bindlessHeap.TextureSamplerSetLayout,
+                _sampledAtlasSetLayout
+            };
+            var pushConstantRange = new PushConstantRange
+            {
+                StageFlags = ShaderStageFlags.ComputeBit,
+                Size = (uint)Marshal.SizeOf<GPUSimpleDdgiPublishPushConstants>()
+            };
+            var layoutInfo = new PipelineLayoutCreateInfo
+            {
+                SType = StructureType.PipelineLayoutCreateInfo,
+                SetLayoutCount = 3,
+                PSetLayouts = layouts,
+                PushConstantRangeCount = 1,
+                PPushConstantRanges = &pushConstantRange
+            };
+            Result result = _context.Api.CreatePipelineLayout(
+                _context.Device,
+                &layoutInfo,
+                null,
+                out _pipelineLayout);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create Simple DDGI publish pipeline layout", result);
+        }
+
+        private VkPipeline CreatePipeline(string shaderName)
+        {
+            ShaderModule shaderModule = default;
+            try
+            {
+                shaderModule = ShaderModuleLoader.Load(_context, shaderName);
+                var stage = new PipelineShaderStageCreateInfo
+                {
+                    SType = StructureType.PipelineShaderStageCreateInfo,
+                    Stage = ShaderStageFlags.ComputeBit,
+                    Module = shaderModule,
+                    PName = (byte*)_entryPointName
+                };
+                var pipelineInfo = new ComputePipelineCreateInfo
+                {
+                    SType = StructureType.ComputePipelineCreateInfo,
+                    Stage = stage,
+                    Layout = _pipelineLayout,
+                    BasePipelineIndex = -1
+                };
+                Result result = _context.Api.CreateComputePipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1,
+                    &pipelineInfo,
+                    null,
+                    out VkPipeline pipeline);
+                if (result != Result.Success)
+                    throw new VulkanException($"Failed to create Simple DDGI publish pipeline '{shaderName}'", result);
+                return pipeline;
+            }
+            finally
+            {
+                if (shaderModule.Handle != 0)
+                    _context.Api.DestroyShaderModule(_context.Device, shaderModule, null);
+            }
+        }
+
+        private void InsertComputeStorageBarrier(CommandBuffer cmd)
+        {
+            var barrier = new MemoryBarrier2
+            {
+                SType = StructureType.MemoryBarrier2,
+                SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
+                SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
+                DstStageMask = PipelineStageFlags2.ComputeShaderBit,
+                DstAccessMask = AccessFlags2.ShaderStorageReadBit |
+                                AccessFlags2.ShaderStorageWriteBit
+            };
+            var dependency = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                MemoryBarrierCount = 1,
+                PMemoryBarriers = &barrier
+            };
+            _context.Api.CmdPipelineBarrier2(cmd, &dependency);
+        }
     }
 
     public abstract unsafe class SimpleDdgiComputePass : RenderPassBase

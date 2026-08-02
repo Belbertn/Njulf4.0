@@ -941,6 +941,7 @@ namespace Njulf.Tests
                     "SimpleDdgiRelocateClassifyPass",
                     "SimpleDdgiTransportPass",
                     "SimpleDdgiBlendPass",
+                    "SimpleDdgiPublishPass",
                     "DdgiSchedulePass",
                     "DdgiTracePass",
                     "DdgiBlendPass",

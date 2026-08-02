@@ -62,9 +62,19 @@ namespace Njulf.Rendering.Resources
         private uint _particleCapacity;
         private uint _emitterCapacity;
         private uint _drawCapacity;
+        private ulong _resourceGeneration;
         private bool _disposed;
 
         public float SoftParticleDistanceForFrame { get; private set; }
+        /// <summary>Changes only when the runtime publishes a different particle allocation set.</summary>
+        public ulong ResourceGeneration
+        {
+            get
+            {
+                lock (_lock)
+                    return _resourceGeneration;
+            }
+        }
 
         public GpuParticleRuntimeManager(VulkanContext context, BufferManager bufferManager, StagingRing stagingRing)
         {
@@ -610,6 +620,7 @@ namespace Njulf.Rendering.Resources
             if (!buffer.Handle.IsValid)
             {
                 buffer = CreateBuffer(required, stride, usage, debugName);
+                AdvanceResourceGeneration();
                 return;
             }
 
@@ -625,6 +636,7 @@ namespace Njulf.Rendering.Resources
 
             DestroyIfValid(buffer.Handle);
             buffer = CreateBuffer(newCapacity, stride, usage, debugName);
+            AdvanceResourceGeneration();
         }
 
         private RuntimeBuffer CreateBuffer(uint elementCapacity, ulong stride, BufferUsageFlags usage, string debugName)
@@ -653,6 +665,14 @@ namespace Njulf.Rendering.Resources
                 Vma.AllocationCreateFlags.MappedBit | Vma.AllocationCreateFlags.HostAccessRandomBit,
                 $"GpuParticles.CounterReadback.Frame{frameIndex}",
                 MemoryBudgetCategory.DiagnosticsAndDebug);
+            AdvanceResourceGeneration();
+        }
+
+        private void AdvanceResourceGeneration()
+        {
+            _resourceGeneration++;
+            if (_resourceGeneration == 0)
+                _resourceGeneration = 1;
         }
 
         private void ExecuteBufferBarrier(CommandBuffer commandBuffer, BufferMemoryBarrier2 barrier)

@@ -1,0 +1,88 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
+#include "ddgi_simple_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// The optional image mirror is capped independently from the SSBO probe pool.
+// The manager declines this optional path when the resolved array-layer count
+// would require more descriptors than this production layout.
+const uint SIMPLE_DDGI_PUBLISH_MAX_IMAGE_GROUPS = 16u;
+layout(set = 2, binding = 0, rgba16f) uniform image2DArray IrradianceImages[16];
+layout(set = 2, binding = 1, rgba16f) uniform image2DArray VisibilityImages[16];
+
+layout(push_constant) uniform SimpleDdgiPublishPushBlock
+{
+    uint ParamsBufferIndex;
+    uint IrradianceAtlasBufferIndex;
+    uint VisibilityAtlasBufferIndex;
+    uint ProbeStateBufferIndex;
+    uint ProbeUpdateQueueBufferIndex;
+    uint TransportIrradianceAtlasBufferIndex;
+    uint SampledAtlasGroupCount;
+    uint SampledAtlasLayersPerTexture;
+} pc;
+
+void main()
+{
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    uint queueOffset = gl_WorkGroupID.x;
+    if (queueOffset >= params.probesToUpdate || params.probeCount == 0u ||
+        pc.SampledAtlasGroupCount == 0u || pc.SampledAtlasLayersPerTexture == 0u)
+        return;
+
+    SimpleDdgiProbeUpdate update =
+        ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, queueOffset);
+    if (update.probeIndex >= params.probeCount)
+        return;
+
+    SimpleDdgiProbeState state =
+        ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, update.probeIndex);
+    if (!SimpleDdgiUpdateMatchesProbeGeneration(update, state))
+        return;
+
+    uint groupIndex = update.probeIndex / pc.SampledAtlasLayersPerTexture;
+    uint layerIndex = update.probeIndex - groupIndex * pc.SampledAtlasLayersPerTexture;
+    if (groupIndex >= min(pc.SampledAtlasGroupCount, SIMPLE_DDGI_PUBLISH_MAX_IMAGE_GROUPS))
+        return;
+
+    uint irradianceTexelCount = params.irradianceTexels * params.irradianceTexels;
+    for (uint texel = gl_LocalInvocationID.x;
+         texel < irradianceTexelCount;
+         texel += gl_WorkGroupSize.x)
+    {
+        uint x = texel % params.irradianceTexels;
+        uint y = texel / params.irradianceTexels;
+        vec4 value = ReadSimpleDdgiAtlasTexel(
+            pc.IrradianceAtlasBufferIndex,
+            update.probeIndex,
+            texel,
+            params.irradianceTexels);
+        imageStore(
+            IrradianceImages[nonuniformEXT(groupIndex)],
+            ivec3(int(x), int(y), int(layerIndex)),
+            value);
+    }
+
+    uint visibilityTexelCount = params.visibilityTexels * params.visibilityTexels;
+    for (uint texel = gl_LocalInvocationID.x;
+         texel < visibilityTexelCount;
+         texel += gl_WorkGroupSize.x)
+    {
+        uint x = texel % params.visibilityTexels;
+        uint y = texel / params.visibilityTexels;
+        vec4 value = ReadSimpleDdgiAtlasTexel(
+            pc.VisibilityAtlasBufferIndex,
+            update.probeIndex,
+            texel,
+            params.visibilityTexels);
+        imageStore(
+            VisibilityImages[nonuniformEXT(groupIndex)],
+            ivec3(int(x), int(y), int(layerIndex)),
+            value);
+    }
+}

@@ -94,6 +94,7 @@ namespace Njulf.Rendering.Resources
         private bool _hasTlasInstanceSignature;
         private int _lastTlasInstanceCount;
         private ulong _frameSerial;
+        private ulong _resourceGeneration;
 
         public AccelerationStructureManager(
             VulkanContext context,
@@ -160,6 +161,8 @@ namespace Njulf.Rendering.Resources
             SaturatingAdd(RayQueryInstanceMetadataBufferBytes, _retiredBufferBytes)));
         public string LastFallbackReason => _lastFallbackReason;
         public long LastBuildMicroseconds => _lastBuildMicroseconds;
+        /// <summary>Changes when a ray-query-visible backing allocation is added or replaced.</summary>
+        public ulong ResourceGeneration => _resourceGeneration;
 
         /// <summary>
         /// Resolves every backing allocation traversed by a ray query. A TLAS descriptor reaches
@@ -753,6 +756,7 @@ namespace Njulf.Rendering.Resources
                 _lastBlasBuildMicroseconds += ElapsedMicroseconds(blasStart);
                 _lastBlasBuildCount++;
                 _blasCache.Add(instance.Mesh, blas);
+                AdvanceResourceGeneration();
                 AccelerationStructureBytes = checked(AccelerationStructureBytes + blas.Size);
                 InsertAccelerationStructureBuildBarrier(commandBuffer);
             }
@@ -869,6 +873,7 @@ namespace Njulf.Rendering.Resources
                 return false;
 
             _blasCache.Remove(selectedMesh);
+            AdvanceResourceGeneration();
             RetireAccelerationStructureResource(selectedBlas.Handle, selectedBlas.StorageBuffer, selectedBlas.Size);
             _lastBlasEvictionCount++;
             _lastBlasEvictionBytes = checked(_lastBlasEvictionBytes + selectedBlas.Size);
@@ -1323,6 +1328,7 @@ namespace Njulf.Rendering.Resources
                     AccelerationStructureTypeKHR.TopLevelKhr,
                     "Top Level Acceleration Structure");
                 _tlas = new TopLevelAccelerationStructure(tlas, storageBuffer, requiredSize);
+                AdvanceResourceGeneration();
             }
             catch
             {
@@ -1450,7 +1456,15 @@ namespace Njulf.Rendering.Resources
                 requireDeviceAddress: false,
                 MemoryBudgetCategory.GlobalIllumination,
                 "DDGI Ray Query Instance Metadata Buffer");
+            AdvanceResourceGeneration();
             RegisterRayQueryInstanceMetadataBuffer();
+        }
+
+        private void AdvanceResourceGeneration()
+        {
+            _resourceGeneration++;
+            if (_resourceGeneration == 0)
+                _resourceGeneration = 1;
         }
 
         private void RegisterRayQueryInstanceMetadataBuffer()
@@ -1788,6 +1802,7 @@ namespace Njulf.Rendering.Resources
             else
                 DestroyAccelerationStructureResource(_tlas.Handle, _tlas.StorageBuffer);
             _tlas = default;
+            AdvanceResourceGeneration();
             _hasTlasInstanceSignature = false;
             _lastTlasInstanceSignature = 0;
             _lastTlasInstanceCount = 0;
@@ -1806,6 +1821,7 @@ namespace Njulf.Rendering.Resources
                     DestroyAccelerationStructureResource(blas.Handle, blas.StorageBuffer);
             }
             _blasCache.Clear();
+            AdvanceResourceGeneration();
         }
 
         private void BeginFrameResourceRetirement()

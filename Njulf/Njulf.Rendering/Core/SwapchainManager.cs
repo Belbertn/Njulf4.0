@@ -33,6 +33,7 @@ namespace Njulf.Rendering.Core
         
         // Layout tracking
         private ImageLayout[] _imageLayouts = Array.Empty<ImageLayout>();
+        private ulong _resourceGeneration;
         private SwapchainScreenshotCapability _screenshotCapability =
             SwapchainScreenshotCapability.Evaluate(ImageUsageFlags.None);
         
@@ -49,6 +50,8 @@ namespace Njulf.Rendering.Core
         public ImageView DepthImageView => _depthImageView;
         public ImageLayout DepthImageLayout => _depthImageLayout;
         public uint ImageCount => (uint)_images.Length;
+        /// <summary>Changes only when the swapchain publishes a new image allocation set.</summary>
+        public ulong ResourceGeneration => _resourceGeneration;
         /// <summary>
         /// True when the current surface allowed this swapchain to be created
         /// with <see cref="ImageUsageFlags.TransferSrcBit"/>.  Renderer PNG
@@ -216,7 +219,11 @@ namespace Njulf.Rendering.Core
                 _context.SetDebugName(_imageViews[i].Handle, ObjectType.ImageView, $"Swapchain Image View {i}");
                 _imageLayouts[i] = ImageLayout.Undefined;
             }
-            
+
+            _resourceGeneration++;
+            if (_resourceGeneration == 0)
+                _resourceGeneration = 1;
+
             System.Diagnostics.Debug.WriteLine($"Swapchain created with {actualImageCount} images ({_extent.Width}x{_extent.Height}).");
         }
         

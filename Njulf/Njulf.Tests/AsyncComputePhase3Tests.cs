@@ -1100,6 +1100,95 @@ public sealed class AsyncComputePhase3Tests
     }
 
     [Test]
+    public void ConcreteResourcePlan_ReactivationReusesValidatedImmutableLookups()
+    {
+        using var graph = new RenderGraph();
+        graph.RegisterResources(new[]
+        {
+            new RenderGraphResourceDescriptor(
+                RenderGraphResourceId.LightTiles,
+                "Light tiles",
+                RenderGraphResourceKind.Buffer,
+                null,
+                RenderGraphResourceSizePolicy.Dynamic,
+                RenderGraphResourceLifetime.Persistent,
+                Persistent: true)
+        });
+        RenderGraphResourcePlan plan = graph.CreateConcreteResourcePlan(new[]
+        {
+            CreateBufferBinding(RenderGraphResourceId.LightTiles, "cached", 401, 0, 64)
+        });
+
+        graph.ActivateConcreteResourcePlan(plan, resetState: true);
+        IReadOnlyList<RenderGraphConcreteResourceBinding> firstLookup =
+            graph.ConcreteResourceBindings.GetBindings(RenderGraphResourceId.LightTiles, 0);
+        ulong generation = graph.ConcreteResourceBindings.Generation;
+
+        graph.ActivateConcreteResourcePlan(plan);
+        IReadOnlyList<RenderGraphConcreteResourceBinding> secondLookup =
+            graph.ConcreteResourceBindings.GetBindings(RenderGraphResourceId.LightTiles, 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(graph.ConcreteResourceBindings.Generation, Is.EqualTo(generation));
+            Assert.That(plan.Generation, Is.EqualTo(generation));
+            Assert.That(ReferenceEquals(firstLookup, secondLookup), Is.True);
+            Assert.That(secondLookup.Single().ResourcePlanGeneration, Is.EqualTo(generation));
+        });
+    }
+
+    [Test]
+    public void ConcreteResourcePlan_UsesTypedIdentityInsteadOfDiagnosticName()
+    {
+        var bindings = new RenderGraphResourceBindings();
+        RenderGraphConcreteResourceBinding first =
+            CreateBufferBinding(RenderGraphResourceId.LightTiles, "first name", 402, 0, 64);
+        RenderGraphConcreteResourceBinding renamed = first with { Name = "different diagnostic name" };
+
+        Assert.That(
+            () => bindings.Replace(new[] { first, renamed }),
+            Throws.InvalidOperationException.With.Message.Contains("Duplicate concrete binding identity"));
+    }
+
+    [Test]
+    public void ConcreteResourcePlan_ReadsLiveLayoutWithoutRebuildingGeneration()
+    {
+        ImageLayout liveLayout = ImageLayout.ColorAttachmentOptimal;
+        var bindings = new RenderGraphResourceBindings();
+        bindings.Replace(new[]
+        {
+            RenderGraphConcreteResourceBinding.ForImage(
+                RenderGraphResourceId.AmbientOcclusionRaw,
+                "live layout",
+                new Image { Handle = 403 },
+                new ImageSubresourceRange
+                {
+                    AspectMask = ImageAspectFlags.ColorBit,
+                    BaseMipLevel = 0,
+                    LevelCount = 1,
+                    BaseArrayLayer = 0,
+                    LayerCount = 1
+                },
+                liveLayout,
+                new uint[] { 0, 1 },
+                initialOwnerQueueFamily: 0,
+                allocationGeneration: 403,
+                layoutProvider: () => liveLayout)
+        });
+        RenderGraphConcreteResourceBinding binding =
+            bindings.GetBindings(RenderGraphResourceId.AmbientOcclusionRaw).Single();
+        ulong generation = bindings.Generation;
+
+        liveLayout = ImageLayout.ShaderReadOnlyOptimal;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bindings.GetCurrentLayout(binding), Is.EqualTo(ImageLayout.ShaderReadOnlyOptimal));
+            Assert.That(bindings.Generation, Is.EqualTo(generation));
+        });
+    }
+
+    [Test]
     public void RenderGraph_RejectsConcreteBindingWithTheWrongResourceKind()
     {
         using var graph = new RenderGraph();

@@ -22,6 +22,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly Dictionary<RenderGraphResourceId, RenderGraphResourceUsage> _lastResourceUsages = new();
         private readonly List<RenderGraphPlannedBarrier> _framePlannedBarriers = new();
         private readonly StringBuilder _barrierSummaryBuilder = new();
+        private ulong _resourceAllocationGeneration;
         private bool _cleanedUp;
         private bool _disposed;
 
@@ -41,6 +42,11 @@ namespace Njulf.Rendering.Pipeline
             ToReadOnlyPassResourceUsages();
         public IReadOnlyList<RenderGraphPlannedBarrier> LastPlannedBarriers => _framePlannedBarriers.ToArray();
         public RenderGraphResourceBindings ConcreteResourceBindings => _concreteResourceBindings;
+        /// <summary>
+        /// Advances only when graph-owned allocations or their swapchain-dependent configuration
+        /// change. Frame rotation does not invalidate an immutable concrete resource plan.
+        /// </summary>
+        public ulong ResourceAllocationGeneration => _resourceAllocationGeneration;
 
         public RenderGraphDiagnostics CreateDiagnostics(
             RenderFeatureIsolationMode featureIsolation,
@@ -231,6 +237,7 @@ namespace Njulf.Rendering.Pipeline
             }
 
             targets.Add(target);
+            AdvanceResourceAllocationGeneration();
             return target;
         }
 
@@ -244,6 +251,7 @@ namespace Njulf.Rendering.Pipeline
             target.Dispose();
             if (targets.Count == 0)
                 _ownedRenderTargets.Remove(id);
+            AdvanceResourceAllocationGeneration();
         }
 
         public bool OwnsResource(RenderGraphResourceId id)
@@ -271,7 +279,10 @@ namespace Njulf.Rendering.Pipeline
                 throw new InvalidOperationException($"Resource '{id}' does not own render target '{target.Name}'.");
 
             if (target.Extent.Width != extent.Width || target.Extent.Height != extent.Height)
+            {
                 target.Recreate(extent);
+                AdvanceResourceAllocationGeneration();
+            }
         }
 
         public void RecreateOwnedRenderTargets(RenderGraphResourceId id, Extent2D extent)
@@ -282,7 +293,10 @@ namespace Njulf.Rendering.Pipeline
             foreach (RenderTarget target in targets)
             {
                 if (target.Extent.Width != extent.Width || target.Extent.Height != extent.Height)
+                {
                     target.Recreate(extent);
+                    AdvanceResourceAllocationGeneration();
+                }
             }
         }
         
@@ -376,6 +390,17 @@ namespace Njulf.Rendering.Pipeline
         /// </summary>
         public void ReplaceConcreteResourceBindings(IEnumerable<RenderGraphConcreteResourceBinding> bindings)
         {
+            RenderGraphResourcePlan plan = CreateConcreteResourcePlan(bindings);
+            _concreteResourceBindings.Activate(plan, resetState: true);
+        }
+
+        /// <summary>
+        /// Builds and exhaustively validates an immutable concrete resource plan without publishing
+        /// it. Callers may cache the result by their typed allocation-generation key.
+        /// </summary>
+        public RenderGraphResourcePlan CreateConcreteResourcePlan(
+            IEnumerable<RenderGraphConcreteResourceBinding> bindings)
+        {
             if (bindings == null)
                 throw new ArgumentNullException(nameof(bindings));
 
@@ -401,8 +426,12 @@ namespace Njulf.Rendering.Pipeline
                 }
             }
 
-            _concreteResourceBindings.Replace(materialized);
+            return _concreteResourceBindings.CreatePlan(materialized);
         }
+
+        /// <summary>Publishes a previously validated plan in constant time.</summary>
+        public void ActivateConcreteResourcePlan(RenderGraphResourcePlan plan, bool resetState = false) =>
+            _concreteResourceBindings.Activate(plan, resetState);
 
         public void InvalidateConcreteResourceBindings() => _concreteResourceBindings.Invalidate();
 
@@ -952,8 +981,16 @@ namespace Njulf.Rendering.Pipeline
             // Imported and graph-owned images may have been recreated. A plan compiled before
             // this point must never retain the old handle or ownership state.
             _concreteResourceBindings.Invalidate();
+            AdvanceResourceAllocationGeneration();
             foreach (var pass in _passes)
                 pass.OnSwapchainRecreated();
+        }
+
+        private void AdvanceResourceAllocationGeneration()
+        {
+            _resourceAllocationGeneration++;
+            if (_resourceAllocationGeneration == 0)
+                _resourceAllocationGeneration = 1;
         }
         
         public void Cleanup()

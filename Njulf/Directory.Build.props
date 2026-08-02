@@ -1,5 +1,6 @@
 <Project>
   <PropertyGroup>
+    <Configurations>Debug;Release;ShippingPerformance;ProfileSymbols;DetailedInvestigation</Configurations>
     <!-- GpuMemoryAllocator.vma ships an unused macos-arm64 asset. Njulf does not target macOS. -->
     <NoWarn>$(NoWarn);NETSDK1206</NoWarn>
 
@@ -10,6 +11,26 @@
     -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <RestoreLockedMode
-      Condition="'$(RestoreLockedMode)' == '' and ('$(Configuration)' == 'Release' or '$(ContinuousIntegrationBuild)' == 'true')">true</RestoreLockedMode>
+      Condition="'$(RestoreLockedMode)' == '' and ('$(Configuration)' == 'Release' or '$(Configuration)' == 'ShippingPerformance' or '$(Configuration)' == 'ProfileSymbols' or '$(Configuration)' == 'DetailedInvestigation' or '$(ContinuousIntegrationBuild)' == 'true')">true</RestoreLockedMode>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'ShippingPerformance' or '$(Configuration)' == 'ProfileSymbols' or '$(Configuration)' == 'DetailedInvestigation'">
+    <Optimize>true</Optimize>
+    <DebugType>portable</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+    <DefineConstants>$(DefineConstants);TRACE;RELEASE</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'ShippingPerformance'">
+    <DefineConstants>$(DefineConstants);NJULF_SHIPPING_PERFORMANCE</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'ProfileSymbols'">
+    <DefineConstants>$(DefineConstants);NJULF_PROFILE_SYMBOLS</DefineConstants>
+    <NjulfShaderDebugInformation>true</NjulfShaderDebugInformation>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'DetailedInvestigation'">
+    <DefineConstants>$(DefineConstants);NJULF_DETAILED_INVESTIGATION</DefineConstants>
   </PropertyGroup>
 </Project>

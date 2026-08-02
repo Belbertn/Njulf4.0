@@ -136,6 +136,7 @@ namespace Njulf.Rendering.Data
         private UploadState _objectUploadState;
         private StaticScenePayloadSignature _lastStaticPayloadSignature;
         private SceneCullingSignature _lastCullingSignature;
+        private DrawPacketSet _drawPacketSet = DrawPacketSet.Empty;
         private Matrix4x4 _lastCameraDependentViewProjection;
         private bool _hasLastCameraDependentViewProjection;
         private Matrix4x4 _previousHiZViewProjectionMatrix = Matrix4x4.Identity;
@@ -581,6 +582,17 @@ namespace Njulf.Rendering.Data
                         useCpuMeshletFrustumCulling: useCpuMeshletFrustumCulling,
                         gpuLod1DistanceRatio: gpuLod1DistanceRatio,
                         gpuLod2DistanceRatio: gpuLod2DistanceRatio);
+                    ulong drawPacketRevision = _drawPacketSet.Revision + 1;
+                    if (drawPacketRevision == 0)
+                        drawPacketRevision = 1;
+                    _drawPacketSet = DrawPacketSet.Create(
+                        drawPacketRevision,
+                        _directionalShadowMeshletDrawCommands,
+                        _localShadowMeshletDrawCommands,
+                        _directionalStaticShadowMeshletDrawCommands,
+                        _directionalDynamicShadowMeshletDrawCommands,
+                        _localStaticShadowMeshletDrawCommands,
+                        _localDynamicShadowMeshletDrawCommands);
                     _lastStaticPayloadSignature = staticPayloadSignature;
                     _lastCullingSignature = cullingSignature;
                     _hasCachedPayload = true;
@@ -854,20 +866,21 @@ namespace Njulf.Rendering.Data
                 }
 
                 for (int cascade = 0; cascade < ShadowSettings.MaxDirectionalCascades; cascade++)
-                    sceneData.DirectionalShadowMeshletCounts[cascade] = _directionalShadowMeshletDrawCommands.Count;
-                sceneData.LocalShadowMeshletCount = _localShadowMeshletDrawCommands.Count;
-                sceneData.DirectionalStaticShadowMeshletCount = _directionalStaticShadowMeshletDrawCommands.Count;
-                sceneData.DirectionalDynamicShadowMeshletCount = _directionalDynamicShadowMeshletDrawCommands.Count;
-                sceneData.LocalStaticShadowMeshletCount = _localStaticShadowMeshletDrawCommands.Count;
-                sceneData.LocalDynamicShadowMeshletCount = _localDynamicShadowMeshletDrawCommands.Count;
+                    sceneData.DirectionalShadowMeshletCounts[cascade] = _drawPacketSet.DirectionalShadowCommands.Length;
+                sceneData.LocalShadowMeshletCount = _drawPacketSet.LocalShadowCommands.Length;
+                sceneData.DirectionalStaticShadowMeshletCount = _drawPacketSet.DirectionalStaticShadowCommands.Length;
+                sceneData.DirectionalDynamicShadowMeshletCount = _drawPacketSet.DirectionalDynamicShadowCommands.Length;
+                sceneData.LocalStaticShadowMeshletCount = _drawPacketSet.LocalStaticShadowCommands.Length;
+                sceneData.LocalDynamicShadowMeshletCount = _drawPacketSet.LocalDynamicShadowCommands.Length;
                 sceneData.DirectionalShadowSkinnedObjectCount = _directionalShadowSkinnedObjectCount;
                 sceneData.LocalShadowSkinnedObjectCount = _localShadowSkinnedObjectCount;
-                sceneData.DirectionalShadowMeshletDrawSignature = HashMeshletDrawCommands(_directionalShadowMeshletDrawCommands);
-                sceneData.LocalShadowMeshletDrawSignature = HashMeshletDrawCommands(_localShadowMeshletDrawCommands);
-                sceneData.DirectionalStaticShadowMeshletDrawSignature = HashMeshletDrawCommands(_directionalStaticShadowMeshletDrawCommands);
-                sceneData.DirectionalDynamicShadowMeshletDrawSignature = HashMeshletDrawCommands(_directionalDynamicShadowMeshletDrawCommands);
-                sceneData.LocalStaticShadowMeshletDrawSignature = HashMeshletDrawCommands(_localStaticShadowMeshletDrawCommands);
-                sceneData.LocalDynamicShadowMeshletDrawSignature = HashMeshletDrawCommands(_localDynamicShadowMeshletDrawCommands);
+                sceneData.DrawPacketRevision = _drawPacketSet.Revision;
+                sceneData.DirectionalShadowMeshletDrawSignature = _drawPacketSet.DirectionalShadowSignature;
+                sceneData.LocalShadowMeshletDrawSignature = _drawPacketSet.LocalShadowSignature;
+                sceneData.DirectionalStaticShadowMeshletDrawSignature = _drawPacketSet.DirectionalStaticShadowSignature;
+                sceneData.DirectionalDynamicShadowMeshletDrawSignature = _drawPacketSet.DirectionalDynamicShadowSignature;
+                sceneData.LocalStaticShadowMeshletDrawSignature = _drawPacketSet.LocalStaticShadowSignature;
+                sceneData.LocalDynamicShadowMeshletDrawSignature = _drawPacketSet.LocalDynamicShadowSignature;
                 sceneData.PointShadowFaceMasks = CopyPointShadowFaceMasks(selectedPointShadows.Length);
 
                 if (AdvancePreviousWorldMatrices())
@@ -2410,24 +2423,6 @@ namespace Njulf.Rendering.Data
             return (uint)count;
         }
 
-        private static ulong HashMeshletDrawCommands(IReadOnlyList<GPUMeshletDrawCommand> commands)
-        {
-            const ulong OffsetBasis = 14695981039346656037UL;
-            const ulong Prime = 1099511628211UL;
-
-            ulong hash = OffsetBasis;
-            hash = (hash ^ (uint)commands.Count) * Prime;
-            for (int i = 0; i < commands.Count; i++)
-            {
-                GPUMeshletDrawCommand command = commands[i];
-                hash = (hash ^ command.MeshletIndex) * Prime;
-                hash = (hash ^ command.InstanceId) * Prime;
-                hash = (hash ^ command.MaterialIndex) * Prime;
-            }
-
-            return hash;
-        }
-
         private int[] CopyPointShadowFaceMasks(int pointShadowCount)
         {
             int count = Math.Min(Math.Max(0, pointShadowCount), _pointShadowFaceMasks.Length);
@@ -2731,6 +2726,7 @@ namespace Njulf.Rendering.Data
                 _directionalDynamicShadowMeshletDrawCommands.Clear();
                 _localStaticShadowMeshletDrawCommands.Clear();
                 _localDynamicShadowMeshletDrawCommands.Clear();
+                _drawPacketSet = DrawPacketSet.Empty;
 
                 _objectData.Clear();
                 _meshletDrawCommands.Clear();

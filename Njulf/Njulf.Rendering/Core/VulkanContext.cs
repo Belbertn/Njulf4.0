@@ -66,6 +66,7 @@ namespace Njulf.Rendering.Core
         private bool _memoryBudgetExtensionEnabled;
         private bool _imageCompressionControlEnabled;
         private bool _rayQuerySupported;
+        private bool _shaderStorageImageArrayNonUniformIndexingSupported;
         private uint _memoryHeapCount;
         private readonly MemoryHeapFlags[] _memoryHeapFlags = new MemoryHeapFlags[MaxMemoryHeaps];
 
@@ -107,6 +108,8 @@ namespace Njulf.Rendering.Core
         public bool MemoryBudgetExtensionEnabled => _memoryBudgetExtensionEnabled;
         public bool ImageCompressionControlEnabled => _imageCompressionControlEnabled;
         public bool RayQuerySupported => _rayQuerySupported;
+        public bool ShaderStorageImageArrayNonUniformIndexingSupported =>
+            _shaderStorageImageArrayNonUniformIndexingSupported;
         public KhrSurface KhrSurface => _khrSurface;
         public KhrSwapchain KhrSwapchain => _khrSwapchain;
         public ExtMeshShader ExtMeshShader => _extMeshShader;
@@ -114,7 +117,9 @@ namespace Njulf.Rendering.Core
         public KhrSynchronization2 KhrSync2 => _khrSync2;
         public KhrAccelerationStructure? KhrAccelerationStructure => _khrAccelerationStructure;
         public KhrDeferredHostOperations? KhrDeferredHostOps => _khrDeferredHostOps;
-        public bool DebugUtilsAvailable => _debug && _extDebugUtils != null;
+        public bool DebugUtilsAvailable => _extDebugUtils != null;
+        public bool DebugLabelsEnabled =>
+            _validationSettings.EnableDebugLabels && DebugUtilsAvailable;
         public RendererValidationSettings ValidationSettings => _validationSettings;
         public RendererValidationMessageSnapshot ValidationMessageSnapshot => _validationMessages.Snapshot();
         public DeviceRequirementReport? SelectedDeviceRequirementReport { get; private set; }
@@ -140,9 +145,10 @@ namespace Njulf.Rendering.Core
             _requirementOverride = requirementOverride ?? DeviceRequirementOverride.FromEnvironment();
 
             RunStartupStep("VulkanContext.CreateInstance", CreateInstance);
+            if (_validationSettings.EnableDebugUtils)
+                RunStartupStep("VulkanContext.LoadDebugUtils", LoadDebugUtils);
             if (_debug)
             {
-                RunStartupStep("VulkanContext.LoadDebugUtils", LoadDebugUtils);
                 RunStartupStep("VulkanContext.SetupDebugMessenger", SetupDebugMessenger);
             }
             RunStartupStep("VulkanContext.PickPhysicalDevice", PickPhysicalDevice);
@@ -270,7 +276,7 @@ namespace Njulf.Rendering.Core
                     extensions.Add(extension);
             }
 
-            if (_debug)
+            if (_validationSettings.EnableDebugUtils)
                 extensions.Add("VK_EXT_debug_utils");
 
             RunStartupStep("VulkanContext.ValidateInstanceExtensions", () => ValidateInstanceExtensions(extensions));
@@ -359,6 +365,7 @@ namespace Njulf.Rendering.Core
             bool memoryBudgetExtensionEnabled = false;
             bool imageCompressionControlEnabled = false;
             bool rayQuerySupported = false;
+            bool shaderStorageImageArrayNonUniformIndexingSupported = false;
 
             foreach (var device in devices)
             {
@@ -465,16 +472,24 @@ namespace Njulf.Rendering.Core
                     queueFamilies[graphicsIndex].QueueCount > 1;
                 bool selectedHasIndependentComputeQueue = selectedHasDedicatedComputeQueue ||
                     computeUsesSecondaryGraphicsQueue;
+                bool candidateSupportsSampledAtlasPublication =
+                    requirements.ShaderStorageImageArrayNonUniformIndexingSupported;
                 bool shouldSelectDevice = selectedDevice == null ||
                     (requirements.RayQuerySupported && !rayQuerySupported) ||
                     (requirements.RayQuerySupported == rayQuerySupported &&
+                     candidateSupportsSampledAtlasPublication &&
+                     !shaderStorageImageArrayNonUniformIndexingSupported) ||
+                    (requirements.RayQuerySupported == rayQuerySupported &&
+                     candidateSupportsSampledAtlasPublication == shaderStorageImageArrayNonUniformIndexingSupported &&
                      candidateHasDedicatedComputeQueue &&
                      !selectedHasDedicatedComputeQueue) ||
                     (requirements.RayQuerySupported == rayQuerySupported &&
+                     candidateSupportsSampledAtlasPublication == shaderStorageImageArrayNonUniformIndexingSupported &&
                      candidateHasDedicatedComputeQueue == selectedHasDedicatedComputeQueue &&
                      candidateHasIndependentComputeQueue &&
                      !selectedHasIndependentComputeQueue) ||
                     (requirements.RayQuerySupported == rayQuerySupported &&
+                     candidateSupportsSampledAtlasPublication == shaderStorageImageArrayNonUniformIndexingSupported &&
                      candidateHasDedicatedComputeQueue == selectedHasDedicatedComputeQueue &&
                      candidateHasIndependentComputeQueue == selectedHasIndependentComputeQueue &&
                      candidateHasDedicatedTransferQueue &&
@@ -491,6 +506,8 @@ namespace Njulf.Rendering.Core
                     memoryBudgetExtensionEnabled = requirements.MemoryBudgetExtensionAvailable;
                     imageCompressionControlEnabled = requirements.ImageCompressionControlAvailable;
                     rayQuerySupported = requirements.RayQuerySupported;
+                    shaderStorageImageArrayNonUniformIndexingSupported =
+                        candidateSupportsSampledAtlasPublication;
                 }
             }
 
@@ -517,6 +534,8 @@ namespace Njulf.Rendering.Core
             _memoryBudgetExtensionEnabled = memoryBudgetExtensionEnabled;
             _imageCompressionControlEnabled = imageCompressionControlEnabled;
             _rayQuerySupported = rayQuerySupported;
+            _shaderStorageImageArrayNonUniformIndexingSupported =
+                shaderStorageImageArrayNonUniformIndexingSupported;
 
             var selectedProperties = new PhysicalDeviceProperties();
             _vk.GetPhysicalDeviceProperties(_physicalDevice, &selectedProperties);
@@ -617,6 +636,7 @@ namespace Njulf.Rendering.Core
                 DescriptorBindingVariableDescriptorCount = true,
                 RuntimeDescriptorArray = true,
                 ShaderSampledImageArrayNonUniformIndexing = true,
+                ShaderStorageImageArrayNonUniformIndexing = true,
                 ShaderStorageBufferArrayNonUniformIndexing = true,
                 ShaderUniformBufferArrayNonUniformIndexing = true
             };
@@ -699,7 +719,11 @@ namespace Njulf.Rendering.Core
                 rayQueryFeatures.RayQuery);
 
             requirements = missingFeatures.Count == 0 && missingExtensions.Count == 0
-                ? DeviceRequirements.Supported(memoryBudgetExtensionAvailable, imageCompressionControlAvailable, rayQueryCapability.Supported)
+                ? DeviceRequirements.Supported(
+                    memoryBudgetExtensionAvailable,
+                    imageCompressionControlAvailable,
+                    rayQueryCapability.Supported,
+                    descriptorIndexingFeatures.ShaderStorageImageArrayNonUniformIndexing)
                 : DeviceRequirements.Missing(missingExtensions, missingFeatures);
             return true;
         }
@@ -934,6 +958,8 @@ namespace Njulf.Rendering.Core
                 DescriptorBindingVariableDescriptorCount = true,
                 RuntimeDescriptorArray = true,
                 ShaderSampledImageArrayNonUniformIndexing = true,
+                ShaderStorageImageArrayNonUniformIndexing =
+                    _shaderStorageImageArrayNonUniformIndexingSupported,
                 ShaderStorageBufferArrayNonUniformIndexing = true,
                 ShaderUniformBufferArrayNonUniformIndexing = true
             };
@@ -1031,7 +1057,8 @@ namespace Njulf.Rendering.Core
                 IReadOnlyList<string> missingQueueFamilies,
                 bool memoryBudgetExtensionAvailable,
                 bool imageCompressionControlAvailable,
-                bool rayQuerySupported)
+                bool rayQuerySupported,
+                bool shaderStorageImageArrayNonUniformIndexingSupported)
             {
                 IsSupported = isSupported;
                 MissingDeviceExtensions = missingDeviceExtensions;
@@ -1040,6 +1067,8 @@ namespace Njulf.Rendering.Core
                 MemoryBudgetExtensionAvailable = memoryBudgetExtensionAvailable;
                 ImageCompressionControlAvailable = imageCompressionControlAvailable;
                 RayQuerySupported = rayQuerySupported;
+                ShaderStorageImageArrayNonUniformIndexingSupported =
+                    shaderStorageImageArrayNonUniformIndexingSupported;
             }
 
             public bool IsSupported { get; }
@@ -1049,6 +1078,7 @@ namespace Njulf.Rendering.Core
             public bool MemoryBudgetExtensionAvailable { get; }
             public bool ImageCompressionControlAvailable { get; }
             public bool RayQuerySupported { get; }
+            public bool ShaderStorageImageArrayNonUniformIndexingSupported { get; }
             public string MissingRequirements => string.Join(", ", MissingDeviceExtensions)
                 + (MissingFeatures.Count == 0 ? string.Empty : (MissingDeviceExtensions.Count == 0 ? string.Empty : ", ") + string.Join(", ", MissingFeatures))
                 + (MissingQueueFamilies.Count == 0 ? string.Empty : ", " + string.Join(", ", MissingQueueFamilies));
@@ -1056,14 +1086,16 @@ namespace Njulf.Rendering.Core
             public static DeviceRequirements Supported(
                 bool memoryBudgetExtensionAvailable,
                 bool imageCompressionControlAvailable,
-                bool rayQuerySupported) => new(
+                bool rayQuerySupported,
+                bool shaderStorageImageArrayNonUniformIndexingSupported) => new(
                 true,
                 Array.Empty<string>(),
                 Array.Empty<string>(),
                 Array.Empty<string>(),
                 memoryBudgetExtensionAvailable,
                 imageCompressionControlAvailable,
-                rayQuerySupported);
+                rayQuerySupported,
+                shaderStorageImageArrayNonUniformIndexingSupported);
 
             public static DeviceRequirements Missing(
                 IReadOnlyList<string>? missingDeviceExtensions = null,
@@ -1077,7 +1109,8 @@ namespace Njulf.Rendering.Core
                     missingQueueFamilies ?? Array.Empty<string>(),
                     memoryBudgetExtensionAvailable: false,
                     imageCompressionControlAvailable: false,
-                    rayQuerySupported: false);
+                    rayQuerySupported: false,
+                    shaderStorageImageArrayNonUniformIndexingSupported: false);
             }
         }
 
@@ -1253,7 +1286,7 @@ namespace Njulf.Rendering.Core
 
         public void BeginDebugLabel(CommandBuffer commandBuffer, string name)
         {
-            if (!DebugUtilsAvailable || commandBuffer.Handle == 0 || string.IsNullOrWhiteSpace(name))
+            if (!DebugLabelsEnabled || commandBuffer.Handle == 0 || string.IsNullOrWhiteSpace(name))
                 return;
 
             nint namePtr = SilkMarshal.StringToPtr(name);
@@ -1275,7 +1308,7 @@ namespace Njulf.Rendering.Core
 
         public void EndDebugLabel(CommandBuffer commandBuffer)
         {
-            if (!DebugUtilsAvailable || commandBuffer.Handle == 0)
+            if (!DebugLabelsEnabled || commandBuffer.Handle == 0)
                 return;
 
             _extDebugUtils!.CmdEndDebugUtilsLabel(commandBuffer);
@@ -1453,7 +1486,7 @@ namespace Njulf.Rendering.Core
 
                 // Keep the messenger alive through device teardown so destruction-time
                 // validation errors are still observable.
-                if (_debug && _debugMessenger.Handle != 0)
+                if (_debugMessenger.Handle != 0)
                     _extDebugUtils?.DestroyDebugUtilsMessenger(_instance, _debugMessenger, null);
 
                 if (_instance.Handle != 0)

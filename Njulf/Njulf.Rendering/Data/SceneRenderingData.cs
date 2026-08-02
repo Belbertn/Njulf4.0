@@ -521,6 +521,7 @@ namespace Njulf.Rendering.Data
         public int LocalShadowSkinnedObjectCount { get; set; }
         public ulong DirectionalShadowMeshletDrawSignature { get; set; }
         public ulong LocalShadowMeshletDrawSignature { get; set; }
+        public ulong DrawPacketRevision { get; set; }
         public ulong DirectionalStaticShadowMeshletDrawSignature { get; set; }
         public ulong DirectionalDynamicShadowMeshletDrawSignature { get; set; }
         public ulong LocalStaticShadowMeshletDrawSignature { get; set; }
@@ -1748,6 +1749,7 @@ namespace Njulf.Rendering.Data
             LocalShadowSkinnedObjectCount = 0;
             DirectionalShadowMeshletDrawSignature = 0;
             LocalShadowMeshletDrawSignature = 0;
+            DrawPacketRevision = 0;
             DirectionalStaticShadowMeshletDrawSignature = 0;
             DirectionalDynamicShadowMeshletDrawSignature = 0;
             LocalStaticShadowMeshletDrawSignature = 0;

@@ -40,6 +40,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
         "SimpleDdgiRelocateClassifyPass",
         "SimpleDdgiTransportPass",
         "SimpleDdgiBlendPass",
+        "SimpleDdgiPublishPass",
         "DdgiSchedulePass",
         "DdgiTracePass",
         "DdgiBlendPass",
@@ -319,7 +320,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(diagnostics.AsyncComputeCandidatePassCount, Is.EqualTo(20));
+            Assert.That(diagnostics.AsyncComputeCandidatePassCount, Is.EqualTo(21));
             Assert.That(diagnostics.AsyncComputeEnabledPassCount, Is.EqualTo(0));
             Assert.That(
                 diagnostics.Passes.Where(pass => pass.AsyncComputeCandidate).Select(pass => pass.Name),
@@ -332,6 +333,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
                     "SimpleDdgiRelocateClassifyPass",
                     "SimpleDdgiTransportPass",
                     "SimpleDdgiBlendPass",
+                    "SimpleDdgiPublishPass",
                     "DdgiSchedulePass",
                     "DdgiTracePass",
                     "DdgiBlendPass",
@@ -550,7 +552,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
                     "AmbientOcclusionBlurPass", "HiZBuildPass",
                     "SsgiTracePass", "SsgiTemporalPass", "SsgiDenoisePass",
                     "FarFieldClipmapBakePass",
-                    "SimpleDdgiTracePass", "SimpleDdgiRelocateClassifyPass", "SimpleDdgiTransportPass", "SimpleDdgiBlendPass",
+                    "SimpleDdgiTracePass", "SimpleDdgiRelocateClassifyPass", "SimpleDdgiTransportPass", "SimpleDdgiBlendPass", "SimpleDdgiPublishPass",
                     "DdgiSchedulePass", "DdgiTracePass", "DdgiBlendPass", "DdgiRelocateClassifyPass", "DdgiPublishPass",
                     "FogPass", "BloomPass",
                     "GpuParticleResetPass", "GpuParticleSimulatePass", "GpuParticleSortPass"
@@ -637,6 +639,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(geometryPasses, Does.Not.Contain("SimpleDdgiRelocateClassifyPass"));
             Assert.That(geometryPasses, Does.Not.Contain("SimpleDdgiTransportPass"));
             Assert.That(geometryPasses, Does.Not.Contain("SimpleDdgiBlendPass"));
+            Assert.That(geometryPasses, Does.Not.Contain("SimpleDdgiPublishPass"));
             Assert.That(geometryPasses, Does.Not.Contain("DdgiSchedulePass"));
             Assert.That(geometryPasses, Does.Not.Contain("DdgiTracePass"));
             Assert.That(geometryPasses, Does.Not.Contain("DdgiBlendPass"));
@@ -690,6 +693,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
             "SimpleDdgiRelocateClassifyPass" or
             "SimpleDdgiTransportPass" or
             "SimpleDdgiBlendPass" or
+            "SimpleDdgiPublishPass" or
             "DdgiSchedulePass" or
             "DdgiTracePass" or
             "DdgiBlendPass" or

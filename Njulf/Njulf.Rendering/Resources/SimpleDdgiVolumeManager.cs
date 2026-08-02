@@ -107,7 +107,6 @@ namespace Njulf.Rendering.Resources
         private static readonly ulong ProbeStateStride = (ulong)Marshal.SizeOf<GPUSimpleDdgiProbeState>();
         private static readonly ulong RelocationClassificationStride =
             (ulong)Marshal.SizeOf<GPUSimpleDdgiRelocationClassification>();
-        private static readonly ulong AtlasTexelStride = 8;
         private const uint ProbeStateFreshFlag = 1u << 0;
         private const uint ProbeStateScrollExposedFlag = 1u << 1;
         private const uint ProbeStateInactiveFlag = 1u << 2;
@@ -159,6 +158,17 @@ namespace Njulf.Rendering.Resources
         private const byte ProbeSchedulingScrollExposedFlag = 1 << 0;
         private const byte ProbeSchedulingRegionalDirtyFlag = 1 << 1;
         private const byte ProbeSchedulingVisibleFlag = 1 << 2;
+        private const byte SchedulerTransportParticipantFlag = 1 << 0;
+        private const byte SchedulerTransportSourceRepairFlag = 1 << 1;
+        private const byte SchedulerTransportPendingConvergenceFlag = 1 << 2;
+        private const byte SchedulerInactiveDeferredFlag = 1 << 3;
+        private const byte SchedulerLifecycleFreshFlag = 1 << 0;
+        private const byte SchedulerLifecycleScrollExposedFlag = 1 << 1;
+        private const byte SchedulerLifecycleRelocationPendingFlag = 1 << 2;
+        private const byte SchedulerLifecycleUnpublishedFlag = 1 << 3;
+        private const byte SchedulerLifecycleVisibleUnsupportedFlag = 1 << 4;
+        private const byte SchedulerLifecycleVisiblePendingFlag = 1 << 5;
+        private const byte SchedulerLifecycleGenerationStaleFlag = 1 << 6;
         private const int SchedulerVisibleImportanceThreshold = 4;
         // Absolute fixed-point defect accepted only close to black. Combined
         // with the authored relative threshold, this bounds the residual without
@@ -223,6 +233,50 @@ namespace Njulf.Rendering.Resources
         private readonly int[] _pendingWorkClassCounts = new int[SchedulerWorkClassCount];
         private readonly int[] _rayRejectedWorkClassCounts = new int[SchedulerWorkClassCount];
         private readonly byte[] _queuedWorkClassScratch = new byte[GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount];
+        // Probe membership is persistent. Queue counts are the authoritative
+        // pending counters; a frame now walks only admitted work and state changes
+        // instead of rediscovering every probe in every priority pass.
+        private readonly SimpleDdgiPersistentProbeQueues _schedulerWorkQueues;
+        private readonly SimpleDdgiPersistentProbeQueues _schedulerSourceRefreshQueues;
+        private readonly SimpleDdgiPersistentProbeQueues _schedulerCachedSolverQueues;
+        private readonly SimpleDdgiSchedulerWakeHeap _schedulerWakeHeap = new();
+        private int[] _probeSchedulerDirtyIndices = Array.Empty<int>();
+        private byte[] _probeSchedulerDirty = Array.Empty<byte>();
+        private byte[] _probeSchedulerTransportStates = Array.Empty<byte>();
+        private byte[] _probeSchedulerVolumeIndices = Array.Empty<byte>();
+        private byte[] _probeSchedulerLifecycleStates = Array.Empty<byte>();
+        private uint[] _probeSchedulerTrackedLastUpdatedFrames = Array.Empty<uint>();
+        private uint[] _probeSchedulerTrackedSourceRefreshFrames = Array.Empty<uint>();
+        private readonly SimpleDdgiSchedulerWakeHeap _schedulerFreshAgeHeap = new();
+        private readonly SimpleDdgiSchedulerWakeHeap _schedulerScrollExposedAgeHeap = new();
+        private readonly SimpleDdgiSchedulerWakeHeap _schedulerRelocationPendingAgeHeap = new();
+        private readonly SimpleDdgiSchedulerWakeHeap _schedulerUnpublishedAgeHeap = new();
+        private readonly SimpleDdgiSchedulerWakeHeap _schedulerVisibleUnsupportedAgeHeap = new();
+        private readonly SimpleDdgiSchedulerWakeHeap _schedulerGenerationStaleAgeHeap = new();
+        private readonly SimpleDdgiIncrementalAgeHistogram _schedulerVisibleUnsupportedAgeHistogram =
+            new(maximumExactAge: 600);
+        private readonly SimpleDdgiIncrementalAgeHistogram _schedulerVisiblePendingAgeHistogram =
+            new(maximumExactAge: 600);
+        private readonly SimpleDdgiIncrementalAgeHistogram _schedulerGenerationStaleAgeHistogram =
+            new(maximumExactAge: GiSourceAgeHistogramMaximumFrames);
+        private int[] _probeVisibilityDirtyIndices = Array.Empty<int>();
+        private byte[] _probeVisibilityDirty = Array.Empty<byte>();
+        private byte[] _probeVisibleFreshCounted = Array.Empty<byte>();
+        private readonly int[] _volumeVisibleFreshProbeCounts =
+            new int[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
+        private int _probeSchedulerDirtyCount;
+        private int _probeVisibilityDirtyCount;
+        private bool _schedulerRebuildRequired = true;
+        private bool _schedulerVisibilityFullRefreshRequired = true;
+        private bool _hasSchedulerVisibilityCamera;
+        private Vector3 _schedulerVisibilityCameraPosition;
+        private bool _schedulerGlobalStateValid;
+        private SchedulerGlobalStateSnapshot _schedulerGlobalState;
+        private int _schedulerParticipatingProbeCount;
+        private int _schedulerSourceRepairProbeCount;
+        private int _schedulerPendingConvergenceProbeCount;
+        private int _schedulerInactiveDeferredProbeCount;
+        private ulong _schedulerInactiveDeferredSavedPrimaryRayCount;
         private byte[] _probeFresh = Array.Empty<byte>();
         private byte[] _probeInactive = Array.Empty<byte>();
         private byte[] _probeRelocationPending = Array.Empty<byte>();
@@ -251,7 +305,10 @@ namespace Njulf.Rendering.Resources
         private uint[] _probeClassifications = Array.Empty<uint>();
         private byte[] _probeStableUpdateCounts = Array.Empty<byte>();
         private float[] _probeLuminanceChangeEma = Array.Empty<float>();
-        private uint[] _probeAges = Array.Empty<uint>();
+        // Age is derived lazily from this timestamp. Incrementing 15k-32k age
+        // cells every frame was one of the scheduler's dominant CPU costs.
+        private uint[] _probeLastUpdatedFrames = Array.Empty<uint>();
+        private readonly uint[] _probeAgeSnapshotScratch = new uint[GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount];
         private uint _oldestVisibleUnsupportedProbeAge;
         private int _visibleUnsupportedProbeCountAboveLatencyTarget;
         private int _visibleZeroSupportRepairUpdateCount;
@@ -295,10 +352,6 @@ namespace Njulf.Rendering.Resources
         private uint _dirtyFirstScheduledLatencyMaxFrames;
         private uint _dirtyFirstUpdateLatencyMaxFrames;
         private uint _dirtyConvergenceLatencyMaxFrames;
-        private readonly Dictionary<
-            (int VolumeKind, int SourceOrdinal, SimpleDdgiSchedulerWorkClass WorkClass),
-            int> _volumeWorkClassRoundRobinCursors = new(
-                GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount * SchedulerWorkClassCount);
         private int _previousVolumeCount;
         private readonly Vector3[] _ringOrigins = new Vector3[3];
         private readonly bool[] _ringHasOrigins = new bool[3];
@@ -348,6 +401,7 @@ namespace Njulf.Rendering.Resources
         // optional image mirror exists only for controlled sampled-atlas A/B
         // captures, so allocation or descriptor failures never disable DDGI.
         private SimpleDdgiSampledAtlas? _sampledAtlas;
+        private ulong _sampledAtlasPublicationGeneration;
         private string _sampledAtlasFallbackReason = string.Empty;
         // Avoid retrying a known-unsatisfied image allocation every frame. A
         // topology change or explicit feature toggle clears this latch.
@@ -426,7 +480,6 @@ namespace Njulf.Rendering.Resources
         private int _currentTransportPublishedProbeCount;
         private int _currentTransportPublishRegionCount;
         private ulong _transportPublishedProbeTotal;
-        private ulong _transportPublishRegionTotal;
         private ulong _updateTransactionAbortCount;
         private ulong _sourceCacheInvalidationCount;
         // Fence-safe prior-frame counts. MarkBlendExecuted runs after scene
@@ -448,8 +501,6 @@ namespace Njulf.Rendering.Resources
         private float _sourceSweepFramesPerSecond =
             GiSourceSweepNominalFramesPerSecond;
         private long _sourceSweepLastTimestamp;
-        private readonly int[] _sourceStepAgeHistogram =
-            new int[GiSourceAgeHistogramMaximumFrames + 2];
         private uint _transportGeneration;
         // A local residual alone cannot prove that multi-bounce transport has
         // reached a probe whose neighbors are still warming. Global source
@@ -493,6 +544,7 @@ namespace Njulf.Rendering.Resources
         private bool _traceTransactionExecuted;
         private bool _relocateClassifyTransactionExecuted;
         private bool _transportTransactionExecuted;
+        private bool _blendTransactionExecuted;
         private uint _updateTransactionSerial;
         private ulong _frameSerial;
         private SimpleDdgiLayoutReport? _lastLayoutReport;
@@ -502,11 +554,6 @@ namespace Njulf.Rendering.Resources
         private SimpleDdgiLayoutReport? _cachedLayoutReport;
         private HashSet<int>? _cachedAcceptedSourceOrdinals;
         private ulong _cachedLayoutFingerprint;
-        // Publication coalesces contiguous physical probe ranges before issuing
-        // copies.  Both retained arrays make this render-thread path allocation
-        // free even at the largest accepted queue size.
-        private readonly int[] _transportPublishProbeIndices = new int[GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount];
-        private readonly BufferCopy[] _transportPublishCopies = new BufferCopy[GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount];
         private bool _disposed;
 
         public SimpleDdgiVolumeManager(VulkanContext context, BufferManager bufferManager, RenderSettings settings)
@@ -514,6 +561,18 @@ namespace Njulf.Rendering.Resources
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+
+            int schedulerQueueCount =
+                GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount * SchedulerWorkClassCount;
+            _schedulerWorkQueues = new SimpleDdgiPersistentProbeQueues(
+                schedulerQueueCount,
+                SchedulerWorkClassCount);
+            _schedulerSourceRefreshQueues = new SimpleDdgiPersistentProbeQueues(
+                schedulerQueueCount,
+                SchedulerWorkClassCount);
+            _schedulerCachedSolverQueues = new SimpleDdgiPersistentProbeQueues(
+                schedulerQueueCount,
+                SchedulerWorkClassCount);
 
             _paramsBuffer = _bufferManager.CreateDeviceBuffer(
                 Math.Max(MinBufferSize, ParamsBufferSize),
@@ -556,6 +615,7 @@ namespace Njulf.Rendering.Resources
         public ulong SampledAtlasImageBytes => _sampledAtlas?.EstimatedImageBytes ?? 0UL;
         public int SampledAtlasGroupCount => _sampledAtlas?.GroupCount ?? 0;
         public int SampledAtlasLayersPerTexture => _sampledAtlas?.LayersPerTexture ?? 0;
+        public ulong SampledAtlasAllocationGeneration => _sampledAtlasPublicationGeneration;
         /// <summary>Total atlas allocation across SSBO writer and optional images.</summary>
         public ulong AtlasBytes => checked(AtlasBufferBytes + SampledAtlasImageBytes);
         public ulong RayScratchBytes => _rayScratchBytes;
@@ -655,7 +715,7 @@ namespace Njulf.Rendering.Resources
         public int TransportPublishedProbeCount => _transportPublishedProbeCount;
         public int TransportPublishRegionCount => _transportPublishRegionCount;
         public ulong TransportPublishedProbeTotal => _transportPublishedProbeTotal;
-        public ulong TransportPublishRegionTotal => _transportPublishRegionTotal;
+        public ulong TransportPublishRegionTotal => 0UL;
         public ulong UpdateTransactionAbortCount => _updateTransactionAbortCount;
         public ulong SourceCacheInvalidationCount => _sourceCacheInvalidationCount;
         public int SourceRefreshTransportInvalidationCount =>
@@ -700,9 +760,8 @@ namespace Njulf.Rendering.Resources
         public ulong TransportCalibrationChangeCount => _transportCalibrationChangeCount;
 
         /// <summary>
-        /// Snapshot of V2 source/solver state for diagnostics. The scan is over
-        /// bounded CPU metadata only; it neither reads GPU memory nor changes
-        /// scheduling state.
+        /// Snapshot of V2 source/solver state from the scheduler's incremental
+        /// counters; it neither reads GPU memory nor walks the probe pool.
         /// </summary>
         public void GetTransportProgress(
             out int sourceReadyProbeCount,
@@ -717,36 +776,16 @@ namespace Njulf.Rendering.Resources
             if (!TransportV2Active)
                 return;
 
-            for (int probeIndex = 0; probeIndex < _probeCount; probeIndex++)
-            {
-                // Inactive probes contribute no receiver-visible interpolation
-                // mass. They retain the bounded classification retry path, but
-                // an embedded/relocating tail must not hold every active probe in
-                // field-wide full-ray warmup indefinitely.
-                if (!ShouldParticipateInTransportConvergence(
-                        (uint)probeIndex < (uint)_probeInactive.Length &&
-                        _probeInactive[probeIndex] != 0))
-                {
-                    continue;
-                }
-
-                if (NeedsSourceRefresh(probeIndex))
-                {
-                    sourceStaleProbeCount++;
-                    continue;
-                }
-
-                sourceReadyProbeCount++;
-                // Report local fixed-point progress even while the field-wide
-                // propagation latch deliberately keeps every probe schedulable.
-                // Using IsTransportConverged here collapses all progress to zero
-                // whenever the global latch is set and makes a healthy bounded
-                // propagation wave indistinguishable from a solver livelock.
-                if (HasLocalTransportConvergenceEvidence(probeIndex))
-                    convergedProbeCount++;
-                else
-                    pendingSolverProbeCount++;
-            }
+            sourceStaleProbeCount = _schedulerSourceRepairProbeCount;
+            sourceReadyProbeCount = Math.Max(
+                0,
+                _schedulerParticipatingProbeCount - sourceStaleProbeCount);
+            pendingSolverProbeCount = Math.Min(
+                sourceReadyProbeCount,
+                _schedulerPendingConvergenceProbeCount);
+            convergedProbeCount = Math.Max(
+                0,
+                sourceReadyProbeCount - pendingSolverProbeCount);
         }
         public int EffectiveMaxShadedLights => _effectiveMaxShadedLights;
         public ulong AdaptiveRaySavedPrimaryRayCount => _adaptiveRaySavedPrimaryRayCount;
@@ -998,7 +1037,9 @@ namespace Njulf.Rendering.Resources
         public bool CanExecuteTransportTransaction => TransportV2Active &&
             _updateTransactionPending && _traceTransactionExecuted && _relocateClassifyTransactionExecuted && !_transportTransactionExecuted;
         public bool CanExecuteBlendTransaction => _updateTransactionPending && _traceTransactionExecuted &&
-            _relocateClassifyTransactionExecuted && (!TransportV2Active || _transportTransactionExecuted);
+            _relocateClassifyTransactionExecuted && (!TransportV2Active || _transportTransactionExecuted) &&
+            !_blendTransactionExecuted;
+        public bool CanExecutePublishTransaction => _updateTransactionPending && _blendTransactionExecuted;
         // Async planning asks all pass predicates before any command has been
         // recorded.  These predicates deliberately describe a transaction that is
         // safe to schedule, while CanExecute* above remains the stricter guard at
@@ -1007,6 +1048,7 @@ namespace Njulf.Rendering.Resources
         public bool CanScheduleRelocateClassifyTransaction => _updateTransactionPending && !_relocateClassifyTransactionExecuted;
         public bool CanScheduleTransportTransaction => TransportV2Active && _updateTransactionPending && !_transportTransactionExecuted;
         public bool CanScheduleBlendTransaction => _updateTransactionPending;
+        public bool CanSchedulePublishTransaction => _updateTransactionPending;
         public uint UpdateTransactionSerial => _updateTransactionSerial;
 
         public IReadOnlyList<DdgiVolumeDiagnosticsEntry> GetVolumeDiagnostics()
@@ -1038,12 +1080,15 @@ namespace Njulf.Rendering.Resources
                     : 0;
                 float volumeCubicMeters = Math.Max(size.X * size.Y * size.Z, 0.0001f);
                 int firstProbe = FirstProbe(volume);
-                int ageCount = firstProbe >= 0 && firstProbe < _probeAges.Length
-                    ? Math.Min(probeCount, _probeAges.Length - firstProbe)
+                int ageCount = firstProbe >= 0 && firstProbe < _probeLastUpdatedFrames.Length
+                    ? Math.Min(probeCount, _probeLastUpdatedFrames.Length - firstProbe)
                     : 0;
+                FillProbeAgeSnapshot(
+                    firstProbe,
+                    _probeAgeSnapshotScratch.AsSpan(0, ageCount));
                 uint estimatedAgeP95 = ageCount > 0
                     ? CalculateProbeAgePercentile(
-                        _probeAges.AsSpan(firstProbe, ageCount),
+                        _probeAgeSnapshotScratch.AsSpan(0, ageCount),
                         _probeAgePercentileScratch.AsSpan(0, ageCount),
                         0.95f)
                     : 0u;
@@ -1176,11 +1221,28 @@ namespace Njulf.Rendering.Resources
             return values[left];
         }
 
+        internal static uint CalculateProbeAge(uint lastUpdatedFrame, uint currentFrame) =>
+            unchecked(currentFrame - lastUpdatedFrame);
+
+        private uint GetProbeAge(int probeIndex) =>
+            (uint)probeIndex < (uint)_probeLastUpdatedFrames.Length
+                ? CalculateProbeAge(_probeLastUpdatedFrames[probeIndex], _frameIndex)
+                : 0u;
+
+        private void FillProbeAgeSnapshot(int firstProbe, Span<uint> destination)
+        {
+            for (int local = 0; local < destination.Length; local++)
+                destination[local] = GetProbeAge(firstProbe + local);
+        }
+
         public void GetEstimatedProbeAgeFrames(out float p50, out float p95, out float maximum)
         {
-            int ageCount = Math.Min(_probeCount, _probeAges.Length);
+            int ageCount = Math.Min(_probeCount, _probeLastUpdatedFrames.Length);
+            FillProbeAgeSnapshot(
+                firstProbe: 0,
+                _probeAgeSnapshotScratch.AsSpan(0, ageCount));
             CalculateProbeAgeStatistics(
-                _probeAges.AsSpan(0, ageCount),
+                _probeAgeSnapshotScratch.AsSpan(0, ageCount),
                 _probeAgePercentileScratch.AsSpan(0, ageCount),
                 out uint exactP50,
                 out uint exactP95,
@@ -1340,8 +1402,10 @@ namespace Njulf.Rendering.Resources
                     MarkRegionalDirtyProbes(dirtyRegions!);
                 if (TransportV2Active && _newlyInvalidatedProbeCount > 0)
                     BeginTransportGlobalConvergence();
+                RefreshPersistentSchedulerState();
                 UpdateTransportGlobalConvergenceState();
                 int visibleFreshRecoveryBudget = RefreshProbeSchedulingImportance();
+                RefreshPersistentSchedulerState();
 
                 int updateBudget = ResolveFeedbackLimitedUpdateBudget(
                     dirtyBoostedBudget,
@@ -1538,6 +1602,37 @@ namespace Njulf.Rendering.Resources
             Array.Clear(_probeSourceEpochs);
             Array.Clear(_probeSourceRayCounts);
             Array.Clear(_probeTransportGenerationCounts);
+            _schedulerWorkQueues.Clear();
+            _schedulerSourceRefreshQueues.Clear();
+            _schedulerCachedSolverQueues.Clear();
+            _schedulerWakeHeap.Clear();
+            _schedulerFreshAgeHeap.Clear();
+            _schedulerScrollExposedAgeHeap.Clear();
+            _schedulerRelocationPendingAgeHeap.Clear();
+            _schedulerUnpublishedAgeHeap.Clear();
+            _schedulerVisibleUnsupportedAgeHeap.Clear();
+            _schedulerGenerationStaleAgeHeap.Clear();
+            _schedulerVisibleUnsupportedAgeHistogram.Clear(_frameSerial);
+            _schedulerVisiblePendingAgeHistogram.Clear(_frameSerial);
+            _schedulerGenerationStaleAgeHistogram.Clear(_frameSerial);
+            Array.Clear(_probeSchedulerTransportStates);
+            Array.Fill(_probeSchedulerVolumeIndices, byte.MaxValue);
+            Array.Clear(_probeSchedulerLifecycleStates);
+            Array.Clear(_probeSchedulerTrackedLastUpdatedFrames);
+            Array.Clear(_probeSchedulerTrackedSourceRefreshFrames);
+            _schedulerParticipatingProbeCount = 0;
+            _schedulerSourceRepairProbeCount = 0;
+            _schedulerPendingConvergenceProbeCount = 0;
+            _schedulerInactiveDeferredProbeCount = 0;
+            _schedulerInactiveDeferredSavedPrimaryRayCount = 0UL;
+            _schedulerGlobalStateValid = false;
+            _schedulerRebuildRequired = true;
+            _schedulerVisibilityFullRefreshRequired = true;
+            _hasSchedulerVisibilityCamera = false;
+            _probeVisibilityDirtyCount = 0;
+            Array.Clear(_probeVisibilityDirty);
+            Array.Clear(_probeVisibleFreshCounted);
+            Array.Clear(_volumeVisibleFreshProbeCounts);
             _hasTransportCalibrationSignatures = false;
             _transportV2WasActive = false;
             BeginTransportGlobalConvergence(forceFieldEvidenceReset: true);
@@ -1549,10 +1644,21 @@ namespace Njulf.Rendering.Resources
             _frameIndex++;
         }
 
-        public void MarkBlendExecuted()
+        public void MarkPublishExecuted()
         {
-            if (!CanExecuteBlendTransaction)
+            if (!CanExecutePublishTransaction)
                 return;
+
+            if (TransportV2Active && _probesToUpdate > 0)
+            {
+                _currentTransportPublishedProbeCount = _probesToUpdate;
+                // GPU publication has no CPU-built transfer regions.
+                _currentTransportPublishRegionCount = 0;
+                _transportPublishedProbeTotal = SaturatingAdd(
+                    _transportPublishedProbeTotal,
+                    (ulong)_probesToUpdate);
+                _transportGeneration = AdvanceSourceLightingGeneration(_transportGeneration);
+            }
 
             if (_probesToUpdate > 0)
             {
@@ -1611,7 +1717,7 @@ namespace Njulf.Rendering.Resources
                         if ((uint)probeIndex < (uint)_probeDirtyReasons.Length)
                             _probeDirtyReasons[probeIndex] = 0;
                         if (!relocationPublicationPending)
-                            _probeAges[probeIndex] = 0;
+                            _probeLastUpdatedFrames[probeIndex] = completedFrame;
                         if (TransportV2Active)
                         {
                             bool sourceRefresh = (update.Flags & ProbeUpdateSourceRefreshFlag) != 0u;
@@ -1693,6 +1799,8 @@ namespace Njulf.Rendering.Resources
                             }
                         }
                         RecordDirtyFirstCompletedUpdate(probeIndex, completedFrame);
+                        MarkProbeSchedulerDirty(probeIndex);
+                        MarkProbeVisibilityDirty(probeIndex);
                     }
                 }
 
@@ -1703,174 +1811,20 @@ namespace Njulf.Rendering.Resources
             _traceTransactionExecuted = false;
             _relocateClassifyTransactionExecuted = false;
             _transportTransactionExecuted = false;
+            _blendTransactionExecuted = false;
         }
 
-        /// <summary>
-        /// Mirrors just-completed probe layers after the canonical blend writes.
-        /// This records on the graphics queue while sampled images are not yet a
-        /// first-class render-graph resource, preserving queue ownership safety.
-        /// </summary>
-        public void SynchronizeSampledAtlasesAfterBlend(CommandBuffer commandBuffer)
+        public void UpdateSampledAtlasGpuPublishDescriptors(DescriptorSet descriptorSet) =>
+            _sampledAtlas?.UpdateGpuPublishDescriptors(descriptorSet);
+
+        public void BeginSampledAtlasGpuPublication(CommandBuffer commandBuffer)
         {
             _lastSampledAtlasSynchronizationMicroseconds = 0;
-            if (!SampledAtlasActive || _probesToUpdate <= 0 || _sampledAtlas == null)
-                return;
-
-            long syncStart = Stopwatch.GetTimestamp();
-            try
-            {
-                _sampledAtlas.CopyUpdated(
-                    commandBuffer,
-                    _bufferManager.GetBuffer(_irradianceAtlasBuffer),
-                    _irradianceAtlasBytes,
-                    _bufferManager.GetBuffer(_visibilityAtlasBuffer),
-                    _visibilityAtlasBytes,
-                    new ReadOnlySpan<GPUSimpleDdgiProbeUpdate>(_updateQueueScratch, 0, _probesToUpdate));
-            }
-            finally
-            {
-                _lastSampledAtlasSynchronizationMicroseconds = ElapsedMicroseconds(syncStart);
-            }
+            _sampledAtlas?.BeginGpuPublication(commandBuffer);
         }
 
-        /// <summary>
-        /// Publishes the completed V2 Jacobi target into the canonical atlas.
-        /// The blend pass reads only the previously published canonical field and
-        /// writes only the private target; this range copy is the sole visibility
-        /// boundary for receiver sampling.  Incomplete transport work therefore
-        /// cannot leak into a rendered frame.
-        /// </summary>
-        public unsafe void PublishTransportAtlasAfterBlend(CommandBuffer commandBuffer)
-        {
-            _currentTransportPublishedProbeCount = 0;
-            _currentTransportPublishRegionCount = 0;
-            if (!TransportV2Active || _probesToUpdate <= 0 ||
-                !_transportIrradianceAtlasBuffer.IsValid || !_irradianceAtlasBuffer.IsValid ||
-                commandBuffer.Handle == 0)
-            {
-                return;
-            }
-
-            int selectedCount = 0;
-            for (int queueOffset = 0; queueOffset < _probesToUpdate; queueOffset++)
-            {
-                int probeIndex = checked((int)_updateQueueScratch[queueOffset].ProbeIndex);
-                if ((uint)probeIndex >= (uint)_probeCount)
-                    continue;
-                _transportPublishProbeIndices[selectedCount++] = probeIndex;
-            }
-
-            if (selectedCount == 0)
-                return;
-
-            Array.Sort(_transportPublishProbeIndices, 0, selectedCount);
-            ulong probeBytes = checked((ulong)IrradianceTexelsPerProbe * IrradianceTexelsPerProbe * AtlasTexelStride);
-            int copyCount = 0;
-            int uniqueCount = 0;
-            int runStart = _transportPublishProbeIndices[0];
-            int previous = runStart;
-            uniqueCount = 1;
-            for (int index = 1; index < selectedCount; index++)
-            {
-                int probeIndex = _transportPublishProbeIndices[index];
-                if (probeIndex == previous)
-                    continue;
-
-                uniqueCount++;
-                if (probeIndex == previous + 1)
-                {
-                    previous = probeIndex;
-                    continue;
-                }
-
-                _transportPublishCopies[copyCount++] = CreateTransportPublishCopy(runStart, previous, probeBytes);
-                runStart = previous = probeIndex;
-            }
-            _transportPublishCopies[copyCount++] = CreateTransportPublishCopy(runStart, previous, probeBytes);
-
-            Silk.NET.Vulkan.Buffer target = _bufferManager.GetBuffer(_transportIrradianceAtlasBuffer);
-            Silk.NET.Vulkan.Buffer canonical = _bufferManager.GetBuffer(_irradianceAtlasBuffer);
-            ulong targetBytes = Math.Min(_transportIrradianceAtlasBytes, _irradianceAtlasBytes);
-            BufferMemoryBarrier2* before = stackalloc BufferMemoryBarrier2[2];
-            before[0] = BarrierBuilder.BufferBarrier(
-                target,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.TransferBit,
-                AccessFlags2.TransferReadBit,
-                0,
-                targetBytes);
-            before[1] = BarrierBuilder.BufferBarrier(
-                canonical,
-                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
-                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.TransferBit,
-                AccessFlags2.TransferWriteBit,
-                0,
-                _irradianceAtlasBytes);
-            var beforeDependency = new DependencyInfo
-            {
-                SType = StructureType.DependencyInfo,
-                BufferMemoryBarrierCount = 2,
-                PBufferMemoryBarriers = before
-            };
-            _context.Api.CmdPipelineBarrier2(commandBuffer, &beforeDependency);
-
-            fixed (BufferCopy* copies = _transportPublishCopies)
-                _context.Api.CmdCopyBuffer(commandBuffer, target, canonical, checked((uint)copyCount), copies);
-
-            BufferMemoryBarrier2* after = stackalloc BufferMemoryBarrier2[2];
-            after[0] = BarrierBuilder.BufferBarrier(
-                canonical,
-                PipelineStageFlags2.TransferBit,
-                AccessFlags2.TransferWriteBit,
-                // A sampled-atlas mirror may immediately issue a transfer read
-                // after this publication. Include that consumer here as well as
-                // the normal compute/fragment field readers; otherwise its
-                // generic compute-write -> transfer barrier would not cover this
-                // preceding transfer write.
-                PipelineStageFlags2.TransferBit | PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
-                AccessFlags2.TransferReadBit | AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
-                0,
-                _irradianceAtlasBytes);
-            after[1] = BarrierBuilder.BufferBarrier(
-                target,
-                PipelineStageFlags2.TransferBit,
-                AccessFlags2.TransferReadBit,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit,
-                0,
-                targetBytes);
-            var afterDependency = new DependencyInfo
-            {
-                SType = StructureType.DependencyInfo,
-                BufferMemoryBarrierCount = 2,
-                PBufferMemoryBarriers = after
-            };
-            _context.Api.CmdPipelineBarrier2(commandBuffer, &afterDependency);
-
-            _currentTransportPublishedProbeCount = uniqueCount;
-            _currentTransportPublishRegionCount = copyCount;
-            _transportPublishedProbeTotal = SaturatingAdd(
-                _transportPublishedProbeTotal,
-                (ulong)uniqueCount);
-            _transportPublishRegionTotal = SaturatingAdd(
-                _transportPublishRegionTotal,
-                (ulong)copyCount);
-            _transportGeneration = AdvanceSourceLightingGeneration(_transportGeneration);
-        }
-
-        private static BufferCopy CreateTransportPublishCopy(int firstProbe, int lastProbe, ulong probeBytes)
-        {
-            ulong offset = checked((ulong)Math.Max(firstProbe, 0) * probeBytes);
-            ulong probeCount = checked((ulong)Math.Max(lastProbe - firstProbe + 1, 0));
-            return new BufferCopy
-            {
-                SrcOffset = offset,
-                DstOffset = offset,
-                Size = checked(probeCount * probeBytes)
-            };
-        }
+        public void EndSampledAtlasGpuPublication(CommandBuffer commandBuffer) =>
+            _sampledAtlas?.EndGpuPublication(commandBuffer);
 
         public void MarkTraceExecuted()
         {
@@ -1890,6 +1844,12 @@ namespace Njulf.Rendering.Resources
                 _transportTransactionExecuted = true;
         }
 
+        public void MarkBlendExecuted()
+        {
+            if (CanExecuteBlendTransaction)
+                _blendTransactionExecuted = true;
+        }
+
         public void AbortUpdateTransaction()
         {
             if (_updateTransactionPending)
@@ -1902,6 +1862,7 @@ namespace Njulf.Rendering.Resources
             _traceTransactionExecuted = false;
             _relocateClassifyTransactionExecuted = false;
             _transportTransactionExecuted = false;
+            _blendTransactionExecuted = false;
         }
 
         private void BeginUpdateTransaction(bool hasWork)
@@ -1913,10 +1874,21 @@ namespace Njulf.Rendering.Resources
             _traceTransactionExecuted = false;
             _relocateClassifyTransactionExecuted = false;
             _transportTransactionExecuted = false;
+            _blendTransactionExecuted = false;
         }
 
         private void ResetFrameCounters()
         {
+            // Clear only the bounded queue produced by the preceding frame.
+            // Clearing the whole probe pool was another hidden O(total probes)
+            // scheduler pass.
+            for (int queueOffset = 0; queueOffset < _probesToUpdate; queueOffset++)
+            {
+                int probeIndex = checked((int)_updateQueueScratch[queueOffset].ProbeIndex);
+                if ((uint)probeIndex < (uint)_probeQueued.Length)
+                    _probeQueued[probeIndex] = 0;
+            }
+            _probesToUpdate = 0;
             _transportPublishedProbeCount = _currentTransportPublishedProbeCount;
             _transportPublishRegionCount = _currentTransportPublishRegionCount;
             _sourceRefreshTransportInvalidationCount =
@@ -1964,9 +1936,7 @@ namespace Njulf.Rendering.Resources
             _schedulerPressureReason = SimpleDdgiSchedulerPressureReason.None;
             Array.Clear(_scheduledWorkClassCounts);
             Array.Clear(_reservedWorkClassCounts);
-            Array.Clear(_pendingWorkClassCounts);
             Array.Clear(_rayRejectedWorkClassCounts);
-            Array.Clear(_volumeWorkClassPendingScratch);
             Array.Clear(_volumeWorkClassQuotaScratch);
             Array.Clear(_volumeWorkClassUsageScratch);
             _fullRayProbeUpdateCount = 0;
@@ -1995,7 +1965,7 @@ namespace Njulf.Rendering.Resources
             byte[] previousVisibilityImportance = _probeVisibilityImportance;
             byte[] previousStableUpdateCounts = _probeStableUpdateCounts;
             float[] previousLuminanceChangeEma = _probeLuminanceChangeEma;
-            uint[] previousAges = _probeAges;
+            uint[] previousLastUpdatedFrames = _probeLastUpdatedFrames;
             uint[] previousSourceLightingGenerations = _probeSourceLightingGenerations;
             uint[] previousSourceRefreshFrames = _probeLastSourceRefreshFrames;
             uint[] previousSourceEpochs = _probeSourceEpochs;
@@ -2021,7 +1991,7 @@ namespace Njulf.Rendering.Resources
             _probeClassifications = new uint[Math.Max(0, probeCount)];
             _probeStableUpdateCounts = new byte[Math.Max(0, probeCount)];
             _probeLuminanceChangeEma = new float[Math.Max(0, probeCount)];
-            _probeAges = new uint[Math.Max(0, probeCount)];
+            _probeLastUpdatedFrames = new uint[Math.Max(0, probeCount)];
             _probeSourceLightingGenerations = new uint[Math.Max(0, probeCount)];
             _probeLastSourceRefreshFrames = new uint[Math.Max(0, probeCount)];
             _probeSourceEpochs = new uint[Math.Max(0, probeCount)];
@@ -2041,7 +2011,7 @@ namespace Njulf.Rendering.Resources
             Array.Copy(previousVisibilityImportance, _probeVisibilityImportance, Math.Min(copyCount, previousVisibilityImportance.Length));
             Array.Copy(previousStableUpdateCounts, _probeStableUpdateCounts, Math.Min(copyCount, previousStableUpdateCounts.Length));
             Array.Copy(previousLuminanceChangeEma, _probeLuminanceChangeEma, Math.Min(copyCount, previousLuminanceChangeEma.Length));
-            Array.Copy(previousAges, _probeAges, copyCount);
+            Array.Copy(previousLastUpdatedFrames, _probeLastUpdatedFrames, copyCount);
             Array.Copy(previousSourceLightingGenerations, _probeSourceLightingGenerations, Math.Min(copyCount, previousSourceLightingGenerations.Length));
             Array.Copy(previousSourceRefreshFrames, _probeLastSourceRefreshFrames, Math.Min(copyCount, previousSourceRefreshFrames.Length));
             Array.Copy(previousSourceEpochs, _probeSourceEpochs, Math.Min(copyCount, previousSourceEpochs.Length));
@@ -2059,6 +2029,11 @@ namespace Njulf.Rendering.Resources
                 Array.Fill(_probeGenerations, 1u, copyCount, probeCount - copyCount);
                 Array.Fill(_probeActiveWeights, 1.0f, copyCount, probeCount - copyCount);
                 Array.Fill(_probeSourceEpochs, 1u, copyCount, probeCount - copyCount);
+                Array.Fill(
+                    _probeLastUpdatedFrames,
+                    unchecked(_frameIndex - 1u),
+                    copyCount,
+                    probeCount - copyCount);
                 _newlyInvalidatedProbeCount += probeCount - copyCount;
             }
 
@@ -2072,7 +2047,560 @@ namespace Njulf.Rendering.Resources
 
             _activeProbeCount = Math.Max(0, probeCount - CountInactiveProbes(_probeInactive, probeCount));
             RecomputeDirtyLatencyOutstandingCount();
+            EnsurePersistentSchedulerCapacity(probeCount);
             _probeStateUploadRequired = true;
+        }
+
+        private void EnsurePersistentSchedulerCapacity(int probeCount)
+        {
+            probeCount = Math.Max(0, probeCount);
+            _schedulerWorkQueues.EnsureProbeCapacity(probeCount);
+            _schedulerSourceRefreshQueues.EnsureProbeCapacity(probeCount);
+            _schedulerCachedSolverQueues.EnsureProbeCapacity(probeCount);
+            _schedulerWakeHeap.EnsureProbeCapacity(probeCount);
+            _schedulerFreshAgeHeap.EnsureProbeCapacity(probeCount);
+            _schedulerScrollExposedAgeHeap.EnsureProbeCapacity(probeCount);
+            _schedulerRelocationPendingAgeHeap.EnsureProbeCapacity(probeCount);
+            _schedulerUnpublishedAgeHeap.EnsureProbeCapacity(probeCount);
+            _schedulerVisibleUnsupportedAgeHeap.EnsureProbeCapacity(probeCount);
+            _schedulerGenerationStaleAgeHeap.EnsureProbeCapacity(probeCount);
+            _probeSchedulerDirtyIndices = new int[probeCount];
+            _probeSchedulerDirty = new byte[probeCount];
+            _probeSchedulerTransportStates = new byte[probeCount];
+            _probeSchedulerVolumeIndices = new byte[probeCount];
+            Array.Fill(_probeSchedulerVolumeIndices, byte.MaxValue);
+            _probeSchedulerLifecycleStates = new byte[probeCount];
+            _probeSchedulerTrackedLastUpdatedFrames = new uint[probeCount];
+            _probeSchedulerTrackedSourceRefreshFrames = new uint[probeCount];
+            _probeVisibilityDirtyIndices = new int[probeCount];
+            _probeVisibilityDirty = new byte[probeCount];
+            _probeVisibleFreshCounted = new byte[probeCount];
+            _probeSchedulerDirtyCount = 0;
+            _probeVisibilityDirtyCount = 0;
+            Array.Clear(_volumeVisibleFreshProbeCounts);
+            _schedulerGlobalStateValid = false;
+            _schedulerRebuildRequired = true;
+            _schedulerVisibilityFullRefreshRequired = true;
+            _hasSchedulerVisibilityCamera = false;
+        }
+
+        private void MarkProbeSchedulerDirty(int probeIndex)
+        {
+            if ((uint)probeIndex >= (uint)_probeSchedulerDirty.Length ||
+                _probeSchedulerDirty[probeIndex] != 0)
+            {
+                return;
+            }
+
+            _probeSchedulerDirty[probeIndex] = 1;
+            _probeSchedulerDirtyIndices[_probeSchedulerDirtyCount++] = probeIndex;
+        }
+
+        private void MarkProbeVisibilityDirty(int probeIndex)
+        {
+            if ((uint)probeIndex >= (uint)_probeVisibilityDirty.Length ||
+                _probeVisibilityDirty[probeIndex] != 0)
+            {
+                return;
+            }
+
+            _probeVisibilityDirty[probeIndex] = 1;
+            _probeVisibilityDirtyIndices[_probeVisibilityDirtyCount++] = probeIndex;
+        }
+
+        private void RequirePersistentSchedulerRebuild()
+        {
+            _schedulerRebuildRequired = true;
+        }
+
+        private SchedulerGlobalStateSnapshot CaptureSchedulerGlobalState()
+        {
+            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+            return new SchedulerGlobalStateSnapshot(
+                _volumeTableGeneration,
+                _probeCount,
+                _lightingDirtyFrames > 0,
+                TransportV2Active,
+                TransportGlobalConvergencePending,
+                _transportPeriodicSourceRefreshWavePending,
+                _transportPeriodicSourceRefreshWaveCutoffFrame,
+                _sourceLightingGeneration,
+                gi.SimpleDdgiClassificationSchedulingEnabled,
+                _probeConvergenceReadbackValid != 0,
+                gi.SimpleDdgiStableMaintenanceUpdateCount,
+                gi.SimpleDdgiTransportMaximumSolverGenerations,
+                BitConverter.SingleToInt32Bits(gi.SimpleDdgiTransportResidualThreshold));
+        }
+
+        private void RefreshPersistentSchedulerState()
+        {
+            SchedulerGlobalStateSnapshot currentGlobalState = CaptureSchedulerGlobalState();
+            if (!_schedulerGlobalStateValid || currentGlobalState != _schedulerGlobalState)
+            {
+                if (!_schedulerGlobalStateValid ||
+                    currentGlobalState.VolumeTableGeneration !=
+                        _schedulerGlobalState.VolumeTableGeneration ||
+                    currentGlobalState.LightingDirty !=
+                        _schedulerGlobalState.LightingDirty ||
+                    currentGlobalState.ConvergenceReadbackValid !=
+                        _schedulerGlobalState.ConvergenceReadbackValid ||
+                    currentGlobalState.StableMaintenanceUpdateCount !=
+                        _schedulerGlobalState.StableMaintenanceUpdateCount)
+                {
+                    _schedulerVisibilityFullRefreshRequired = true;
+                }
+                _schedulerGlobalState = currentGlobalState;
+                _schedulerGlobalStateValid = true;
+                _schedulerRebuildRequired = true;
+            }
+
+            while (_schedulerWakeHeap.TryPopDue(_frameSerial, out int dueProbeIndex))
+                MarkProbeSchedulerDirty(dueProbeIndex);
+
+            if (_schedulerRebuildRequired)
+            {
+                RebuildPersistentSchedulerState();
+            }
+            else
+            {
+                int dirtyCount = _probeSchedulerDirtyCount;
+                _probeSchedulerDirtyCount = 0;
+                for (int dirtyOffset = 0; dirtyOffset < dirtyCount; dirtyOffset++)
+                {
+                    int probeIndex = _probeSchedulerDirtyIndices[dirtyOffset];
+                    if ((uint)probeIndex >= (uint)_probeSchedulerDirty.Length)
+                        continue;
+                    _probeSchedulerDirty[probeIndex] = 0;
+                    RefreshProbeSchedulerEntry(
+                        probeIndex,
+                        ResolveSchedulerVolumeIndex(probeIndex));
+                }
+            }
+
+            _inactiveProbeSkipCount = _schedulerInactiveDeferredProbeCount;
+            _inactiveProbeSavedPrimaryRayCount =
+                _schedulerInactiveDeferredSavedPrimaryRayCount;
+        }
+
+        private void RebuildPersistentSchedulerState()
+        {
+            _schedulerWorkQueues.Clear();
+            _schedulerSourceRefreshQueues.Clear();
+            _schedulerCachedSolverQueues.Clear();
+            _schedulerWakeHeap.Clear();
+            _schedulerFreshAgeHeap.Clear();
+            _schedulerScrollExposedAgeHeap.Clear();
+            _schedulerRelocationPendingAgeHeap.Clear();
+            _schedulerUnpublishedAgeHeap.Clear();
+            _schedulerVisibleUnsupportedAgeHeap.Clear();
+            _schedulerGenerationStaleAgeHeap.Clear();
+            _schedulerVisibleUnsupportedAgeHistogram.Clear(_frameSerial);
+            _schedulerVisiblePendingAgeHistogram.Clear(_frameSerial);
+            _schedulerGenerationStaleAgeHistogram.Clear(_frameSerial);
+            Array.Clear(_probeSchedulerTransportStates);
+            Array.Fill(_probeSchedulerVolumeIndices, byte.MaxValue);
+            Array.Clear(_probeSchedulerLifecycleStates);
+            Array.Clear(_probeSchedulerTrackedLastUpdatedFrames);
+            Array.Clear(_probeSchedulerTrackedSourceRefreshFrames);
+            Array.Clear(_pendingWorkClassCounts);
+            _schedulerParticipatingProbeCount = 0;
+            _schedulerSourceRepairProbeCount = 0;
+            _schedulerPendingConvergenceProbeCount = 0;
+            _schedulerInactiveDeferredProbeCount = 0;
+            _schedulerInactiveDeferredSavedPrimaryRayCount = 0UL;
+
+            for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
+            {
+                GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
+                int firstProbe = FirstProbe(volume);
+                int probeCount = VolumeProbeCount(volume);
+                int stride = ResolveProbeUpdateStride(probeCount);
+                for (int sequenceIndex = 0; sequenceIndex < probeCount; sequenceIndex++)
+                {
+                    int local = (int)((long)sequenceIndex * stride % probeCount);
+                    RefreshProbeSchedulerEntry(firstProbe + local, volumeIndex);
+                }
+            }
+
+            Array.Clear(_probeSchedulerDirty);
+            _probeSchedulerDirtyCount = 0;
+            _schedulerRebuildRequired = false;
+        }
+
+        private void RefreshProbeSchedulerEntry(int probeIndex, int volumeIndex)
+        {
+            if ((uint)probeIndex < (uint)_probeSchedulerVolumeIndices.Length)
+            {
+                _probeSchedulerVolumeIndices[probeIndex] =
+                    (uint)volumeIndex < (uint)_volumeCount
+                        ? checked((byte)volumeIndex)
+                        : byte.MaxValue;
+            }
+            int queueIndex = SimpleDdgiPersistentProbeQueues.NoQueue;
+            if ((uint)probeIndex < (uint)_probeCount &&
+                (uint)volumeIndex < (uint)_volumeCount &&
+                TryResolveProbeWorkClass(
+                    probeIndex,
+                    volumeIndex,
+                    out SimpleDdgiSchedulerWorkClass workClass))
+            {
+                queueIndex = WorkClassOffset(volumeIndex) + (int)workClass;
+            }
+
+            _schedulerWorkQueues.MoveToQueue(probeIndex, queueIndex);
+            bool sourceRefreshRequired = queueIndex !=
+                    SimpleDdgiPersistentProbeQueues.NoQueue &&
+                TransportV2Active &&
+                NeedsSourceRefresh(probeIndex);
+            bool cachedSolverPriority = queueIndex !=
+                    SimpleDdgiPersistentProbeQueues.NoQueue &&
+                !sourceRefreshRequired &&
+                IsCachedTransportSolvePriorityCandidate(probeIndex);
+            _schedulerSourceRefreshQueues.MoveToQueue(
+                probeIndex,
+                sourceRefreshRequired
+                    ? queueIndex
+                    : SimpleDdgiPersistentProbeQueues.NoQueue);
+            _schedulerCachedSolverQueues.MoveToQueue(
+                probeIndex,
+                cachedSolverPriority
+                    ? queueIndex
+                    : SimpleDdgiPersistentProbeQueues.NoQueue);
+
+            RefreshProbeSchedulerCounters(probeIndex, volumeIndex);
+            RefreshProbeSchedulerLifecycleState(probeIndex);
+            RefreshProbeSchedulerWake(probeIndex);
+        }
+
+        private int ResolveSchedulerVolumeIndex(int probeIndex)
+        {
+            if ((uint)probeIndex < (uint)_probeSchedulerVolumeIndices.Length)
+            {
+                int volumeIndex = _probeSchedulerVolumeIndices[probeIndex];
+                if ((uint)volumeIndex < (uint)_volumeCount)
+                    return volumeIndex;
+            }
+
+            return ResolveVolumeIndexForProbe(probeIndex);
+        }
+
+        private void RefreshProbeSchedulerCounters(int probeIndex, int volumeIndex)
+        {
+            if ((uint)probeIndex >= (uint)_probeSchedulerTransportStates.Length)
+                return;
+
+            byte previousState = _probeSchedulerTransportStates[probeIndex];
+            bool participant = TransportV2Active &&
+                (uint)probeIndex < (uint)_probeInactive.Length &&
+                ShouldParticipateInTransportConvergence(
+                    _probeInactive[probeIndex] != 0);
+            bool sourceRepair = participant && NeedsSourceRefresh(probeIndex);
+            bool pendingConvergence = participant &&
+                !sourceRepair &&
+                !HasLocalTransportConvergenceEvidence(probeIndex);
+            bool inactiveDeferred = ShouldSkipInactiveProbe(probeIndex);
+            byte nextState = 0;
+            if (participant)
+                nextState |= SchedulerTransportParticipantFlag;
+            if (sourceRepair)
+                nextState |= SchedulerTransportSourceRepairFlag;
+            if (pendingConvergence)
+                nextState |= SchedulerTransportPendingConvergenceFlag;
+            if (inactiveDeferred)
+                nextState |= SchedulerInactiveDeferredFlag;
+            if (nextState == previousState)
+                return;
+
+            AdjustSchedulerCounter(
+                previousState,
+                nextState,
+                SchedulerTransportParticipantFlag,
+                ref _schedulerParticipatingProbeCount);
+            AdjustSchedulerCounter(
+                previousState,
+                nextState,
+                SchedulerTransportSourceRepairFlag,
+                ref _schedulerSourceRepairProbeCount);
+            AdjustSchedulerCounter(
+                previousState,
+                nextState,
+                SchedulerTransportPendingConvergenceFlag,
+                ref _schedulerPendingConvergenceProbeCount);
+
+            bool wasInactiveDeferred =
+                (previousState & SchedulerInactiveDeferredFlag) != 0;
+            if (wasInactiveDeferred != inactiveDeferred)
+            {
+                ulong savedRays = (uint)volumeIndex < (uint)_volumeCount
+                    ? (ulong)Math.Max(0, ResolveVolumeQuality(volumeIndex).FullRays)
+                    : 0UL;
+                if (inactiveDeferred)
+                {
+                    _schedulerInactiveDeferredProbeCount++;
+                    _schedulerInactiveDeferredSavedPrimaryRayCount = SaturatingAdd(
+                        _schedulerInactiveDeferredSavedPrimaryRayCount,
+                        savedRays);
+                }
+                else
+                {
+                    _schedulerInactiveDeferredProbeCount = Math.Max(
+                        0,
+                        _schedulerInactiveDeferredProbeCount - 1);
+                    _schedulerInactiveDeferredSavedPrimaryRayCount =
+                        _schedulerInactiveDeferredSavedPrimaryRayCount >= savedRays
+                            ? _schedulerInactiveDeferredSavedPrimaryRayCount - savedRays
+                            : 0UL;
+                }
+            }
+
+            _probeSchedulerTransportStates[probeIndex] = nextState;
+        }
+
+        private void RefreshProbeSchedulerLifecycleState(int probeIndex)
+        {
+            if ((uint)probeIndex >= (uint)_probeSchedulerLifecycleStates.Length ||
+                (uint)probeIndex >= (uint)_probeLastUpdatedFrames.Length)
+            {
+                return;
+            }
+
+            byte previousState = _probeSchedulerLifecycleStates[probeIndex];
+            uint previousLastUpdatedFrame =
+                _probeSchedulerTrackedLastUpdatedFrames[probeIndex];
+            uint currentLastUpdatedFrame = _probeLastUpdatedFrames[probeIndex];
+            uint previousSourceRefreshFrame =
+                _probeSchedulerTrackedSourceRefreshFrames[probeIndex];
+            uint currentSourceRefreshFrame =
+                (uint)probeIndex < (uint)_probeLastSourceRefreshFrames.Length
+                    ? _probeLastSourceRefreshFrames[probeIndex]
+                    : 0u;
+            bool visible =
+                (uint)probeIndex < (uint)_probeSchedulingFlags.Length &&
+                (_probeSchedulingFlags[probeIndex] &
+                    ProbeSchedulingVisibleFlag) != 0;
+            bool fresh =
+                (uint)probeIndex < (uint)_probeFresh.Length &&
+                _probeFresh[probeIndex] != 0;
+            bool scrollExposed =
+                (uint)probeIndex < (uint)_probeSchedulingFlags.Length &&
+                (_probeSchedulingFlags[probeIndex] &
+                    ProbeSchedulingScrollExposedFlag) != 0;
+            bool relocationPending =
+                (uint)probeIndex < (uint)_probeRelocationPending.Length &&
+                _probeRelocationPending[probeIndex] != 0;
+            bool unpublished = fresh || relocationPending ||
+                (TransportV2Active &&
+                    ((uint)probeIndex >= (uint)_probeSourceRayCounts.Length ||
+                        _probeSourceRayCounts[probeIndex] == 0));
+            bool visibleUnsupported = visible &&
+                IsProbeDataUnavailable(probeIndex);
+            bool visiblePending = visible &&
+                (fresh || scrollExposed || relocationPending || unpublished);
+            bool generationStale = TransportV2Active &&
+                (uint)probeIndex < (uint)_probeInactive.Length &&
+                ShouldParticipateInTransportConvergence(
+                    _probeInactive[probeIndex] != 0) &&
+                ((uint)probeIndex >=
+                        (uint)_probeSourceLightingGenerations.Length ||
+                    _probeSourceLightingGenerations[probeIndex] !=
+                        _sourceLightingGeneration);
+
+            byte nextState = 0;
+            if (fresh)
+                nextState |= SchedulerLifecycleFreshFlag;
+            if (scrollExposed)
+                nextState |= SchedulerLifecycleScrollExposedFlag;
+            if (relocationPending)
+                nextState |= SchedulerLifecycleRelocationPendingFlag;
+            if (unpublished)
+                nextState |= SchedulerLifecycleUnpublishedFlag;
+            if (visibleUnsupported)
+                nextState |= SchedulerLifecycleVisibleUnsupportedFlag;
+            if (visiblePending)
+                nextState |= SchedulerLifecycleVisiblePendingFlag;
+            if (generationStale)
+                nextState |= SchedulerLifecycleGenerationStaleFlag;
+            if (nextState == previousState &&
+                currentLastUpdatedFrame == previousLastUpdatedFrame &&
+                currentSourceRefreshFrame == previousSourceRefreshFrame)
+            {
+                return;
+            }
+
+            uint previousAge = CalculateProbeAge(
+                previousLastUpdatedFrame,
+                _frameIndex);
+            uint currentAge = GetProbeAge(probeIndex);
+            ulong lastUpdatedSerial = _frameSerial >= currentAge
+                ? _frameSerial - currentAge
+                : 0UL;
+            uint previousSourceAge = CalculateProbeAge(
+                previousSourceRefreshFrame,
+                _frameIndex);
+            uint currentSourceAge = CalculateProbeAge(
+                currentSourceRefreshFrame,
+                _frameIndex);
+            ulong sourceRefreshSerial = _frameSerial >= currentSourceAge
+                ? _frameSerial - currentSourceAge
+                : 0UL;
+            UpdateSchedulerAgeHeap(
+                _schedulerFreshAgeHeap,
+                probeIndex,
+                previousState,
+                nextState,
+                SchedulerLifecycleFreshFlag,
+                lastUpdatedSerial);
+            UpdateSchedulerAgeHeap(
+                _schedulerScrollExposedAgeHeap,
+                probeIndex,
+                previousState,
+                nextState,
+                SchedulerLifecycleScrollExposedFlag,
+                lastUpdatedSerial);
+            UpdateSchedulerAgeHeap(
+                _schedulerRelocationPendingAgeHeap,
+                probeIndex,
+                previousState,
+                nextState,
+                SchedulerLifecycleRelocationPendingFlag,
+                lastUpdatedSerial);
+            UpdateSchedulerAgeHeap(
+                _schedulerUnpublishedAgeHeap,
+                probeIndex,
+                previousState,
+                nextState,
+                SchedulerLifecycleUnpublishedFlag,
+                lastUpdatedSerial);
+            UpdateSchedulerAgeHeap(
+                _schedulerVisibleUnsupportedAgeHeap,
+                probeIndex,
+                previousState,
+                nextState,
+                SchedulerLifecycleVisibleUnsupportedFlag,
+                lastUpdatedSerial);
+            UpdateSchedulerAgeHeap(
+                _schedulerGenerationStaleAgeHeap,
+                probeIndex,
+                previousState,
+                nextState,
+                SchedulerLifecycleGenerationStaleFlag,
+                sourceRefreshSerial);
+            UpdateSchedulerAgeHistogram(
+                _schedulerVisibleUnsupportedAgeHistogram,
+                previousState,
+                nextState,
+                SchedulerLifecycleVisibleUnsupportedFlag,
+                previousAge,
+                currentAge);
+            UpdateSchedulerAgeHistogram(
+                _schedulerVisiblePendingAgeHistogram,
+                previousState,
+                nextState,
+                SchedulerLifecycleVisiblePendingFlag,
+                previousAge,
+                currentAge);
+            UpdateSchedulerAgeHistogram(
+                _schedulerGenerationStaleAgeHistogram,
+                previousState,
+                nextState,
+                SchedulerLifecycleGenerationStaleFlag,
+                previousSourceAge,
+                currentSourceAge);
+            _probeSchedulerLifecycleStates[probeIndex] = nextState;
+            _probeSchedulerTrackedLastUpdatedFrames[probeIndex] =
+                currentLastUpdatedFrame;
+            _probeSchedulerTrackedSourceRefreshFrames[probeIndex] =
+                currentSourceRefreshFrame;
+        }
+
+        private static void UpdateSchedulerAgeHeap(
+            SimpleDdgiSchedulerWakeHeap heap,
+            int probeIndex,
+            byte previousState,
+            byte nextState,
+            byte flag,
+            ulong lastUpdatedSerial)
+        {
+            bool wasMember = (previousState & flag) != 0;
+            bool isMember = (nextState & flag) != 0;
+            if (!isMember)
+            {
+                if (wasMember)
+                    heap.Remove(probeIndex);
+                return;
+            }
+
+            heap.Schedule(probeIndex, lastUpdatedSerial);
+        }
+
+        private void UpdateSchedulerAgeHistogram(
+            SimpleDdgiIncrementalAgeHistogram histogram,
+            byte previousState,
+            byte nextState,
+            byte flag,
+            uint previousAge,
+            uint currentAge)
+        {
+            if ((previousState & flag) != 0)
+                histogram.Remove(previousAge, _frameSerial);
+            if ((nextState & flag) != 0)
+                histogram.Add(currentAge, _frameSerial);
+        }
+
+        private static void AdjustSchedulerCounter(
+            byte previousState,
+            byte nextState,
+            byte flag,
+            ref int counter)
+        {
+            bool wasSet = (previousState & flag) != 0;
+            bool isSet = (nextState & flag) != 0;
+            if (wasSet == isSet)
+                return;
+            counter = isSet ? counter + 1 : Math.Max(0, counter - 1);
+        }
+
+        private void RefreshProbeSchedulerWake(int probeIndex)
+        {
+            _schedulerWakeHeap.Remove(probeIndex);
+            if ((uint)probeIndex >= (uint)_probeCount)
+                return;
+
+            ulong nextWakeFrame = ulong.MaxValue;
+            if (ShouldSkipInactiveProbe(probeIndex))
+            {
+                uint age = GetProbeAge(probeIndex);
+                uint remaining = age < InactiveProbeRetryFrames
+                    ? InactiveProbeRetryFrames - age
+                    : 0u;
+                nextWakeFrame = _frameSerial + Math.Max(1UL, remaining);
+            }
+
+            if (TransportV2Active &&
+                (uint)probeIndex < (uint)_probeInactive.Length &&
+                _probeInactive[probeIndex] == 0 &&
+                (uint)probeIndex < (uint)_probeFresh.Length &&
+                _probeFresh[probeIndex] == 0 &&
+                (uint)probeIndex < (uint)_probeSourceLightingGenerations.Length &&
+                _probeSourceLightingGenerations[probeIndex] == _sourceLightingGeneration &&
+                (uint)probeIndex < (uint)_probeSourceRayCounts.Length &&
+                _probeSourceRayCounts[probeIndex] > 0 &&
+                (uint)probeIndex < (uint)_probeLastSourceRefreshFrames.Length)
+            {
+                uint elapsed = unchecked(
+                    _frameIndex - _probeLastSourceRefreshFrames[probeIndex]);
+                uint refreshFrames = checked((uint)Math.Max(
+                    1,
+                    EffectiveTransportSourceRefreshFrames));
+                if (elapsed < refreshFrames)
+                {
+                    ulong periodicWake = _frameSerial + (refreshFrames - elapsed);
+                    nextWakeFrame = Math.Min(nextWakeFrame, periodicWake);
+                }
+            }
+
+            if (nextWakeFrame != ulong.MaxValue)
+                _schedulerWakeHeap.Schedule(probeIndex, nextWakeFrame);
         }
 
         private void RecomputeDirtyLatencyOutstandingCount()
@@ -2120,7 +2648,7 @@ namespace Njulf.Rendering.Resources
             Array.Clear(_probeSchedulingFlags);
             Array.Clear(_probeDirtyReasons);
             Array.Clear(_probeVisibilityImportance);
-            _volumeWorkClassRoundRobinCursors.Clear();
+            RequirePersistentSchedulerRebuild();
             _dirtyLatencyOutstandingEventCount = 0;
             _probeStateReadbackValid = 0;
             _probeConvergenceReadbackValid = 0;
@@ -2362,6 +2890,7 @@ namespace Njulf.Rendering.Resources
                     BeginTransportGlobalConvergence(forceFieldEvidenceReset: true);
             }
             ApplyPendingTransportFieldConvergenceEvidenceReset();
+            RefreshPersistentSchedulerState();
             if (!_transportGlobalConvergencePending || _probeCount <= 0)
                 return;
 
@@ -2378,28 +2907,13 @@ namespace Njulf.Rendering.Resources
                 _transportPeriodicSourceRefreshWaveCutoffFrame = _frameIndex;
                 _transportGlobalWatchdogRefreshWaveStarted = true;
                 _transportGlobalSourceRepairPhasePending = true;
+                RefreshPersistentSchedulerState();
             }
 
-            int participatingProbeCount = 0;
-            int sourceRepairProbeCount = 0;
-            int pendingConvergenceProbeCount = 0;
-            for (int probeIndex = 0; probeIndex < _probeCount; probeIndex++)
-            {
-                bool inactive = (uint)probeIndex < (uint)_probeInactive.Length &&
-                    _probeInactive[probeIndex] != 0;
-                if (!ShouldParticipateInTransportConvergence(inactive))
-                    continue;
-
-                participatingProbeCount++;
-                if (NeedsSourceRefresh(probeIndex))
-                {
-                    sourceRepairProbeCount++;
-                    continue;
-                }
-
-                if (!HasLocalTransportConvergenceEvidence(probeIndex))
-                    pendingConvergenceProbeCount++;
-            }
+            int participatingProbeCount = _schedulerParticipatingProbeCount;
+            int sourceRepairProbeCount = _schedulerSourceRepairProbeCount;
+            int pendingConvergenceProbeCount =
+                _schedulerPendingConvergenceProbeCount;
 
             int sourceRepairAllowance =
                 ResolveTransportGlobalConvergenceSourceRepairAllowance(
@@ -2449,6 +2963,7 @@ namespace Njulf.Rendering.Resources
             if (_probeLuminanceChangeEma.Length > 0)
                 Array.Clear(_probeLuminanceChangeEma);
             _transportFieldConvergenceEvidenceResetPending = false;
+            RequirePersistentSchedulerRebuild();
         }
 
         internal static bool ShouldParticipateInTransportConvergence(bool inactive) =>
@@ -2668,79 +3183,230 @@ namespace Njulf.Rendering.Resources
             if (_probeCount <= 0)
                 return 0;
 
-            bool globalDirty = _lightingDirtyFrames > 0;
-            int visibleFreshRecoveryBudget = 0;
-            int requiredStableUpdates = Math.Max(
-                1,
-                _settings.GlobalIllumination.SimpleDdgiStableMaintenanceUpdateCount);
-            for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
+            if (!_hasSchedulerVisibilityCamera)
+                _schedulerVisibilityFullRefreshRequired = true;
+            else if ((_schedulerCameraPosition - _schedulerVisibilityCameraPosition).LengthSquared() > 0.000001f)
             {
-                GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
-                int firstProbe = FirstProbe(volume);
-                int probeCount = VolumeProbeCount(volume);
-                int visibleFreshCount = 0;
-                for (int local = 0; local < probeCount; local++)
+                MarkCameraVisibilityCandidates(
+                    _schedulerVisibilityCameraPosition,
+                    _schedulerCameraPosition);
+            }
+
+            if (_schedulerVisibilityFullRefreshRequired)
+            {
+                Array.Clear(_volumeVisibleFreshProbeCounts);
+                Array.Clear(_probeVisibleFreshCounted);
+                for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
                 {
-                    int probeIndex = firstProbe + local;
-                    if ((uint)probeIndex >= (uint)_probeVisibilityImportance.Length ||
-                        (uint)probeIndex >= (uint)_probeSchedulingFlags.Length)
+                    GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
+                    int firstProbe = FirstProbe(volume);
+                    int probeCount = VolumeProbeCount(volume);
+                    for (int local = 0; local < probeCount; local++)
                     {
-                        continue;
+                        RefreshProbeSchedulingImportance(
+                            firstProbe + local,
+                            volumeIndex);
                     }
-
-                    bool needsVisibility = globalDirty || _probeFresh[probeIndex] != 0 ||
-                        (_probeSchedulingFlags[probeIndex] & (ProbeSchedulingScrollExposedFlag | ProbeSchedulingRegionalDirtyFlag)) != 0 ||
-                        ((uint)probeIndex < (uint)_probeInactive.Length && _probeInactive[probeIndex] != 0) ||
-                        (_probeConvergenceReadbackValid != 0 &&
-                            (uint)probeIndex < (uint)_probeStableUpdateCounts.Length &&
-                            _probeStableUpdateCounts[probeIndex] < requiredStableUpdates);
-                    if (!needsVisibility)
-                    {
-                        _probeVisibilityImportance[probeIndex] = 0;
-                        _probeSchedulingFlags[probeIndex] &= unchecked((byte)~ProbeSchedulingVisibleFlag);
-                        continue;
-                    }
-
-                    byte importance = CalculateProbeSchedulingImportance(probeIndex, volumeIndex);
-                    _probeVisibilityImportance[probeIndex] = importance;
-                    if (importance >= SchedulerVisibleImportanceThreshold)
-                    {
-                        _probeSchedulingFlags[probeIndex] |= ProbeSchedulingVisibleFlag;
-                        bool freshOrExposed = _probeFresh[probeIndex] != 0 ||
-                            (_probeSchedulingFlags[probeIndex] & ProbeSchedulingScrollExposedFlag) != 0;
-                        if (freshOrExposed)
-                            visibleFreshCount++;
-                    }
-                    else
-                        _probeSchedulingFlags[probeIndex] &= unchecked((byte)~ProbeSchedulingVisibleFlag);
                 }
 
+                Array.Clear(_probeVisibilityDirty);
+                _probeVisibilityDirtyCount = 0;
+                _schedulerVisibilityFullRefreshRequired = false;
+            }
+            else
+            {
+                int dirtyCount = _probeVisibilityDirtyCount;
+                _probeVisibilityDirtyCount = 0;
+                for (int dirtyOffset = 0; dirtyOffset < dirtyCount; dirtyOffset++)
+                {
+                    int probeIndex = _probeVisibilityDirtyIndices[dirtyOffset];
+                    if ((uint)probeIndex >= (uint)_probeVisibilityDirty.Length)
+                        continue;
+                    _probeVisibilityDirty[probeIndex] = 0;
+                    RefreshProbeSchedulingImportance(
+                        probeIndex,
+                        ResolveSchedulerVolumeIndex(probeIndex));
+                }
+            }
+
+            _schedulerVisibilityCameraPosition = _schedulerCameraPosition;
+            _hasSchedulerVisibilityCamera = true;
+            int visibleFreshRecoveryBudget = 0;
+            for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
+            {
                 // The per-ring minimum is also the bounded recovery guarantee for
                 // visible cells invalidated by camera-relative scrolling. Adaptive
                 // feedback may still reduce maintenance work after these cells are
                 // populated, but it cannot leave a moving receiver sampling empty
                 // atlas slots one probe at a time.
-                int volumeMinimum = Math.Max(0, ResolveVolumeQuality(volumeIndex).MinimumUpdateQuota);
+                int volumeMinimum = Math.Max(
+                    0,
+                    ResolveVolumeQuality(volumeIndex).MinimumUpdateQuota);
                 visibleFreshRecoveryBudget = SaturatingAdd(
                     visibleFreshRecoveryBudget,
-                    Math.Min(visibleFreshCount, volumeMinimum));
+                    Math.Min(
+                        _volumeVisibleFreshProbeCounts[volumeIndex],
+                        volumeMinimum));
             }
 
             return visibleFreshRecoveryBudget;
         }
 
-        private byte CalculateProbeSchedulingImportance(int probeIndex, int volumeIndex)
+        private void RefreshProbeSchedulingImportance(
+            int probeIndex,
+            int volumeIndex)
+        {
+            if ((uint)probeIndex >= (uint)_probeVisibilityImportance.Length ||
+                (uint)probeIndex >= (uint)_probeSchedulingFlags.Length ||
+                (uint)volumeIndex >= (uint)_volumeCount)
+            {
+                return;
+            }
+
+            bool wasVisible =
+                (_probeSchedulingFlags[probeIndex] & ProbeSchedulingVisibleFlag) != 0;
+            bool wasVisibleFresh =
+                (uint)probeIndex < (uint)_probeVisibleFreshCounted.Length &&
+                _probeVisibleFreshCounted[probeIndex] != 0;
+            int requiredStableUpdates = Math.Max(
+                1,
+                _settings.GlobalIllumination.SimpleDdgiStableMaintenanceUpdateCount);
+            bool needsVisibility = _lightingDirtyFrames > 0 ||
+                _probeFresh[probeIndex] != 0 ||
+                (_probeSchedulingFlags[probeIndex] &
+                    (ProbeSchedulingScrollExposedFlag |
+                        ProbeSchedulingRegionalDirtyFlag)) != 0 ||
+                ((uint)probeIndex < (uint)_probeInactive.Length &&
+                    _probeInactive[probeIndex] != 0) ||
+                (_probeConvergenceReadbackValid != 0 &&
+                    (uint)probeIndex < (uint)_probeStableUpdateCounts.Length &&
+                    _probeStableUpdateCounts[probeIndex] < requiredStableUpdates);
+            byte importance = needsVisibility
+                ? CalculateProbeSchedulingImportance(probeIndex, volumeIndex)
+                : (byte)0;
+            _probeVisibilityImportance[probeIndex] = importance;
+            if (importance >= SchedulerVisibleImportanceThreshold)
+                _probeSchedulingFlags[probeIndex] |= ProbeSchedulingVisibleFlag;
+            else
+                _probeSchedulingFlags[probeIndex] &=
+                    unchecked((byte)~ProbeSchedulingVisibleFlag);
+
+            bool isVisible =
+                (_probeSchedulingFlags[probeIndex] & ProbeSchedulingVisibleFlag) != 0;
+            bool isVisibleFresh = isVisible &&
+                (_probeFresh[probeIndex] != 0 ||
+                    (_probeSchedulingFlags[probeIndex] &
+                        ProbeSchedulingScrollExposedFlag) != 0);
+            if (wasVisibleFresh != isVisibleFresh)
+            {
+                _probeVisibleFreshCounted[probeIndex] =
+                    isVisibleFresh ? (byte)1 : (byte)0;
+                _volumeVisibleFreshProbeCounts[volumeIndex] = Math.Max(
+                    0,
+                    _volumeVisibleFreshProbeCounts[volumeIndex] +
+                        (isVisibleFresh ? 1 : -1));
+            }
+
+            if (wasVisible != isVisible)
+                MarkProbeSchedulerDirty(probeIndex);
+        }
+
+        private void MarkCameraVisibilityCandidates(
+            Vector3 previousCameraPosition,
+            Vector3 currentCameraPosition)
+        {
+            for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
+            {
+                GPUSimpleDdgiVolume currentVolume = _volumeScratch[volumeIndex];
+                MarkVolumeVisibilityCandidates(
+                    currentVolume,
+                    volumeIndex,
+                    previousCameraPosition);
+                MarkVolumeVisibilityCandidates(
+                    currentVolume,
+                    volumeIndex,
+                    currentCameraPosition);
+                if (_recenteredThisFrame &&
+                    TryGetPreviousMatchingVolume(
+                        volumeIndex,
+                        currentVolume,
+                        out GPUSimpleDdgiVolume previousVolume))
+                {
+                    MarkVolumeVisibilityCandidates(
+                        previousVolume,
+                        volumeIndex,
+                        previousCameraPosition);
+                }
+            }
+        }
+
+        private void MarkVolumeVisibilityCandidates(
+            GPUSimpleDdgiVolume volume,
+            int volumeIndex,
+            Vector3 cameraPosition)
+        {
+            int baseImportance = ResolveVolumeSchedulingBaseImportance(volumeIndex);
+            // Camera proximity contributes three points. Always-visible volumes
+            // and volumes that cannot reach the threshold need no spatial work.
+            if (baseImportance >= SchedulerVisibleImportanceThreshold ||
+                baseImportance + 4 < SchedulerVisibleImportanceThreshold)
+            {
+                return;
+            }
+
+            float spacing = Spacing(volume);
+            Vector3 origin = Origin(volume);
+            float radius = ResolveProbeSchedulingProximityRadius(
+                volume,
+                spacing);
+            int countX = CountX(volume);
+            int countY = CountY(volume);
+            int countZ = CountZ(volume);
+            int minimumX = Math.Clamp(
+                (int)MathF.Floor((cameraPosition.X - radius - origin.X) / spacing),
+                0,
+                Math.Max(0, countX - 1));
+            int maximumX = Math.Clamp(
+                (int)MathF.Ceiling((cameraPosition.X + radius - origin.X) / spacing),
+                0,
+                Math.Max(0, countX - 1));
+            int minimumY = Math.Clamp(
+                (int)MathF.Floor((cameraPosition.Y - radius - origin.Y) / spacing),
+                0,
+                Math.Max(0, countY - 1));
+            int maximumY = Math.Clamp(
+                (int)MathF.Ceiling((cameraPosition.Y + radius - origin.Y) / spacing),
+                0,
+                Math.Max(0, countY - 1));
+            int minimumZ = Math.Clamp(
+                (int)MathF.Floor((cameraPosition.Z - radius - origin.Z) / spacing),
+                0,
+                Math.Max(0, countZ - 1));
+            int maximumZ = Math.Clamp(
+                (int)MathF.Ceiling((cameraPosition.Z + radius - origin.Z) / spacing),
+                0,
+                Math.Max(0, countZ - 1));
+            int firstProbe = FirstProbe(volume);
+            for (int z = minimumZ; z <= maximumZ; z++)
+                for (int y = minimumY; y <= maximumY; y++)
+                    for (int x = minimumX; x <= maximumX; x++)
+                    {
+                        int physicalLocal = CalculatePhysicalProbeLocalIndex(
+                            volume,
+                            x,
+                            y,
+                            z);
+                        MarkProbeVisibilityDirty(firstProbe + physicalLocal);
+                    }
+        }
+
+        private int ResolveVolumeSchedulingBaseImportance(int volumeIndex)
         {
             if ((uint)volumeIndex >= (uint)_volumeCount)
                 return 0;
 
             GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
-            int firstProbe = FirstProbe(volume);
-            int local = probeIndex - firstProbe;
-            if (local < 0 || local >= VolumeProbeCount(volume))
-                return 0;
-
-            int importance = Kind(volume) == VolumeKindAuthored
+            return Kind(volume) == VolumeKindAuthored
                 ? _volumePurposes[volumeIndex] switch
                 {
                     SimpleDdgiVolumePurpose.ReceiverHero => 6,
@@ -2754,6 +3420,33 @@ namespace Njulf.Rendering.Resources
                     1 => 1,
                     _ => 0
                 };
+        }
+
+        private static float ResolveProbeSchedulingProximityRadius(
+            GPUSimpleDdgiVolume volume,
+            float spacing)
+        {
+            return Math.Max(
+                spacing * 3.0f,
+                Kind(volume) == VolumeKindRing
+                    ? spacing * 4.0f
+                    : Math.Max(
+                        volume.WorldMinAndEdgeFade.W,
+                        spacing * 2.0f));
+        }
+
+        private byte CalculateProbeSchedulingImportance(int probeIndex, int volumeIndex)
+        {
+            if ((uint)volumeIndex >= (uint)_volumeCount)
+                return 0;
+
+            GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
+            int firstProbe = FirstProbe(volume);
+            int local = probeIndex - firstProbe;
+            if (local < 0 || local >= VolumeProbeCount(volume))
+                return 0;
+
+            int importance = ResolveVolumeSchedulingBaseImportance(volumeIndex);
 
             (int x, int y, int z) = CalculateLogicalProbeCoordinate(volume, local);
             float spacing = Spacing(volume);
@@ -2761,11 +3454,9 @@ namespace Njulf.Rendering.Resources
             float dx = origin.X + x * spacing - _schedulerCameraPosition.X;
             float dy = origin.Y + y * spacing - _schedulerCameraPosition.Y;
             float dz = origin.Z + z * spacing - _schedulerCameraPosition.Z;
-            float proximityRadius = Math.Max(
-                spacing * 3.0f,
-                Kind(volume) == VolumeKindRing
-                    ? spacing * 4.0f
-                    : Math.Max(_volumeScratch[volumeIndex].WorldMinAndEdgeFade.W, spacing * 2.0f));
+            float proximityRadius = ResolveProbeSchedulingProximityRadius(
+                volume,
+                spacing);
             if (dx * dx + dy * dy + dz * dz <= proximityRadius * proximityRadius)
                 importance += 3;
 
@@ -2854,10 +3545,6 @@ namespace Njulf.Rendering.Resources
                     : SimpleDdgiSchedulerPressureReason.NoEligibleWork;
                 return 0;
             }
-
-            for (int i = 0; i < _probeCount; i++)
-                _probeAges[i] = _probeAges[i] == uint.MaxValue ? uint.MaxValue : _probeAges[i] + 1u;
-            Array.Clear(_probeQueued, 0, _probeCount);
 
             int count = 0;
             int[] quotas = ResolveVolumeQuotas(capacity);
@@ -2965,16 +3652,9 @@ namespace Njulf.Rendering.Resources
 
         private void ResolveSourceRefreshThroughputTarget(int updateBudget)
         {
-            int participatingProbeCount = 0;
-            for (int probeIndex = 0; probeIndex < _probeCount; probeIndex++)
-            {
-                bool inactive =
-                    (uint)probeIndex < (uint)_probeInactive.Length &&
-                    _probeInactive[probeIndex] != 0;
-                if (ShouldParticipateInTransportConvergence(inactive))
-                    participatingProbeCount++;
-            }
-
+            int participatingProbeCount = TransportV2Active
+                ? _schedulerParticipatingProbeCount
+                : 0;
             int targetFrames = EffectiveTransportSourceRefreshFrames;
             _sourceRefreshTargetProbeCount = participatingProbeCount <= 0
                 ? 0
@@ -2989,62 +3669,30 @@ namespace Njulf.Rendering.Resources
 
         private void RefreshSourceStepAgeTelemetry()
         {
-            Array.Clear(_sourceStepAgeHistogram);
-            int participantCount = 0;
-            int staleCount = 0;
-            int maximumAge = 0;
-            for (int probeIndex = 0; probeIndex < _probeCount; probeIndex++)
-            {
-                bool inactive =
-                    (uint)probeIndex < (uint)_probeInactive.Length &&
-                    _probeInactive[probeIndex] != 0;
-                if (!ShouldParticipateInTransportConvergence(inactive))
-                    continue;
-
-                participantCount++;
-                bool stale =
-                    (uint)probeIndex >= (uint)_probeSourceLightingGenerations.Length ||
-                    _probeSourceLightingGenerations[probeIndex] !=
-                        _sourceLightingGeneration;
-                int age = 0;
-                if (stale)
-                {
-                    staleCount++;
-                    uint lastRefresh =
-                        (uint)probeIndex < (uint)_probeLastSourceRefreshFrames.Length
-                            ? _probeLastSourceRefreshFrames[probeIndex]
-                            : 0u;
-                    age = ClampUIntToInt(unchecked(_frameIndex - lastRefresh));
-                    maximumAge = Math.Max(maximumAge, age);
-                }
-
-                int bucket = Math.Min(
-                    age,
-                    GiSourceAgeHistogramMaximumFrames + 1);
-                _sourceStepAgeHistogram[bucket] = SaturatingAdd(
-                    _sourceStepAgeHistogram[bucket],
-                    1);
-            }
-
+            int participantCount = _schedulerParticipatingProbeCount;
+            int staleCount = _schedulerGenerationStaleAgeHistogram.Count;
+            int maximumAge = ClampUIntToInt(
+                ResolveMaximumTrackedProbeAge(
+                    _schedulerGenerationStaleAgeHeap));
             _sourceStepStaleProbeCount = staleCount;
             _sourceStepAgeMaximumFrames = maximumAge;
             _sourceStepAgeP95Frames = 0;
             if (participantCount > 0)
             {
                 int targetRank = (int)Math.Ceiling(participantCount * 0.95);
-                int cumulative = 0;
-                for (int bucket = 0; bucket < _sourceStepAgeHistogram.Length; bucket++)
+                int currentGenerationCount = Math.Max(
+                    0,
+                    participantCount - staleCount);
+                if (targetRank > currentGenerationCount)
                 {
-                    cumulative = SaturatingAdd(
-                        cumulative,
-                        _sourceStepAgeHistogram[bucket]);
-                    if (cumulative < targetRank)
-                        continue;
-                    _sourceStepAgeP95Frames = bucket <=
+                    int staleRank = targetRank - currentGenerationCount;
+                    int age = _schedulerGenerationStaleAgeHistogram.SelectRank(
+                        staleRank,
+                        _frameSerial);
+                    _sourceStepAgeP95Frames = age <=
                         GiSourceAgeHistogramMaximumFrames
-                            ? bucket
+                            ? age
                             : maximumAge;
-                    break;
                 }
             }
 
@@ -3130,59 +3778,40 @@ namespace Njulf.Rendering.Resources
         {
             _probeLifecycleLatencyTargetFrames =
                 ResolveProbeLifecycleLatencyTarget(_probeCount, updateBudget);
-            _oldestVisibleUnsupportedProbeAge = 0;
-            _visibleUnsupportedProbeCountAboveLatencyTarget = 0;
-            _maximumFreshProbeAge = 0;
-            _maximumScrollExposedProbeAge = 0;
-            _maximumRelocationPendingProbeAge = 0;
-            _maximumUnpublishedProbeAge = 0;
-            _probeLifecycleBoundExceededCount = 0;
+            _oldestVisibleUnsupportedProbeAge =
+                ResolveMaximumTrackedProbeAge(
+                    _schedulerVisibleUnsupportedAgeHeap);
+            _maximumFreshProbeAge = ResolveMaximumTrackedProbeAge(
+                _schedulerFreshAgeHeap);
+            _maximumScrollExposedProbeAge = ResolveMaximumTrackedProbeAge(
+                _schedulerScrollExposedAgeHeap);
+            _maximumRelocationPendingProbeAge = ResolveMaximumTrackedProbeAge(
+                _schedulerRelocationPendingAgeHeap);
+            _maximumUnpublishedProbeAge = ResolveMaximumTrackedProbeAge(
+                _schedulerUnpublishedAgeHeap);
             _visibleZeroSupportRepairUpdateCount =
                 _scheduledWorkClassCounts[(int)SimpleDdgiSchedulerWorkClass.VisibleZeroSupport];
 
-            uint bound = checked((uint)_probeLifecycleLatencyTargetFrames);
-            for (int probeIndex = 0; probeIndex < _probeCount; probeIndex++)
-            {
-                uint age = _probeAges[probeIndex];
-                bool visible =
-                    (uint)probeIndex < (uint)_probeSchedulingFlags.Length &&
-                    (_probeSchedulingFlags[probeIndex] & ProbeSchedulingVisibleFlag) != 0;
-                bool fresh = _probeFresh[probeIndex] != 0;
-                bool scrollExposed =
-                    (uint)probeIndex < (uint)_probeSchedulingFlags.Length &&
-                    (_probeSchedulingFlags[probeIndex] & ProbeSchedulingScrollExposedFlag) != 0;
-                bool relocationPending =
-                    (uint)probeIndex < (uint)_probeRelocationPending.Length &&
-                    _probeRelocationPending[probeIndex] != 0;
-                bool unpublished = fresh || relocationPending ||
-                    (TransportV2Active &&
-                        ((uint)probeIndex >= (uint)_probeSourceRayCounts.Length ||
-                            _probeSourceRayCounts[probeIndex] == 0));
-                bool unsupported = IsProbeDataUnavailable(probeIndex);
+            _visibleUnsupportedProbeCountAboveLatencyTarget =
+                _schedulerVisibleUnsupportedAgeHistogram.CountAbove(
+                    _probeLifecycleLatencyTargetFrames,
+                    _frameSerial);
+            _probeLifecycleBoundExceededCount =
+                _schedulerVisiblePendingAgeHistogram.CountAbove(
+                    _probeLifecycleLatencyTargetFrames,
+                    _frameSerial);
+        }
 
-                if (fresh)
-                    _maximumFreshProbeAge = Math.Max(_maximumFreshProbeAge, age);
-                if (scrollExposed)
-                    _maximumScrollExposedProbeAge =
-                        Math.Max(_maximumScrollExposedProbeAge, age);
-                if (relocationPending)
-                    _maximumRelocationPendingProbeAge =
-                        Math.Max(_maximumRelocationPendingProbeAge, age);
-                if (unpublished)
-                    _maximumUnpublishedProbeAge = Math.Max(_maximumUnpublishedProbeAge, age);
-                if (visible && unsupported)
-                {
-                    _oldestVisibleUnsupportedProbeAge =
-                        Math.Max(_oldestVisibleUnsupportedProbeAge, age);
-                    if (age > bound)
-                        _visibleUnsupportedProbeCountAboveLatencyTarget++;
-                }
-                if (visible && age > bound &&
-                    (fresh || scrollExposed || relocationPending || unpublished))
-                {
-                    _probeLifecycleBoundExceededCount++;
-                }
-            }
+        private uint ResolveMaximumTrackedProbeAge(
+            SimpleDdgiSchedulerWakeHeap ageHeap)
+        {
+            if (!ageHeap.TryPeek(out _, out ulong lastUpdatedSerial))
+                return 0u;
+
+            ulong age = _frameSerial >= lastUpdatedSerial
+                ? _frameSerial - lastUpdatedSerial
+                : 0UL;
+            return age > uint.MaxValue ? uint.MaxValue : (uint)age;
         }
 
         internal static int ResolveProbeLifecycleLatencyTarget(
@@ -3206,49 +3835,30 @@ namespace Njulf.Rendering.Resources
 
         private void BuildWorkClassReservations(int[] volumeQuotas)
         {
-            Array.Clear(_volumeWorkClassPendingScratch);
             Array.Clear(_volumeWorkClassQuotaScratch);
             Array.Clear(_volumeWorkClassUsageScratch);
-            Array.Clear(_volumeSourceRefreshPendingScratch);
             Array.Clear(_volumeSourceRefreshUsageScratch);
-            Array.Clear(_volumeCachedSolverPendingScratch);
             Array.Clear(_volumeCachedSolverUsageScratch);
-            Array.Clear(_pendingWorkClassCounts);
             Array.Clear(_reservedWorkClassCounts);
+
+            for (int classIndex = 0; classIndex < SchedulerWorkClassCount; classIndex++)
+            {
+                _pendingWorkClassCounts[classIndex] =
+                    _schedulerWorkQueues.GetWorkClassCount(classIndex);
+            }
 
             for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
             {
-                GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
-                int firstProbe = FirstProbe(volume);
-                int probeCount = VolumeProbeCount(volume);
                 int workClassOffset = WorkClassOffset(volumeIndex);
-                for (int local = 0; local < probeCount; local++)
+                for (int classIndex = 0; classIndex < SchedulerWorkClassCount; classIndex++)
                 {
-                    int probeIndex = firstProbe + local;
-                    if (!TryResolveProbeWorkClass(probeIndex, volumeIndex, out SimpleDdgiSchedulerWorkClass workClass))
-                        continue;
-
-                    int classIndex = (int)workClass;
-                    _volumeWorkClassPendingScratch[workClassOffset + classIndex] = SaturatingAdd(
-                        _volumeWorkClassPendingScratch[workClassOffset + classIndex],
-                        1);
-                    bool sourceRefreshRequired =
-                        TransportV2Active && NeedsSourceRefresh(probeIndex);
-                    if (sourceRefreshRequired)
-                    {
-                        _volumeSourceRefreshPendingScratch[workClassOffset + classIndex] =
-                            SaturatingAdd(
-                                _volumeSourceRefreshPendingScratch[workClassOffset + classIndex],
-                                1);
-                    }
-                    else if (IsCachedTransportSolvePriorityCandidate(probeIndex))
-                    {
-                        _volumeCachedSolverPendingScratch[workClassOffset + classIndex] =
-                            SaturatingAdd(
-                                _volumeCachedSolverPendingScratch[workClassOffset + classIndex],
-                                1);
-                    }
-                    _pendingWorkClassCounts[classIndex] = SaturatingAdd(_pendingWorkClassCounts[classIndex], 1);
+                    int queueIndex = workClassOffset + classIndex;
+                    _volumeWorkClassPendingScratch[queueIndex] =
+                        _schedulerWorkQueues.GetQueueCount(queueIndex);
+                    _volumeSourceRefreshPendingScratch[queueIndex] =
+                        _schedulerSourceRefreshQueues.GetQueueCount(queueIndex);
+                    _volumeCachedSolverPendingScratch[queueIndex] =
+                        _schedulerCachedSolverQueues.GetQueueCount(queueIndex);
                 }
 
                 Span<int> pending = _volumeWorkClassPendingScratch.AsSpan(workClassOffset, SchedulerWorkClassCount);
@@ -3555,72 +4165,37 @@ namespace Njulf.Rendering.Resources
             if (volumeQuota <= volumeUsed || classLimit <= classUsed || (uint)volumeIndex >= (uint)_volumeCount)
                 return;
 
-            GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
-            int firstProbe = FirstProbe(volume);
-            int probeCount = VolumeProbeCount(volume);
-            var cursorKey = VolumeWorkClassCursorKey(volume, workClass);
-            _volumeWorkClassRoundRobinCursors.TryGetValue(cursorKey, out int storedCursor);
-            int cursor = Math.Clamp(storedCursor, 0, Math.Max(probeCount - 1, 0));
-            int stride = ResolveProbeUpdateStride(probeCount);
-
+            SimpleDdgiPersistentProbeQueues queues = sourceRefreshOnly
+                ? _schedulerSourceRefreshQueues
+                : cachedSolverOnly
+                    ? _schedulerCachedSolverQueues
+                    : _schedulerWorkQueues;
+            int queueIndex = WorkClassOffset(volumeIndex) + (int)workClass;
+            int visitLimit = queues.GetQueueCount(queueIndex);
             int visited = 0;
-            while (visited < probeCount && volumeUsed < volumeQuota && classUsed < classLimit && count < capacity)
+            while (visited < visitLimit &&
+                volumeUsed < volumeQuota &&
+                classUsed < classLimit &&
+                count < capacity &&
+                queues.TryRotateNext(queueIndex, out int probeIndex))
             {
-                int local = (int)((cursor + (long)visited * stride) % probeCount);
-                int probeIndex = firstProbe + local;
                 visited++;
                 if ((uint)probeIndex >= (uint)_probeCount || _probeQueued[probeIndex] != 0)
                     continue;
 
-                if (ShouldSkipInactiveProbe(probeIndex))
-                {
-                    // The generic pass records the skip once. Priority scans are
-                    // ordering prepasses, not additional rejected requests.
-                    if (!sourceRefreshOnly && !cachedSolverOnly)
-                        RecordInactiveProbeSkip(probeIndex);
-                    continue;
-                }
-
-                if (!TryResolveProbeWorkClass(probeIndex, volumeIndex, out SimpleDdgiSchedulerWorkClass resolvedClass) ||
-                    resolvedClass != workClass)
-                {
-                    continue;
-                }
-
-                if (sourceRefreshOnly && !NeedsSourceRefresh(probeIndex))
-                    continue;
-
-                if (cachedSolverOnly && !IsCachedTransportSolvePriorityCandidate(probeIndex))
-                    continue;
-
                 uint flags = _probeInactive[probeIndex] != 0 ? ProbeStateInactiveFlag : 0u;
-                if (!AddProbeUpdate(ref count, capacity, probeIndex, flags, workClass))
+                if (!AddProbeUpdate(
+                        ref count,
+                        capacity,
+                        probeIndex,
+                        volumeIndex,
+                        flags,
+                        workClass))
                     continue;
 
-                if (sourceRefreshOnly)
-                {
-                    int sourceRefreshOffset = WorkClassOffset(volumeIndex) + (int)workClass;
-                    _volumeSourceRefreshUsageScratch[sourceRefreshOffset] = SaturatingAdd(
-                        _volumeSourceRefreshUsageScratch[sourceRefreshOffset],
-                        1);
-                }
-                if (cachedSolverOnly)
-                {
-                    int cachedSolverOffset = WorkClassOffset(volumeIndex) + (int)workClass;
-                    _volumeCachedSolverUsageScratch[cachedSolverOffset] = SaturatingAdd(
-                        _volumeCachedSolverUsageScratch[cachedSolverOffset],
-                        1);
-                }
                 volumeUsed++;
                 classUsed++;
             }
-
-            // Every saturated priority class must advance independently. Starting
-            // visible retry/dirty scans at local probe zero each frame repeatedly
-            // admitted the same prefix and left the tail stale indefinitely.
-            _volumeWorkClassRoundRobinCursors[cursorKey] = probeCount > 0
-                ? (int)((cursor + (long)visited * stride) % probeCount)
-                : 0;
         }
 
         private bool TryResolveProbeWorkClass(
@@ -4082,7 +4657,7 @@ namespace Njulf.Rendering.Resources
                 return false;
 
             if (_probeInactive[probeIndex] != 0)
-                return _probeAges[probeIndex] >= InactiveProbeRetryFrames;
+                return GetProbeAge(probeIndex) >= InactiveProbeRetryFrames;
 
             return _probeConvergenceReadbackValid != 0 &&
                 (uint)probeIndex < (uint)_probeStableUpdateCounts.Length &&
@@ -4121,12 +4696,12 @@ namespace Njulf.Rendering.Resources
         {
             bool inRange = (uint)probeIndex < (uint)_probeInactive.Length &&
                 (uint)probeIndex < (uint)_probeFresh.Length &&
-                (uint)probeIndex < (uint)_probeAges.Length;
+                (uint)probeIndex < (uint)_probeLastUpdatedFrames.Length;
             return inRange && ShouldSkipInactiveProbeForScheduling(
                 _settings.GlobalIllumination.SimpleDdgiClassificationSchedulingEnabled,
                 _probeInactive[probeIndex] != 0,
                 _probeFresh[probeIndex] != 0,
-                _probeAges[probeIndex],
+                GetProbeAge(probeIndex),
                 InactiveProbeRetryFrames);
         }
 
@@ -4150,13 +4725,6 @@ namespace Njulf.Rendering.Resources
                 inactive &&
                 !freshOrRelocationPending &&
                 age < retryFrames;
-        }
-
-        private void RecordInactiveProbeSkip(int probeIndex)
-        {
-            _inactiveProbeSkipCount++;
-            int volumeIndex = ResolveVolumeIndexForProbe(probeIndex);
-            _inactiveProbeSavedPrimaryRayCount += (ulong)ResolveVolumeQuality(volumeIndex).FullRays;
         }
 
         private void BeginProbeDirtyLatency(int probeIndex, uint startFrame)
@@ -4473,13 +5041,15 @@ namespace Njulf.Rendering.Resources
             ref int count,
             int capacity,
             int probeIndex,
+            int volumeIndex,
             uint flags,
             SimpleDdgiSchedulerWorkClass workClass)
         {
-            if (count >= capacity || (uint)probeIndex >= (uint)_probeCount)
+            if (count >= capacity ||
+                (uint)probeIndex >= (uint)_probeCount ||
+                (uint)volumeIndex >= (uint)_volumeCount)
                 return false;
 
-            int volumeIndex = Math.Max(0, ResolveVolumeIndexForProbe(probeIndex));
             uint effectiveFlags = flags | (_probeFresh[probeIndex] != 0 ? ProbeStateFreshFlag : 0u);
             bool sourceRefresh = NeedsSourceRefresh(probeIndex);
             if (sourceRefresh)
@@ -4514,7 +5084,7 @@ namespace Njulf.Rendering.Resources
                 ProbeIndex = checked((uint)probeIndex),
                 VolumeIndex = checked((uint)volumeIndex),
                 Flags = PackUpdateFlags(probeIndex, volumeIndex, effectiveFlags, requestedRays, sourceRefresh),
-                Reserved0 = PackProbeUpdateMetadata(_probeGenerations[probeIndex], _probeAges[probeIndex]),
+                Reserved0 = PackProbeUpdateMetadata(_probeGenerations[probeIndex], GetProbeAge(probeIndex)),
                 SourceRayCount = checked((uint)Math.Clamp(sourceRayCount, 1, GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe)),
                 SourceLightingGeneration = sourceRefresh ? _sourceLightingGeneration : 0u
             };
@@ -4522,6 +5092,20 @@ namespace Njulf.Rendering.Resources
             int scheduledClassIndex = (int)workClass;
             if ((uint)scheduledClassIndex < (uint)_scheduledWorkClassCounts.Length)
                 _scheduledWorkClassCounts[scheduledClassIndex] = SaturatingAdd(_scheduledWorkClassCounts[scheduledClassIndex], 1);
+            int schedulerQueueIndex = WorkClassOffset(volumeIndex) + scheduledClassIndex;
+            if (sourceRefresh &&
+                _schedulerSourceRefreshQueues.GetProbeQueue(probeIndex) == schedulerQueueIndex)
+            {
+                _volumeSourceRefreshUsageScratch[schedulerQueueIndex] = SaturatingAdd(
+                    _volumeSourceRefreshUsageScratch[schedulerQueueIndex],
+                    1);
+            }
+            else if (_schedulerCachedSolverQueues.GetProbeQueue(probeIndex) == schedulerQueueIndex)
+            {
+                _volumeCachedSolverUsageScratch[schedulerQueueIndex] = SaturatingAdd(
+                    _volumeCachedSolverUsageScratch[schedulerQueueIndex],
+                    1);
+            }
             _probeQueued[probeIndex] = 1;
             RecordDirtyFirstScheduledUpdate(probeIndex, _frameIndex);
             return true;
@@ -4681,8 +5265,8 @@ namespace Njulf.Rendering.Resources
                     _probeSchedulingFlags[probeIndex] = 0;
                 if ((uint)probeIndex < (uint)_probeDirtyReasons.Length)
                     _probeDirtyReasons[probeIndex] = 0;
-                if ((uint)probeIndex < (uint)_probeAges.Length)
-                    _probeAges[probeIndex] = 0u;
+                if ((uint)probeIndex < (uint)_probeLastUpdatedFrames.Length)
+                    _probeLastUpdatedFrames[probeIndex] = unchecked(_frameIndex - 1u);
                 _probeStateDirtySlots.Add(probeIndex);
             }
             _probeFresh[probeIndex] = 1;
@@ -4703,6 +5287,8 @@ namespace Njulf.Rendering.Resources
                 _recenterRefreshProbeCount++;
             if (dirty && shouldAdvanceGeneration)
                 _dirtyRefreshProbeCount++;
+            MarkProbeSchedulerDirty(probeIndex);
+            MarkProbeVisibilityDirty(probeIndex);
         }
 
         private void MarkProbeSourceCacheStale(int probeIndex)
@@ -4733,6 +5319,8 @@ namespace Njulf.Rendering.Resources
             // CPU invalidation and prevents the completed readback from re-arming
             // the same source repair indefinitely.
             _probeStateDirtySlots.Add(probeIndex);
+            MarkProbeSchedulerDirty(probeIndex);
+            MarkProbeVisibilityDirty(probeIndex);
             // A per-slot cache repair is exceptional (normally a live resource
             // transition or corruption guard). Treat it as a new transport
             // boundary so neighboring bounce paths cannot remain retired while
@@ -5570,7 +6158,7 @@ namespace Njulf.Rendering.Resources
             {
                 RelocationAndActive = new Vector4(relocation.X, relocation.Y, relocation.Z, Math.Clamp(activeWeight, 0.0f, 1.0f)),
                 Flags = flags,
-                Age = _probeAges[probeIndex],
+                Age = GetProbeAge(probeIndex),
                 Classification = classification,
                 Reserved0 = BitConverter.SingleToUInt32Bits((uint)probeIndex < (uint)_probeLuminanceChangeEma.Length ? _probeLuminanceChangeEma[probeIndex] : 0.0f)
             };
@@ -5876,6 +6464,8 @@ namespace Njulf.Rendering.Resources
         {
             if (!SampledAtlasRequested || probeCount <= 0)
             {
+                if (_sampledAtlas != null)
+                    AdvanceSampledAtlasPublicationGeneration();
                 _sampledAtlas?.Dispose();
                 _sampledAtlas = null;
                 _sampledAtlasFallbackReason = string.Empty;
@@ -5891,6 +6481,19 @@ namespace Njulf.Rendering.Resources
             }
 
             ulong configuredBudgetBytes = _settings.GlobalIllumination.DdgiAtlasMemoryBudgetBytes;
+            if (!_context.ShaderStorageImageArrayNonUniformIndexingSupported)
+            {
+                if (_sampledAtlas != null)
+                    AdvanceSampledAtlasPublicationGeneration();
+                _sampledAtlas?.Dispose();
+                _sampledAtlas = null;
+                _sampledAtlasFallbackReason =
+                    "sampled-atlas-storage-image-non-uniform-indexing-unavailable";
+                _sampledAtlasFailedProbeCount = probeCount;
+                _sampledAtlasFailureBudgetBytes = configuredBudgetBytes;
+                return;
+            }
+
             if (_sampledAtlasFailedProbeCount == probeCount &&
                 _sampledAtlasFailureBudgetBytes == configuredBudgetBytes)
                 return;
@@ -5907,8 +6510,14 @@ namespace Njulf.Rendering.Resources
             try
             {
                 _sampledAtlas ??= new SimpleDdgiSampledAtlas(_context);
-                if (_sampledAtlas.EnsureCapacity(probeCount, _registeredBindlessHeap))
+                ulong previousGeneration = _sampledAtlas.AllocationGeneration;
+                if (_sampledAtlas.EnsureCapacity(probeCount))
                 {
+                    if (_sampledAtlas.AllocationGeneration != previousGeneration)
+                    {
+                        _sampledAtlas.Register(_registeredBindlessHeap);
+                        AdvanceSampledAtlasPublicationGeneration();
+                    }
                     _sampledAtlasFallbackReason = string.Empty;
                     _sampledAtlasFailedProbeCount = -1;
                     _sampledAtlasFailureBudgetBytes = 0;
@@ -5925,10 +6534,18 @@ namespace Njulf.Rendering.Resources
             {
                 _sampledAtlas?.Dispose();
                 _sampledAtlas = null;
+                AdvanceSampledAtlasPublicationGeneration();
                 _sampledAtlasFallbackReason = $"sampled-atlas-vulkan-{exception.Result}";
                 _sampledAtlasFailedProbeCount = probeCount;
                 _sampledAtlasFailureBudgetBytes = configuredBudgetBytes;
             }
+        }
+
+        private void AdvanceSampledAtlasPublicationGeneration()
+        {
+            _sampledAtlasPublicationGeneration++;
+            if (_sampledAtlasPublicationGeneration == 0UL)
+                _sampledAtlasPublicationGeneration = 1UL;
         }
 
         private unsafe bool WouldExceedSampledAtlasBudget(int probeCount, ulong configuredBudgetBytes)
@@ -6390,11 +7007,6 @@ namespace Njulf.Rendering.Resources
 
         private static int SourceOrdinal(GPUSimpleDdgiVolume volume) =>
             Math.Max(0, (int)MathF.Round(volume.RaysAndReserved.X));
-
-        private static (int VolumeKind, int SourceOrdinal, SimpleDdgiSchedulerWorkClass WorkClass) VolumeWorkClassCursorKey(
-            GPUSimpleDdgiVolume volume,
-            SimpleDdgiSchedulerWorkClass workClass) =>
-            ((int)Kind(volume), SourceOrdinal(volume), workClass);
 
         private static int CountInactiveProbes(byte[] inactive, int probeCount)
         {
@@ -6922,6 +7534,28 @@ namespace Njulf.Rendering.Resources
 
                 Vector3 previousRelocation = _probeRelocations[probeIndex];
                 bool wasInactive = _probeInactive[probeIndex] != 0;
+                bool wasRelocationPending =
+                    (uint)probeIndex < (uint)_probeRelocationPending.Length &&
+                    _probeRelocationPending[probeIndex] != 0;
+                bool wasFresh =
+                    (uint)probeIndex < (uint)_probeFresh.Length &&
+                    _probeFresh[probeIndex] != 0;
+                byte previousStableUpdateCount =
+                    (uint)probeIndex < (uint)_probeStableUpdateCounts.Length
+                        ? _probeStableUpdateCounts[probeIndex]
+                        : (byte)0;
+                float previousLuminanceChangeEma =
+                    (uint)probeIndex < (uint)_probeLuminanceChangeEma.Length
+                        ? _probeLuminanceChangeEma[probeIndex]
+                        : 0.0f;
+                float previousActiveWeight =
+                    (uint)probeIndex < (uint)_probeActiveWeights.Length
+                        ? _probeActiveWeights[probeIndex]
+                        : 1.0f;
+                uint previousClassification =
+                    (uint)probeIndex < (uint)_probeClassifications.Length
+                        ? _probeClassifications[probeIndex]
+                        : 0u;
                 Vector3 currentRelocation = new(
                     state.RelocationAndActive.X,
                     state.RelocationAndActive.Y,
@@ -7054,6 +7688,22 @@ namespace Njulf.Rendering.Resources
                             0.0f,
                             1.0f);
                     }
+                }
+                bool schedulerStateChanged =
+                    wasInactive != inactive ||
+                    wasRelocationPending != relocationRetracePending ||
+                    wasFresh != (_probeFresh[probeIndex] != 0) ||
+                    previousStableUpdateCount != _probeStableUpdateCounts[probeIndex] ||
+                    BitConverter.SingleToInt32Bits(previousLuminanceChangeEma) !=
+                        BitConverter.SingleToInt32Bits(_probeLuminanceChangeEma[probeIndex]) ||
+                    (classificationFeedbackEnabled &&
+                        (previousClassification != _probeClassifications[probeIndex] ||
+                            (previousActiveWeight <= 0.001f) !=
+                            (_probeActiveWeights[probeIndex] <= 0.001f)));
+                if (schedulerStateChanged)
+                {
+                    MarkProbeSchedulerDirty(probeIndex);
+                    MarkProbeVisibilityDirty(probeIndex);
                 }
             }
 
@@ -7220,6 +7870,21 @@ namespace Njulf.Rendering.Resources
             }
             DrainRetiredResources(force: true);
         }
+
+        private readonly record struct SchedulerGlobalStateSnapshot(
+            uint VolumeTableGeneration,
+            int ProbeCount,
+            bool LightingDirty,
+            bool TransportV2Active,
+            bool TransportGlobalConvergencePending,
+            bool PeriodicSourceRefreshWavePending,
+            uint PeriodicSourceRefreshWaveCutoffFrame,
+            uint SourceLightingGeneration,
+            bool ClassificationSchedulingEnabled,
+            bool ConvergenceReadbackValid,
+            int StableMaintenanceUpdateCount,
+            int MaximumSolverGenerations,
+            int ResidualThresholdBits);
 
         private readonly record struct RetiredBufferResource(
             BufferHandle Buffer,

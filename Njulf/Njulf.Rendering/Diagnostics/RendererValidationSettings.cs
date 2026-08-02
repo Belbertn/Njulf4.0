@@ -10,6 +10,18 @@ public sealed record RendererValidationSettings(
     string? StartupLogPath,
     string? HealthReportPath)
 {
+    /// <summary>
+    /// Loads VK_EXT_debug_utils for object names and capture labels independently
+    /// of validation-layer enablement.
+    /// </summary>
+    public bool EnableDebugUtils { get; init; } = true;
+
+    /// <summary>
+    /// Controls command-buffer label emission without changing validation state.
+    /// Object names remain enabled whenever debug utils are enabled.
+    /// </summary>
+    public bool EnableDebugLabels { get; init; } = true;
+
     public bool EnableValidation => Mode != RendererValidationMode.Off;
     public bool EnableGpuAssisted => Mode is RendererValidationMode.GpuAssisted or RendererValidationMode.All;
     public bool EnableSynchronization => Mode is RendererValidationMode.Synchronization or RendererValidationMode.All;
@@ -46,6 +58,12 @@ public sealed record RendererValidationSettings(
         {
             Mode = mode,
             FailOnErrorMessage = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_FAIL_ON_VALIDATION_MESSAGE")),
+            EnableDebugUtils = ParseBoolOrDefault(
+                Environment.GetEnvironmentVariable("NJULF_RENDERER_DEBUG_UTILS"),
+                Default.EnableDebugUtils),
+            EnableDebugLabels = ParseBoolOrDefault(
+                Environment.GetEnvironmentVariable("NJULF_RENDERER_DEBUG_LABELS"),
+                Default.EnableDebugLabels),
             StartupLogPath = NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_STARTUP_LOG")),
             HealthReportPath = NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_HEALTH_REPORT"))
         };
@@ -107,6 +125,9 @@ public sealed record RendererValidationSettings(
             value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
             value.Equals("on", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool ParseBoolOrDefault(string? value, bool defaultValue) =>
+        string.IsNullOrWhiteSpace(value) ? defaultValue : ParseBool(value);
 }
 
 /// <summary>

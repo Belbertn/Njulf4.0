@@ -99,6 +99,51 @@ public sealed class SimpleDdgiSampledAtlasTests
         });
     }
 
+    [Test]
+    public void StableCapacityCheck_UsesCachedLayerLimitWithoutQueryingVulkan()
+    {
+        string source = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiSampledAtlas.cs"));
+        int constructorStart = source.IndexOf(
+            "public SimpleDdgiSampledAtlas(VulkanContext context)",
+            StringComparison.Ordinal);
+        int constructorEnd = source.IndexOf(
+            "public bool IsReady",
+            constructorStart,
+            StringComparison.Ordinal);
+        int ensureCapacityStart = source.IndexOf(
+            "public bool EnsureCapacity(int requiredProbeCount)",
+            StringComparison.Ordinal);
+        int ensureCapacityEnd = source.IndexOf(
+            "internal static bool RequiresStableCapacityReallocation(",
+            ensureCapacityStart,
+            StringComparison.Ordinal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(constructorStart, Is.GreaterThanOrEqualTo(0));
+            Assert.That(constructorEnd, Is.GreaterThan(constructorStart));
+            Assert.That(ensureCapacityStart, Is.GreaterThan(constructorEnd));
+            Assert.That(ensureCapacityEnd, Is.GreaterThan(ensureCapacityStart));
+        });
+
+        string constructor = source[constructorStart..constructorEnd];
+        string ensureCapacity = source[ensureCapacityStart..ensureCapacityEnd];
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                constructor,
+                Does.Contain("_resolvedLayersPerTexture = ResolveLayersPerTexture();"));
+            Assert.That(
+                ensureCapacity,
+                Does.Contain("int layersPerTexture = _resolvedLayersPerTexture;"));
+            Assert.That(ensureCapacity, Does.Not.Contain("ResolveLayersPerTexture("));
+            Assert.That(ensureCapacity, Does.Not.Contain("GetPhysicalDeviceProperties("));
+        });
+    }
+
     [TestCase(1)]
     [TestCase(64)]
     [TestCase(128)]
@@ -126,21 +171,68 @@ public sealed class SimpleDdgiSampledAtlasTests
     }
 
     [Test]
-    public void UpdatedProbeCopies_CoalesceRunsAndBoundPathologicalRegionLists()
+    public void GpuPublication_UsesBoundedStorageImageTable()
     {
-        int[] contiguousAndDuplicate = [3, 4, 4, 5, 12, 13, 90];
-        int[] fragmented = Enumerable.Range(0, 65).Select(index => index * 2).ToArray();
+        Assert.That(SimpleDdgiSampledAtlas.MaxGpuPublishTextureGroups, Is.EqualTo(16));
+    }
+
+    [Test]
+    public void GpuPublication_EnablesItsOptionalDescriptorIndexingFeatureAndUsesQueuePortableBarriers()
+    {
+        string context = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Core",
+            "VulkanContext.cs"));
+        string pass = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Pipeline",
+            "SimpleDdgiPasses.cs"));
+        string atlas = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiSampledAtlas.cs"));
+        string manager = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiVolumeManager.cs"));
 
         Assert.Multiple(() =>
         {
             Assert.That(
-                SimpleDdgiSampledAtlas.CountContiguousProbeRuns(contiguousAndDuplicate),
-                Is.EqualTo(3));
-            Assert.That(SimpleDdgiSampledAtlas.ShouldCopyWholeGroup(64), Is.False);
+                context.Split("ShaderStorageImageArrayNonUniformIndexing = true").Length - 1,
+                Is.EqualTo(1),
+                "The optional storage-image indexing feature must be queried.");
             Assert.That(
-                SimpleDdgiSampledAtlas.ShouldCopyWholeGroup(
-                    SimpleDdgiSampledAtlas.CountContiguousProbeRuns(fragmented)),
-                Is.True);
+                context,
+                Does.Contain("_shaderStorageImageArrayNonUniformIndexingSupported"));
+            Assert.That(
+                context,
+                Does.Not.Contain("missingFeatures.Add(\"shaderStorageImageArrayNonUniformIndexing\")"));
+            Assert.That(
+                pass,
+                Does.Contain("_context.ShaderStorageImageArrayNonUniformIndexingSupported &&"));
+            Assert.That(
+                manager,
+                Does.Contain("sampled-atlas-storage-image-non-uniform-indexing-unavailable"));
+            Assert.That(
+                atlas,
+                Does.Not.Contain("PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit"));
         });
+    }
+
+    private static string FindSourceFile(params string[] relativeParts)
+    {
+        string directory = TestContext.CurrentContext.TestDirectory;
+        while (!string.IsNullOrEmpty(directory))
+        {
+            string candidate = Path.Combine(new[] { directory }.Concat(relativeParts).ToArray());
+            if (File.Exists(candidate))
+                return candidate;
+
+            DirectoryInfo? parent = Directory.GetParent(directory);
+            directory = parent?.FullName ?? string.Empty;
+        }
+
+        throw new FileNotFoundException("Could not locate repository source file.", Path.Combine(relativeParts));
     }
 }

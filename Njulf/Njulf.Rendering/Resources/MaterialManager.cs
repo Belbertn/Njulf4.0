@@ -74,6 +74,9 @@ namespace Njulf.Rendering.Resources
         private uint _ssgiInputRevision = 1;
         private uint _materialContentRevisionSerial;
         private uint _textureContentRevisionSerial;
+        private uint _referencedTextureCacheRevision = uint.MaxValue;
+        private IReadOnlyList<TextureHandle> _referencedTextureCache = Array.Empty<TextureHandle>();
+        private ulong _referencedTextureSetGeneration;
         private bool _gpuUploadDirty = true;
         private ulong _lastUploadBytes;
         private ulong _lastExtensionUploadBytes;
@@ -1597,21 +1600,74 @@ namespace Njulf.Rendering.Resources
             lock (_lock)
             {
                 ThrowIfDisposedLocked();
-                var handles = new HashSet<TextureHandle>();
-                foreach (MaterialSlot slot in _materials)
-                {
-                    if (!slot.Active)
-                        continue;
-
-                    foreach (TextureHandle handle in slot.TextureHandles)
-                    {
-                        if (handle.IsValid)
-                            handles.Add(handle);
-                    }
-                }
-
-                return handles.ToArray();
+                EnsureReferencedTextureCacheLocked();
+                return _referencedTextureCache;
             }
+        }
+
+        /// <summary>
+        /// Changes only when the set of physical texture handles referenced by live materials
+        /// changes. Scalar material edits therefore do not invalidate a resource plan.
+        /// </summary>
+        public ulong ReferencedTextureSetGeneration
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    ThrowIfDisposedLocked();
+                    EnsureReferencedTextureCacheLocked();
+                    return _referencedTextureSetGeneration;
+                }
+            }
+        }
+
+        private void EnsureReferencedTextureCacheLocked()
+        {
+            if (_referencedTextureCacheRevision == _materialDataRevision)
+                return;
+
+            var handles = new HashSet<TextureHandle>();
+            foreach (MaterialSlot slot in _materials)
+            {
+                if (!slot.Active)
+                    continue;
+
+                foreach (TextureHandle handle in slot.TextureHandles)
+                {
+                    if (handle.IsValid)
+                        handles.Add(handle);
+                }
+            }
+
+            TextureHandle[] ordered = handles
+                .OrderBy(static handle => handle.Index)
+                .ThenBy(static handle => handle.Generation)
+                .ToArray();
+            bool changed = _referencedTextureCacheRevision == uint.MaxValue ||
+                _referencedTextureCache.Count != ordered.Length;
+            if (!changed)
+            {
+                for (int index = 0; index < ordered.Length; index++)
+                {
+                    if (_referencedTextureCache[index] == ordered[index])
+                        continue;
+                    changed = true;
+                    break;
+                }
+            }
+
+            if (changed)
+            {
+                _referencedTextureCache = ordered.Length == 0
+                    ? Array.Empty<TextureHandle>()
+                    : Array.AsReadOnly(ordered);
+                _referencedTextureSetGeneration++;
+                if (_referencedTextureSetGeneration == 0)
+                    _referencedTextureSetGeneration = 1;
+            }
+
+            _referencedTextureCacheRevision = _materialDataRevision;
         }
 
         public MaterialRenderMetadata GetMaterialMetadata(MaterialHandle handle)

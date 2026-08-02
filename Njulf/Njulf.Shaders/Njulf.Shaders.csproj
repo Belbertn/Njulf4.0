@@ -16,6 +16,7 @@
 
     <ItemGroup>
       <ShaderSource Include="*.task;*.mesh;*.vert;*.frag;*.comp" />
+      <ShaderInclude Include="*.glsl" />
       <GpuDiagnosticTaskShader Include="depth.task;forward.task;forward_compacted.task" />
       <ForwardSimpleFragmentShader Include="forward.frag" />
       <ForwardWeightedOitFragmentShader Include="forward.frag" />
@@ -65,10 +66,16 @@
     </ItemGroup>
 
     <PropertyGroup>
-      <NjulfShaderCompileOptions Condition="'$(NJULF_SHADER_PROFILE)' == '1'">-gVS -Os</NjulfShaderCompileOptions>
+      <NjulfShaderOptimizationOptions Condition="'$(Configuration)' == 'ShippingPerformance' or '$(Configuration)' == 'ProfileSymbols' or '$(Configuration)' == 'DetailedInvestigation'">-Os</NjulfShaderOptimizationOptions>
+      <NjulfShaderDebugInformation Condition="'$(NJULF_SHADER_PROFILE)' == '1'">true</NjulfShaderDebugInformation>
+      <NjulfShaderDebugOptions Condition="'$(NjulfShaderDebugInformation)' == 'true'">-gVS</NjulfShaderDebugOptions>
+      <NjulfShaderCompileOptions>$(NjulfShaderOptimizationOptions) $(NjulfShaderDebugOptions)</NjulfShaderCompileOptions>
     </PropertyGroup>
 
-    <Target Name="CompileNjulfShaders" BeforeTargets="AssignTargetPaths">
+    <Target Name="CompileNjulfShaders"
+            BeforeTargets="AssignTargetPaths"
+            Inputs="@(ShaderSource);@(ShaderInclude);$(MSBuildProjectFullPath)"
+            Outputs="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv');@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv');@(MaterialTransportProvenanceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');$(IntermediateOutputPath)Shaders\forward_opaque.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv;$(IntermediateOutputPath)Shaders\foliage_forward_ssgi.frag.spv;$(IntermediateOutputPath)Shaders\foliage_forward_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\scene_surface_simple.frag.spv">
       <MakeDir Directories="$(IntermediateOutputPath)Shaders" />
       <MakeDir Directories="$(OutDir)Shaders" />
 

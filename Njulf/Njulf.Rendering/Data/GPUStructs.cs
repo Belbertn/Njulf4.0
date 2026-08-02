@@ -1538,6 +1538,19 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiPublishPushConstants
+    {
+        public uint ParamsBufferIndex;
+        public uint IrradianceAtlasBufferIndex;
+        public uint VisibilityAtlasBufferIndex;
+        public uint ProbeStateBufferIndex;
+        public uint ProbeUpdateQueueBufferIndex;
+        public uint TransportIrradianceAtlasBufferIndex;
+        public uint SampledAtlasGroupCount;
+        public uint SampledAtlasLayersPerTexture;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUFarFieldVoxelizePushConstants
     {
         public uint ParamsBufferIndex;
