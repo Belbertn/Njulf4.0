@@ -604,13 +604,21 @@ namespace Njulf.Rendering.Pipeline
                 _context.Api.CmdFillBuffer(cmd, _bufferManager.GetBuffer(staticShadow.Handle), 0, staticShadow.ByteSize, 0xffffffffu);
                 _context.Api.CmdFillBuffer(cmd, _bufferManager.GetBuffer(dynamicShadow.Handle), 0, dynamicShadow.ByteSize, 0xffffffffu);
             }
-            _context.Api.CmdFillBuffer(cmd, indirect, 0, indirectDispatchBuffer.ByteSize, 0u);
-            for (uint slot = 0; slot < IndirectDispatchSlotCount; slot++)
+            // Keep X=0, Y=1, Z=1 in one transfer write. Split fills overlap and do not
+            // guarantee that the later Y/Z values win without an intervening barrier.
+            Span<GPUFoliageDispatchArgs> initialDispatchArgs =
+                stackalloc GPUFoliageDispatchArgs[IndirectDispatchSlotCount];
+            for (int slot = 0; slot < initialDispatchArgs.Length; slot++)
             {
-                ulong slotOffset = slot * IndirectDispatchStride;
-                _context.Api.CmdFillBuffer(cmd, indirect, slotOffset + 4, 4, 1u);
-                _context.Api.CmdFillBuffer(cmd, indirect, slotOffset + 8, 4, 1u);
+                initialDispatchArgs[slot] = new GPUFoliageDispatchArgs
+                {
+                    GroupCountX = 0u,
+                    GroupCountY = 1u,
+                    GroupCountZ = 1u,
+                    Padding0 = 0u
+                };
             }
+            _context.Api.CmdUpdateBuffer(cmd, indirect, 0, initialDispatchArgs);
 
             Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[16];
             int barrierIndex = 0;

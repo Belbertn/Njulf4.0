@@ -2347,6 +2347,34 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
+    public void SceneCompaction_InitializesIndirectDispatchWithoutOverlappingTransferWrites()
+    {
+        string sceneCompactionPass = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "SceneOpaqueCompactionPass.cs");
+        string forwardVisibilityPass = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "ForwardVisibilityCompactionPass.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sceneCompactionPass, Does.Contain(
+                "CmdUpdateBuffer(cmd, indirect, 0, initialDispatchArgs);"));
+            Assert.That(sceneCompactionPass, Does.Not.Contain(
+                "CmdFillBuffer(cmd, indirect"));
+            Assert.That(forwardVisibilityPass, Does.Contain(
+                "CmdUpdateBuffer(cmd, indirect, 0, initialDispatchArgs);"));
+            Assert.That(forwardVisibilityPass, Does.Not.Contain(
+                "CmdFillBuffer(cmd, indirect"));
+            Assert.That(sceneCompactionPass, Does.Contain("GroupCountX = 0u"));
+            Assert.That(sceneCompactionPass, Does.Contain("GroupCountY = 1u"));
+            Assert.That(sceneCompactionPass, Does.Contain("GroupCountZ = 1u"));
+        });
+    }
+
+    [Test]
     public void ForwardHiZOcclusion_UsesConservativeEdgeSampling()
     {
         string taskShader = ReadRepoText("Njulf.Shaders", "forward.task");
