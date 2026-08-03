@@ -98,6 +98,9 @@ public sealed class SimpleDdgiLayoutCompilerTests
                 plan.ProbeStateReadbackBytes,
                 Is.EqualTo((ulong)RenderingConstants.FramesInFlight * probes * 80UL));
             Assert.That(
+                plan.ProbeStateReadbackBytesPerBuffer,
+                Is.EqualTo(SimpleDdgiMemoryPlan.ResolveProbeStateReadbackBufferBytes(probes)));
+            Assert.That(
                 plan.RayScratchBytes,
                 Is.EqualTo((ulong)updates * rays * 32UL));
             Assert.That(plan.SampledAtlasProbeCapacity, Is.EqualTo(1_024));
@@ -105,6 +108,34 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(
                 plan.LiveBytes,
                 Is.EqualTo(plan.PersistentBytes + plan.WorkBytes));
+        });
+    }
+
+    [TestCase(0, 16UL)]
+    [TestCase(1_000, 80_000UL)]
+    [TestCase(15_368, 688_384UL)]
+    [TestCase(32_768, 1_245_184UL)]
+    public void ProbeStateReadbackCapacity_UsesOneBoundedPerFrameContract(
+        int probeCount,
+        ulong expectedBytes)
+    {
+        SimpleDdgiMemoryPlan plan = SimpleDdgiMemoryPlan.Create(
+            probeCount,
+            updateRequestCapacity: Math.Min(probeCount, 2_048),
+            rayCapacity: 128,
+            sampledAtlasRequested: false,
+            concreteTransportBuffers: true,
+            readbackBufferCount: RenderingConstants.FramesInFlight);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiMemoryPlan.ResolveProbeStateReadbackBufferBytes(probeCount),
+                Is.EqualTo(expectedBytes));
+            Assert.That(plan.ProbeStateReadbackBytesPerBuffer, Is.EqualTo(expectedBytes));
+            Assert.That(
+                plan.ProbeStateReadbackBytes,
+                Is.EqualTo(expectedBytes * (ulong)RenderingConstants.FramesInFlight));
         });
     }
 
@@ -206,7 +237,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
     }
 
     [Test]
-    public void ConcreteTransportReservation_IsIndependentOfActiveShaderVersion()
+    public void ConcreteTransportReservation_UsesOnlyGraphSafePlaceholdersWhenV2IsDisabled()
     {
         SimpleDdgiMemoryPlan graphConcrete = SimpleDdgiMemoryPlan.Create(
             probeCount: 16,
@@ -227,13 +258,18 @@ public sealed class SimpleDdgiLayoutCompilerTests
         {
             Assert.That(graphConcrete.TransportIrradianceBytes, Is.GreaterThan(0));
             Assert.That(graphConcrete.TransportSourceCacheBytes, Is.GreaterThan(0));
-            Assert.That(graphWithoutTransport.TransportIrradianceBytes, Is.Zero);
-            Assert.That(graphWithoutTransport.TransportSourceCacheBytes, Is.Zero);
+            Assert.That(
+                graphWithoutTransport.TransportIrradianceBytes,
+                Is.EqualTo(SimpleDdgiMemoryPlan.GraphSafePlaceholderBytes));
+            Assert.That(
+                graphWithoutTransport.TransportSourceCacheBytes,
+                Is.EqualTo(SimpleDdgiMemoryPlan.GraphSafePlaceholderBytes));
             Assert.That(
                 graphConcrete.LiveBytes - graphWithoutTransport.LiveBytes,
                 Is.EqualTo(
                     graphConcrete.TransportIrradianceBytes +
-                    graphConcrete.TransportSourceCacheBytes));
+                    graphConcrete.TransportSourceCacheBytes -
+                    SimpleDdgiMemoryPlan.GraphSafePlaceholderBytes * 2UL));
         });
     }
 

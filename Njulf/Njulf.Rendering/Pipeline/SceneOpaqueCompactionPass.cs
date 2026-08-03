@@ -1232,6 +1232,8 @@ namespace Njulf.Rendering.Pipeline
         /// command stream has no topology-safe lower-LOD remapping.
         /// </summary>
         public uint DirectionalShadowLodFallbackCount { get; init; }
+        /// <summary>LOD0 candidates deliberately removed by the selected lower-LOD range.</summary>
+        public uint OpaqueLodDecimatedCount { get; init; }
 
         public bool IsValid =>
             CandidateCount != 0 ||
@@ -1241,6 +1243,7 @@ namespace Njulf.Rendering.Pipeline
             HiZTestedCount != 0 ||
             HiZRejectedCount != 0 ||
             DirectionalShadowLodFallbackCount != 0 ||
+            OpaqueLodDecimatedCount != 0 ||
             SolidDepthCandidateCount != 0 ||
             SolidDepthEmittedCount != 0 ||
             SolidDepthOverflowCount != 0 ||
@@ -1335,7 +1338,8 @@ namespace Njulf.Rendering.Pipeline
                     counters.DirectionalDynamicShadowCascade3OverflowCount
                 ])
             {
-                DirectionalShadowLodFallbackCount = counters.DirectionalShadowLodFallbackCount
+                DirectionalShadowLodFallbackCount = counters.DirectionalShadowLodFallbackCount,
+                OpaqueLodDecimatedCount = counters.OpaqueLodDecimatedCount
             };
         }
 

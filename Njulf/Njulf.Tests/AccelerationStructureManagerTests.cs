@@ -375,6 +375,44 @@ public sealed unsafe class AccelerationStructureManagerTests
     }
 
     [Test]
+    public void ResidencyPolicy_SkipsNearestSelectionWhenStaticAdmissionIsUnbounded()
+    {
+        var unbounded = new AccelerationStructureResidencyPolicy(
+            Enabled: true,
+            CameraPosition: Vector3.Zero,
+            MemoryBudgetBytes: 1024,
+            StaticResidentDistance: float.MaxValue,
+            MaximumStaticInstances: int.MaxValue,
+            EvictionGraceFrames: 3,
+            AllowStaticMemoryCulling: false);
+        AccelerationStructureResidencyPolicy boundedDistance = unbounded with
+        {
+            StaticResidentDistance = 128f
+        };
+        AccelerationStructureResidencyPolicy boundedCount = unbounded with
+        {
+            MaximumStaticInstances = 256
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                AccelerationStructureManager.RequiresStaticResidencySelection(unbounded),
+                Is.False);
+            Assert.That(
+                AccelerationStructureManager.RequiresStaticResidencySelection(boundedDistance),
+                Is.True);
+            Assert.That(
+                AccelerationStructureManager.RequiresStaticResidencySelection(boundedCount),
+                Is.True);
+            Assert.That(
+                AccelerationStructureManager.RequiresStaticResidencySelection(
+                    AccelerationStructureResidencyPolicy.Disabled),
+                Is.False);
+        });
+    }
+
+    [Test]
     public void TransientResidencyBudget_IsExplicitTierBoundedAndNeverUnbounded()
     {
         const ulong mib = 1024UL * 1024UL;
@@ -397,6 +435,70 @@ public sealed unsafe class AccelerationStructureManagerTests
             Assert.That(
                 AccelerationStructureManager.CalculateTransientMemoryBudgetBytes(ulong.MaxValue),
                 Is.EqualTo(ulong.MaxValue));
+        });
+    }
+
+    [TestCase(1_024UL, 0UL, false)]
+    [TestCase(1_024UL, 1_024UL, false)]
+    [TestCase(1_024UL, 1_025UL, false)]
+    [TestCase(1_024UL, 512UL, true)]
+    [TestCase(16UL, 1UL, false)]
+    public void BlasCompaction_RequiresAValidStrictResidencyReduction(
+        ulong sourceBytes,
+        ulong queriedCompactedBytes,
+        bool expected)
+    {
+        Assert.That(
+            AccelerationStructureManager.ShouldCompactBottomLevelAccelerationStructure(
+                sourceBytes,
+                queriedCompactedBytes),
+            Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void BlasCompactionFrameBudget_AllowsOneOversizedItemThenBoundsOverlap()
+    {
+        const ulong mib = 1024UL * 1024UL;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                AccelerationStructureManager.FitsBlasCompactionFrameBudget(
+                    0,
+                    48UL * mib,
+                    32UL * mib),
+                Is.True);
+            Assert.That(
+                AccelerationStructureManager.FitsBlasCompactionFrameBudget(
+                    24UL * mib,
+                    8UL * mib,
+                    32UL * mib),
+                Is.True);
+            Assert.That(
+                AccelerationStructureManager.FitsBlasCompactionFrameBudget(
+                    24UL * mib,
+                    9UL * mib,
+                    32UL * mib),
+                Is.False);
+        });
+    }
+
+    [Test]
+    public void BlasCompaction_UsesFenceCompletedNonWaitingQueriesAndDeferredRetirement()
+    {
+        string source = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "AccelerationStructureManager.cs"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Contain("AllowCompactionBitKhr"));
+            Assert.That(source, Does.Contain("AccelerationStructureCompactedSizeKhr"));
+            Assert.That(source, Does.Contain("CopyAccelerationStructureModeKHR.CompactKhr"));
+            Assert.That(source, Does.Contain("QueryResultFlags.Result64Bit"));
+            Assert.That(source, Does.Not.Contain("QueryResultFlags.WaitBit"));
+            Assert.That(source, Does.Contain("RetireAccelerationStructureResource("));
         });
     }
 

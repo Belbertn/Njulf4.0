@@ -32,6 +32,7 @@ namespace Njulf.Rendering.Diagnostics
             "DDGI emissive unsupported skinned objects";
         public const string DdgiEmissiveUnsupportedSkinnedImportanceMetricName =
             "DDGI emissive unsupported skinned importance";
+        public const double ZeroGateNumericalTolerance = 1.0e-12;
         // "GPU memory" remains the compatibility metric consumed by renderer diagnostics:
         // driver heap usage when available, otherwise tracked allocations. When the driver
         // reports a heap budget, the tracked allocation budget is emitted separately.
@@ -374,11 +375,15 @@ namespace Njulf.Rendering.Diagnostics
             string unit,
             RenderBudgetStatus? forcedStatus = null)
         {
+            double reportedValue = double.IsFinite(value) &&
+                Math.Abs(value) <= ZeroGateNumericalTolerance
+                    ? 0.0
+                    : value;
             RenderBudgetStatus status = forcedStatus ??
-                (double.IsFinite(value) && value == 0.0
+                (double.IsFinite(reportedValue) && reportedValue == 0.0
                     ? RenderBudgetStatus.WithinBudget
                     : RenderBudgetStatus.OverBudget);
-            return new BudgetMetric(name, value, 0.0, 0.0, unit, status);
+            return new BudgetMetric(name, reportedValue, 0.0, 0.0, unit, status);
         }
 
         private static RenderBudgetStatus ClassifyHardLimit(double value, double failureThreshold)

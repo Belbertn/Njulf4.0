@@ -89,6 +89,8 @@ namespace Njulf.Rendering
         // Keeping this renderer-local prevents a later on-disk asset change from being reported
         // as though it had affected the already-created Vulkan pipeline.
         private string _captureShaderBundleHash = "unavailable:shader-bundle-not-initialized";
+        private string _captureExecutableHash = "unavailable:executable-hash-not-initialized";
+        private string _captureDirtyWorktreeState = "unavailable:dirty-worktree-state-not-initialized";
         // Capture metadata is renderer-owned rather than application-owned so snapshots always
         // retain a coherent frame/camera serial even when callers use a minimal ICamera.
         private ulong _captureSceneRevision = ulong.MaxValue;
@@ -123,7 +125,8 @@ namespace Njulf.Rendering
         private readonly List<RenderObject> _ddgiTrackedRenderObjectRemovalScratch = new();
         private readonly Dictionary<ParticleEffectInstance, DdgiTrackedVfxProxy> _ddgiTrackedVfxProxies = new();
         private readonly List<ParticleEffectInstance> _ddgiTrackedVfxProxyRemovalScratch = new();
-        private const int MaxDdgiEmissiveSourceCount = 256;
+        private const int MaxDdgiEmissiveSourceCount =
+            GlobalIlluminationSettings.MaxDdgiEmissiveTriangleBudget;
         private const int MaximumDdgiEmissiveRuntimeRecordScans = 262144;
         private static readonly ulong DdgiEmissiveSourceStride = (ulong)Marshal.SizeOf<GPUDdgiEmissiveSource>();
         private readonly GPUDdgiEmissiveSource[] _ddgiEmissiveSourceScratch = new GPUDdgiEmissiveSource[MaxDdgiEmissiveSourceCount];
@@ -625,7 +628,11 @@ namespace Njulf.Rendering
             _environmentManager = new EnvironmentManager(_context, _bufferManager, _textureManager, Settings);
             _reflectionProbeManager = new ReflectionProbeManager(_context, _bufferManager, Settings);
             _ddgiProbeVolumeManager = new DdgiProbeVolumeManager(_context, _bufferManager, Settings);
-            _simpleDdgiVolumeManager = new SimpleDdgiVolumeManager(_context, _bufferManager, Settings);
+            _simpleDdgiVolumeManager = new SimpleDdgiVolumeManager(
+                _context,
+                _bufferManager,
+                Settings,
+                RecordDeviceWaitIdle);
             _ddgiGatherTileManager = new DdgiGatherTileManager(_context, _bufferManager);
             _ddgiEmissiveSourceBuffer = CreateDdgiEmissiveSourceBuffer();
             _accelerationStructureManager = new AccelerationStructureManager(_context, _bufferManager, _meshManager, _materialManager);
@@ -641,6 +648,8 @@ namespace Njulf.Rendering
             // Create pipelines
             CreatePipelines();
             _captureShaderBundleHash = ResolvePerformanceCaptureShaderBundleHash();
+            _captureExecutableHash = ResolvePerformanceCaptureExecutableHash();
+            _captureDirtyWorktreeState = ResolvePerformanceCaptureDirtyWorktreeState();
 
             // Initialize render graph with passes
             InitializeRenderGraph();
@@ -1876,6 +1885,7 @@ namespace Njulf.Rendering
             sceneData.TransparentDdgiReceiverCountersEnabled = false;
             sceneData.DecalDebugView = Settings.Decals.DebugView;
             sceneData.GeometryDecalsEnabled = geometryDecalsEnabled;
+            sceneData.DecalReceiveShadows = Settings.Decals.ReceiveShadows;
             sceneData.DecalReceiveGlobalIllumination =
                 Settings.Decals.ReceiveGlobalIllumination;
             sceneData.GeometryDecalDepthBias = Settings.Decals.GeometryDepthBias;
@@ -1912,6 +1922,7 @@ namespace Njulf.Rendering
                 ddgiAvailableForLayeredReceivers;
             sceneData.TransparentDdgiReceiverCountersEnabled =
                 ddgiAvailableForLayeredReceivers &&
+                RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled &&
                 Settings.Diagnostics.DdgiForwardEstimateCountersEnabled;
             BuildDebugOverlayDrawCommands(scene, sceneData);
             sceneData.DebugDrawSnapshot = _debugDraw.Snapshot();
@@ -1999,6 +2010,10 @@ namespace Njulf.Rendering
             _hizVisibilityPolicyState.PyramidValid = sceneData.HiZBuildEnabled;
             if (MeshletDiagnosticCountersActive)
                 ApplyCompletedGpuCounters(sceneData, _completedGpuCounters);
+            ApplyCompletedCompactedMeshOnlyForwardCounters(
+                sceneData,
+                _completedSceneSubmissionCounters,
+                _completedForwardVisibilityCounters);
             ApplyCompletedSsgiCounters(sceneData, _completedGpuCounters);
             ApplyCompletedDdgiForwardEstimateCounters(sceneData, _completedDdgiForwardEstimateCounters);
             ApplyCompletedDdgiInvestigationCounters(sceneData, _completedDdgiInvestigationCounters);
@@ -2016,8 +2031,9 @@ namespace Njulf.Rendering
                 completedGpuTimings);
             GlobalIlluminationSettings giSettings = Settings.GlobalIllumination;
             bool detailedDdgiInstrumentationActive =
-                Settings.Diagnostics.DdgiForwardEstimateCountersEnabled ||
-                giSettings.DebugView != GlobalIlluminationDebugView.None;
+                RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled &&
+                (Settings.Diagnostics.DdgiForwardEstimateCountersEnabled ||
+                    giSettings.DebugView != GlobalIlluminationDebugView.None);
             bool fixedSimpleDdgiBudget =
                 !giSettings.DdgiAdaptiveBudgetingEnabled ||
                 detailedDdgiInstrumentationActive;
@@ -4115,7 +4131,7 @@ namespace Njulf.Rendering
                 sceneData.DirectionalShadowPcfRadius,
                 sceneData.SpotShadowPcfRadius,
                 sceneData.PointShadowPcfRadius,
-                sceneData.ForwardShadowReceiverMeshletCount,
+                sceneData.ForwardShadowReceiverMeshletCapacity,
                 sceneData.SpotShadowsEnabled ? 1 : 0,
                 sceneData.SpotShadowCandidateCount,
                 sceneData.SpotShadowSelectedCount,
@@ -4291,7 +4307,10 @@ namespace Njulf.Rendering
                 DdgiDetailedCountersRequested = ddgiRequested &&
                     (Settings.Diagnostics.DdgiForwardEstimateCountersEnabled ||
                      giSettings.DebugView != GlobalIlluminationDebugView.None) ? 1 : 0,
+                DdgiDetailedCountersCompiled =
+                    RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled ? 1 : 0,
                 DdgiDetailedCountersEnabled = (giUsesDdgi || giUsesSimpleDdgi) &&
+                    RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled &&
                     (Settings.Diagnostics.DdgiForwardEstimateCountersEnabled ||
                      giSettings.DebugView != GlobalIlluminationDebugView.None) ? 1 : 0,
                 SimpleDdgiProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiProbeCount : 0,
@@ -4329,6 +4348,12 @@ namespace Njulf.Rendering
                 SimpleDdgiTransportPendingSolverProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportPendingSolverProbeCount : 0,
                 SimpleDdgiTransportGlobalConvergencePending = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportGlobalConvergencePending : 0,
                 SimpleDdgiTransportGlobalConvergenceElapsedFrames = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportGlobalConvergenceElapsedFrames : 0,
+                SimpleDdgiTransportConvergence = giUsesSimpleDdgi
+                    ? AttributeSimpleDdgiTransportRingTimings(
+                        sceneData.SimpleDdgiTransportConvergence,
+                        sceneData.GpuSimpleDdgiTransportMicroseconds,
+                        sceneData.GpuSimpleDdgiBlendMicroseconds)
+                    : SimpleDdgiTransportConvergenceTelemetry.Empty,
                 SimpleDdgiTransportCalibrationChangeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportCalibrationChangeCount : 0UL,
                 SimpleDdgiTransportIrradianceAtlasBytes = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportIrradianceAtlasBytes : 0UL,
                 SimpleDdgiTransportSourceCacheBytes = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceCacheBytes : 0UL,
@@ -4379,6 +4404,33 @@ namespace Njulf.Rendering
                 SimpleDdgiSampledAtlasGroupCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiSampledAtlasGroupCount : 0,
                 SimpleDdgiSampledAtlasLayersPerTexture = giUsesSimpleDdgi ? sceneData.SimpleDdgiSampledAtlasLayersPerTexture : 0,
                 SimpleDdgiSampledAtlasImageBytes = giUsesSimpleDdgi ? sceneData.SimpleDdgiSampledAtlasImageBytes : 0UL,
+                SimpleDdgiRayScratchBytes = giUsesSimpleDdgi
+                    ? _simpleDdgiVolumeManager?.RayScratchBytes ?? 0UL
+                    : 0UL,
+                SimpleDdgiProbeStateBytes = giUsesSimpleDdgi
+                    ? _simpleDdgiVolumeManager?.ProbeStateBytes ?? 0UL
+                    : 0UL,
+                SimpleDdgiProbeUpdateQueueBytes = giUsesSimpleDdgi
+                    ? _simpleDdgiVolumeManager?.ProbeUpdateQueueBytes ?? 0UL
+                    : 0UL,
+                SimpleDdgiRelocationClassificationBytes = giUsesSimpleDdgi
+                    ? _simpleDdgiVolumeManager?.RelocationClassificationBytes ?? 0UL
+                    : 0UL,
+                SimpleDdgiProbeStateReadbackBytes = giUsesSimpleDdgi
+                    ? _simpleDdgiVolumeManager?.ProbeStateReadbackBytes ?? 0UL
+                    : 0UL,
+                SimpleDdgiRetiredBufferCount =
+                    _simpleDdgiVolumeManager?.RetiredBufferCount ?? 0,
+                SimpleDdgiRetiredBufferBytes =
+                    _simpleDdgiVolumeManager?.RetiredBufferBytes ?? 0UL,
+                SimpleDdgiDuplicateMirrorBytes = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSampledAtlasImageBytes
+                    : 0UL,
+                SimpleDdgiDisabledRetainedBytes = !giUsesSimpleDdgi &&
+                    _simpleDdgiVolumeManager != null
+                        ? _simpleDdgiVolumeManager.BufferBytes +
+                          _simpleDdgiVolumeManager.SampledAtlasImageBytes
+                        : 0UL,
                 SimpleDdgiSampledAtlasFallbackReason = giUsesSimpleDdgi
                     ? sceneData.SimpleDdgiSampledAtlasFallbackReason
                     : simpleDdgiRequested && giSettings.EmergencyGiFallbackEnabled
@@ -4418,6 +4470,12 @@ namespace Njulf.Rendering
                 SimpleDdgiLowVisibilitySampleCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiLowVisibilitySampleCount : 0,
                 SimpleDdgiGatherSampleCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiGatherSampleCount : 0,
                 SimpleDdgiSecondVolumeGatherCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiSecondVolumeGatherCount : 0,
+                SimpleDdgiGatherMultiplicity = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiGatherMultiplicity
+                    : SimpleDdgiGatherMultiplicityCounters.Empty,
+                DecalFragmentAttribution = giUsesDdgi
+                    ? sceneData.DecalFragmentAttribution
+                    : DecalFragmentAttributionCounters.Empty,
                 SimpleDdgiGatherPrimaryRejectionCounts = giUsesSimpleDdgi
                     ? sceneData.SimpleDdgiGatherPrimaryRejectionCounts
                     : Array.Empty<uint>(),
@@ -4594,6 +4652,17 @@ namespace Njulf.Rendering
                 DdgiFastGatherRejectedZeroSupportCount = giUsesDdgi ? sceneData.DdgiFastGatherRejectedZeroSupportCount : 0u,
                 DdgiFastGatherRejectedZeroDataCount = giUsesDdgi ? sceneData.DdgiFastGatherRejectedZeroDataCount : 0u,
                 DdgiFastGatherRejectedZeroOwnershipCount = giUsesDdgi ? sceneData.DdgiFastGatherRejectedZeroOwnershipCount : 0u,
+                DdgiFastGatherStatus = giUsesSimpleDdgi
+                    ? "not-applicable:simple-ddgi-uses-structured-volume-gather"
+                    : !giUsesDdgi
+                        ? "disabled:ddgi-not-active"
+                        : sceneData.DdgiForwardEstimateCountersReadbackValid == 0
+                            ? "unavailable:detailed-counter-readback-disabled"
+                            : sceneData.DdgiFastGatherAttemptCount == 0
+                                ? "legacy-eligible:no-fast-gather-attempts"
+                                : sceneData.DdgiFastGatherAcceptedCount == 0
+                                    ? "legacy-attempted:all-rejected"
+                                    : "legacy-active:accepted",
                 DdgiShaderGatherFallbackAttemptCount = giUsesDdgi ? sceneData.DdgiShaderGatherFallbackAttemptCount : 0u,
                 DdgiShaderGatherFallbackAcceptedCount = giUsesDdgi ? sceneData.DdgiShaderGatherFallbackAcceptedCount : 0u,
                 DdgiShaderGatherFallbackEmptyCount = giUsesDdgi ? sceneData.DdgiShaderGatherFallbackEmptyCount : 0u,
@@ -4807,6 +4876,7 @@ namespace Njulf.Rendering
                 CpuSsgiRecordMicroseconds = giUsesSsgi ? sceneData.CpuSsgiRecordMicroseconds : 0,
                 CpuDdgiRecordMicroseconds = giUsesDdgi ? sceneData.CpuDdgiRecordMicroseconds : 0,
                 CpuSimpleDdgiRecordMicroseconds = giUsesSimpleDdgi ? sceneData.CpuSimpleDdgiRecordMicroseconds : 0,
+                SimpleDdgiUploadTiming = giUsesSimpleDdgi ? sceneData.SimpleDdgiUploadTiming : default,
                 CpuFarFieldRecordMicroseconds = giUsesSimpleDdgi ? sceneData.CpuFarFieldRecordMicroseconds : 0,
                 CpuGlobalIlluminationRecordMicroseconds = giEnabled ? sceneData.CpuGlobalIlluminationRecordMicroseconds : 0,
                 CpuGlobalIlluminationRecordP95Microseconds = giEnabled ? sceneData.CpuGlobalIlluminationRecordP95Microseconds : 0,
@@ -4854,6 +4924,14 @@ namespace Njulf.Rendering
                 AccelerationStructureBottomLevelCount = sceneData.AccelerationStructureBottomLevelCount,
                 AccelerationStructureTopLevelInstanceCount = sceneData.AccelerationStructureTopLevelInstanceCount,
                 AccelerationStructureBlasBuildCount = sceneData.AccelerationStructureBlasBuildCount,
+                AccelerationStructureBlasCompactionQueryCount = sceneData.AccelerationStructureBlasCompactionQueryCount,
+                AccelerationStructureBlasCompactionCount = sceneData.AccelerationStructureBlasCompactionCount,
+                AccelerationStructureBlasCompactionSourceBytes = sceneData.AccelerationStructureBlasCompactionSourceBytes,
+                AccelerationStructureBlasCompactionBytesSaved = sceneData.AccelerationStructureBlasCompactionBytesSaved,
+                AccelerationStructureBlasCompactedResidentBytesSaved = sceneData.AccelerationStructureBlasCompactedResidentBytesSaved,
+                AccelerationStructureBlasCompactionPendingCount = sceneData.AccelerationStructureBlasCompactionPendingCount,
+                AccelerationStructureBlasCompactionQueryOverflowCount = sceneData.AccelerationStructureBlasCompactionQueryOverflowCount,
+                AccelerationStructureBlasCompactionQueryReadbackFailureCount = sceneData.AccelerationStructureBlasCompactionQueryReadbackFailureCount,
                 AccelerationStructureTlasBuildCount = sceneData.AccelerationStructureTlasBuildCount,
                 AccelerationStructureTlasUpdateCount = sceneData.AccelerationStructureTlasUpdateCount,
                 AccelerationStructureTlasSkipCount = sceneData.AccelerationStructureTlasSkipCount,
@@ -4877,6 +4955,7 @@ namespace Njulf.Rendering
                 AccelerationStructureRayQueryMetadataUploadBytes = sceneData.AccelerationStructureRayQueryMetadataUploadBytes,
                 CpuAccelerationStructureBuildMicroseconds = sceneData.CpuAccelerationStructureBuildMicroseconds,
                 CpuAccelerationStructureBlasBuildMicroseconds = sceneData.CpuAccelerationStructureBlasBuildMicroseconds,
+                CpuAccelerationStructureBlasCompactionMicroseconds = sceneData.CpuAccelerationStructureBlasCompactionMicroseconds,
                 CpuAccelerationStructureTlasBuildMicroseconds = sceneData.CpuAccelerationStructureTlasBuildMicroseconds,
                 CpuAccelerationStructureInstanceUploadMicroseconds = sceneData.CpuAccelerationStructureInstanceUploadMicroseconds,
                 GpuAccelerationStructureBlasMicroseconds = sceneData.GpuAccelerationStructureBlasMicroseconds,
@@ -4887,6 +4966,7 @@ namespace Njulf.Rendering
                         ? "Emergency GI fallback is active."
                         : sceneData.AccelerationStructureFallbackReason,
                 GeometryDecalsEnabled = sceneData.GeometryDecalsEnabled ? 1 : 0,
+                DecalReceiveShadows = sceneData.DecalReceiveShadows ? 1 : 0,
                 DecalReceiveGlobalIllumination =
                     sceneData.DecalReceiveGlobalIllumination ? 1 : 0,
                 GeometryDecalDepthBias = sceneData.GeometryDecalDepthBias,
@@ -4901,6 +4981,7 @@ namespace Njulf.Rendering
                 MaterialTotalCompileMicroseconds = materialDiagnostics.TotalCompileMicroseconds,
                 MaterialCompileP95Microseconds = materialDiagnostics.CompileP95Microseconds,
                 MaterialCompileTimingSampleCount = materialDiagnostics.CompileTimingSampleCount,
+                MaterialLastUploadMicroseconds = materialDiagnostics.LastUploadMicroseconds,
                 MaterialUploadP95Microseconds = materialDiagnostics.UploadP95Microseconds,
                 MaterialUploadTimingSampleCount = materialDiagnostics.UploadTimingSampleCount,
                 MaterialLegacyV1FallbackCount = materialDiagnostics.LegacyV1FallbackCount,
@@ -5109,6 +5190,7 @@ namespace Njulf.Rendering
                 GpuTimingSupported = _gpuTimestamps.Supported ? 1 : 0,
                 GpuTimingEnabled = Settings.Debug.AllowGpuTiming ? 1 : 0,
                 GpuTimingPending = _gpuTimestamps.PendingThisFrame ? 1 : 0,
+                GpuTimestampPeriodNanoseconds = _context.TimestampPeriodNanoseconds,
                 GpuTimingFrameLatency = FramesInFlight,
                 GpuTimingUnavailableReason = BuildGpuTimingReason(),
                 CpuHiZDepthTransitionMicroseconds = sceneData.CpuHiZDepthTransitionMicroseconds,
@@ -5211,6 +5293,7 @@ namespace Njulf.Rendering
                 SceneSubmissionGpuLod1EmittedCount = sceneData.SceneSubmissionGpuLod1EmittedCount,
                 SceneSubmissionGpuLod2EmittedCount = sceneData.SceneSubmissionGpuLod2EmittedCount,
                 SceneSubmissionGpuMissingLodFallbackCount = sceneData.SceneSubmissionGpuMissingLodFallbackCount,
+                SceneSubmissionGpuOpaqueLodDecimatedCount = sceneData.SceneSubmissionGpuOpaqueLodDecimatedCount,
                 SceneSubmissionValidationValid = sceneData.SceneSubmissionValidationValid,
                 SceneSubmissionValidationStatus = sceneData.SceneSubmissionValidationStatus,
                 SceneSubmissionValidationCpuOpaqueCount = sceneData.SceneSubmissionValidationCpuOpaqueCount,
@@ -5300,6 +5383,15 @@ namespace Njulf.Rendering
             ulong sceneShadowHighWaterBytes = checked(
                 ((ulong)sceneData.LocalShadowMeshletCount + SumDirectionalShadowMeshlets(sceneData)) *
                 (ulong)Marshal.SizeOf<GPUMeshletDrawCommand>());
+            bool detailedGiCapture =
+                RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled &&
+                (Settings.Diagnostics.DdgiForwardEstimateCountersEnabled ||
+                    giSettings.DebugView != GlobalIlluminationDebugView.None);
+            bool productionTimingCapture =
+                !RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled &&
+                _context.ValidationSettings.Mode == RendererValidationMode.Off &&
+                !Settings.Diagnostics.DdgiForwardEstimateCountersEnabled &&
+                giSettings.DebugView == GlobalIlluminationDebugView.None;
 
             RendererDiagnostics finalDiagnostics = diagnostics with
             {
@@ -5315,6 +5407,8 @@ namespace Njulf.Rendering
                 CaptureRenderWidth = sceneData.ScreenWidth,
                 CaptureRenderHeight = sceneData.ScreenHeight,
                 CaptureSceneContentRevision = sceneData.SceneContentRevision,
+                CaptureSceneAssetHash = ComputePerformanceCaptureSceneAssetHash(sceneData),
+                CaptureSceneStateHash = ComputePerformanceCaptureSceneStateHash(sceneData),
                 CaptureRun = new PerformanceCaptureRunMetadata(
                     ResolveCaptureSceneKind(sceneData.CaptureSceneName),
                     ResolveCaptureScenario(sceneData.CaptureScenario),
@@ -5322,27 +5416,52 @@ namespace Njulf.Rendering
                     ResolvePerformanceCaptureApplicationVersion(),
                     ResolvePerformanceCaptureCommit(),
                     ResolveCaptureShaderBundleHash(_captureShaderBundleHash),
-                    RenderSettings.SerializationVersion),
+                    RenderSettings.SerializationVersion)
+                {
+                    ExecutableHash = _captureExecutableHash,
+                    DirtyWorktreeState = _captureDirtyWorktreeState
+                },
                 CaptureCamera = CreatePerformanceCaptureCameraMetadata(sceneData),
                 CaptureFrame = new PerformanceCaptureFrameMetadata(
                     sceneData.DdgiFrameSerial,
                     sceneData.CaptureFramesSinceSceneLoad,
                     sceneData.DdgiWarmupState,
                     sceneData.SimpleDdgiFramesSinceLastRecenter,
-                    sceneData.SimpleDdgiFramesSinceLastClear),
+                    sceneData.SimpleDdgiFramesSinceLastClear)
+                {
+                    DdgiCacheGeneration = sceneData.DdgiCacheGeneration,
+                    SimpleDdgiTransportGeneration = sceneData.SimpleDdgiTransportGeneration,
+                    TransportConvergencePending =
+                        sceneData.SimpleDdgiTransportGlobalConvergencePending != 0,
+                    TransportConvergedProbeCount =
+                        sceneData.SimpleDdgiTransportConvergedProbeCount,
+                    TransportPendingProbeCount =
+                        sceneData.SimpleDdgiTransportPendingSolverProbeCount
+                },
                 ResolvedGiSettings = ResolvedGiSettingsMetadata.Unknown,
                 GiMeasurement = new GiMeasurementMetadata(
-                    Settings.Diagnostics.DdgiForwardEstimateCountersEnabled ||
-                    giSettings.DebugView != GlobalIlluminationDebugView.None
-                        ? GiMeasurementMode.DetailedInvestigation
-                        : GiMeasurementMode.NormalTelemetry,
-                    Settings.Diagnostics.DdgiForwardEstimateCountersEnabled ? 1 : 0,
-                    Settings.Diagnostics.DdgiForwardEstimateCountersEnabled
+                    productionTimingCapture
+                        ? GiMeasurementMode.Production
+                        : detailedGiCapture
+                            ? GiMeasurementMode.DetailedInvestigation
+                            : GiMeasurementMode.NormalTelemetry,
+                    detailedGiCapture ? 256 : 0,
+                    detailedGiCapture
                         ? "Detailed GPU investigation counters enabled; overhead is capture-specific."
-                        : "Normal telemetry; detailed GI investigation counters disabled.",
-                    Settings.Diagnostics.DdgiForwardEstimateCountersEnabled ||
-                    giSettings.DebugView != GlobalIlluminationDebugView.None,
-                    sceneData.DdgiInvestigationCountersReadbackValid != 0),
+                        : productionTimingCapture
+                            ? "Production timing; detailed GI branches and atomics are compiled out."
+                            : "Normal telemetry; detailed GI investigation counters disabled.",
+                    detailedGiCapture,
+                    detailedGiCapture &&
+                        sceneData.DdgiInvestigationCountersReadbackValid != 0)
+                {
+                    DiagnosticSampleStrideX = detailedGiCapture ? 16 : 0,
+                    DiagnosticSampleStrideY = detailedGiCapture ? 16 : 0,
+                    DiagnosticSampleWeight = detailedGiCapture ? 256 : 0,
+                    SkyVisibilityCountSemantic = detailedGiCapture
+                        ? PerformanceMetricSemantic.SampledEstimate
+                        : PerformanceMetricSemantic.Unavailable
+                },
                 ActiveFeatureIsolation = sceneData.ActiveFeatureIsolation,
                 SkippedRenderPassCount = sceneData.SkippedRenderPassCount,
                 GraphPlannedBarrierCount = sceneData.GraphPlannedBarrierCount,
@@ -5668,6 +5787,108 @@ namespace Njulf.Rendering
             return Convert.ToHexString(hash).ToLowerInvariant();
         }
 
+        internal static string ComputePerformanceCaptureSceneStateHash(
+            SceneRenderingData sceneData)
+        {
+            if (sceneData == null)
+                throw new ArgumentNullException(nameof(sceneData));
+
+            // Restrict this identity to stable content and producer revisions.
+            // Visibility, frame indices, timings, and scheduler populations are
+            // intentionally excluded so two equivalent steady frames match.
+            string canonical = string.Join("|", new[]
+            {
+                sceneData.SceneContentRevision.ToString(CultureInfo.InvariantCulture),
+                sceneData.SsgiMaterialRevision.ToString(CultureInfo.InvariantCulture),
+                sceneData.DdgiEmissiveSourceRevision.ToString(CultureInfo.InvariantCulture),
+                sceneData.DrawPacketRevision.ToString(CultureInfo.InvariantCulture),
+                sceneData.DirectionalShadowMeshletDrawSignature.ToString(CultureInfo.InvariantCulture),
+                sceneData.LocalShadowMeshletDrawSignature.ToString(CultureInfo.InvariantCulture),
+                sceneData.ObjectCount.ToString(CultureInfo.InvariantCulture),
+                sceneData.MeshletCount.ToString(CultureInfo.InvariantCulture),
+                sceneData.MaterialCount.ToString(CultureInfo.InvariantCulture),
+                sceneData.TextureCount.ToString(CultureInfo.InvariantCulture),
+                sceneData.LightCount.ToString(CultureInfo.InvariantCulture),
+                sceneData.DirectionalLightCount.ToString(CultureInfo.InvariantCulture),
+                sceneData.LocalLightCount.ToString(CultureInfo.InvariantCulture),
+                sceneData.GeometryDecalObjectCount.ToString(CultureInfo.InvariantCulture),
+                sceneData.CaptureSceneName ?? string.Empty
+            });
+            byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
+            return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
+        }
+
+        internal static string ComputePerformanceCaptureSceneAssetHash(
+            SceneRenderingData sceneData)
+        {
+            if (sceneData == null)
+                throw new ArgumentNullException(nameof(sceneData));
+
+            // This describes authored inputs rather than the emitted draw list.
+            // A controlled feature pair (for example decals on/off) therefore
+            // retains one base identity, while CaptureSceneStateHash still
+            // records the exact rendered state of each side.
+            string canonical = string.Join("|", new[]
+            {
+                sceneData.SceneContentRevision.ToString(CultureInfo.InvariantCulture),
+                sceneData.SsgiMaterialRevision.ToString(CultureInfo.InvariantCulture),
+                sceneData.DdgiEmissiveSourceRevision.ToString(CultureInfo.InvariantCulture),
+                sceneData.ObjectCount.ToString(CultureInfo.InvariantCulture),
+                sceneData.MaterialCount.ToString(CultureInfo.InvariantCulture),
+                sceneData.TextureCount.ToString(CultureInfo.InvariantCulture),
+                sceneData.LightCount.ToString(CultureInfo.InvariantCulture),
+                sceneData.DirectionalLightCount.ToString(CultureInfo.InvariantCulture),
+                sceneData.LocalLightCount.ToString(CultureInfo.InvariantCulture),
+                sceneData.GeometryDecalObjectCount.ToString(CultureInfo.InvariantCulture),
+                sceneData.CaptureSceneName ?? string.Empty
+            });
+            byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
+            return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
+        }
+
+        internal static SimpleDdgiTransportConvergenceTelemetry
+            AttributeSimpleDdgiTransportRingTimings(
+                SimpleDdgiTransportConvergenceTelemetry telemetry,
+                long transportMicroseconds,
+                long blendMicroseconds)
+        {
+            if (telemetry.Rings.Count == 0)
+                return telemetry;
+
+            ulong scheduledRays = 0UL;
+            long scheduledProbes = 0L;
+            foreach (SimpleDdgiTransportRingConvergenceTelemetry ring in telemetry.Rings)
+            {
+                scheduledRays = ulong.MaxValue - scheduledRays < ring.ScheduledRayCount
+                    ? ulong.MaxValue
+                    : scheduledRays + ring.ScheduledRayCount;
+                scheduledProbes = Math.Min(
+                    int.MaxValue,
+                    scheduledProbes + Math.Max(0, ring.ScheduledProbeCount));
+            }
+
+            var attributed = new SimpleDdgiTransportRingConvergenceTelemetry[
+                telemetry.Rings.Count];
+            for (int index = 0; index < attributed.Length; index++)
+            {
+                SimpleDdgiTransportRingConvergenceTelemetry ring = telemetry.Rings[index];
+                double transportShare = scheduledRays > 0
+                    ? ring.ScheduledRayCount / (double)scheduledRays
+                    : 0.0;
+                double blendShare = scheduledProbes > 0
+                    ? ring.ScheduledProbeCount / (double)scheduledProbes
+                    : 0.0;
+                attributed[index] = ring with
+                {
+                    EstimatedTransportMilliseconds =
+                        Math.Max(0L, transportMicroseconds) / 1000.0 * transportShare,
+                    EstimatedBlendMilliseconds =
+                        Math.Max(0L, blendMicroseconds) / 1000.0 * blendShare
+                };
+            }
+            return telemetry with { Rings = Array.AsReadOnly(attributed) };
+        }
+
         internal static string CreatePerformanceCaptureBuildConfiguration(string? validationMode)
         {
             string validation = NormalizeCaptureMetadataValue(
@@ -5728,6 +5949,188 @@ namespace Njulf.Rendering
             }
 
             return revision ?? "unavailable:source-revision-not-embedded";
+        }
+
+        internal static string ResolvePerformanceCaptureExecutableHash(
+            string? executablePath = null)
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(executablePath))
+                    return HashPerformanceCaptureFile(executablePath);
+
+                string? processPath = Environment.ProcessPath;
+                if (string.IsNullOrWhiteSpace(processPath))
+                    return "unavailable:process-path-not-reported";
+
+                string processFullPath = Path.GetFullPath(processPath);
+                string applicationDirectory =
+                    Path.GetDirectoryName(processFullPath) ??
+                    AppContext.BaseDirectory;
+                var binaryPaths = new List<string> { processFullPath };
+                binaryPaths.AddRange(Directory.GetFiles(
+                    applicationDirectory,
+                    "Njulf*.dll",
+                    SearchOption.TopDirectoryOnly));
+                binaryPaths.Sort(static (left, right) =>
+                    StringComparer.OrdinalIgnoreCase.Compare(
+                        Path.GetFileName(left),
+                        Path.GetFileName(right)));
+
+                // A framework-dependent .NET apphost is largely invariant when
+                // managed renderer code changes. Hash a framed manifest of the
+                // apphost and every application-local Njulf assembly so capture
+                // provenance changes with the code that actually rendered the
+                // frame. File names, rather than absolute paths, keep identical
+                // builds portable between machines.
+                var manifest = new StringBuilder();
+                var seenPaths = new HashSet<string>(
+                    StringComparer.OrdinalIgnoreCase);
+                foreach (string candidatePath in binaryPaths)
+                {
+                    string fullPath = Path.GetFullPath(candidatePath);
+                    if (!seenPaths.Add(fullPath))
+                        continue;
+                    string fileHash = HashPerformanceCaptureFile(fullPath);
+                    if (!fileHash.StartsWith("sha256:", StringComparison.Ordinal))
+                        return fileHash;
+                    manifest.Append(Path.GetFileName(fullPath));
+                    manifest.Append(':');
+                    manifest.Append(fileHash);
+                    manifest.Append('\n');
+                }
+
+                if (manifest.Length == 0)
+                    return "unavailable:executable-bundle-empty";
+                byte[] bundleHash = SHA256.HashData(
+                    Encoding.UTF8.GetBytes(manifest.ToString()));
+                return "sha256:" +
+                    Convert.ToHexString(bundleHash).ToLowerInvariant();
+            }
+            catch (Exception exception) when (exception is
+                IOException or
+                UnauthorizedAccessException or
+                ArgumentException or
+                NotSupportedException or
+                CryptographicException)
+            {
+                return "unavailable:executable-hash-failed";
+            }
+        }
+
+        private static string HashPerformanceCaptureFile(string path)
+        {
+            using var stream = new FileStream(
+                Path.GetFullPath(path),
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read | FileShare.Delete,
+                64 * 1024,
+                FileOptions.SequentialScan);
+            byte[] hash = SHA256.HashData(stream);
+            return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
+        }
+
+        internal static string ResolvePerformanceCaptureDirtyWorktreeState(
+            string? explicitState = null,
+            string? searchStartDirectory = null)
+        {
+            string? supplied = string.IsNullOrWhiteSpace(explicitState)
+                ? Environment.GetEnvironmentVariable("NJULF_DIRTY_WORKTREE_STATE")
+                : explicitState;
+            if (!string.IsNullOrWhiteSpace(supplied))
+            {
+                string normalized = supplied.Trim().ToLowerInvariant();
+                if (normalized is "clean" or "dirty")
+                    return normalized;
+                return "unavailable:invalid-dirty-worktree-state";
+            }
+
+            string start = string.IsNullOrWhiteSpace(searchStartDirectory)
+                ? Environment.CurrentDirectory
+                : searchStartDirectory;
+            string? repositoryRoot = FindCaptureGitRepositoryRoot(start) ??
+                FindCaptureGitRepositoryRoot(AppContext.BaseDirectory);
+            if (repositoryRoot == null)
+                return "unavailable:git-worktree-not-found";
+
+            try
+            {
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = "git",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                startInfo.ArgumentList.Add("-C");
+                startInfo.ArgumentList.Add(repositoryRoot);
+                startInfo.ArgumentList.Add("status");
+                startInfo.ArgumentList.Add("--porcelain=v1");
+                startInfo.ArgumentList.Add("--untracked-files=normal");
+                using Process? process = Process.Start(startInfo);
+                if (process == null)
+                    return "unavailable:git-status-start-failed";
+
+                var outputTask = process.StandardOutput.ReadToEndAsync();
+                var errorTask = process.StandardError.ReadToEndAsync();
+                if (!process.WaitForExit(2_000))
+                {
+                    try
+                    {
+                        process.Kill(entireProcessTree: true);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+                    return "unavailable:git-status-timeout";
+                }
+
+                string output = outputTask.GetAwaiter().GetResult();
+                _ = errorTask.GetAwaiter().GetResult();
+                return process.ExitCode == 0
+                    ? string.IsNullOrWhiteSpace(output) ? "clean" : "dirty"
+                    : "unavailable:git-status-failed";
+            }
+            catch (Exception exception) when (exception is
+                InvalidOperationException or
+                System.ComponentModel.Win32Exception or
+                IOException or
+                UnauthorizedAccessException)
+            {
+                return "unavailable:git-status-failed";
+            }
+        }
+
+        private static string? FindCaptureGitRepositoryRoot(string? startDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(startDirectory))
+                return null;
+
+            DirectoryInfo? directory;
+            try
+            {
+                directory = new DirectoryInfo(Path.GetFullPath(startDirectory));
+            }
+            catch (Exception exception) when (exception is
+                ArgumentException or
+                NotSupportedException or
+                IOException or
+                UnauthorizedAccessException)
+            {
+                return null;
+            }
+
+            for (int depth = 0; directory != null && depth < 64; depth++)
+            {
+                string gitPath = Path.Combine(directory.FullName, ".git");
+                if (Directory.Exists(gitPath) || File.Exists(gitPath))
+                    return directory.FullName;
+                directory = directory.Parent;
+            }
+
+            return null;
         }
 
         internal static string ResolvePerformanceCaptureShaderBundleHash()
@@ -5900,7 +6303,13 @@ namespace Njulf.Rendering
 
         private static string ResolveBuildConfiguration()
         {
-#if DEBUG
+#if NJULF_SHIPPING_PERFORMANCE
+            return "ShippingPerformance";
+#elif NJULF_PROFILE_SYMBOLS
+            return "ProfileSymbols";
+#elif NJULF_DETAILED_INVESTIGATION
+            return "DetailedInvestigation";
+#elif DEBUG
             return "Debug";
 #else
             return "Release";
@@ -8745,6 +9154,9 @@ namespace Njulf.Rendering
             sceneData.CpuSimpleDdgiRecordMicroseconds = simpleDdgiActive
                 ? _simpleDdgiVolumeManager?.LastUploadMicroseconds ?? 0
                 : 0;
+            sceneData.SimpleDdgiUploadTiming = simpleDdgiActive
+                ? _simpleDdgiVolumeManager?.LastUploadTiming ?? default
+                : default;
             sceneData.CpuFarFieldRecordMicroseconds = simpleDdgiActive
                 ? _farFieldClipmapManager?.LastUploadMicroseconds ?? 0
                 : 0;
@@ -8888,6 +9300,8 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiTransportPendingSolverProbeCount = pendingSolverProbeCount;
             sceneData.SimpleDdgiTransportGlobalConvergencePending = _simpleDdgiVolumeManager.TransportGlobalConvergencePending ? 1 : 0;
             sceneData.SimpleDdgiTransportGlobalConvergenceElapsedFrames = _simpleDdgiVolumeManager.TransportGlobalConvergenceElapsedFrames;
+            sceneData.SimpleDdgiTransportConvergence =
+                _simpleDdgiVolumeManager.CreateTransportConvergenceTelemetry();
             sceneData.SimpleDdgiTransportCalibrationChangeCount = _simpleDdgiVolumeManager.TransportCalibrationChangeCount;
             sceneData.SimpleDdgiTransportIrradianceAtlasBytes = _simpleDdgiVolumeManager.TransportIrradianceAtlasBytes;
             sceneData.SimpleDdgiTransportSourceCacheBytes = _simpleDdgiVolumeManager.TransportSourceCacheBytes;
@@ -10953,6 +11367,16 @@ namespace Njulf.Rendering
             sceneData.AccelerationStructureBottomLevelCount = stats.BottomLevelCount;
             sceneData.AccelerationStructureTopLevelInstanceCount = stats.TopLevelInstanceCount;
             sceneData.AccelerationStructureBlasBuildCount = stats.BlasBuildCount;
+            sceneData.AccelerationStructureBlasCompactionQueryCount = stats.BlasCompactionQueryCount;
+            sceneData.AccelerationStructureBlasCompactionCount = stats.BlasCompactionCount;
+            sceneData.AccelerationStructureBlasCompactionSourceBytes = stats.BlasCompactionSourceBytes;
+            sceneData.AccelerationStructureBlasCompactionBytesSaved = stats.BlasCompactionBytesSaved;
+            sceneData.AccelerationStructureBlasCompactedResidentBytesSaved =
+                stats.BottomLevelAccelerationStructureCompactedBytesSaved;
+            sceneData.AccelerationStructureBlasCompactionPendingCount = stats.PendingBlasCompactionCount;
+            sceneData.AccelerationStructureBlasCompactionQueryOverflowCount = stats.BlasCompactionQueryOverflowCount;
+            sceneData.AccelerationStructureBlasCompactionQueryReadbackFailureCount =
+                stats.BlasCompactionQueryReadbackFailureCount;
             sceneData.AccelerationStructureTlasBuildCount = stats.TlasBuildCount;
             sceneData.AccelerationStructureTlasUpdateCount = stats.TlasUpdateCount;
             sceneData.AccelerationStructureTlasSkipCount = stats.TlasSkipCount;
@@ -10986,6 +11410,7 @@ namespace Njulf.Rendering
             sceneData.AccelerationStructureRayQueryMetadataUploadBytes = stats.RayQueryInstanceMetadataUploadBytes;
             sceneData.CpuAccelerationStructureBuildMicroseconds = stats.BuildMicroseconds;
             sceneData.CpuAccelerationStructureBlasBuildMicroseconds = stats.BlasBuildMicroseconds;
+            sceneData.CpuAccelerationStructureBlasCompactionMicroseconds = stats.BlasCompactionMicroseconds;
             sceneData.CpuAccelerationStructureTlasBuildMicroseconds = stats.TlasBuildMicroseconds;
             sceneData.CpuAccelerationStructureInstanceUploadMicroseconds = stats.InstanceUploadMicroseconds;
             sceneData.AccelerationStructureFallbackReason = stats.FallbackReason;
@@ -11274,16 +11699,55 @@ namespace Njulf.Rendering
 
         private static void ApplyCompletedGpuCounters(SceneRenderingData sceneData, GpuMeshletCounters counters)
         {
-            int sceneSubmissionHiZTested = sceneData.ForwardOcclusionTestedMeshletsGpu;
-            int sceneSubmissionHiZCulled = sceneData.ForwardOcclusionCulledMeshletsGpu;
             sceneData.DepthTaskInvocations = counters.DepthCandidates;
             sceneData.DepthFrustumCulledMeshletsGpu = counters.DepthFrustumCulled;
             sceneData.DepthEmittedMeshletsGpu = counters.DepthEmitted;
+
+            // The compacted indirect pipeline intentionally has no task stage.
+            // Its authoritative counters come from the compaction pass below;
+            // overwriting them with the (correctly zero) task diagnostic buffer
+            // would make the capture claim that no mesh work was submitted.
+            if (sceneData.SceneSubmissionForwardTaskShader ==
+                SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedMeshOnly)
+            {
+                return;
+            }
+
+            int sceneSubmissionHiZTested = sceneData.ForwardOcclusionTestedMeshletsGpu;
+            int sceneSubmissionHiZCulled = sceneData.ForwardOcclusionCulledMeshletsGpu;
             sceneData.ForwardTaskInvocations = counters.ForwardCandidates;
             sceneData.ForwardFrustumCulledMeshletsGpu = counters.ForwardFrustumCulled;
             sceneData.ForwardOcclusionTestedMeshletsGpu = Math.Max(counters.ForwardOcclusionTested, sceneSubmissionHiZTested);
             sceneData.ForwardOcclusionCulledMeshletsGpu = Math.Max(counters.ForwardOcclusionCulled, sceneSubmissionHiZCulled);
             sceneData.ForwardEmittedMeshletsGpu = counters.ForwardEmitted;
+        }
+
+        private static void ApplyCompletedCompactedMeshOnlyForwardCounters(
+            SceneRenderingData sceneData,
+            SceneSubmissionCounterSnapshot sceneSubmissionCounters,
+            SceneSubmissionCounterSnapshot forwardVisibilityCounters)
+        {
+            if (sceneData.SceneSubmissionForwardTaskShader !=
+                SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedMeshOnly)
+            {
+                return;
+            }
+
+            int submittedMeshWorkgroups = Math.Max(0, sceneData.ForwardTaskInvocations);
+            SceneSubmissionCounterSnapshot authoritativeCounters =
+                sceneData.ForwardVisibilityCompactionActive
+                    ? forwardVisibilityCounters
+                    : sceneSubmissionCounters;
+            if (authoritativeCounters.IsValid)
+                submittedMeshWorkgroups = ClampUIntToInt(authoritativeCounters.EmittedCount);
+
+            // Preserve the historical field contract for capture consumers: it
+            // represents forward candidate workgroups. On the mesh-only path the
+            // indirect group count is already dense, so candidates == emitted and
+            // there is no second-stage frustum rejection.
+            sceneData.ForwardTaskInvocations = submittedMeshWorkgroups;
+            sceneData.ForwardFrustumCulledMeshletsGpu = 0;
+            sceneData.ForwardEmittedMeshletsGpu = submittedMeshWorkgroups;
         }
 
         private static void ApplyCompletedSsgiCounters(SceneRenderingData sceneData, GpuMeshletCounters counters)
@@ -11534,6 +11998,10 @@ namespace Njulf.Rendering
                 sceneData.SimpleDdgiLowVisibilitySampleCount = 0;
                 sceneData.SimpleDdgiGatherSampleCount = 0;
                 sceneData.SimpleDdgiSecondVolumeGatherCount = 0;
+                sceneData.SimpleDdgiGatherMultiplicity =
+                    SimpleDdgiGatherMultiplicityCounters.Empty;
+                sceneData.DecalFragmentAttribution =
+                    DecalFragmentAttributionCounters.Empty;
                 sceneData.SimpleDdgiGatherPrimaryRejectionCounts = Array.Empty<uint>();
                 sceneData.SimpleDdgiGatherFallbackRejectionCounts = Array.Empty<uint>();
                 sceneData.SimpleDdgiGatherRecoveryRejectionCounts = Array.Empty<uint>();
@@ -11593,6 +12061,8 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiLowVisibilitySampleCount = counters.SimpleLowVisibilitySampleCount;
             sceneData.SimpleDdgiGatherSampleCount = counters.SimpleGatherCount;
             sceneData.SimpleDdgiSecondVolumeGatherCount = counters.SimpleSecondVolumeGatherCount;
+            sceneData.SimpleDdgiGatherMultiplicity = counters.GatherMultiplicity;
+            sceneData.DecalFragmentAttribution = counters.DecalFragmentAttribution;
             sceneData.SimpleDdgiGatherPrimaryRejectionCounts =
                 counters.SimpleGatherPrimaryRejectionCounts ?? Array.Empty<uint>();
             sceneData.SimpleDdgiGatherFallbackRejectionCounts =
@@ -11861,6 +12331,8 @@ namespace Njulf.Rendering
                 sceneData.SceneSubmissionGpuLod1EmittedCount = ClampUIntToInt(counters.Lod1EmittedCount);
                 sceneData.SceneSubmissionGpuLod2EmittedCount = ClampUIntToInt(counters.Lod2EmittedCount);
                 sceneData.SceneSubmissionGpuMissingLodFallbackCount = ClampUIntToInt(counters.MissingLodFallbackCount);
+                sceneData.SceneSubmissionGpuOpaqueLodDecimatedCount =
+                    ClampUIntToInt(counters.OpaqueLodDecimatedCount);
                 sceneData.SceneSubmissionGpuDirectionalShadowLodFallbackCount =
                     ClampUIntToInt(counters.DirectionalShadowLodFallbackCount);
                 sceneData.SceneSubmissionGpuDepthSolidCandidateCount = ClampUIntToInt(counters.SolidDepthCandidateCount);

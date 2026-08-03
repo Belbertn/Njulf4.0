@@ -128,7 +128,7 @@ bool MeshletOccludedByHiZBounds4Tap(vec3 worldCenter, float worldRadius)
 
     vec2 minUv = projected[0].xy;
     vec2 maxUv = projected[0].xy;
-    for (int i = 1; i < 5; i++)
+    for (int i = 1; i < 6; i++)
     {
         minUv = min(minUv, projected[i].xy);
         maxUv = max(maxUv, projected[i].xy);

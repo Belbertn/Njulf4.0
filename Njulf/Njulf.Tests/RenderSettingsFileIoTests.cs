@@ -68,6 +68,7 @@ public sealed class RenderSettingsFileIoTests
             var settings = new RenderSettings();
             settings.Transparency.ReceiveGlobalIllumination = false;
             settings.Decals.ReceiveGlobalIllumination = true;
+            settings.Decals.ReceiveShadows = false;
 
             settings.Save(path);
             RenderSettings loaded = RenderSettings.Load(path);
@@ -80,6 +81,8 @@ public sealed class RenderSettingsFileIoTests
                 Assert.That(
                     loaded.Decals.ReceiveGlobalIllumination,
                     Is.True);
+                Assert.That(loaded.Decals.ReceiveShadows, Is.False);
+                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(8));
                 Assert.That(
                     File.ReadAllText(path),
                     Does.Contain($"\"Version\": {RenderSettings.SerializationVersion}"));

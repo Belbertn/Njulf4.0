@@ -33,6 +33,7 @@ namespace Njulf.Core
         public int WindowWidth { get; set; } = 1280;
         public int WindowHeight { get; set; } = 720;
         public string WindowTitle { get; set; } = "Njulf Game";
+        public WindowBorder WindowBorderStyle { get; set; } = WindowBorder.Resizable;
         public bool VSync { get; set; } = true;
         public bool IsRunning => _isRunning;
 
@@ -193,6 +194,7 @@ namespace Njulf.Core
             var options = WindowOptions.DefaultVulkan;
             options.Size = new Vector2D<int>(WindowWidth, WindowHeight);
             options.Title = WindowTitle;
+            options.WindowBorder = WindowBorderStyle;
             options.VSync = VSync;
 
             return Silk.NET.Windowing.Window.Create(options);

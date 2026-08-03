@@ -54,6 +54,7 @@ const uint SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_OVERFLOW = 67u;
 // explicit correspondence table.  This counter records the conservative LOD0
 // retention used instead of dropping a caster.
 const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_LOD_FALLBACK = 68u;
+const uint SCENE_SUBMISSION_COUNTER_OPAQUE_LOD_DECIMATED = 69u;
 const uint SCENE_INDIRECT_DISPATCH_WORD_STRIDE = 4u;
 const uint SCENE_INDIRECT_DISPATCH_OPAQUE_SLOT = 0u;
 const uint SCENE_INDIRECT_DISPATCH_SIMPLE_OPAQUE_SLOT = 1u;
@@ -313,7 +314,7 @@ bool MeshletOccludedByHiZBounds4Tap(vec3 worldCenter, float worldRadius)
 
     vec2 minUv = projected[0].xy;
     vec2 maxUv = projected[0].xy;
-    for (int i = 1; i < 5; i++)
+    for (int i = 1; i < 6; i++)
     {
         minUv = min(minUv, projected[i].xy);
         maxUv = max(maxUv, projected[i].xy);
@@ -533,7 +534,13 @@ bool ApplyGpuLodSelection(inout GPUMeshletDrawCommand command, out uint effectiv
         atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_MISSING_LOD_FALLBACK], 1u);
 
     if (lod0LocalIndex >= meshletCount)
+    {
+        atomicAdd(
+            BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
+                SCENE_SUBMISSION_COUNTER_OPAQUE_LOD_DECIMATED],
+            1u);
         return false;
+    }
 
     command.MeshletIndex = firstMeshlet + lod0LocalIndex;
     return true;

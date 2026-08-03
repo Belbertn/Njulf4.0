@@ -435,6 +435,9 @@ namespace Njulf.Rendering.Data
                 gpuLod2DistanceRatio,
                 gpuLod1DistanceRatio);
             geometryDecalsEnabled &= decalSettings?.GeometryDecalsEnabled ?? true;
+            int isolatedDecalMaterialIndex = Math.Max(
+                -1,
+                decalSettings?.IsolatedMaterialIndex ?? -1);
 
             lock (_lock)
             {
@@ -494,6 +497,7 @@ namespace Njulf.Rendering.Data
                     transparencySettings,
                     decalSettings,
                     geometryDecalsEnabled,
+                    isolatedDecalMaterialIndex,
                     CaptureCpuSnapshots,
                     cameraDependentCpuPayload,
                     useCpuMeshletFrustumCulling,
@@ -577,6 +581,7 @@ namespace Njulf.Rendering.Data
                         selectedPointShadows,
                         rebuildObjectData: staticPayloadChanged,
                         geometryDecalsEnabled: geometryDecalsEnabled,
+                        isolatedDecalMaterialIndex: isolatedDecalMaterialIndex,
                         maxTransparentMeshlets: transparencySettings?.MaxTransparentMeshlets ?? int.MaxValue,
                         useCameraDependentCpuPayload: cameraDependentCpuPayload,
                         useCpuMeshletFrustumCulling: useCpuMeshletFrustumCulling,
@@ -942,6 +947,7 @@ namespace Njulf.Rendering.Data
             ReadOnlySpan<SelectedLocalShadow> selectedPointShadows,
             bool rebuildObjectData,
             bool geometryDecalsEnabled,
+            int isolatedDecalMaterialIndex,
             int maxTransparentMeshlets,
             bool useCameraDependentCpuPayload,
             bool useCpuMeshletFrustumCulling,
@@ -1160,7 +1166,10 @@ namespace Njulf.Rendering.Data
                         {
                             if (isGeometryDecal)
                                 _geometryDecalMeshletCount++;
-                            if (!isGeometryDecal || geometryDecalsEnabled)
+                            if (!isGeometryDecal ||
+                                (geometryDecalsEnabled &&
+                                 (isolatedDecalMaterialIndex < 0 ||
+                                  isolatedDecalMaterialIndex == materialIndex)))
                                 AddTransparentDraw(command, transparentDistanceSquared, metadata.DecalLayer, maxTransparentMeshlets);
                         }
                         else
@@ -1393,7 +1402,10 @@ namespace Njulf.Rendering.Data
                             {
                                 if (isGeometryDecal)
                                     _geometryDecalMeshletCount++;
-                                if (!isGeometryDecal || geometryDecalsEnabled)
+                                if (!isGeometryDecal ||
+                                    (geometryDecalsEnabled &&
+                                     (isolatedDecalMaterialIndex < 0 ||
+                                      isolatedDecalMaterialIndex == materialIndex)))
                                     AddTransparentDraw(command, transparentDistanceSquared, metadata.DecalLayer, maxTransparentMeshlets);
                             }
                             else
@@ -3015,6 +3027,7 @@ namespace Njulf.Rendering.Data
                 TransparencySettings? transparencySettings,
                 DecalSettings? decalSettings,
                 bool geometryDecalsEnabled,
+                int isolatedDecalMaterialIndex,
                 bool captureCpuSnapshots,
                 bool cameraDependentCpuPayload,
                 bool useCpuMeshletFrustumCulling,
@@ -3048,6 +3061,7 @@ namespace Njulf.Rendering.Data
                 hash.Add(transparencySettings?.MaxTransparentMeshlets ?? int.MaxValue);
                 hash.Add(transparencySettings?.SortPerMeshlet ?? true);
                 hash.Add(geometryDecalsEnabled);
+                hash.Add(isolatedDecalMaterialIndex);
                 if (cameraDependentCpuPayload && directionalShadowData.HasValue)
                 {
                     GPUShadowData shadowData = directionalShadowData.Value;

@@ -391,21 +391,78 @@ public sealed class SimpleDdgiBounceConvergenceTests
             Is.EqualTo(expectedFrames));
     }
 
+    [TestCase(true, 24.0f, 60.0f)]
+    [TestCase(true, 144.0f, 60.0f)]
+    [TestCase(false, 24.0f, 24.0f)]
+    [TestCase(false, 144.0f, 144.0f)]
+    public void SourceSweepFrameRate_IsNominalOnlyForDeterministicScheduling(
+        bool deterministicFixedBudget,
+        float observedFramesPerSecond,
+        float expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveSourceSweepFramesPerSecond(
+                deterministicFixedBudget,
+                observedFramesPerSecond),
+            Is.EqualTo(expected));
+    }
+
     [TestCase(true, true, false, true)]
     [TestCase(true, true, true, false)]
     [TestCase(true, false, false, false)]
     [TestCase(false, true, false, false)]
-    public void SourceRefresh_ReopensPropagationOnlyAfterACompletedField(
+    public void SourceRefresh_WakesOnlyItsNeighborhoodAfterGlobalSettlement(
         bool transportV2,
         bool sourceRefresh,
         bool globalConvergencePending,
         bool expected)
     {
         Assert.That(
-            SimpleDdgiVolumeManager.ShouldBeginTransportPropagationSweep(
+            SimpleDdgiVolumeManager.ShouldWakeTransportPropagationNeighborhood(
                 transportV2,
                 sourceRefresh,
                 globalConvergencePending),
+            Is.EqualTo(expected));
+    }
+
+    [TestCase(true, 40, 40, true)]
+    [TestCase(true, 41, 40, true)]
+    [TestCase(true, 39, 40, false)]
+    [TestCase(false, 2_048, 40, false)]
+    [TestCase(true, -1, 0, true)]
+    public void RoutineSourceRefresh_UsesThroughputTargetAsHardBackgroundCeiling(
+        bool routineSourceRefresh,
+        int scheduledSourceRefreshCount,
+        int targetSourceRefreshCount,
+        bool expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ShouldDeferRoutineSourceRefresh(
+                routineSourceRefresh,
+                scheduledSourceRefreshCount,
+                targetSourceRefreshCount),
+            Is.EqualTo(expected));
+    }
+
+    [TestCase(true, 0.0f, 0.025f, false)]
+    [TestCase(true, 0.025f, 0.025f, false)]
+    [TestCase(true, 0.0499f, 0.025f, false)]
+    [TestCase(true, 0.0501f, 0.025f, true)]
+    [TestCase(false, 0.0f, 0.025f, true)]
+    [TestCase(true, float.PositiveInfinity, 0.025f, true)]
+    [TestCase(true, -1.0f, 0.025f, true)]
+    [TestCase(true, 0.0f, float.NaN, true)]
+    public void RoutineSourceRefresh_PropagatesOnlyForMaterialOrInvalidResidual(
+        bool residualEnvelopeValid,
+        float residualEnvelope,
+        float stableResidualThreshold,
+        bool expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ShouldPropagateRoutineSourceRefresh(
+                residualEnvelopeValid,
+                residualEnvelope,
+                stableResidualThreshold),
             Is.EqualTo(expected));
     }
 
@@ -627,6 +684,22 @@ public sealed class SimpleDdgiBounceConvergenceTests
             SimpleDdgiVolumeManager.RequiresProbeStateReadback(
                 classificationFeedbackEnabled,
                 transportV2Active),
+            Is.EqualTo(expected));
+    }
+
+    [TestCase(true, false, true)]
+    [TestCase(true, true, false)]
+    [TestCase(false, false, false)]
+    [TestCase(false, true, false)]
+    public void ProbeStateReadback_IdleFramePreservesLatestCompletedEvidence(
+        bool readbackRequired,
+        bool readbackRecorded,
+        bool expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ShouldPreserveProbeStateReadbackEvidence(
+                readbackRequired,
+                readbackRecorded),
             Is.EqualTo(expected));
     }
 

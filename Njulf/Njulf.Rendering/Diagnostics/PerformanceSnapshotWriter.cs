@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -8,6 +11,33 @@ using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Diagnostics
 {
+    public sealed record PerformanceMetricSemanticEntry(
+        string Path,
+        PerformanceMetricSemantic Semantic,
+        string Description);
+
+    public sealed record PerformanceMemoryOwnershipAudit(
+        ulong TrackedBytes,
+        ulong BudgetBytes,
+        ulong HeadroomBytes,
+        double HeadroomFraction,
+        bool MeetsTwentyPercentHeadroom,
+        ulong CanonicalDdgiAtlasBytes,
+        ulong SampledAtlasMirrorBytes,
+        ulong TransportBytes,
+        ulong ReadbackBytes,
+        ulong ScratchAndQueueBytes,
+        ulong RetiredGenerationBytes,
+        int RetiredGenerationCount,
+        ulong DisabledFeatureRetainedBytes,
+        ulong DuplicateOwnershipBytes,
+        IReadOnlyList<string> Findings)
+    {
+        public static PerformanceMemoryOwnershipAudit Unavailable { get; } = new(
+            0, 0, 0, 0.0, false, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            Array.Empty<string>());
+    }
+
     /// <summary>
     /// Immutable context required to compare captures meaningfully. This is deliberately
     /// separate from the frame diagnostics so snapshot consumers can reject incompatible
@@ -41,6 +71,12 @@ namespace Njulf.Rendering.Diagnostics
         public ResolvedGiSettingsMetadata ResolvedGiSettings { get; init; } = ResolvedGiSettingsMetadata.Unknown;
         public GiMeasurementMetadata Measurement { get; init; } = GiMeasurementMetadata.Unknown;
         public IReadOnlyList<GiFeatureState> FeatureStates { get; init; } = Array.Empty<GiFeatureState>();
+        public string SceneStateHash { get; init; } = "unknown-scene-state";
+        public string SceneAssetHash { get; init; } = "unknown-scene-asset";
+        public string ValidationState { get; init; } = "unknown-validation";
+        public string PairedCaptureIdentity { get; init; } = string.Empty;
+        public IReadOnlyList<PerformanceMetricSemanticEntry> CounterSemantics { get; init; } =
+            Array.Empty<PerformanceMetricSemanticEntry>();
     }
 
     public sealed record PerformanceSnapshot(
@@ -66,6 +102,8 @@ namespace Njulf.Rendering.Diagnostics
         public IReadOnlyList<GiDiagnosticWarning> StructuredWarnings { get; init; } = Array.Empty<GiDiagnosticWarning>();
         public GiTimingAttributionSnapshot GiTiming { get; init; } = GiTimingAttributionSnapshot.Unavailable;
         public GiResidencySnapshot GiResidency { get; init; } = GiResidencySnapshot.Unavailable;
+        public PerformanceMemoryOwnershipAudit MemoryAudit { get; init; } =
+            PerformanceMemoryOwnershipAudit.Unavailable;
     }
 
     public sealed record PerformanceFoliageSnapshot(
@@ -327,6 +365,14 @@ namespace Njulf.Rendering.Diagnostics
         ulong AccelerationStructureInstanceBufferBytes,
         ulong AccelerationStructureRayQueryMetadataBytes,
         int AccelerationStructureBlasBuildCount,
+        int AccelerationStructureBlasCompactionQueryCount,
+        int AccelerationStructureBlasCompactionCount,
+        ulong AccelerationStructureBlasCompactionSourceBytes,
+        ulong AccelerationStructureBlasCompactionBytesSaved,
+        ulong AccelerationStructureBlasCompactedResidentBytesSaved,
+        int AccelerationStructureBlasCompactionPendingCount,
+        int AccelerationStructureBlasCompactionQueryOverflowCount,
+        int AccelerationStructureBlasCompactionQueryReadbackFailureCount,
         int AccelerationStructureTlasBuildCount,
         int AccelerationStructureTlasUpdateCount,
         int AccelerationStructureTlasSkipCount,
@@ -349,6 +395,7 @@ namespace Njulf.Rendering.Diagnostics
         int DdgiSchedulerP95OverBudget,
         long CpuAccelerationStructureBuildMicroseconds,
         long CpuAccelerationStructureBlasBuildMicroseconds,
+        long CpuAccelerationStructureBlasCompactionMicroseconds,
         long CpuAccelerationStructureTlasBuildMicroseconds,
         long CpuAccelerationStructureInstanceUploadMicroseconds,
         long GpuDdgiScheduleMicroseconds,
@@ -390,6 +437,8 @@ namespace Njulf.Rendering.Diagnostics
 
     public sealed class PerformanceSnapshotWriter
     {
+        private static readonly IReadOnlyList<PerformanceMetricSemanticEntry>
+            CounterSemanticManifest = BuildCounterSemanticManifest();
         internal static readonly JsonSerializerOptions SerializerOptions = new()
         {
             AllowTrailingCommas = false,
@@ -447,7 +496,8 @@ namespace Njulf.Rendering.Diagnostics
                         diagnostics,
                         budget.Memory,
                         RenderBudgetProfile.GetDefault(
-                            diagnostics.ActiveBudgetProfile))
+                            diagnostics.ActiveBudgetProfile)),
+                MemoryAudit = CreateMemoryOwnershipAudit(diagnostics, budget.Memory)
             };
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(
                 snapshot,
@@ -670,8 +720,99 @@ namespace Njulf.Rendering.Diagnostics
                     ? ResolvedGiSettingsMetadataFactory.Create(diagnostics)
                     : diagnostics.ResolvedGiSettings,
                 Measurement = diagnostics.GiMeasurement,
-                FeatureStates = featureStates
+                FeatureStates = featureStates,
+                SceneStateHash = NormalizeRunMetadataValue(
+                    diagnostics.CaptureSceneStateHash,
+                    "unavailable:scene-state-hash-not-reported"),
+                SceneAssetHash = NormalizeRunMetadataValue(
+                    diagnostics.CaptureSceneAssetHash,
+                    "unavailable:scene-asset-hash-not-reported"),
+                ValidationState = diagnostics.ValidationMode.ToString(),
+                PairedCaptureIdentity = CreatePairedCaptureIdentity(diagnostics),
+                CounterSemantics = CreateCounterSemantics()
             };
+        }
+
+        internal static string CreatePairedCaptureIdentity(
+            RendererDiagnostics diagnostics)
+        {
+            string canonical = string.Join("|", new[]
+            {
+                diagnostics.CaptureGpuDeviceName,
+                diagnostics.CaptureGpuDriverVersion,
+                diagnostics.CaptureRenderWidth.ToString(),
+                diagnostics.CaptureRenderHeight.ToString(),
+                diagnostics.ActiveQualityPreset.ToString(),
+                diagnostics.CaptureSceneAssetHash,
+                diagnostics.CaptureCamera.ViewHash,
+                diagnostics.CaptureCamera.ProjectionHash,
+                diagnostics.CaptureRun.ExecutableHash,
+                diagnostics.CaptureRun.Commit,
+                diagnostics.CaptureRun.DirtyWorktreeState,
+                diagnostics.CaptureRun.ShaderBundleHash
+            });
+            byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
+            return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
+        }
+
+        internal static PerformanceMemoryOwnershipAudit CreateMemoryOwnershipAudit(
+            RendererDiagnostics diagnostics,
+            MemoryBudgetSnapshot memory)
+        {
+            ulong tracked = memory.TotalTrackedBytes;
+            ulong budget = memory.BudgetBytes;
+            ulong headroom = budget > tracked ? budget - tracked : 0UL;
+            double headroomFraction = budget > 0
+                ? headroom / (double)budget
+                : 0.0;
+            ulong transportBytes = SaturatingAdd(
+                diagnostics.SimpleDdgiTransportIrradianceAtlasBytes,
+                diagnostics.SimpleDdgiTransportSourceCacheBytes);
+            ulong scratchAndQueueBytes = SaturatingAdd(
+                diagnostics.SimpleDdgiRayScratchBytes,
+                diagnostics.SimpleDdgiProbeStateBytes,
+                diagnostics.SimpleDdgiProbeUpdateQueueBytes,
+                diagnostics.SimpleDdgiRelocationClassificationBytes);
+            var findings = new List<string>();
+            if (budget == 0)
+                findings.Add("Configured tracked-memory budget is unavailable.");
+            else if (headroomFraction < 0.20)
+                findings.Add($"Tracked-memory headroom is {headroomFraction:P2}; the contract requires at least 20%.");
+            if (diagnostics.SimpleDdgiDuplicateMirrorBytes > 0)
+                findings.Add("The optional sampled DDGI atlas duplicates canonical SSBO atlas content.");
+            if (diagnostics.SimpleDdgiRetiredBufferBytes > 0)
+                findings.Add("Fence-retired DDGI generations are still resident in this frame.");
+            if (diagnostics.SimpleDdgiDisabledRetainedBytes > 0)
+                findings.Add("Disabled Simple-DDGI retains graph-safe placeholder resources.");
+
+            return new PerformanceMemoryOwnershipAudit(
+                tracked,
+                budget,
+                headroom,
+                headroomFraction,
+                budget > 0 && headroomFraction >= 0.20,
+                diagnostics.SimpleDdgiAtlasBytes >=
+                    diagnostics.SimpleDdgiSampledAtlasImageBytes
+                        ? diagnostics.SimpleDdgiAtlasBytes -
+                          diagnostics.SimpleDdgiSampledAtlasImageBytes
+                        : 0UL,
+                diagnostics.SimpleDdgiSampledAtlasImageBytes,
+                transportBytes,
+                diagnostics.SimpleDdgiProbeStateReadbackBytes,
+                scratchAndQueueBytes,
+                diagnostics.SimpleDdgiRetiredBufferBytes,
+                diagnostics.SimpleDdgiRetiredBufferCount,
+                diagnostics.SimpleDdgiDisabledRetainedBytes,
+                diagnostics.SimpleDdgiDuplicateMirrorBytes,
+                Array.AsReadOnly(findings.ToArray()));
+        }
+
+        private static ulong SaturatingAdd(params ulong[] values)
+        {
+            ulong total = 0UL;
+            foreach (ulong value in values)
+                total = ulong.MaxValue - total < value ? ulong.MaxValue : total + value;
+            return total;
         }
 
         internal static PerformanceCaptureRunMetadata NormalizeCaptureRunMetadata(PerformanceCaptureRunMetadata? run)
@@ -684,9 +825,227 @@ namespace Njulf.Rendering.Diagnostics
                 BuildConfiguration = NormalizeRunMetadataValue(value.BuildConfiguration, "unavailable:build-configuration-not-reported"),
                 ApplicationVersion = NormalizeRunMetadataValue(value.ApplicationVersion, "unavailable:application-version-not-reported"),
                 Commit = NormalizeRunMetadataValue(value.Commit, "unavailable:source-revision-not-reported"),
-                ShaderBundleHash = NormalizeRunMetadataValue(value.ShaderBundleHash, "unavailable:shader-bundle-hash-not-reported")
+                ShaderBundleHash = NormalizeRunMetadataValue(value.ShaderBundleHash, "unavailable:shader-bundle-hash-not-reported"),
+                ExecutableHash = NormalizeRunMetadataValue(value.ExecutableHash, "unavailable:executable-hash-not-reported"),
+                DirtyWorktreeState = NormalizeRunMetadataValue(value.DirtyWorktreeState, "unavailable:dirty-worktree-state-not-reported")
             };
         }
+
+        internal static IReadOnlyList<PerformanceMetricSemanticEntry> CreateCounterSemantics() =>
+            CounterSemanticManifest;
+
+        private static IReadOnlyList<PerformanceMetricSemanticEntry> BuildCounterSemanticManifest()
+        {
+            var entries = new List<PerformanceMetricSemanticEntry>();
+            var paths = new HashSet<string>(StringComparer.Ordinal);
+            AppendCounterSemanticEntries(
+                typeof(RendererDiagnostics),
+                "Diagnostics",
+                entries,
+                paths,
+                new HashSet<Type>(),
+                depth: 0);
+            return Array.AsReadOnly(entries
+                .OrderBy(static entry => entry.Path, StringComparer.Ordinal)
+                .ToArray());
+        }
+
+        private static void AppendCounterSemanticEntries(
+            Type contractType,
+            string parentPath,
+            ICollection<PerformanceMetricSemanticEntry> entries,
+            ISet<string> paths,
+            ISet<Type> ancestors,
+            int depth)
+        {
+            if (depth > 6 || !ancestors.Add(contractType))
+                return;
+
+            foreach (PropertyInfo property in contractType
+                         .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                         .Where(static property => property.GetIndexParameters().Length == 0)
+                         .Where(static property => property.GetCustomAttribute<ObsoleteAttribute>() == null)
+                         .OrderBy(static property => property.Name, StringComparer.Ordinal))
+            {
+                Type propertyType = Nullable.GetUnderlyingType(property.PropertyType) ??
+                    property.PropertyType;
+                string path = parentPath + "." + property.Name;
+                if (IsIntegralCounterType(propertyType) && IsCounterPropertyName(property.Name))
+                {
+                    AddCounterSemanticEntry(path, property.Name, entries, paths);
+                    continue;
+                }
+
+                if (TryGetCollectionElementType(propertyType, out Type elementType))
+                {
+                    Type effectiveElementType = Nullable.GetUnderlyingType(elementType) ??
+                        elementType;
+                    string collectionPath = path + "[*]";
+                    if (IsIntegralCounterType(effectiveElementType) &&
+                        IsCounterPropertyName(property.Name))
+                    {
+                        AddCounterSemanticEntry(collectionPath, property.Name, entries, paths);
+                    }
+                    else if (ShouldTraverseCounterContract(effectiveElementType))
+                    {
+                        AppendCounterSemanticEntries(
+                            effectiveElementType,
+                            collectionPath,
+                            entries,
+                            paths,
+                            ancestors,
+                            depth + 1);
+                    }
+
+                    continue;
+                }
+
+                if (ShouldTraverseCounterContract(propertyType))
+                {
+                    AppendCounterSemanticEntries(
+                        propertyType,
+                        path,
+                        entries,
+                        paths,
+                        ancestors,
+                        depth + 1);
+                }
+            }
+
+            ancestors.Remove(contractType);
+        }
+
+        private static void AddCounterSemanticEntry(
+            string path,
+            string propertyName,
+            ICollection<PerformanceMetricSemanticEntry> entries,
+            ISet<string> paths)
+        {
+            if (!paths.Add(path))
+                return;
+
+            PerformanceMetricSemantic semantic = ResolveCounterSemantic(path, propertyName);
+            entries.Add(new PerformanceMetricSemanticEntry(
+                path,
+                semantic,
+                DescribeCounterSemantic(semantic)));
+        }
+
+        private static bool IsIntegralCounterType(Type type) =>
+            type == typeof(byte) || type == typeof(sbyte) ||
+            type == typeof(short) || type == typeof(ushort) ||
+            type == typeof(int) || type == typeof(uint) ||
+            type == typeof(long) || type == typeof(ulong);
+
+        private static bool IsCounterPropertyName(string name) =>
+            name.Contains("Count", StringComparison.Ordinal) ||
+                name.Contains("Counts", StringComparison.Ordinal) ||
+                name.Contains("Capacity", StringComparison.Ordinal) ||
+                name.Contains("Budget", StringComparison.Ordinal) ||
+                name.Contains("Invocations", StringComparison.Ordinal) ||
+                name.Contains("Bytes", StringComparison.Ordinal) ||
+                name.Contains("Lane", StringComparison.Ordinal) ||
+                name.Contains("ScheduledRay", StringComparison.Ordinal) ||
+                name.Contains("RaysPerFrame", StringComparison.Ordinal) ||
+                name.Contains("ProbesUpdated", StringComparison.Ordinal);
+
+        private static bool TryGetCollectionElementType(Type type, out Type elementType)
+        {
+            if (type.IsArray)
+            {
+                elementType = type.GetElementType()!;
+                return true;
+            }
+
+            Type? enumerableType = type.IsGenericType &&
+                type.GetGenericTypeDefinition() == typeof(IEnumerable<>)
+                    ? type
+                    : type.GetInterfaces().FirstOrDefault(static candidate =>
+                        candidate.IsGenericType &&
+                        candidate.GetGenericTypeDefinition() == typeof(IEnumerable<>));
+            if (enumerableType != null)
+            {
+                elementType = enumerableType.GetGenericArguments()[0];
+                return true;
+            }
+
+            elementType = typeof(void);
+            return false;
+        }
+
+        private static bool ShouldTraverseCounterContract(Type type) =>
+            type != typeof(string) &&
+            !type.IsPrimitive &&
+            !type.IsEnum &&
+            type.Namespace?.StartsWith("Njulf.Rendering", StringComparison.Ordinal) == true;
+
+        private static PerformanceMetricSemantic ResolveCounterSemantic(
+            string path,
+            string name)
+        {
+            if (string.Equals(
+                    name,
+                    nameof(RendererDiagnostics.ForwardShadowReceiverMeshletCapacity),
+                    StringComparison.Ordinal) ||
+                path.Contains(".CapacityDetails.", StringComparison.Ordinal) &&
+                (name.Contains("Bytes", StringComparison.Ordinal) ||
+                 name.Contains("Capacity", StringComparison.Ordinal)) ||
+                name.Contains("Capacity", StringComparison.Ordinal) ||
+                name.EndsWith("BufferBytes", StringComparison.Ordinal) ||
+                name.EndsWith("AtlasBytes", StringComparison.Ordinal) ||
+                name.EndsWith("ScratchBytes", StringComparison.Ordinal) ||
+                name.EndsWith("RetainedBytes", StringComparison.Ordinal) ||
+                name.EndsWith("MirrorBytes", StringComparison.Ordinal))
+            {
+                return PerformanceMetricSemantic.Capacity;
+            }
+
+            if (name.Contains("Estimated", StringComparison.Ordinal) ||
+                name.Contains("Estimate", StringComparison.Ordinal) ||
+                name.Contains("Sampled", StringComparison.Ordinal) ||
+                path.Contains(".DecalFragmentAttribution.", StringComparison.Ordinal) ||
+                path.Contains(".SimpleDdgiGatherMultiplicity.", StringComparison.Ordinal) ||
+                path.Contains(".DirectionalShadowReceiverCounters.", StringComparison.Ordinal) ||
+                name.StartsWith("SimpleDdgiGather", StringComparison.Ordinal) ||
+                name.StartsWith("SimpleDdgiSecondVolumeGather", StringComparison.Ordinal) ||
+                name.StartsWith("SimpleDdgiSkyVisibility", StringComparison.Ordinal))
+            {
+                return PerformanceMetricSemantic.SampledEstimate;
+            }
+
+            if (name.EndsWith("Budget", StringComparison.Ordinal) ||
+                name.EndsWith("BudgetBytes", StringComparison.Ordinal) ||
+                name.Contains("Configured", StringComparison.Ordinal))
+            {
+                return PerformanceMetricSemantic.ConfiguredBudget;
+            }
+
+            if (name.Contains("Emitted", StringComparison.Ordinal) ||
+                name.Contains("Scheduled", StringComparison.Ordinal) ||
+                name.Contains("Dispatch", StringComparison.Ordinal) ||
+                name.Contains("Trace", StringComparison.Ordinal) ||
+                name.Contains("ProbesUpdated", StringComparison.Ordinal) ||
+                name.Contains("RaysPerFrame", StringComparison.Ordinal))
+            {
+                return PerformanceMetricSemantic.EmittedWork;
+            }
+
+            return PerformanceMetricSemantic.Exact;
+        }
+
+        private static string DescribeCounterSemantic(
+            PerformanceMetricSemantic semantic) => semantic switch
+            {
+                PerformanceMetricSemantic.SampledEstimate =>
+                    "Sparse or weighted estimate; inspect Measurement for stride and weight.",
+                PerformanceMetricSemantic.Capacity =>
+                    "Provisioned or addressable capacity; not emitted work.",
+                PerformanceMetricSemantic.ConfiguredBudget =>
+                    "Configured limit or admission budget; not emitted work.",
+                PerformanceMetricSemantic.EmittedWork =>
+                    "Exact work emitted or scheduled by the named producer.",
+                _ => "Exact counter in the stated capture/readback domain."
+            };
 
         private static string NormalizeRunMetadataValue(string? value, string unavailableValue)
         {
@@ -1132,6 +1491,14 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.AccelerationStructureInstanceBufferBytes,
                 diagnostics.AccelerationStructureRayQueryMetadataBytes,
                 diagnostics.AccelerationStructureBlasBuildCount,
+                diagnostics.AccelerationStructureBlasCompactionQueryCount,
+                diagnostics.AccelerationStructureBlasCompactionCount,
+                diagnostics.AccelerationStructureBlasCompactionSourceBytes,
+                diagnostics.AccelerationStructureBlasCompactionBytesSaved,
+                diagnostics.AccelerationStructureBlasCompactedResidentBytesSaved,
+                diagnostics.AccelerationStructureBlasCompactionPendingCount,
+                diagnostics.AccelerationStructureBlasCompactionQueryOverflowCount,
+                diagnostics.AccelerationStructureBlasCompactionQueryReadbackFailureCount,
                 diagnostics.AccelerationStructureTlasBuildCount,
                 diagnostics.AccelerationStructureTlasUpdateCount,
                 diagnostics.AccelerationStructureTlasSkipCount,
@@ -1154,6 +1521,7 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.DdgiSchedulerP95OverBudget,
                 diagnostics.CpuAccelerationStructureBuildMicroseconds,
                 diagnostics.CpuAccelerationStructureBlasBuildMicroseconds,
+                diagnostics.CpuAccelerationStructureBlasCompactionMicroseconds,
                 diagnostics.CpuAccelerationStructureTlasBuildMicroseconds,
                 diagnostics.CpuAccelerationStructureInstanceUploadMicroseconds,
                 diagnostics.GpuDdgiScheduleMicroseconds,

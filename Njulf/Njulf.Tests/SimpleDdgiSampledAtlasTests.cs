@@ -107,7 +107,7 @@ public sealed class SimpleDdgiSampledAtlasTests
             "Resources",
             "SimpleDdgiSampledAtlas.cs"));
         int constructorStart = source.IndexOf(
-            "public SimpleDdgiSampledAtlas(VulkanContext context)",
+            "public SimpleDdgiSampledAtlas(",
             StringComparison.Ordinal);
         int constructorEnd = source.IndexOf(
             "public bool IsReady",
@@ -136,6 +136,9 @@ public sealed class SimpleDdgiSampledAtlasTests
             Assert.That(
                 constructor,
                 Does.Contain("_resolvedLayersPerTexture = ResolveLayersPerTexture();"));
+            Assert.That(
+                constructor,
+                Does.Contain("_recordRuntimeStall = recordRuntimeStall"));
             Assert.That(
                 ensureCapacity,
                 Does.Contain("int layersPerTexture = _resolvedLayersPerTexture;"));

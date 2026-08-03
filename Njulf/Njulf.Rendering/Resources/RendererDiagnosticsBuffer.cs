@@ -90,8 +90,20 @@ namespace Njulf.Rendering.Resources
         public const int DdgiAlbedoCounterBase =
             SimpleDdgiVolumeEnergyCounterBase + SimpleDdgiVolumeEnergyCounterCount;
         public const int DdgiAlbedoCounterCount = 12;
-        public const int CounterCount =
+        // Mutually exclusive forward-gather attribution. Appended so all
+        // established diagnostics offsets remain capture-compatible.
+        public const int SimpleDdgiGatherMultiplicityCounterBase =
             DdgiAlbedoCounterBase + DdgiAlbedoCounterCount;
+        public const int SimpleDdgiGatherMultiplicityCounterCount = 9;
+        // Sparse full-frame estimates for geometry-decal fragment attribution.
+        // Keep this family appended to preserve every established counter ABI.
+        public const int DecalFragmentAttributionCounterBase =
+            SimpleDdgiGatherMultiplicityCounterBase +
+            SimpleDdgiGatherMultiplicityCounterCount;
+        public const int DecalFragmentAttributionCounterCount = 6;
+        public const int CounterCount =
+            DecalFragmentAttributionCounterBase +
+            DecalFragmentAttributionCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const float DdgiShadowHitDistanceScale = 256.0f;
@@ -334,6 +346,14 @@ namespace Njulf.Rendering.Resources
                     break;
                 }
             }
+            for (int i = 0; i < DecalFragmentAttributionCounterCount; i++)
+            {
+                if (counters[DecalFragmentAttributionCounterBase + i] != 0)
+                {
+                    investigationValid = true;
+                    break;
+                }
+            }
 
             float invInvestigationSampleCount = ddgiInvestigationSampleCount > 0 ? 1.0f / ddgiInvestigationSampleCount : 0.0f;
             float invSimpleVisibilitySampleCount = simpleVisibilitySampleCount > 0 ? 1.0f / simpleVisibilitySampleCount : 0.0f;
@@ -435,6 +455,25 @@ namespace Njulf.Rendering.Resources
                     FarFieldStepBucket2Count: counters[FarFieldCounterBase + 7],
                     FarFieldStepBucket3Count: counters[FarFieldCounterBase + 8],
                     FarFieldStepBucket4Count: counters[FarFieldCounterBase + 9])
+                {
+                    GatherMultiplicity = new SimpleDdgiGatherMultiplicityCounters(
+                        OneGatherPixelCount: counters[SimpleDdgiGatherMultiplicityCounterBase + 0],
+                        TwoGatherPixelCount: counters[SimpleDdgiGatherMultiplicityCounterBase + 1],
+                        RecoveryGatherPixelCount: counters[SimpleDdgiGatherMultiplicityCounterBase + 2],
+                        RingTransitionBlendCount: counters[SimpleDdgiGatherMultiplicityCounterBase + 3],
+                        MissingOrInvalidPrimarySupportCount: counters[SimpleDdgiGatherMultiplicityCounterBase + 4],
+                        RecoveryCount: counters[SimpleDdgiGatherMultiplicityCounterBase + 5],
+                        CoverageEdgeCount: counters[SimpleDdgiGatherMultiplicityCounterBase + 6],
+                        PrimaryOwnershipBelowThresholdCount: counters[SimpleDdgiGatherMultiplicityCounterBase + 7],
+                        DebugOrDiagnosticOnlyCount: counters[SimpleDdgiGatherMultiplicityCounterBase + 8]),
+                    DecalFragmentAttribution = new DecalFragmentAttributionCounters(
+                        EstimatedInvocationCount: counters[DecalFragmentAttributionCounterBase + 0],
+                        EstimatedBackFaceKilledCount: counters[DecalFragmentAttributionCounterBase + 1],
+                        EstimatedCoverageKilledCount: counters[DecalFragmentAttributionCounterBase + 2],
+                        EstimatedSurvivingCount: counters[DecalFragmentAttributionCounterBase + 3],
+                        EstimatedDdgiGatherCount: counters[DecalFragmentAttributionCounterBase + 4],
+                        EstimatedShadowEvaluationCount: counters[DecalFragmentAttributionCounterBase + 5])
+                }
                 : DdgiInvestigationCounters.Empty;
             if (sampleCount > 0 ||
                 visibilityMomentSampleCount > 0 ||

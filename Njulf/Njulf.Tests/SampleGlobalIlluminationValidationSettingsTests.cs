@@ -1,5 +1,6 @@
 using Njulf.Core.Math;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
 using NjulfHelloGame;
 using NUnit.Framework;
@@ -143,32 +144,33 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(settings.Environment.SunDriver, Is.EqualTo(ProceduralSkySunDriver.SceneDirectionalLight));
             Assert.That(settings.Environment.AnimateTimeOfDay, Is.False);
             Assert.That(settings.Environment.SkyIntensity, Is.EqualTo(1.0f));
-            Assert.That(settings.Diagnostics.DirectionalShadowReceiverCountersEnabled, Is.True);
+            Assert.That(
+                settings.Diagnostics.DirectionalShadowReceiverCountersEnabled,
+                Is.EqualTo(RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled));
             Assert.That(settings.GlobalIllumination.SimpleDdgiThinSurfaceTransmissionEnabled, Is.False);
         });
     }
 
     [Test]
-    public void SponzaProfile_AstronomicalSunStartsAsHighCourtyardFacingSummerKey()
+    public void SponzaProfile_AstronomicalSunStartsHighAndShinesAcrossCurtainRows()
     {
         System.Numerics.Vector3 toSun = SolarPositionCalculator.CalculateToSunDirection(
             SampleSponzaGlobalIlluminationProfile.DefaultSolarTimeHours,
             SampleSponzaGlobalIlluminationProfile.DefaultLatitudeDegrees,
             SampleSponzaGlobalIlluminationProfile.DefaultDayOfYear,
             SampleSponzaGlobalIlluminationProfile.DefaultNorthOffsetDegrees);
-        System.Numerics.Vector3 expectedToSun = -SampleSponzaLightingProfile.DirectionalKeyDirection;
         System.Numerics.Vector2 actualAzimuth = System.Numerics.Vector2.Normalize(
             new System.Numerics.Vector2(toSun.X, toSun.Z));
-        System.Numerics.Vector2 expectedAzimuth = System.Numerics.Vector2.Normalize(
-            new System.Numerics.Vector2(expectedToSun.X, expectedToSun.Z));
+        System.Numerics.Vector2 curtainFacingAzimuth = System.Numerics.Vector2.Normalize(
+            new System.Numerics.Vector2(1.0f, -1.0f));
         float elevationDegrees = MathF.Asin(toSun.Y) * 180.0f / MathF.PI;
 
         Assert.Multiple(() =>
         {
             Assert.That(
-                System.Numerics.Vector2.Dot(actualAzimuth, expectedAzimuth),
-                Is.GreaterThan(0.999999f));
-            Assert.That(elevationDegrees, Is.InRange(60.0f, 66.0f));
+                System.Numerics.Vector2.Dot(actualAzimuth, curtainFacingAzimuth),
+                Is.GreaterThan(0.9999f));
+            Assert.That(elevationDegrees, Is.InRange(50.0f, 56.0f));
         });
     }
 

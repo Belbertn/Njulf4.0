@@ -377,6 +377,57 @@ public sealed class GiFeatureStateFactoryTests
         {
             GlobalIlluminationIndirectIntensity = 1.1f
         });
+        ResolvedGiSettingsMetadata changedRuntimeTelemetry = ResolvedGiSettingsMetadataFactory.Create(diagnostics with
+        {
+            SimpleDdgiTransportSourceRefreshFrames = 99,
+            SimpleDdgiTransportSourceRefreshTargetProbeCount = 77,
+            SimpleDdgiTransportSourceRefreshCapacityShortfall = 3,
+            SimpleDdgiTransportSourceCohortTransitionActive = 1,
+            SimpleDdgiTransportSourceCohortTransitionCount = 12,
+            SimpleDdgiTransportSourceCohortElapsedFrames = 34,
+            SimpleDdgiTransportSourceStepStaleProbeCount = 56,
+            SimpleDdgiTransportSourceStepAgeP95Frames = 78,
+            SimpleDdgiTransportSourceStepAgeMaximumFrames = 90,
+            SimpleDdgiTransportGlobalConvergenceElapsedFrames = 123,
+            SimpleDdgiTransportCalibrationChangeCount = 456,
+            DdgiScheduledRequestBudget = 17,
+            DdgiScheduledPrimaryRayBudget = 18,
+            DdgiAdaptiveBudgetScale = 0.5f,
+            DdgiAdaptiveBudgetReduced = 1,
+            DdgiEmergencyDegradeActive = 1,
+            DdgiAdaptiveBudgetReason = "frame-pressure",
+            DdgiGpuSchedulerFallbackActive = 1,
+            DdgiGpuSchedulerFallbackReason = "transient",
+            DdgiEffectiveMaxShadedLights = 1,
+            DdgiLightSelectionMode = "disabled-for-cache-reuse-frame",
+            DdgiEmissiveSourceRevision = 999,
+            SimpleDdgiSchedulerPolicy = diagnostics.SimpleDdgiSchedulerPolicy with
+            {
+                EffectiveRequestBudget = 17,
+                PressureReason = "FeedbackReducedBudget"
+            }
+        });
+        RendererDiagnostics featureReasonDiagnostics = diagnostics with
+        {
+            GiFeatureStates = [new GiFeatureState(
+                "simple-ddgi-transport-v2",
+                true,
+                true,
+                true,
+                true,
+                GiFeatureStateStatus.Active,
+                "13000/13117 probes converged after 71 frames")]
+        };
+        ResolvedGiSettingsMetadata featureReasonFirst =
+            ResolvedGiSettingsMetadataFactory.Create(featureReasonDiagnostics);
+        ResolvedGiSettingsMetadata featureReasonChanged =
+            ResolvedGiSettingsMetadataFactory.Create(featureReasonDiagnostics with
+            {
+                GiFeatureStates = [featureReasonDiagnostics.GiFeatureStates[0] with
+                {
+                    Reason = "13100/13117 probes converged after 72 frames"
+                }]
+            });
 
         Assert.Multiple(() =>
         {
@@ -384,6 +435,8 @@ public sealed class GiFeatureStateFactoryTests
             Assert.That(changedLayout.StableHash, Is.Not.EqualTo(first.StableHash));
             Assert.That(changedFallback.StableHash, Is.Not.EqualTo(first.StableHash));
             Assert.That(changedLighting.StableHash, Is.Not.EqualTo(first.StableHash));
+            Assert.That(changedRuntimeTelemetry.StableHash, Is.EqualTo(first.StableHash));
+            Assert.That(featureReasonChanged.StableHash, Is.EqualTo(featureReasonFirst.StableHash));
             Assert.That(first.EffectiveSettings, Does.Contain("layout.probeBudget=128"));
             Assert.That(first.EffectiveSettings, Does.Contain("gi.indirectIntensity=1"));
             Assert.That(first.EffectiveSettings.Any(setting => setting.StartsWith("feature[", System.StringComparison.Ordinal)), Is.True);

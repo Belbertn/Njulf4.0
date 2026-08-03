@@ -2312,6 +2312,9 @@ internal sealed class SampleInputController
         Console.WriteLine(
             $"{prefix}: AS blas/tlas/instances={diagnostics.AccelerationStructureBottomLevelCount}/{diagnostics.AccelerationStructureTlasBuildCount}/{diagnostics.AccelerationStructureTopLevelInstanceCount}, " +
             $"blasBuilds={diagnostics.AccelerationStructureBlasBuildCount}, tlasUpdates={diagnostics.AccelerationStructureTlasUpdateCount}, tlasSkips={diagnostics.AccelerationStructureTlasSkipCount}, " +
+            $"blasCompact=query:{diagnostics.AccelerationStructureBlasCompactionQueryCount},copy:{diagnostics.AccelerationStructureBlasCompactionCount},pending:{diagnostics.AccelerationStructureBlasCompactionPendingCount}," +
+            $"savedFrame:{diagnostics.AccelerationStructureBlasCompactionBytesSaved},savedResident:{diagnostics.AccelerationStructureBlasCompactedResidentBytesSaved}," +
+            $"queryOverflow:{diagnostics.AccelerationStructureBlasCompactionQueryOverflowCount},readbackFailure:{diagnostics.AccelerationStructureBlasCompactionQueryReadbackFailureCount}, " +
             $"fallback='{diagnostics.AccelerationStructureFallbackReason}'");
         Console.WriteLine(
             $"{prefix}: cpuUs ssgi/ddgi/as={diagnostics.CpuSsgiRecordMicroseconds}/{diagnostics.CpuDdgiRecordMicroseconds}/{diagnostics.CpuAccelerationStructureBuildMicroseconds}, " +

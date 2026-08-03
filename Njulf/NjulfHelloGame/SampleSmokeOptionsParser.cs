@@ -40,6 +40,13 @@ public static class SampleSmokeOptionsParser
         "--benchmark-warmup-frames",
         "--benchmark-measure-frames",
         "--benchmark-budget-profile",
+        "--benchmark-pair-id",
+        "--benchmark-variant",
+        "--benchmark-require-production",
+        "--benchmark-hdr-reference",
+        "--benchmark-hdr-candidate",
+        "--benchmark-shader-profile",
+        "--benchmark-require-shader-profile",
         "--startup-log",
         "--validation",
         "--force-missing-assets",
@@ -166,11 +173,46 @@ public static class SampleSmokeOptionsParser
             !string.IsNullOrWhiteSpace(benchmarkReportPath);
         int benchmarkWarmupFrames = ParseNonNegativeInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_WARMUP_FRAMES"), 30, "NJULF_RENDERER_BENCHMARK_WARMUP_FRAMES");
         int benchmarkMeasureFrames = ParsePositiveInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_MEASURE_FRAMES"), 120, "NJULF_RENDERER_BENCHMARK_MEASURE_FRAMES");
+        string benchmarkPairId =
+            Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_PAIR_ID")?.Trim() ??
+            string.Empty;
+        string benchmarkVariant =
+            Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_VARIANT")?.Trim() ??
+            "baseline";
+        bool benchmarkRequireProduction = ParseBool(
+            Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_REQUIRE_PRODUCTION"),
+            "NJULF_RENDERER_BENCHMARK_REQUIRE_PRODUCTION");
+        string benchmarkHdrReferencePath =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_RENDERER_BENCHMARK_HDR_REFERENCE")) ?? string.Empty;
+        string benchmarkHdrCandidatePath =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_RENDERER_BENCHMARK_HDR_CANDIDATE")) ?? string.Empty;
+        string benchmarkShaderProfilePath =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_RENDERER_BENCHMARK_SHADER_PROFILE")) ?? string.Empty;
+        bool benchmarkRequireShaderProfile = ParseBool(
+            Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_BENCHMARK_REQUIRE_SHADER_PROFILE"),
+            "NJULF_RENDERER_BENCHMARK_REQUIRE_SHADER_PROFILE");
         RenderBudgetProfileKind? benchmarkBudgetProfile =
             ParseBenchmarkBudgetProfile(
                 Environment.GetEnvironmentVariable(
                     "NJULF_RENDERER_BENCHMARK_BUDGET_PROFILE"));
         enableBenchmark |= benchmarkBudgetProfile.HasValue;
+        enableBenchmark |= !string.IsNullOrWhiteSpace(benchmarkPairId);
+        enableBenchmark |= !string.Equals(
+            benchmarkVariant,
+            SampleBenchmarkCaptureVariant.Baseline,
+            StringComparison.OrdinalIgnoreCase);
+        enableBenchmark |= benchmarkRequireProduction;
+        enableBenchmark |= !string.IsNullOrWhiteSpace(benchmarkHdrReferencePath);
+        enableBenchmark |= !string.IsNullOrWhiteSpace(benchmarkHdrCandidatePath);
+        enableBenchmark |= !string.IsNullOrWhiteSpace(benchmarkShaderProfilePath);
+        enableBenchmark |= benchmarkRequireShaderProfile;
 
         string? validationEnvironment =
             Environment.GetEnvironmentVariable("NJULF_RENDERER_VALIDATION");
@@ -306,6 +348,34 @@ public static class SampleSmokeOptionsParser
                         ParseBenchmarkBudgetProfile(value) ??
                         throw new ArgumentException(
                             "--benchmark-budget-profile requires low, medium, high, or ultra.");
+                    enableBenchmark = true;
+                    break;
+                case "--benchmark-pair-id":
+                    benchmarkPairId = RequireNonEmptyValue(value, "--benchmark-pair-id");
+                    enableBenchmark = true;
+                    break;
+                case "--benchmark-variant":
+                    benchmarkVariant = RequireNonEmptyValue(value, "--benchmark-variant");
+                    enableBenchmark = true;
+                    break;
+                case "--benchmark-require-production":
+                    benchmarkRequireProduction = ParseBool(value, optionName);
+                    enableBenchmark = true;
+                    break;
+                case "--benchmark-hdr-reference":
+                    benchmarkHdrReferencePath = RequirePath(value, optionName);
+                    enableBenchmark = true;
+                    break;
+                case "--benchmark-hdr-candidate":
+                    benchmarkHdrCandidatePath = RequirePath(value, optionName);
+                    enableBenchmark = true;
+                    break;
+                case "--benchmark-shader-profile":
+                    benchmarkShaderProfilePath = RequirePath(value, optionName);
+                    enableBenchmark = true;
+                    break;
+                case "--benchmark-require-shader-profile":
+                    benchmarkRequireShaderProfile = ParseBool(value, optionName);
                     enableBenchmark = true;
                     break;
                 case "--startup-log":
@@ -636,6 +706,59 @@ public static class SampleSmokeOptionsParser
                 // benchmark can publish a report.
                 mode = SampleSmokeMode.None;
                 frameCount = 0;
+                if (!validationSpecified)
+                    validationMode = RendererValidationMode.Off;
+                // Async auto-promotion is an adaptive experiment, not a locked
+                // workload: its profitability history can choose a different
+                // queue plan in otherwise identical processes. Phase 8 keeps it
+                // out of the canonical benchmark unless the caller explicitly
+                // names an async mode for a controlled A/B capture.
+                if (!asyncComputeModeOverride.HasValue)
+                {
+                    asyncComputeModeOverride = AsyncComputeMode.Disabled;
+                    enableAsyncCompute = false;
+                }
+                if (benchmarkRequireProduction &&
+                    validationMode != RendererValidationMode.Off)
+                {
+                    throw new ArgumentException(
+                        "--benchmark-require-production requires --validation off.");
+                }
+                if (benchmarkRequireProduction &&
+                    RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled)
+                {
+                    throw new ArgumentException(
+                        "--benchmark-require-production requires a Release, ShippingPerformance, or ProfileSymbols build whose DDGI diagnostic atomics are compiled out.");
+                }
+                if (benchmarkRequireProduction &&
+                    string.IsNullOrWhiteSpace(benchmarkHdrReferencePath))
+                {
+                    throw new ArgumentException(
+                        "--benchmark-require-production requires --benchmark-hdr-reference so the post-measurement HDR image gate cannot be omitted.");
+                }
+                if (benchmarkRequireProduction &&
+                    string.IsNullOrWhiteSpace(benchmarkPairId))
+                {
+                    throw new ArgumentException(
+                        "--benchmark-require-production requires --benchmark-pair-id for controlled repeats and A/B captures.");
+                }
+                if (benchmarkRequireProduction && benchmarkMeasureFrames < 120)
+                {
+                    throw new ArgumentException(
+                        "--benchmark-require-production requires at least 120 measurement frames.");
+                }
+                if (!string.IsNullOrWhiteSpace(benchmarkHdrCandidatePath) &&
+                    string.IsNullOrWhiteSpace(benchmarkHdrReferencePath))
+                {
+                    throw new ArgumentException(
+                        "--benchmark-hdr-candidate requires --benchmark-hdr-reference because HDR capture is a comparison gate.");
+                }
+                if (benchmarkRequireShaderProfile &&
+                    string.IsNullOrWhiteSpace(benchmarkShaderProfilePath))
+                {
+                    throw new ArgumentException(
+                        "--benchmark-require-shader-profile requires --benchmark-shader-profile.");
+                }
             }
             else
             {
@@ -706,7 +829,18 @@ public static class SampleSmokeOptionsParser
             DisableVSync: true,
             BudgetProfileOverride: benchmarkBudgetProfile,
             MaterialGiQualificationCandidate:
-                materialGiQualificationCandidate);
+                materialGiQualificationCandidate)
+        {
+            CapturePairId = benchmarkPairId,
+            CaptureVariant = string.IsNullOrWhiteSpace(benchmarkVariant)
+                ? "baseline"
+                : benchmarkVariant,
+            RequireProductionTiming = benchmarkRequireProduction,
+            HdrReferencePath = benchmarkHdrReferencePath,
+            HdrCandidatePath = benchmarkHdrCandidatePath,
+            ShaderProfileArtifactPath = benchmarkShaderProfilePath,
+            RequireShaderProfileEvidence = benchmarkRequireShaderProfile
+        };
         return new SampleSmokeOptions(
             mode,
             frameCount,
@@ -755,6 +889,8 @@ public static class SampleSmokeOptionsParser
         if (arg is "--force-missing-assets" or
             "--fail-on-validation-message" or
             "--benchmark" or
+            "--benchmark-require-production" or
+            "--benchmark-require-shader-profile" or
             "--material-gi-qualification-candidate" or
             "--gpu-timing" or
             "--scene-gpu-compaction" or
@@ -1009,5 +1145,12 @@ public static class SampleSmokeOptionsParser
             throw new ArgumentException($"{name} requires a non-empty path.");
 
         return System.IO.Path.GetFullPath(value);
+    }
+
+    private static string RequireNonEmptyValue(string value, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"{name} requires a non-empty value.");
+        return value.Trim();
     }
 }

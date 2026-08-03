@@ -34,6 +34,9 @@ public sealed class TransparencyAndDecalSettingsTests
         {
             Assert.That(settings.Decals.GeometryDecalsEnabled, Is.True);
             Assert.That(settings.Decals.ProjectedDecalsEnabled, Is.False);
+            Assert.That(settings.Decals.ReceiveShadows, Is.True);
+            Assert.That(settings.Decals.ReceiveGlobalIllumination, Is.True);
+            Assert.That(settings.Decals.IsolatedMaterialIndex, Is.EqualTo(-1));
             Assert.That(settings.Decals.DebugView, Is.EqualTo(DecalDebugView.None));
             Assert.That(settings.Decals.GeometryDepthBias, Is.EqualTo(0.0005f));
             Assert.That(settings.Decals.GeometrySlopeScaledDepthBias, Is.EqualTo(0f));

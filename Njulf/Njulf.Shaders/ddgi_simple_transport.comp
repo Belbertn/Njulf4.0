@@ -4,7 +4,12 @@
 
 #include "common.glsl"
 #include "gi_material_transport.glsl"
-#define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
+// Transport reads the canonical field published by the preceding completed
+// update. The sampled atlas is an incrementally synchronized mirror of that
+// exact field and remains in shader-read layout between publications, including
+// on a distinct compute queue. Use hardware bilinear filtering for interior
+// octahedral samples; ddgi_simple_shared.glsl retains the canonical SSBO path at
+// seams and whenever the optional mirror is unavailable.
 #include "ddgi_simple_shared.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
@@ -34,6 +39,9 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint TransportWriteIrradianceAtlasBufferIndex;
     uint TransportGeneration;
     uint PrimaryDirectionalLightIndex;
+    uint DispatchQueueOffset;
+    uint DispatchProbeCount;
+    uint DispatchRaysPerProbe;
 } pc;
 
 void WriteSimpleTransportRayResult(
@@ -45,11 +53,11 @@ void WriteSimpleTransportRayResult(
     float hitKind)
 {
     uint baseWord = rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS;
-    WriteStorageVec4(pc.RayResultScratchBufferIndex, baseWord, vec4(clamp(radiance, vec3(0.0), vec3(65504.0)), max(surfaceDistance, 0.0)));
-    WriteStorageFloat(pc.RayResultScratchBufferIndex, baseWord + 4u, direction.x);
-    WriteStorageFloat(pc.RayResultScratchBufferIndex, baseWord + 5u, direction.y);
-    WriteStorageFloat(pc.RayResultScratchBufferIndex, baseWord + 6u, direction.z);
-    WriteStorageWord(
+    WriteStorageVec4Uniform(pc.RayResultScratchBufferIndex, baseWord, vec4(clamp(radiance, vec3(0.0), vec3(65504.0)), max(surfaceDistance, 0.0)));
+    WriteStorageFloatUniform(pc.RayResultScratchBufferIndex, baseWord + 4u, direction.x);
+    WriteStorageFloatUniform(pc.RayResultScratchBufferIndex, baseWord + 5u, direction.y);
+    WriteStorageFloatUniform(pc.RayResultScratchBufferIndex, baseWord + 6u, direction.z);
+    WriteStorageWordUniform(
         pc.RayResultScratchBufferIndex,
         baseWord + 7u,
         PackSimpleDdgiRayVisibilityHit(visibilityDistance, hitKind));
@@ -58,16 +66,26 @@ void WriteSimpleTransportRayResult(
 void main()
 {
     SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
-    uint globalRay = gl_GlobalInvocationID.x;
-    uint totalRays = params.probesToUpdate * params.raysPerProbe;
-    if (globalRay >= totalRays || params.probeCount == 0u ||
+    uint dispatchRay = gl_GlobalInvocationID.x;
+    uint dispatchProbeCount = pc.DispatchProbeCount > 0u
+        ? pc.DispatchProbeCount
+        : params.probesToUpdate;
+    uint dispatchRaysPerProbe = pc.DispatchRaysPerProbe > 0u
+        ? pc.DispatchRaysPerProbe
+        : params.raysPerProbe;
+    uint dispatchRayCount = dispatchProbeCount * dispatchRaysPerProbe;
+    if (dispatchRay >= dispatchRayCount || params.probeCount == 0u ||
         (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) == 0u)
     {
         return;
     }
 
-    uint queueOffset = globalRay / params.raysPerProbe;
-    uint rayIndex = globalRay - queueOffset * params.raysPerProbe;
+    uint queueOffset = pc.DispatchQueueOffset +
+        dispatchRay / dispatchRaysPerProbe;
+    uint rayIndex = dispatchRay % dispatchRaysPerProbe;
+    if (queueOffset >= params.probesToUpdate)
+        return;
+    uint globalRay = queueOffset * params.raysPerProbe + rayIndex;
     SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, queueOffset);
     uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
     if (rayIndex >= activeRayCount || update.probeIndex >= params.probeCount)
@@ -100,11 +118,11 @@ void main()
         // a full source refresh through the next probe-state readback.
         MarkSimpleDdgiProbeSourceCacheInvalid(pc.ProbeStateBufferIndex, update.probeIndex);
         uint scratchBase = globalRay * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS;
-        vec4 sourceRadianceDistance = ReadStorageVec4(pc.RayResultScratchBufferIndex, scratchBase);
-        vec4 sourceDirectionHit = ReadStorageVec4(pc.RayResultScratchBufferIndex, scratchBase + 4u);
+        vec4 sourceRadianceDistance = ReadStorageAlignedVec4Uniform(pc.RayResultScratchBufferIndex, scratchBase);
+        vec4 sourceDirectionHit = ReadStorageAlignedVec4Uniform(pc.RayResultScratchBufferIndex, scratchBase + 4u);
         vec2 sourceVisibilityHit =
             UnpackSimpleDdgiRayVisibilityHit(
-                ReadStorageWord(
+                ReadStorageWordUniform(
                     pc.RayResultScratchBufferIndex,
                     scratchBase + 7u));
         RecordSimpleDdgiTransportEnergyDiagnostics(
@@ -149,24 +167,35 @@ void main()
             source.diffuseReflectance,
             vec3(0.0),
             vec3(params.transportAlbedoClamp));
+        float reflectedReflectanceMaximum = max(
+            diffuseReflectance.r,
+            max(diffuseReflectance.g, diffuseReflectance.b));
         vec3 hitPosition = probePosition + source.direction * source.distance;
-        float reflectedSolverOwnership;
-        float reflectedFallbackWeight;
-        vec3 bouncedIrradiance = SampleSimpleDdgiSolverBounceIrradiance(
-            hitPosition + normal * max(0.03, volume.spacing * 0.02),
-            normal,
-            -source.direction,
-            reflectedSolverOwnership,
-            reflectedFallbackWeight);
-        solverGatherCount++;
-        solverOwnershipSum += reflectedSolverOwnership;
-        solverFallbackWeightSum += reflectedFallbackWeight;
-        // Material AO is a receiver-side approximation. Geometry visibility is
-        // already present in the traced field, so applying baked AO at every
-        // recursive surface double-counts occlusion and compounds energy loss.
-        reflectedBounceRadiance = EvaluateGiDiffuseFromIrradiance(
-            bouncedIrradiance,
-            diffuseReflectance);
+        // A mathematically black lobe cannot return recursive energy. Avoid a
+        // complete structured gather in that case; this is an exact zero rather
+        // than an albedo threshold, so dark-but-nonzero materials retain their
+        // full transport contribution.
+        if (reflectedReflectanceMaximum > 0.0)
+        {
+            float reflectedSolverOwnership;
+            float reflectedFallbackWeight;
+            vec3 bouncedIrradiance = SampleSimpleDdgiSolverBounceIrradiance(
+                params,
+                hitPosition + normal * max(0.03, volume.spacing * 0.02),
+                normal,
+                -source.direction,
+                reflectedSolverOwnership,
+                reflectedFallbackWeight);
+            solverGatherCount++;
+            solverOwnershipSum += reflectedSolverOwnership;
+            solverFallbackWeightSum += reflectedFallbackWeight;
+            // Material AO is a receiver-side approximation. Geometry visibility is
+            // already present in the traced field, so applying baked AO at every
+            // recursive surface double-counts occlusion and compounds energy loss.
+            reflectedBounceRadiance = EvaluateGiDiffuseFromIrradiance(
+                bouncedIrradiance,
+                diffuseReflectance);
+        }
         vec3 transmittedReflectance = clamp(
             source.transmittedDiffuseReflectance,
             vec3(0.0),
@@ -178,6 +207,7 @@ void main()
             float transmittedSolverOwnership;
             float transmittedFallbackWeight;
             vec3 transmittedIrradiance = SampleSimpleDdgiSolverBounceIrradiance(
+                params,
                 hitPosition - normal * max(0.03, volume.spacing * 0.02),
                 -normal,
                 source.direction,
@@ -229,7 +259,7 @@ void main()
         solverFallbackWeightSum);
 
     vec2 visibilityHit = UnpackSimpleDdgiRayVisibilityHit(
-        ReadStorageWord(
+        ReadStorageWordUniform(
             pc.RayResultScratchBufferIndex,
             globalRay * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 7u));
     WriteSimpleTransportRayResult(

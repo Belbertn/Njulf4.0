@@ -4,6 +4,7 @@ using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Resources;
+using NjulfHelloGame;
 using NUnit.Framework;
 
 namespace Njulf.Tests
@@ -57,7 +58,9 @@ namespace Njulf.Tests
                 ("DDGI layered receivers", RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterBase, RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterCount),
                 ("DDGI thin transport", RendererDiagnosticsBuffer.ThinSurfaceTransportCounterBase, RendererDiagnosticsBuffer.ThinSurfaceTransportCounterCount),
                 ("simple DDGI per-volume energy", RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterBase, RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterCount),
-                ("DDGI effective albedo", RendererDiagnosticsBuffer.DdgiAlbedoCounterBase, RendererDiagnosticsBuffer.DdgiAlbedoCounterCount)
+                ("DDGI effective albedo", RendererDiagnosticsBuffer.DdgiAlbedoCounterBase, RendererDiagnosticsBuffer.DdgiAlbedoCounterCount),
+                ("simple DDGI gather multiplicity", RendererDiagnosticsBuffer.SimpleDdgiGatherMultiplicityCounterBase, RendererDiagnosticsBuffer.SimpleDdgiGatherMultiplicityCounterCount),
+                ("decal fragment attribution", RendererDiagnosticsBuffer.DecalFragmentAttributionCounterBase, RendererDiagnosticsBuffer.DecalFragmentAttributionCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -94,6 +97,8 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterCount, Is.EqualTo(
                     GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount * 19));
                 Assert.That(RendererDiagnosticsBuffer.DdgiAlbedoCounterCount, Is.EqualTo(12));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiGatherMultiplicityCounterCount, Is.EqualTo(9));
+                Assert.That(RendererDiagnosticsBuffer.DecalFragmentAttributionCounterCount, Is.EqualTo(6));
                 Assert.That(simpleSharedShader, Does.Contain(
                     $"SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_BASE = {RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterBase}u"));
                 Assert.That(simpleSharedShader, Does.Contain(
@@ -102,6 +107,8 @@ namespace Njulf.Tests
                     $"DDGI_THIN_TRANSPORT_COUNTER_BASE = {RendererDiagnosticsBuffer.ThinSurfaceTransportCounterBase}u"));
                 Assert.That(commonShader, Does.Contain(
                     $"DDGI_ALBEDO_COUNTER_BASE = {RendererDiagnosticsBuffer.DdgiAlbedoCounterBase}u"));
+                Assert.That(commonShader, Does.Contain(
+                    "DECAL_FRAGMENT_ATTRIBUTION_COUNTER_BASE = SIMPLE_DDGI_GATHER_MULTIPLICITY_COUNTER_BASE + 9u"));
                 Assert.That(commonShader, Does.Contain("DDGI_THIN_INVALID_TRANSMISSION_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 17u"));
                 Assert.That(RendererDiagnosticsBuffer.DdgiShadowHitDistanceScale, Is.EqualTo(256.0f));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(nextExpectedStart));
@@ -383,6 +390,40 @@ namespace Njulf.Tests
                     program,
                     Does.Contain(
                         "_smokeOptions.Mode is SampleSmokeMode.QualitySwitch or SampleSmokeMode.LongRun"));
+            });
+        }
+
+        [Test]
+        public void BenchmarkHost_PinsDeferredAsyncAndAdaptiveDdgiScheduling()
+        {
+            string program = ReadRepoText("NjulfHelloGame", "Program.cs");
+            string parser = ReadRepoText("NjulfHelloGame", "SampleSmokeOptionsParser.cs");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(program, Does.Contain(
+                    "renderer.Settings.GlobalIllumination.DdgiAdaptiveBudgetingEnabled = false;"));
+                Assert.That(parser, Does.Contain(
+                    "asyncComputeModeOverride = AsyncComputeMode.Disabled;"));
+                Assert.That(parser, Does.Contain("if (!asyncComputeModeOverride.HasValue)"));
+            });
+        }
+
+        [Test]
+        public void BenchmarkHost_UsesDeterministicSimulationStep()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    HelloGame.ResolveSimulationDeltaTime(
+                        0.004f,
+                        benchmarkEnabled: true),
+                    Is.EqualTo(1.0f / 60.0f));
+                Assert.That(
+                    HelloGame.ResolveSimulationDeltaTime(
+                        0.004f,
+                        benchmarkEnabled: false),
+                    Is.EqualTo(0.004f));
             });
         }
 

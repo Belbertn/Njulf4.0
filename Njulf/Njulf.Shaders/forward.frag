@@ -321,10 +321,43 @@ bool DdgiLayeredReceiverCountersEnabled()
     return (pc.Push.DiagnosticFlags & 32u) != 0u;
 }
 
+bool ForwardDecalReceiveShadows()
+{
+    return (pc.Push.DiagnosticFlags & 64u) != 0u;
+}
+
+bool ForwardLayeredReceiverAcceptsShadows(bool geometryDecal)
+{
+    if (pc.Push.MeshletDrawBufferBaseIndex !=
+        uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX))
+        return true;
+    return geometryDecal
+        ? ForwardDecalReceiveShadows()
+        : ForwardTransparentReceiveShadows() != 0u;
+}
+
 bool DdgiSparseDiagnosticPixel()
 {
     uvec2 pixel = uvec2(max(gl_FragCoord.xy, vec2(0.0)));
     return (pixel.x & 15u) == 0u && (pixel.y & 15u) == 0u;
+}
+
+void RecordDecalFragmentAttribution(uint counterIndex)
+{
+    if (DdgiLayeredReceiverCountersEnabled() && DdgiSparseDiagnosticPixel())
+    {
+        AddRendererDiagnostic(
+            pc.Push.CurrentFrameIndex,
+            counterIndex,
+            256u);
+    }
+}
+
+uint DdgiSparseDiagnosticSampleWeight()
+{
+    return DdgiForwardEstimateCountersEnabled() && DdgiSparseDiagnosticPixel()
+        ? 256u
+        : 0u;
 }
 
 bool DirectionalShadowReceiverDiagnosticPixel()
@@ -2518,8 +2551,8 @@ bool FindDirectionalShadowTransition(
 
 float EstimateFarFieldSunShadow(vec3 worldPosition, vec3 normal, vec3 lightDirection)
 {
-    SimpleDdgiParams simpleParams = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
-    if ((simpleParams.flags & SIMPLE_DDGI_FLAG_FAR_SUN_SHADOW_ENABLED) == 0u)
+    uint simpleFlags = ReadSimpleDdgiFlags(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    if ((simpleFlags & SIMPLE_DDGI_FLAG_FAR_SUN_SHADOW_ENABLED) == 0u)
         return 1.0;
 
     FarFieldClipmapParams farField = ReadFarFieldClipmapParams(uint(FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX));
@@ -2568,14 +2601,22 @@ void RecordDirectionalShadowVisibility(
     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, counter + cascade, 1u);
 }
 
-float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal, out uint selectedCascade)
+float EvaluateDirectionalShadow(
+    uint lightIndex,
+    vec3 worldPosition,
+    vec3 normal,
+    bool geometryDecal,
+    out uint selectedCascade)
 {
     selectedCascade = 0u;
     vec4 shadowIndices = ReadShadowIndices();
     if (shadowIndices.x < 0.5 ||
-        (pc.Push.MeshletDrawBufferBaseIndex == uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX) && ForwardTransparentReceiveShadows() == 0u) ||
+        !ForwardLayeredReceiverAcceptsShadows(geometryDecal) ||
         int(round(shadowIndices.w)) != int(lightIndex))
         return 1.0;
+
+    if (geometryDecal)
+        RecordDecalFragmentAttribution(DECAL_ESTIMATED_SHADOW_EVALUATION_COUNTER);
 
     vec4 shadowSettings = ReadShadowSettings();
     uint cascadeCount = clamp(uint(round(shadowIndices.y)), 1u, uint(MAX_DIRECTIONAL_SHADOW_TEXTURES));
@@ -2835,11 +2876,14 @@ float CompareReverseZDepth(float receiverDepth, float sampledDepth, float bias)
     return receiverDepth >= sampledDepth - bias ? 1.0 : 0.0;
 }
 
-float EvaluateSpotShadow(uint lightIndex, vec3 worldPosition, vec3 normal)
+float EvaluateSpotShadow(
+    uint lightIndex,
+    vec3 worldPosition,
+    vec3 normal,
+    bool geometryDecal)
 {
     int shadowIndex = ReadLocalSpotShadowIndex(lightIndex);
-    if (shadowIndex < 0 ||
-        (pc.Push.MeshletDrawBufferBaseIndex == uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX) && ForwardTransparentReceiveShadows() == 0u))
+    if (shadowIndex < 0 || !ForwardLayeredReceiverAcceptsShadows(geometryDecal))
         return 1.0;
 
     GPUSpotShadow shadow = ReadSpotShadow(uint(shadowIndex));
@@ -2847,6 +2891,9 @@ float EvaluateSpotShadow(uint lightIndex, vec3 worldPosition, vec3 normal)
         return 1.0;
     if (shadow.BiasStrengthTexelSize.z <= 0.0)
         return 1.0;
+
+    if (geometryDecal)
+        RecordDecalFragmentAttribution(DECAL_ESTIMATED_SHADOW_EVALUATION_COUNTER);
 
     vec3 biasedPosition = worldPosition + normal * shadow.BiasStrengthTexelSize.x;
     vec4 lightClip = MulRowMajor(vec4(biasedPosition, 1.0), shadow.LightViewProjection);
@@ -2967,11 +3014,14 @@ float PointShadowFaceEdgeDistance(vec2 faceUv)
     return min(min(faceUv.x, 1.0 - faceUv.x), min(faceUv.y, 1.0 - faceUv.y));
 }
 
-float EvaluatePointShadow(uint lightIndex, vec3 worldPosition, vec3 normal)
+float EvaluatePointShadow(
+    uint lightIndex,
+    vec3 worldPosition,
+    vec3 normal,
+    bool geometryDecal)
 {
     int shadowIndex = ReadLocalPointShadowIndex(lightIndex);
-    if (shadowIndex < 0 ||
-        (pc.Push.MeshletDrawBufferBaseIndex == uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX) && ForwardTransparentReceiveShadows() == 0u))
+    if (shadowIndex < 0 || !ForwardLayeredReceiverAcceptsShadows(geometryDecal))
         return 1.0;
 
     GPUPointShadow shadow = ReadPointShadow(uint(shadowIndex));
@@ -2985,6 +3035,9 @@ float EvaluatePointShadow(uint lightIndex, vec3 worldPosition, vec3 normal)
     float range = max(shadow.PositionRange.w, 0.001);
     if (length(toReceiver) > range)
         return 1.0;
+
+    if (geometryDecal)
+        RecordDecalFragmentAttribution(DECAL_ESTIMATED_SHADOW_EVALUATION_COUNTER);
 
     vec3 sampleDirection = normalize(toReceiver);
     uint faceIndex = SelectPointShadowFace(sampleDirection);
@@ -3399,6 +3452,7 @@ void AccumulateLight(
     vec3 shadowNormal,
     vec3 viewDirection,
     vec3 worldPosition,
+    bool geometryDecal,
     out float shadowFactor,
     out uint shadowCascade,
     inout vec3 directLighting,
@@ -3420,7 +3474,12 @@ void AccumulateLight(
         // the large number of back-facing fragments in dense meshlet scenes.
         if (dot(normal, lightDirection) <= 0.0)
             return;
-        shadowFactor = EvaluateDirectionalShadow(lightIndex, worldPosition, shadowNormal, shadowCascade);
+        shadowFactor = EvaluateDirectionalShadow(
+            lightIndex,
+            worldPosition,
+            shadowNormal,
+            geometryDecal,
+            shadowCascade);
     }
     else
     {
@@ -3437,11 +3496,19 @@ void AccumulateLight(
         if (light.Type == 2)
         {
             attenuation *= EvaluateNjulfSpotAttenuation(light.Direction, lightDirection, light.SpotAngle);
-            shadowFactor = EvaluateSpotShadow(lightIndex, worldPosition, shadowNormal);
+            shadowFactor = EvaluateSpotShadow(
+                lightIndex,
+                worldPosition,
+                shadowNormal,
+                geometryDecal);
         }
         else
         {
-            shadowFactor = EvaluatePointShadow(lightIndex, worldPosition, shadowNormal);
+            shadowFactor = EvaluatePointShadow(
+                lightIndex,
+                worldPosition,
+                shadowNormal,
+                geometryDecal);
         }
     }
 
@@ -3668,9 +3735,18 @@ void main()
     WriteGiCompositionBaseline(vec3(0.0), 0.0);
     WriteMaterialTransportProvenance(MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN);
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
+    bool geometryDecal = GiMaterialHasFlag(
+        material.TransportFlags,
+        GI_MATERIAL_GEOMETRY_DECAL);
+    if (geometryDecal)
+        RecordDecalFragmentAttribution(DECAL_ESTIMATED_INVOCATION_COUNTER);
     bool doubleSided = material.NormalScaleBias.w >= 0.5;
     if (!doubleSided && !gl_FrontFacing)
+    {
+        if (geometryDecal)
+            RecordDecalFragmentAttribution(DECAL_ESTIMATED_BACKFACE_KILLED_COUNTER);
         discard;
+    }
 
     if (IsAnimationDebugView(debugViewMode))
     {
@@ -3715,7 +3791,14 @@ void main()
         alphaMode > 0.5 && alphaMode < 1.5 ? 1.0 : outputAlpha;
 
     if (!MaterialCoverageSurvivesForward(materialCoverage))
+    {
+        if (geometryDecal)
+            RecordDecalFragmentAttribution(DECAL_ESTIMATED_COVERAGE_KILLED_COUNTER);
         discard;
+    }
+
+    if (geometryDecal)
+        RecordDecalFragmentAttribution(DECAL_ESTIMATED_SURVIVING_COUNTER);
 
     if (debugViewMode == DEBUG_VIEW_MESHLETS)
     {
@@ -4308,6 +4391,7 @@ void main()
             shadowNormal,
             viewDirection,
             fragWorldPosition,
+            geometryDecal,
             lastShadowFactor,
             lastShadowCascade,
             directLighting,
@@ -4340,6 +4424,7 @@ void main()
                 shadowNormal,
                 viewDirection,
                 fragWorldPosition,
+                geometryDecal,
                 lastShadowFactor,
                 lastShadowCascade,
                 directLighting,
@@ -4400,9 +4485,6 @@ void main()
         directLighting = mix(directLighting, cascadeColor, 0.35);
     }
 
-    bool geometryDecal = GiMaterialHasFlag(
-        material.TransportFlags,
-        GI_MATERIAL_GEOMETRY_DECAL);
     bool globalIlluminationEnabled = geometryDecal
         ? ForwardDecalGlobalIlluminationEnabled()
         : ForwardGlobalIlluminationEnabled() != 0u;
@@ -4449,7 +4531,13 @@ void main()
         // A support-aware result distinguishes an unavailable probe field from
         // legitimate zero irradiance.  Fresh, exposed, and invalid slots
         // are excluded before this reaches lighting composition.
-        SimpleDdgiGatherResult simpleGather = SampleSimpleDdgiGather(fragWorldPosition, ddgiNormal, viewDirection);
+        if (geometryDecal)
+            RecordDecalFragmentAttribution(DECAL_ESTIMATED_DDGI_GATHER_COUNTER);
+        SimpleDdgiGatherResult simpleGather = SampleSimpleDdgiGather(
+            simpleDdgiParams,
+            fragWorldPosition,
+            ddgiNormal,
+            viewDirection);
         float simpleSupport = clamp(simpleGather.validSupport, 0.0, 1.0);
         float simpleDirectionalSupport = clamp(simpleGather.directionalSupport, 0.0, 1.0);
         float simpleRadiometricOwnership = SimpleDdgiRadiometricOwnership(simpleGather);
@@ -4497,7 +4585,11 @@ void main()
         float simpleDiagnosticVisibilityMean = 0.0;
         if (IsDdgiDebugView(debugViewMode) || DdgiForwardEstimateDiagnosticPixel())
         {
-            SimpleDdgiDebugSample simpleDebug = SampleSimpleDdgiDebug(fragWorldPosition, ddgiNormal, viewDirection);
+            SimpleDdgiDebugSample simpleDebug = SampleSimpleDdgiDebug(
+                simpleDdgiParams,
+                fragWorldPosition,
+                ddgiNormal,
+                viewDirection);
             ddgiSample.probeIndex = simpleDebug.probeIndex;
             ddgiSample.logicalProbePosition = simpleDebug.logicalProbePosition;
             ddgiSample.relocatedProbePosition = simpleDebug.relocatedProbePosition;
@@ -4528,8 +4620,19 @@ void main()
             ambientOcclusion);
         finalDdgiDiffuse = ddgiDiffuse * simpleOwnership;
         vec3 simpleEnvironmentFallback = diffuseIbl;
-        if ((simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u)
-            simpleEnvironmentFallback *= EstimateFarFieldSkyVisibility(fragWorldPosition, ddgiNormal);
+        bool evaluateFarFieldFallback =
+            simpleFallback > SIMPLE_DDGI_ENVIRONMENT_FALLBACK_MIN_WEIGHT ||
+            (simpleDdgiParams.flags &
+                SIMPLE_DDGI_FLAG_FORCE_LEGACY_FAR_FIELD_FALLBACK) != 0u;
+        if (evaluateFarFieldFallback &&
+            (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u)
+        {
+            simpleEnvironmentFallback *= EstimateFarFieldSkyVisibility(
+                fragWorldPosition,
+                ddgiNormal,
+                simpleDdgiParams,
+                DdgiSparseDiagnosticSampleWeight());
+        }
         finalDiffuseIndirect = finalDdgiDiffuse + simpleEnvironmentFallback * simpleFallback * indirectAo;
         ddgiCoverage = simpleGather.spatialCoverage;
         fallbackWeight = simpleFallback;
@@ -4724,9 +4827,12 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SKY_VISIBILITY)
     {
-        SimpleDdgiParams simpleParams = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
-        float visibility = (simpleParams.flags & SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u
-            ? EstimateFarFieldSkyVisibility(fragWorldPosition, geometricNormal)
+        float visibility = (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u
+            ? EstimateFarFieldSkyVisibility(
+                fragWorldPosition,
+                geometricNormal,
+                simpleDdgiParams,
+                DdgiSparseDiagnosticSampleWeight())
             : 1.0;
         WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SKY_VISIBILITY, vec3(visibility));
         return;

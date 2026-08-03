@@ -111,7 +111,8 @@ namespace Njulf.Rendering.Pipeline
                     decalGlobalIlluminationEnabled:
                         sceneData.DecalReceiveGlobalIllumination,
                     ddgiLayeredReceiverCountersEnabled:
-                        sceneData.TransparentDdgiReceiverCountersEnabled)
+                        sceneData.TransparentDdgiReceiverCountersEnabled,
+                    decalReceiveShadows: sceneData.DecalReceiveShadows)
             };
 
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();

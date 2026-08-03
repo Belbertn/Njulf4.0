@@ -35,6 +35,28 @@ public sealed record SampleBenchmarkReport(
     public SampleDdgiProductionGateReport? DdgiProductionGate { get; init; }
     public IReadOnlyList<SampleGiAccuracyOracleResult> AccuracyOracleResults { get; init; } =
         Array.Empty<SampleGiAccuracyOracleResult>();
+    public SampleBenchmarkCaptureContract CaptureContract { get; init; } =
+        SampleBenchmarkCaptureContract.Unavailable;
+    public SampleBenchmarkTimingStats GpuIndependentPassSumMilliseconds { get; init; } =
+        SampleBenchmarkTimingStats.Empty("GPU independent pass sum");
+    public SampleBenchmarkTimingStats GpuUnexplainedMilliseconds { get; init; } =
+        SampleBenchmarkTimingStats.Empty("GPU unexplained");
+    /// <summary>
+    /// Per-frame sum of the independent Simple-DDGI cached-transport and blend
+    /// timestamp scopes. This is calculated before percentile aggregation so
+    /// its P95 is a real combined-frame percentile, not a sum of unrelated P95s.
+    /// </summary>
+    public SampleBenchmarkTimingStats SimpleDdgiTransportBlendMilliseconds { get; init; } =
+        SampleBenchmarkTimingStats.Empty("Simple DDGI transport + blend");
+    public SampleDdgiSchedulerRefreshEvidence SimpleDdgiSchedulerRefresh { get; init; } =
+        SampleDdgiSchedulerRefreshEvidence.Empty;
+    public int AdditionalSettlingFrameCount { get; init; }
+    public bool SettlingWaitTimedOut { get; init; }
+    public SampleBenchmarkHdrDifference HdrDifference { get; init; } =
+        SampleBenchmarkHdrDifference.Unavailable("HDR comparison was not requested.");
+    public SampleShaderProfileEvidence ShaderProfile { get; init; } =
+        SampleShaderProfileEvidence.Unavailable(
+            "Nsight shader-profile evidence was not supplied.");
 }
 
 public sealed record SampleBenchmarkTimingStats(
@@ -43,9 +65,94 @@ public sealed record SampleBenchmarkTimingStats(
     double AverageMilliseconds,
     double MinMilliseconds,
     double MaxMilliseconds,
-    double P95Milliseconds);
+    double P95Milliseconds)
+{
+    public double MedianMilliseconds { get; init; }
+
+    public static SampleBenchmarkTimingStats Empty(string name) =>
+        new(name, 0, 0, 0, 0, 0) { MedianMilliseconds = 0 };
+}
+
+public sealed record SampleBenchmarkCaptureContract(
+    bool Comparable,
+    bool ProductionTiming,
+    string PairId,
+    string Variant,
+    string IdentityHash,
+    IReadOnlyList<string> Mismatches)
+{
+    /// <summary>Exact rendered-state identity for this individual run.</summary>
+    public string FullIdentityHash { get; init; } = "unavailable";
+    /// <summary>
+    /// Quantization allowance used to reconcile independently rounded pass
+    /// durations with the rounded frame duration.
+    /// </summary>
+    public long PassTimestampReconciliationToleranceMicroseconds { get; init; }
+
+    public static SampleBenchmarkCaptureContract Unavailable { get; } = new(
+        false,
+        false,
+        string.Empty,
+        "baseline",
+        "unavailable",
+        Array.Empty<string>())
+    {
+        FullIdentityHash = "unavailable"
+    };
+}
 
 public sealed record SampleBenchmarkFinding(
     string Category,
     string Subject,
     string Detail);
+
+public sealed record SampleBenchmarkIntegerStats(
+    string Name,
+    int Count,
+    double Average,
+    int Min,
+    int Max,
+    int P95,
+    double Median)
+{
+    public static SampleBenchmarkIntegerStats Empty(string name) =>
+        new(name, 0, 0, 0, 0, 0, 0);
+}
+
+public sealed record SampleDdgiSchedulerSlowFrame(
+    int MeasurementSampleIndex,
+    long SchedulerRefreshMicroseconds,
+    int SchedulerEntryRefreshCount,
+    int SchedulerWakeEntryRefreshCount,
+    int SchedulerWakeRefreshBudget,
+    int SchedulerWakeBudgetSaturated,
+    int SchedulerFullRebuildCount,
+    int VisibilityEntryRefreshCount,
+    int ReadbackProbeCount,
+    int ProbesUpdated,
+    int TransportSourceReadyProbeCount,
+    int TransportConvergedProbeCount,
+    int TransportGlobalConvergencePending)
+{
+    public int RoutineSourceRepairProbeCount { get; init; }
+    public int RoutineMaintenancePendingProbeCount { get; init; }
+}
+
+public sealed record SampleDdgiSchedulerRefreshEvidence(
+    SampleBenchmarkIntegerStats SchedulerEntryRefreshCount,
+    SampleBenchmarkIntegerStats SchedulerWakeEntryRefreshCount,
+    SampleBenchmarkIntegerStats VisibilityEntryRefreshCount,
+    SampleBenchmarkIntegerStats ReadbackProbeCount,
+    int WakeBudgetSaturatedFrameCount,
+    int FullRebuildFrameCount,
+    IReadOnlyList<SampleDdgiSchedulerSlowFrame> SlowestFrames)
+{
+    public static SampleDdgiSchedulerRefreshEvidence Empty { get; } = new(
+        SampleBenchmarkIntegerStats.Empty("Scheduler entries refreshed"),
+        SampleBenchmarkIntegerStats.Empty("Scheduler wake entries refreshed"),
+        SampleBenchmarkIntegerStats.Empty("Visibility entries refreshed"),
+        SampleBenchmarkIntegerStats.Empty("Probe readback entries"),
+        0,
+        0,
+        Array.Empty<SampleDdgiSchedulerSlowFrame>());
+}

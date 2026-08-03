@@ -113,14 +113,17 @@ public sealed class SimpleDdgiVolumeManagerTests
             "_bufferManager.DestroyBuffer(previousHandle);",
             StringComparison.Ordinal);
         int deferredRetirement = ensureBuffer.LastIndexOf(
-            "RetireBufferResource(previousHandle);",
+            "RetireBufferResource(previousHandle, previousBytes);",
             StringComparison.Ordinal);
 
         Assert.Multiple(() =>
         {
             Assert.That(source, Does.Contain("BeginFrameResourceRetirement();"));
             Assert.That(source, Does.Contain("RenderingConstants.FramesInFlight + 1UL"));
-            Assert.That(source, Does.Contain("_context.WaitIdle();"));
+            Assert.That(source, Does.Contain("RecordCapacityDeviceWaitIdle();"));
+            Assert.That(source, Does.Contain("_recordRuntimeStall("));
+            Assert.That(source, Does.Contain("RuntimeStallReason.ResourceResize,"));
+            Assert.That(source, Does.Contain("_context.WaitIdle);"));
             Assert.That(synchronizedGuard, Is.GreaterThanOrEqualTo(0));
             Assert.That(synchronizedDestroy, Is.GreaterThan(synchronizedGuard));
             Assert.That(deferredRetirement, Is.GreaterThan(synchronizedDestroy));
@@ -267,16 +270,16 @@ public sealed class SimpleDdgiVolumeManagerTests
             Is.EqualTo(expectedSkip));
     }
 
-    [TestCase(15_354, 0, 0, true)]
-    [TestCase(15_354, 1, 0, true)]
-    [TestCase(15_354, 14, 0, true)]
+    [TestCase(15_354, 0, 767, true)]
+    [TestCase(15_354, 0, 768, false)]
+    [TestCase(15_354, 14, 767, true)]
     [TestCase(15_354, 15, 0, false)]
-    [TestCase(15_354, 0, 1, false)]
-    [TestCase(999, 1, 0, true)]
-    [TestCase(999, 2, 0, false)]
-    [TestCase(1_000, 1, 0, true)]
+    [TestCase(1_000, 1, 49, true)]
+    [TestCase(1_000, 1, 50, false)]
+    [TestCase(20, 0, 1, true)]
+    [TestCase(19, 0, 1, false)]
     [TestCase(0, 0, 0, true)]
-    public void GlobalTransportConvergence_AllowsOnlyTheBoundedSourceRepairTail(
+    public void GlobalTransportConvergence_RequiresNinetyFivePercentOfSourceReadyProbes(
         int participatingProbeCount,
         int sourceRepairProbeCount,
         int pendingConvergenceProbeCount,
@@ -367,6 +370,50 @@ public sealed class SimpleDdgiVolumeManagerTests
                 hardBudget,
                 feedbackCap,
                 deterministicFixedBudget),
+            Is.EqualTo(expected));
+    }
+
+    [TestCase(0, 1)]
+    [TestCase(1, 1)]
+    [TestCase(64, 64)]
+    [TestCase(512, 128)]
+    [TestCase(2_048, 128)]
+    [TestCase(int.MaxValue, 128)]
+    public void RoutineSchedulerWakeBudget_PacesOnlyBackgroundDeadlines(
+        int baseUpdateBudget,
+        int expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveRoutineSchedulerWakeRefreshBudget(
+                baseUpdateBudget),
+            Is.EqualTo(expected));
+    }
+
+    [TestCase(false, 12, true, false, false, false, false)]
+    [TestCase(true, 0, true, false, false, false, false)]
+    [TestCase(true, 12, true, false, false, false, false)]
+    [TestCase(true, 12, true, true, false, false, true)]
+    [TestCase(true, 12, true, false, true, false, true)]
+    [TestCase(true, 12, true, false, false, true, true)]
+    [TestCase(true, 12, false, false, false, false, true)]
+    public void RegionalInvalidation_OnlyFieldBoundariesOpenGlobalConvergence(
+        bool transportV2Active,
+        int newlyInvalidatedProbeCount,
+        bool hasRegionalDirtyWork,
+        bool requiresGlobalInvalidation,
+        bool atlasFresh,
+        bool recenteredThisFrame,
+        bool expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager
+                .ShouldBeginTransportGlobalConvergenceForInvalidation(
+                    transportV2Active,
+                    newlyInvalidatedProbeCount,
+                    hasRegionalDirtyWork,
+                    requiresGlobalInvalidation,
+                    atlasFresh,
+                    recenteredThisFrame),
             Is.EqualTo(expected));
     }
 
@@ -465,6 +512,35 @@ public sealed class SimpleDdgiVolumeManagerTests
             Assert.That(reservations, Does.Not.Contain("for (int local = 0; local < probeCount"));
             Assert.That(reservations, Does.Contain("_schedulerWorkQueues.GetQueueCount(queueIndex)"));
             Assert.That(source, Does.Contain("private uint[] _probeLastUpdatedFrames"));
+        });
+    }
+
+    [Test]
+    public void ProbeStateReadback_ConsumesOnlySubmittedProbeSlots()
+    {
+        string source = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiVolumeManager.cs"));
+        int readbackStart = source.IndexOf(
+            "private unsafe void ReadCompletedProbeStateReadback(",
+            StringComparison.Ordinal);
+        int readbackEnd = source.IndexOf(
+            "private float CalculateProbeRelocationFraction(",
+            readbackStart,
+            StringComparison.Ordinal);
+
+        Assert.That(readbackStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(readbackEnd, Is.GreaterThan(readbackStart));
+        string readback = source[readbackStart..readbackEnd];
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Contain("_probeStateReadbackUpdatedProbeIndices"));
+            Assert.That(source, Does.Contain("RecordProbeStateReadbackUpdatedSlots(frameIndex);"));
+            Assert.That(readback, Does.Contain(
+                "for (int updatedOffset = 0; updatedOffset < updatedProbeCount; updatedOffset++)"));
+            Assert.That(readback, Does.Not.Contain(
+                "for (int probeIndex = 0; probeIndex < probeCount; probeIndex++)"));
         });
     }
 
@@ -821,6 +897,71 @@ public sealed class SimpleDdgiVolumeManagerTests
             Assert.That(SimpleDdgiVolumeManager.ReadProbeUpdateGeneration(metadata), Is.EqualTo(0x00abcdeu));
             Assert.That(SimpleDdgiVolumeManager.ReadProbeUpdateAge(metadata), Is.EqualTo(255u));
         });
+    }
+
+    [Test]
+    public void Upload_RefreshesVisibilityBeforeThePersistentSchedulerEntries()
+    {
+        string source = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiVolumeManager.cs"));
+
+        int uploadStart = source.IndexOf(
+            "public void Upload(",
+            StringComparison.Ordinal);
+        int uploadEnd = source.IndexOf(
+            "public void EnsureDisabled(",
+            uploadStart,
+            StringComparison.Ordinal);
+        Assert.That(uploadStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(uploadEnd, Is.GreaterThan(uploadStart));
+        string upload = source[uploadStart..uploadEnd];
+
+        int prepare = upload.IndexOf(
+            "PrepareTransportGlobalConvergenceState();",
+            StringComparison.Ordinal);
+        int importance = upload.IndexOf(
+            "int visibleFreshRecoveryBudget = RefreshProbeSchedulingImportance();",
+            StringComparison.Ordinal);
+        int scheduler = upload.IndexOf(
+            "RefreshPersistentSchedulerState();",
+            importance,
+            StringComparison.Ordinal);
+        int evaluate = upload.IndexOf(
+            "EvaluateTransportGlobalConvergenceState();",
+            StringComparison.Ordinal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(prepare, Is.GreaterThanOrEqualTo(0));
+            Assert.That(importance, Is.GreaterThan(prepare));
+            Assert.That(scheduler, Is.GreaterThan(importance));
+            Assert.That(evaluate, Is.GreaterThan(scheduler));
+            Assert.That(
+                upload.IndexOf("RefreshPersistentSchedulerState();", scheduler + 1, StringComparison.Ordinal),
+                Is.EqualTo(-1));
+        });
+    }
+
+    [TestCase(0u, 128, 128)]
+    [TestCase(1u, 128, 1)]
+    [TestCase(32u, 128, 32)]
+    [TestCase(256u, 128, 128)]
+    [TestCase(0u, 0, 1)]
+    public void DispatchRayCount_UsesPackedCountAndNeverExceedsTheQueueStride(
+        uint packedRayCount,
+        int queueRayStride,
+        int expected)
+    {
+        var update = new GPUSimpleDdgiProbeUpdate
+        {
+            Flags = packedRayCount << 16
+        };
+
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveDispatchRayCount(update, queueRayStride),
+            Is.EqualTo(expected));
     }
 
     private static string FindSourceFile(params string[] relativeParts)

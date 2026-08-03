@@ -712,6 +712,8 @@ namespace Njulf.Rendering.Data
         /// lower-LOD range cannot be mapped one-to-one without dropping caster coverage.
         /// </summary>
         public uint DirectionalShadowLodFallbackCount;
+        /// <summary>LOD0 candidate commands intentionally removed by lower-LOD decimation.</summary>
+        public uint OpaqueLodDecimatedCount;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -885,6 +887,7 @@ namespace Njulf.Rendering.Data
         private const uint MaterialTransportProvenanceEnabledFlag = 1u << 3;
         private const uint DecalGlobalIlluminationEnabledFlag = 1u << 4;
         private const uint DdgiLayeredReceiverCountersEnabledFlag = 1u << 5;
+        private const uint DecalReceiveShadowsFlag = 1u << 6;
         private const int DirectionalShadowPreviewCascadeShift = 8;
         private const uint DirectionalShadowPreviewCascadeMask = 0x03u;
 
@@ -932,7 +935,8 @@ namespace Njulf.Rendering.Data
             uint directionalShadowPreviewCascade = 0u,
             bool materialTransportProvenanceEnabled = false,
             bool decalGlobalIlluminationEnabled = false,
-            bool ddgiLayeredReceiverCountersEnabled = false)
+            bool ddgiLayeredReceiverCountersEnabled = false,
+            bool decalReceiveShadows = false)
         {
             return (ddgiForwardEstimateCountersEnabled ? DdgiForwardEstimateCountersEnabledFlag : 0u) |
                    (ddgiClipmapCoverageCountersEnabled ? DdgiClipmapCoverageCountersEnabledFlag : 0u) |
@@ -940,6 +944,7 @@ namespace Njulf.Rendering.Data
                    (materialTransportProvenanceEnabled ? MaterialTransportProvenanceEnabledFlag : 0u) |
                    (decalGlobalIlluminationEnabled ? DecalGlobalIlluminationEnabledFlag : 0u) |
                    (ddgiLayeredReceiverCountersEnabled ? DdgiLayeredReceiverCountersEnabledFlag : 0u) |
+                   (decalReceiveShadows ? DecalReceiveShadowsFlag : 0u) |
                    ((directionalShadowPreviewCascade & DirectionalShadowPreviewCascadeMask) <<
                     DirectionalShadowPreviewCascadeShift);
         }
@@ -1535,6 +1540,9 @@ namespace Njulf.Rendering.Data
         public uint TransportWriteIrradianceAtlasBufferIndex;
         public uint TransportGeneration;
         public uint PrimaryDirectionalLightIndex;
+        public uint DispatchQueueOffset;
+        public uint DispatchProbeCount;
+        public uint DispatchRaysPerProbe;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

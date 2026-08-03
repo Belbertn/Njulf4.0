@@ -1174,7 +1174,19 @@ namespace Njulf.Rendering.Data
 
         public bool GeometryDecalsEnabled { get; set; } = true;
         public bool ProjectedDecalsEnabled { get; set; }
+        /// <summary>
+        /// Controls shadow sampling for geometry-decal receivers independently
+        /// from ordinary transparent materials. Geometry decals share the
+        /// transparent draw path, so folding this into TransparencySettings
+        /// makes a controlled decal-only capture impossible.
+        /// </summary>
+        public bool ReceiveShadows { get; set; } = true;
         public bool ReceiveGlobalIllumination { get; set; } = true;
+        /// <summary>
+        /// Optional material-index isolation used by deterministic performance
+        /// captures. A negative value renders every decal material.
+        /// </summary>
+        public int IsolatedMaterialIndex { get; set; } = -1;
         public DecalDebugView DebugView { get; set; } = DecalDebugView.None;
 
         public float GeometryDepthBias
@@ -1799,6 +1811,9 @@ namespace Njulf.Rendering.Data
         public const int MaxSimpleDdgiRaysPerProbe = 256;
         public const int MaxSimpleDdgiVolumeCount = 16;
         public const int MaxSimpleDdgiTotalProbeCount = 32_768;
+        // Alias indices occupy 16 bits in the shader ABI. 8K covers the measured
+        // production scenes while keeping the persistent table to roughly 512 KiB.
+        public const int MaxDdgiEmissiveTriangleBudget = 8_192;
         public const int MaxFarFieldClipmapResolution = 256;
 
         private float _indirectIntensity = 1.0f;
@@ -1859,7 +1874,7 @@ namespace Njulf.Rendering.Data
         private float _ddgiCascade3MaxRayDistance = 192.0f;
         private int _ddgiMaxShadedLights = 8;
         private int _ddgiMaterialTextureMaxCascade = 1;
-        private int _ddgiEmissiveTriangleBudget = 256;
+        private int _ddgiEmissiveTriangleBudget = MaxDdgiEmissiveTriangleBudget;
         private ulong _ddgiAtlasMemoryBudgetBytes = DefaultDdgiAtlasMemoryBudgetBytes;
         private float _ddgiAsyncComputeReservedBudgetFraction = 0.25f;
         private float _ddgiThinWallProxyThickness = 0.12f;
@@ -2144,7 +2159,10 @@ namespace Njulf.Rendering.Data
         public int DdgiEmissiveTriangleBudget
         {
             get => _ddgiEmissiveTriangleBudget;
-            set => _ddgiEmissiveTriangleBudget = Clamp(value, 1, 256);
+            set => _ddgiEmissiveTriangleBudget = Clamp(
+                value,
+                1,
+                MaxDdgiEmissiveTriangleBudget);
         }
         public bool DdgiProbeClassificationEnabled { get; set; } = true;
         public bool DdgiProbeRelocationEnabled { get; set; } = true;
@@ -2229,6 +2247,13 @@ namespace Njulf.Rendering.Data
                 ? Clamp(value, 0.0f, 1.0f)
                 : 0.95f;
         }
+        /// <summary>
+        /// Diagnostic A/B control that evaluates the pre-gate far-field sky
+        /// visibility path even when its radiometric weight is negligible. The
+        /// result is still multiplied by the exact fallback weight, so this
+        /// changes work attribution without changing intended output.
+        /// </summary>
+        public bool SimpleDdgiForceLegacyFarFieldFallbackEvaluation { get; set; }
         /// <summary>
         /// Keeps camera-relative rings in a shared toroidal physical layout so normal
         /// scrolling invalidates only exposed cells and never copies atlas data.
@@ -3285,10 +3310,10 @@ namespace Njulf.Rendering.Data
             DdgiQualityTier = tier;
             DdgiEmissiveTriangleBudget = tier switch
             {
-                DdgiQualityTier.DdgiLow => 64,
-                DdgiQualityTier.DdgiMedium => 128,
-                DdgiQualityTier.DdgiUltra => 256,
-                _ => 256
+                DdgiQualityTier.DdgiLow => 512,
+                DdgiQualityTier.DdgiMedium => 2_048,
+                DdgiQualityTier.DdgiUltra => MaxDdgiEmissiveTriangleBudget,
+                _ => MaxDdgiEmissiveTriangleBudget
             };
             DdgiAdaptiveBudgetingEnabled = true;
             DdgiAdaptiveBudgetHysteresisFraction = 0.15f;
@@ -4166,7 +4191,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 7;
+        public const int SerializationVersion = 8;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -4704,7 +4729,9 @@ namespace Njulf.Rendering.Data
             // remains an external, non-persisted policy. Version 6 persists the
             // independently configurable transparent/decal DDGI receiver policy.
             // Version 7 persists the procedural-atmosphere authoring contract,
-            // including explicit XYZ values for its vector fields.
+            // including explicit XYZ values for its vector fields. Version 8
+            // persists independent decal shadow reception; material isolation
+            // remains an invocation-scoped benchmark override.
             public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
@@ -4723,6 +4750,7 @@ namespace Njulf.Rendering.Data
             public bool ParticlesEnabled { get; init; } = true;
             public bool? TransparentReceiveGlobalIllumination { get; init; }
             public bool? DecalReceiveGlobalIllumination { get; init; }
+            public bool? DecalReceiveShadows { get; init; }
             public FoliageFile Foliage { get; init; } = new();
             public SceneSubmissionFile SceneSubmission { get; init; } = new();
             public HiZOcclusionFile HiZOcclusion { get; init; } = new();
@@ -4754,6 +4782,7 @@ namespace Njulf.Rendering.Data
                         settings.Transparency.ReceiveGlobalIllumination,
                     DecalReceiveGlobalIllumination =
                         settings.Decals.ReceiveGlobalIllumination,
+                    DecalReceiveShadows = settings.Decals.ReceiveShadows,
                     Foliage = FoliageFile.FromSettings(settings.Foliage),
                     SceneSubmission = SceneSubmissionFile.FromSettings(settings.SceneSubmission),
                     HiZOcclusion = HiZOcclusionFile.FromSettings(settings.HiZOcclusion),
@@ -4794,6 +4823,8 @@ namespace Njulf.Rendering.Data
                     settings.Decals.ReceiveGlobalIllumination =
                         DecalReceiveGlobalIllumination.Value;
                 }
+                if (DecalReceiveShadows.HasValue)
+                    settings.Decals.ReceiveShadows = DecalReceiveShadows.Value;
                 Foliage.ApplyTo(settings.Foliage);
                 SceneSubmission.ApplyTo(settings.SceneSubmission);
                 HiZOcclusion.ApplyTo(settings.HiZOcclusion);

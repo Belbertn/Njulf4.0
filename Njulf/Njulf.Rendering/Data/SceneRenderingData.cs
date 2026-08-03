@@ -171,6 +171,7 @@ namespace Njulf.Rendering.Data
         public bool TransparentDdgiReceiverCountersEnabled { get; set; }
         public DecalDebugView DecalDebugView { get; set; } = DecalDebugView.None;
         public bool GeometryDecalsEnabled { get; set; } = true;
+        public bool DecalReceiveShadows { get; set; } = true;
         public bool DecalReceiveGlobalIllumination { get; set; } = true;
         public float GeometryDecalDepthBias { get; set; } = 0.0005f;
         public float GeometryDecalSlopeScaledDepthBias { get; set; }
@@ -432,6 +433,7 @@ namespace Njulf.Rendering.Data
         public int SceneSubmissionGpuLod1EmittedCount { get; set; }
         public int SceneSubmissionGpuLod2EmittedCount { get; set; }
         public int SceneSubmissionGpuMissingLodFallbackCount { get; set; }
+        public int SceneSubmissionGpuOpaqueLodDecimatedCount { get; set; }
         public int SceneSubmissionValidationValid { get; set; }
         public string SceneSubmissionValidationStatus { get; set; } = string.Empty;
         public int SceneSubmissionValidationCpuOpaqueCount { get; set; }
@@ -487,7 +489,7 @@ namespace Njulf.Rendering.Data
         public int DirectionalShadowPcfRadius { get; set; }
         public int SpotShadowPcfRadius { get; set; }
         public int PointShadowPcfRadius { get; set; }
-        public int ForwardShadowReceiverMeshletCount { get; set; }
+        public int ForwardShadowReceiverMeshletCapacity { get; set; }
         public int DirectionalShadowStaticCacheActiveMask { get; set; }
         public int DirectionalShadowStaticCacheValidMask { get; set; }
         public int DirectionalShadowStaticCacheRefreshMask { get; set; }
@@ -622,6 +624,7 @@ namespace Njulf.Rendering.Data
         public long CpuSsgiRecordMicroseconds { get; set; }
         public long CpuDdgiRecordMicroseconds { get; set; }
         public long CpuSimpleDdgiRecordMicroseconds { get; set; }
+        public SimpleDdgiUploadTiming SimpleDdgiUploadTiming { get; set; }
         public long CpuFarFieldRecordMicroseconds { get; set; }
         public long CpuGlobalIlluminationRecordMicroseconds { get; set; }
         public long CpuGlobalIlluminationRecordP95Microseconds { get; set; }
@@ -828,6 +831,8 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiTransportGlobalConvergencePending { get; set; }
         /// <summary>Age of the active field-wide V2 warmup; zero once local convergence policy resumes.</summary>
         public int SimpleDdgiTransportGlobalConvergenceElapsedFrames { get; set; }
+        public SimpleDdgiTransportConvergenceTelemetry SimpleDdgiTransportConvergence { get; set; } =
+            SimpleDdgiTransportConvergenceTelemetry.Empty;
         /// <summary>Monotonic live source/solver calibration changes that restarted V2 convergence.</summary>
         public ulong SimpleDdgiTransportCalibrationChangeCount { get; set; }
         public ulong SimpleDdgiTransportIrradianceAtlasBytes { get; set; }
@@ -911,6 +916,8 @@ namespace Njulf.Rendering.Data
         public uint SimpleDdgiLowVisibilitySampleCount { get; set; }
         public uint SimpleDdgiGatherSampleCount { get; set; }
         public uint SimpleDdgiSecondVolumeGatherCount { get; set; }
+        public SimpleDdgiGatherMultiplicityCounters SimpleDdgiGatherMultiplicity { get; set; }
+        public DecalFragmentAttributionCounters DecalFragmentAttribution { get; set; }
         public IReadOnlyList<uint> SimpleDdgiGatherPrimaryRejectionCounts { get; set; } = Array.Empty<uint>();
         public IReadOnlyList<uint> SimpleDdgiGatherFallbackRejectionCounts { get; set; } = Array.Empty<uint>();
         public IReadOnlyList<uint> SimpleDdgiGatherRecoveryRejectionCounts { get; set; } = Array.Empty<uint>();
@@ -1135,6 +1142,7 @@ namespace Njulf.Rendering.Data
         public long GpuGiCompositeMicroseconds { get; set; }
         public long CpuAccelerationStructureBuildMicroseconds { get; set; }
         public long CpuAccelerationStructureBlasBuildMicroseconds { get; set; }
+        public long CpuAccelerationStructureBlasCompactionMicroseconds { get; set; }
         public long CpuAccelerationStructureTlasBuildMicroseconds { get; set; }
         public long CpuAccelerationStructureInstanceUploadMicroseconds { get; set; }
         public long GpuAccelerationStructureBlasMicroseconds { get; set; }
@@ -1142,6 +1150,14 @@ namespace Njulf.Rendering.Data
         public int AccelerationStructureBottomLevelCount { get; set; }
         public int AccelerationStructureTopLevelInstanceCount { get; set; }
         public int AccelerationStructureBlasBuildCount { get; set; }
+        public int AccelerationStructureBlasCompactionQueryCount { get; set; }
+        public int AccelerationStructureBlasCompactionCount { get; set; }
+        public ulong AccelerationStructureBlasCompactionSourceBytes { get; set; }
+        public ulong AccelerationStructureBlasCompactionBytesSaved { get; set; }
+        public ulong AccelerationStructureBlasCompactedResidentBytesSaved { get; set; }
+        public int AccelerationStructureBlasCompactionPendingCount { get; set; }
+        public int AccelerationStructureBlasCompactionQueryOverflowCount { get; set; }
+        public int AccelerationStructureBlasCompactionQueryReadbackFailureCount { get; set; }
         public int AccelerationStructureTlasBuildCount { get; set; }
         public int AccelerationStructureTlasUpdateCount { get; set; }
         public int AccelerationStructureTlasSkipCount { get; set; }
@@ -1335,6 +1351,7 @@ namespace Njulf.Rendering.Data
             TransparentDdgiReceiverCountersEnabled = false;
             DecalDebugView = DecalDebugView.None;
             GeometryDecalsEnabled = true;
+            DecalReceiveShadows = true;
             DecalReceiveGlobalIllumination = true;
             GeometryDecalDepthBias = 0.0005f;
             GeometryDecalSlopeScaledDepthBias = 0f;
@@ -1641,6 +1658,7 @@ namespace Njulf.Rendering.Data
             SceneSubmissionGpuLod1EmittedCount = 0;
             SceneSubmissionGpuLod2EmittedCount = 0;
             SceneSubmissionGpuMissingLodFallbackCount = 0;
+            SceneSubmissionGpuOpaqueLodDecimatedCount = 0;
             SceneSubmissionValidationValid = 0;
             SceneSubmissionValidationStatus = string.Empty;
             SceneSubmissionValidationCpuOpaqueCount = 0;
@@ -1715,7 +1733,7 @@ namespace Njulf.Rendering.Data
             DirectionalShadowPcfRadius = 0;
             SpotShadowPcfRadius = 0;
             PointShadowPcfRadius = 0;
-            ForwardShadowReceiverMeshletCount = 0;
+            ForwardShadowReceiverMeshletCapacity = 0;
             DirectionalShadowStaticCacheActiveMask = 0;
             DirectionalShadowStaticCacheValidMask = 0;
             DirectionalShadowStaticCacheRefreshMask = 0;
@@ -1851,6 +1869,7 @@ namespace Njulf.Rendering.Data
             CpuSsgiRecordMicroseconds = 0;
             CpuDdgiRecordMicroseconds = 0;
             CpuSimpleDdgiRecordMicroseconds = 0;
+            SimpleDdgiUploadTiming = default;
             CpuFarFieldRecordMicroseconds = 0;
             CpuGlobalIlluminationRecordMicroseconds = 0;
             CpuGlobalIlluminationRecordP95Microseconds = 0;
@@ -2040,6 +2059,8 @@ namespace Njulf.Rendering.Data
             SimpleDdgiTransportPendingSolverProbeCount = 0;
             SimpleDdgiTransportGlobalConvergencePending = 0;
             SimpleDdgiTransportGlobalConvergenceElapsedFrames = 0;
+            SimpleDdgiTransportConvergence =
+                SimpleDdgiTransportConvergenceTelemetry.Empty;
             SimpleDdgiTransportCalibrationChangeCount = 0;
             SimpleDdgiTransportIrradianceAtlasBytes = 0;
             SimpleDdgiTransportSourceCacheBytes = 0;
@@ -2121,6 +2142,8 @@ namespace Njulf.Rendering.Data
             SimpleDdgiLowVisibilitySampleCount = 0;
             SimpleDdgiGatherSampleCount = 0;
             SimpleDdgiSecondVolumeGatherCount = 0;
+            SimpleDdgiGatherMultiplicity = SimpleDdgiGatherMultiplicityCounters.Empty;
+            DecalFragmentAttribution = DecalFragmentAttributionCounters.Empty;
             SimpleDdgiGatherPrimaryRejectionCounts = Array.Empty<uint>();
             SimpleDdgiGatherFallbackRejectionCounts = Array.Empty<uint>();
             SimpleDdgiGatherRecoveryRejectionCounts = Array.Empty<uint>();
@@ -2340,6 +2363,7 @@ namespace Njulf.Rendering.Data
             GpuGiCompositeMicroseconds = 0;
             CpuAccelerationStructureBuildMicroseconds = 0;
             CpuAccelerationStructureBlasBuildMicroseconds = 0;
+            CpuAccelerationStructureBlasCompactionMicroseconds = 0;
             CpuAccelerationStructureTlasBuildMicroseconds = 0;
             CpuAccelerationStructureInstanceUploadMicroseconds = 0;
             GpuAccelerationStructureBlasMicroseconds = 0;
@@ -2347,6 +2371,14 @@ namespace Njulf.Rendering.Data
             AccelerationStructureBottomLevelCount = 0;
             AccelerationStructureTopLevelInstanceCount = 0;
             AccelerationStructureBlasBuildCount = 0;
+            AccelerationStructureBlasCompactionQueryCount = 0;
+            AccelerationStructureBlasCompactionCount = 0;
+            AccelerationStructureBlasCompactionSourceBytes = 0;
+            AccelerationStructureBlasCompactionBytesSaved = 0;
+            AccelerationStructureBlasCompactedResidentBytesSaved = 0;
+            AccelerationStructureBlasCompactionPendingCount = 0;
+            AccelerationStructureBlasCompactionQueryOverflowCount = 0;
+            AccelerationStructureBlasCompactionQueryReadbackFailureCount = 0;
             AccelerationStructureTlasBuildCount = 0;
             AccelerationStructureTlasUpdateCount = 0;
             AccelerationStructureTlasSkipCount = 0;

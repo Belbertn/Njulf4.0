@@ -64,12 +64,41 @@ namespace Njulf.Rendering.Diagnostics
         DetailedInvestigation
     }
 
+    /// <summary>
+    /// Build-time boundary shared by CPU flags and shader compilation. Release,
+    /// ShippingPerformance, and ProfileSymbols cannot enable DDGI investigation
+    /// atomics at runtime; Debug and DetailedInvestigation retain the explicit
+    /// diagnostic path.
+    /// </summary>
+    public static class RendererBuildFeatures
+    {
+#if DEBUG || NJULF_DETAILED_INVESTIGATION
+        public const bool DetailedDdgiDiagnosticsCompiled = true;
+#else
+        public const bool DetailedDdgiDiagnosticsCompiled = false;
+#endif
+    }
+
     public enum GiMetricFreshness
     {
         CurrentFrame,
         DelayedReadback,
         Aggregated,
         Unavailable
+    }
+
+    /// <summary>
+    /// Meaning of an exported numeric metric. Capture consumers must not compare
+    /// a capacity or configured budget as if it were executed work.
+    /// </summary>
+    public enum PerformanceMetricSemantic
+    {
+        Unavailable,
+        Exact,
+        SampledEstimate,
+        Capacity,
+        ConfiguredBudget,
+        EmittedWork
     }
 
     /// <summary>
@@ -498,6 +527,9 @@ namespace Njulf.Rendering.Diagnostics
             "unknown-commit",
             "unknown-shader-bundle",
             0);
+
+        public string ExecutableHash { get; init; } = "unknown-executable";
+        public string DirtyWorktreeState { get; init; } = "unknown-dirty-state";
     }
 
     public sealed record PerformanceCaptureCameraMetadata(
@@ -540,6 +572,12 @@ namespace Njulf.Rendering.Diagnostics
             DdgiRuntimeWarmupState.Disabled,
             0,
             0);
+
+        public uint DdgiCacheGeneration { get; init; }
+        public uint SimpleDdgiTransportGeneration { get; init; }
+        public bool TransportConvergencePending { get; init; }
+        public int TransportConvergedProbeCount { get; init; }
+        public int TransportPendingProbeCount { get; init; }
     }
 
     public sealed record ResolvedGiSettingsMetadata(
@@ -566,6 +604,12 @@ namespace Njulf.Rendering.Diagnostics
             "not measured",
             false,
             false);
+
+        public int DiagnosticSampleStrideX { get; init; }
+        public int DiagnosticSampleStrideY { get; init; }
+        public int DiagnosticSampleWeight { get; init; }
+        public PerformanceMetricSemantic SkyVisibilityCountSemantic { get; init; } =
+            PerformanceMetricSemantic.Unavailable;
     }
 
     /// <summary>
@@ -1683,21 +1727,6 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "gi.simpleDdgi.transport.residualThreshold", diagnostics.SimpleDdgiTransportResidualThreshold);
             AddSetting(settings, "gi.simpleDdgi.transport.maximumSolverGenerations", diagnostics.SimpleDdgiTransportMaximumSolverGenerations);
             AddSetting(settings, "gi.simpleDdgi.transport.sourceRefreshFrames.configured", diagnostics.SimpleDdgiTransportConfiguredSourceRefreshFrames);
-            AddSetting(settings, "gi.simpleDdgi.transport.sourceRefreshFrames.effective", diagnostics.SimpleDdgiTransportSourceRefreshFrames);
-            AddSetting(settings, "gi.simpleDdgi.transport.sourceRefresh.targetProbesPerFrame", diagnostics.SimpleDdgiTransportSourceRefreshTargetProbeCount);
-            AddSetting(settings, "gi.simpleDdgi.transport.sourceRefresh.capacityShortfall", diagnostics.SimpleDdgiTransportSourceRefreshCapacityShortfall);
-            AddSetting(settings, "gi.simpleDdgi.transport.sourceCohort.active", diagnostics.SimpleDdgiTransportSourceCohortTransitionActive);
-            AddSetting(settings, "gi.simpleDdgi.transport.sourceCohort.transitionCount", diagnostics.SimpleDdgiTransportSourceCohortTransitionCount);
-            AddSetting(settings, "gi.simpleDdgi.transport.sourceCohort.elapsedFrames", diagnostics.SimpleDdgiTransportSourceCohortElapsedFrames);
-            AddSetting(settings, "gi.simpleDdgi.transport.sourceStep.staleProbeCount", diagnostics.SimpleDdgiTransportSourceStepStaleProbeCount);
-            AddSetting(settings, "gi.simpleDdgi.transport.sourceStep.ageP95Frames", diagnostics.SimpleDdgiTransportSourceStepAgeP95Frames);
-            AddSetting(settings, "gi.simpleDdgi.transport.sourceStep.ageMaximumFrames", diagnostics.SimpleDdgiTransportSourceStepAgeMaximumFrames);
-            AddSetting(settings, "gi.simpleDdgi.transport.sourceStep.ageP95Seconds", diagnostics.SimpleDdgiTransportSourceStepAgeP95Seconds);
-            AddSetting(settings, "gi.simpleDdgi.transport.sourceStep.ageMaximumSeconds", diagnostics.SimpleDdgiTransportSourceStepAgeMaximumSeconds);
-            AddSetting(settings, "gi.simpleDdgi.transport.solverInvalidationsPerSourceRefresh",
-                diagnostics.SimpleDdgiTransportSolverInvalidationsPerSourceRefresh);
-            AddSetting(settings, "gi.simpleDdgi.transport.globalConvergenceElapsedFrames", diagnostics.SimpleDdgiTransportGlobalConvergenceElapsedFrames);
-            AddSetting(settings, "gi.simpleDdgi.transport.calibrationChangeCount", diagnostics.SimpleDdgiTransportCalibrationChangeCount);
             AddSetting(settings, "gi.rayQuery.requested", diagnostics.GlobalIlluminationRayQueryRequested);
             AddSetting(settings, "gi.rayQuery.supported", diagnostics.GlobalIlluminationRayQuerySupported);
             AddSetting(settings, "gi.rayQuery.active", diagnostics.GlobalIlluminationRayQueryActive);
@@ -1708,19 +1737,8 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "ddgi.maxUpdatesPerFrame", diagnostics.DdgiMaxProbeUpdatesPerFrame);
             AddSetting(settings, "ddgi.requestBudget", diagnostics.DdgiProbeUpdateRequestBudget);
             AddSetting(settings, "ddgi.primaryRayBudget", diagnostics.DdgiProbeUpdatePrimaryRayBudget);
-            AddSetting(settings, "ddgi.scheduledRequestBudget", diagnostics.DdgiScheduledRequestBudget);
-            AddSetting(settings, "ddgi.scheduledPrimaryRayBudget", diagnostics.DdgiScheduledPrimaryRayBudget);
             AddSetting(settings, "ddgi.raysPerProbe", diagnostics.DdgiRaysPerProbe);
             AddSetting(settings, "ddgi.atlasMemoryBudgetBytes", diagnostics.DdgiAtlasMemoryBudgetBytes);
-            AddSetting(settings, "ddgi.adaptiveBudgetScale", diagnostics.DdgiAdaptiveBudgetScale);
-            AddSetting(settings, "ddgi.adaptiveBudgetReduced", diagnostics.DdgiAdaptiveBudgetReduced);
-            AddSetting(settings, "ddgi.emergencyDegrade", diagnostics.DdgiEmergencyDegradeActive);
-            AddSetting(settings, "ddgi.adaptiveBudgetReason", diagnostics.DdgiAdaptiveBudgetReason);
-            AddSetting(settings, "ddgi.effectiveMaxShadedLights", diagnostics.DdgiEffectiveMaxShadedLights);
-            AddSetting(settings, "ddgi.lightSelectionMode", diagnostics.DdgiLightSelectionMode);
-            AddSetting(settings, "ddgi.emissiveSourceRevision", diagnostics.DdgiEmissiveSourceRevision);
-            AddSetting(settings, "ddgi.gpuSchedulerFallback", diagnostics.DdgiGpuSchedulerFallbackActive);
-            AddSetting(settings, "ddgi.gpuSchedulerFallbackReason", diagnostics.DdgiGpuSchedulerFallbackReason);
 
             AddSetting(settings, "sampledAtlas.requested", diagnostics.SimpleDdgiSampledAtlasRequested);
             AddSetting(settings, "sampledAtlas.active", diagnostics.SimpleDdgiSampledAtlasActive);
@@ -1838,10 +1856,8 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "scheduler.completionSemantics", scheduling.CompletionSemantics);
             AddSetting(settings, "scheduler.policy.available", policy.IsAvailable ? 1 : 0);
             AddSetting(settings, "scheduler.policy.configuredRequestBudget", policy.ConfiguredRequestBudget);
-            AddSetting(settings, "scheduler.policy.effectiveRequestBudget", policy.EffectiveRequestBudget);
             AddSetting(settings, "scheduler.policy.targetGpuMicroseconds", policy.TargetGpuMicroseconds);
             AddSetting(settings, "scheduler.policy.deterministicFixedBudget", policy.DeterministicFixedBudget ? 1 : 0);
-            AddSetting(settings, "scheduler.policy.pressureReason", policy.PressureReason);
             AddSetting(settings, "scheduler.policy.unavailableReason", policy.UnavailableReason);
         }
 
@@ -1863,8 +1879,7 @@ namespace Njulf.Rendering.Diagnostics
                         state.Supported ? "1" : "0",
                         state.Requested ? "1" : "0",
                         state.Active ? "1" : "0",
-                        state.Status.ToString(),
-                        state.Reason
+                        state.Status.ToString()
                     }));
             }
         }

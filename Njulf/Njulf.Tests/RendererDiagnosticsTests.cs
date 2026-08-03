@@ -186,7 +186,7 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.DirectionalShadowPcfRadius, Is.EqualTo(0));
                 Assert.That(diagnostics.SpotShadowPcfRadius, Is.EqualTo(0));
                 Assert.That(diagnostics.PointShadowPcfRadius, Is.EqualTo(0));
-                Assert.That(diagnostics.ForwardShadowReceiverMeshletCount, Is.EqualTo(0));
+                Assert.That(diagnostics.ForwardShadowReceiverMeshletCapacity, Is.EqualTo(0));
                 Assert.That(diagnostics.SpotShadowsEnabled, Is.EqualTo(0));
                 Assert.That(diagnostics.SpotShadowCandidateCount, Is.EqualTo(0));
                 Assert.That(diagnostics.SpotShadowSelectedCount, Is.EqualTo(0));
@@ -1509,6 +1509,10 @@ namespace Njulf.Tests
                 Assert.That(low.DdgiAtlasMemoryBudgetBytes, Is.LessThan(medium.DdgiAtlasMemoryBudgetBytes));
                 Assert.That(medium.DdgiAtlasMemoryBudgetBytes, Is.LessThan(high.DdgiAtlasMemoryBudgetBytes));
                 Assert.That(high.DdgiAtlasMemoryBudgetBytes, Is.LessThan(ultra.DdgiAtlasMemoryBudgetBytes));
+                Assert.That(low.DdgiEmissiveTriangleBudget, Is.EqualTo(512));
+                Assert.That(medium.DdgiEmissiveTriangleBudget, Is.EqualTo(2_048));
+                Assert.That(high.DdgiEmissiveTriangleBudget, Is.EqualTo(GlobalIlluminationSettings.MaxDdgiEmissiveTriangleBudget));
+                Assert.That(ultra.DdgiEmissiveTriangleBudget, Is.EqualTo(GlobalIlluminationSettings.MaxDdgiEmissiveTriangleBudget));
                 Assert.That(low.DdgiMinimumProbeRefreshFrames, Is.GreaterThan(medium.DdgiMinimumProbeRefreshFrames));
                 Assert.That(medium.DdgiMinimumProbeRefreshFrames, Is.GreaterThan(high.DdgiMinimumProbeRefreshFrames));
                 Assert.That(high.DdgiMinimumProbeRefreshFrames, Is.GreaterThan(ultra.DdgiMinimumProbeRefreshFrames));

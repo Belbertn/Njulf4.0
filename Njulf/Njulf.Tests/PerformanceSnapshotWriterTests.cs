@@ -746,6 +746,7 @@ public sealed class PerformanceSnapshotWriterTests
         string build = VulkanRenderer.CreatePerformanceCaptureBuildConfiguration("Standard");
         string applicationVersion = VulkanRenderer.ResolvePerformanceCaptureApplicationVersion();
         string commit = VulkanRenderer.ResolvePerformanceCaptureCommit();
+        string executableHash = VulkanRenderer.ResolvePerformanceCaptureExecutableHash();
         string shaderBundleHash = VulkanRenderer.ResolvePerformanceCaptureShaderBundleHash();
 
         Assert.Multiple(() =>
@@ -755,6 +756,11 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(build, Does.Not.StartWith("unknown"));
             Assert.That(applicationVersion, Does.Not.StartWith("unknown"));
             Assert.That(commit, Does.Not.StartWith("unknown"));
+            Assert.That(executableHash, Does.StartWith("sha256:"));
+            Assert.That(executableHash.Length, Is.EqualTo("sha256:".Length + 64));
+            Assert.That(
+                executableHash,
+                Is.EqualTo(VulkanRenderer.ResolvePerformanceCaptureExecutableHash()));
             Assert.That(shaderBundleHash, Does.StartWith("sha256:"));
             Assert.That(shaderBundleHash.Length, Is.EqualTo("sha256:".Length + 64));
             Assert.That(shaderBundleHash, Is.EqualTo(VulkanRenderer.ResolvePerformanceCaptureShaderBundleHash()));
@@ -885,6 +891,48 @@ public sealed class PerformanceSnapshotWriterTests
             if (Directory.Exists(directory))
                 Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Test]
+    public void CounterSemanticManifest_CoversNestedCapacityGatherConvergenceAndDecalCounters()
+    {
+        IReadOnlyList<PerformanceMetricSemanticEntry> semantics =
+            PerformanceSnapshotWriter.CreateCounterSemantics();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                semantics.Single(entry => entry.Path ==
+                    "Diagnostics.ForwardShadowReceiverMeshletCapacity").Semantic,
+                Is.EqualTo(PerformanceMetricSemantic.Capacity));
+            Assert.That(
+                semantics.Single(entry => entry.Path ==
+                    "Diagnostics.SimpleDdgiUploadTiming.CapacityDetails.IrradianceAtlas.RequiredBytes").Semantic,
+                Is.EqualTo(PerformanceMetricSemantic.Capacity));
+            Assert.That(
+                semantics.Single(entry => entry.Path ==
+                    "Diagnostics.SimpleDdgiUploadTiming.CapacityDetails.TransitionCount").Semantic,
+                Is.EqualTo(PerformanceMetricSemantic.Exact));
+            Assert.That(
+                semantics.Single(entry => entry.Path ==
+                    "Diagnostics.SimpleDdgiGatherMultiplicity.TwoGatherPixelCount").Semantic,
+                Is.EqualTo(PerformanceMetricSemantic.SampledEstimate));
+            Assert.That(
+                semantics.Single(entry => entry.Path ==
+                    "Diagnostics.DecalFragmentAttribution.EstimatedInvocationCount").Semantic,
+                Is.EqualTo(PerformanceMetricSemantic.SampledEstimate));
+            Assert.That(
+                semantics.Single(entry => entry.Path ==
+                    "Diagnostics.SimpleDdgiTransportConvergence.Rings[*].ScheduledRayCount").Semantic,
+                Is.EqualTo(PerformanceMetricSemantic.EmittedWork));
+            Assert.That(
+                semantics.Single(entry => entry.Path ==
+                    "Diagnostics.SimpleDdgiTransportConvergence.Rings[*].ResidualDistributionCounts[*]").Semantic,
+                Is.EqualTo(PerformanceMetricSemantic.Exact));
+            Assert.That(
+                semantics.Select(entry => entry.Path),
+                Is.Unique);
+        });
     }
 
     private static System.Text.Json.Nodes.JsonObject JsonObjectCapture(System.Text.Json.Nodes.JsonObject root) =>

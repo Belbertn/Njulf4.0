@@ -16,6 +16,9 @@ namespace Njulf.Rendering.Resources
 
         public int Count => _count;
 
+        public bool HasDue(ulong currentFrameSerial) =>
+            _count > 0 && _heapFrames[0] <= currentFrameSerial;
+
         public void EnsureProbeCapacity(int probeCount)
         {
             probeCount = Math.Max(0, probeCount);

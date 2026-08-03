@@ -58,6 +58,8 @@ public sealed class SimpleDdgiPersistentProbeQueuesTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(heap.HasDue(4), Is.False);
+            Assert.That(heap.HasDue(5), Is.True);
             Assert.That(heap.TryPopDue(4, out _), Is.False);
             Assert.That(heap.TryPopDue(5, out int first), Is.True);
             Assert.That(first, Is.EqualTo(3));

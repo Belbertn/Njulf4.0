@@ -111,6 +111,7 @@ namespace Njulf.Rendering.Resources
         public const ulong RayResultBytes = 32;
         public const uint TransportRayCacheAbiVersion = 2;
         public const ulong TransportRayCacheBytes = 36;
+        public const ulong GraphSafePlaceholderBytes = 16;
         public const ulong ProbeStateBytesPerProbe = 32;
         public const ulong ProbeUpdateBytes = 32;
         public const ulong RelocationClassificationBytesPerProbe = 48;
@@ -140,6 +141,10 @@ namespace Njulf.Rendering.Resources
         public ulong WorkBytes => checked(UpdateQueueBytes + RayScratchBytes);
 
         public ulong LiveBytes => checked(PersistentBytes + WorkBytes);
+
+        public ulong ProbeStateReadbackBytesPerBuffer => ReadbackBufferCount > 0
+            ? ProbeStateReadbackBytes / checked((ulong)ReadbackBufferCount)
+            : 0UL;
 
         public static SimpleDdgiMemoryPlan Empty { get; } = new();
 
@@ -181,28 +186,21 @@ namespace Njulf.Rendering.Resources
                 checked(probeCount64 * VisibilityBytesPerProbe));
             ulong transportIrradianceBytes = concreteTransportBuffers
                 ? AtLeastOneAllocation(checked(probeCount64 * IrradianceBytesPerProbe))
-                : 0UL;
+                : AtLeastOneAllocation(0UL);
             ulong transportSourceCacheBytes = concreteTransportBuffers
                 ? AtLeastOneAllocation(checked(
                     probeCount64 * rayCount64 * TransportRayCacheBytes))
-                : 0UL;
+                : AtLeastOneAllocation(0UL);
             ulong stateBytes = AtLeastOneAllocation(
                 checked(probeCount64 * ProbeStateBytesPerProbe));
             ulong queueBytes = AtLeastOneAllocation(
                 checked(updateCount64 * ProbeUpdateBytes));
             ulong relocationBytes = AtLeastOneAllocation(
                 checked(probeCount64 * RelocationClassificationBytesPerProbe));
-            ulong classificationReadbackProbeCount = checked((ulong)Math.Min(
-                probes,
-                ClassificationReadbackProbeCapacity));
             ulong readbackBytes = readbacks == 0
                 ? 0UL
-                : checked(
-                    (ulong)readbacks *
-                    AtLeastOneAllocation(checked(
-                        probeCount64 * ProbeStateBytesPerProbe +
-                        classificationReadbackProbeCount *
-                        RelocationClassificationBytesPerProbe)));
+                : checked((ulong)readbacks *
+                    ResolveProbeStateReadbackBufferBytes(probes));
             ulong rayScratchBytes = AtLeastOneAllocation(checked(
                 updateCount64 * rayCount64 * RayResultBytes));
             ulong sampledImageBytes = checked(
@@ -226,6 +224,28 @@ namespace Njulf.Rendering.Resources
                 readbackBytes,
                 rayScratchBytes,
                 sampledImageBytes);
+        }
+
+        /// <summary>
+        /// Returns the one authoritative per-frame readback allocation. Probe
+        /// state is complete because it drives scheduling; classification is a
+        /// bounded rotating diagnostics window. Runtime allocation and capacity
+        /// transition checks must use this same value to avoid release/recreate
+        /// churn on every frame.
+        /// </summary>
+        public static ulong ResolveProbeStateReadbackBufferBytes(int probeCount)
+        {
+            int probes = Math.Clamp(
+                probeCount,
+                0,
+                GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount);
+            ulong classificationProbeCount = checked((ulong)Math.Min(
+                probes,
+                ClassificationReadbackProbeCapacity));
+            return AtLeastOneAllocation(checked(
+                (ulong)probes * ProbeStateBytesPerProbe +
+                classificationProbeCount *
+                RelocationClassificationBytesPerProbe));
         }
 
         public static int ResolveUpdateRequestCapacity(
@@ -262,7 +282,7 @@ namespace Njulf.Rendering.Resources
         }
 
         private static ulong AtLeastOneAllocation(ulong bytes) =>
-            Math.Max(16UL, bytes);
+            Math.Max(GraphSafePlaceholderBytes, bytes);
     }
 
     public sealed record SimpleDdgiLayoutReport(

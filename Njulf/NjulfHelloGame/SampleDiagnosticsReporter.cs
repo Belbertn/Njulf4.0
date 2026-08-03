@@ -180,8 +180,10 @@ internal sealed class SampleDiagnosticsReporter
             $"maskMaterials={diagnostics.MaskMaterialCount}, blendMaterials={diagnostics.BlendMaterialCount}, decalMaterials={diagnostics.GeometryDecalMaterialCount}, " +
             $"sortCandidates={diagnostics.TransparentSortCandidateCount}, sortUs={diagnostics.TransparentSortMicroseconds}, overflow={diagnostics.TransparentOverflowCount}, " +
             $"weightedOit={diagnostics.WeightedOitEnabled}, oitMiB={diagnostics.WeightedOitRenderTargetBytes / (1024.0 * 1024.0):F1}, " +
-            $"decalDebug={diagnostics.DecalDebugView}, decalsEnabled={diagnostics.GeometryDecalsEnabled}, receiveDdgi={diagnostics.DecalReceiveGlobalIllumination}, decalBias={diagnostics.GeometryDecalDepthBias:F5}, " +
-            $"decalSlopeBias={diagnostics.GeometryDecalSlopeScaledDepthBias:F2}.");
+            $"decalDebug={diagnostics.DecalDebugView}, decalsEnabled={diagnostics.GeometryDecalsEnabled}, receiveDdgi={diagnostics.DecalReceiveGlobalIllumination}, receiveShadows={diagnostics.DecalReceiveShadows}, decalBias={diagnostics.GeometryDecalDepthBias:F5}, " +
+            $"decalSlopeBias={diagnostics.GeometryDecalSlopeScaledDepthBias:F2}, " +
+            $"decalEstimated invocation/backfaceKill/coverageKill/surviving/ddgiGather/shadowEval={diagnostics.DecalFragmentAttribution.EstimatedInvocationCount}/{diagnostics.DecalFragmentAttribution.EstimatedBackFaceKilledCount}/{diagnostics.DecalFragmentAttribution.EstimatedCoverageKilledCount}/{diagnostics.DecalFragmentAttribution.EstimatedSurvivingCount}/{diagnostics.DecalFragmentAttribution.EstimatedDdgiGatherCount}/{diagnostics.DecalFragmentAttribution.EstimatedShadowEvaluationCount}, " +
+            $"decalEstimateStrideWeight={DecalFragmentAttributionCounters.SampleStride}/{DecalFragmentAttributionCounters.SampleWeight}.");
         Console.WriteLine(
             $"Frame diagnostics animation: enabled={diagnostics.AnimationEnabled}, skinning={diagnostics.AnimationSkinningMode}, debug={diagnostics.AnimationDebugView}, " +
             $"skinnedObjects={diagnostics.SkinnedObjectCount}, skeletons={diagnostics.SkeletonCount}, skins={diagnostics.SkinCount}, clips={diagnostics.AnimationClipCount}, " +
@@ -280,7 +282,7 @@ internal sealed class SampleDiagnosticsReporter
             $"Frame diagnostics shadows: enabled={diagnostics.DirectionalShadowsEnabled}, map={diagnostics.DirectionalShadowMapSize}, " +
             $"cascades={diagnostics.DirectionalShadowCascadeCount}, lightIndex={diagnostics.ShadowedDirectionalLightIndex}, " +
             $"pcf={diagnostics.DirectionalShadowPcfRadius}/{diagnostics.SpotShadowPcfRadius}/{diagnostics.PointShadowPcfRadius}, " +
-            $"forwardReceivers={diagnostics.ForwardShadowReceiverMeshletCount}, debug={diagnostics.ShadowDebugView}, " +
+            $"forwardReceiverCapacity={diagnostics.ForwardShadowReceiverMeshletCapacity}, debug={diagnostics.ShadowDebugView}, " +
             $"normalBias={diagnostics.ShadowNormalBias:F4}, slopeBias={diagnostics.ShadowSlopeScaledDepthBias:F2}.");
         DirectionalShadowRuntimeDiagnostics directionalShadow = diagnostics.DirectionalShadowRuntime;
         DirectionalShadowReceiverCounters shadowReceivers = directionalShadow.ReceiverCounters;
@@ -372,7 +374,7 @@ internal sealed class SampleDiagnosticsReporter
             $"uploadUs={diagnostics.CpuReflectionProbeUploadMicroseconds}, captureRecordUs={diagnostics.CpuReflectionProbeCaptureRecordMicroseconds}, " +
             $"prefilterRecordUs={diagnostics.CpuReflectionProbePrefilterRecordMicroseconds}.");
         Console.WriteLine(
-            $"Frame diagnostics culling: objectCandidatesCpu={diagnostics.ObjectCandidatesCpu}, objectFrustumCulledCpu={diagnostics.ObjectFrustumCulledCpu}, " +
+            $"Frame diagnostics culling: cpuListRole=cameraInvariantSuperset, objectCandidatesCpu={diagnostics.ObjectCandidatesCpu}, objectFrustumCulledCpu={diagnostics.ObjectFrustumCulledCpu}, " +
             $"meshletCandidatesCpu={diagnostics.MeshletCandidatesCpu}, meshletFrustumCulledCpu={diagnostics.MeshletFrustumCulledCpu}, " +
             $"meshletLodSkippedCpu={diagnostics.MeshletLodSkippedCpu}, lod0Submitted={diagnostics.MeshletLod0SubmittedCpu}, " +
             $"lod1Submitted={diagnostics.MeshletLod1SubmittedCpu}, lod2Submitted={diagnostics.MeshletLod2SubmittedCpu}, " +
@@ -387,7 +389,7 @@ internal sealed class SampleDiagnosticsReporter
             $"fallback='{diagnostics.SceneSubmissionFallbackReason}', compactionSkip='{diagnostics.SceneSubmissionCompactionSkipReason}', indirectSkip='{diagnostics.SceneSubmissionIndirectDispatchSkipReason}', " +
             $"gpuSettings={diagnostics.SceneSubmissionGpuCompactionEnabled}/{diagnostics.SceneSubmissionGpuLodSelectionEnabled}/{diagnostics.SceneSubmissionGpuShadowCompactionEnabled}, " +
             $"gpuCandidates={diagnostics.SceneSubmissionGpuOpaqueCandidateCount}, gpuRejected={diagnostics.SceneSubmissionGpuOpaqueFrustumRejectedCount}, gpuOverflow={diagnostics.SceneSubmissionGpuOpaqueOverflowCount}, " +
-            $"gpuLod={diagnostics.SceneSubmissionGpuLod0EmittedCount}/{diagnostics.SceneSubmissionGpuLod1EmittedCount}/{diagnostics.SceneSubmissionGpuLod2EmittedCount}, " +
+            $"gpuLod={diagnostics.SceneSubmissionGpuLod0EmittedCount}/{diagnostics.SceneSubmissionGpuLod1EmittedCount}/{diagnostics.SceneSubmissionGpuLod2EmittedCount}, gpuLodDecimated={diagnostics.SceneSubmissionGpuOpaqueLodDecimatedCount}, " +
             $"gpuDepth={diagnostics.SceneSubmissionGpuCompactedSolidDepthMeshletCount}/{diagnostics.SceneSubmissionGpuCompactedMaskedDepthMeshletCount}, depthOverflow={diagnostics.SceneSubmissionGpuDepthOverflowCount}, " +
             $"gpuDirShadow={diagnostics.SceneSubmissionGpuCompactedDirectionalShadowMeshletCount}/{diagnostics.SceneSubmissionGpuDirectionalShadowCandidateCount}, dirShadowOverflow={diagnostics.SceneSubmissionGpuDirectionalShadowOverflowCount}, " +
             $"validation='{diagnostics.SceneSubmissionValidationStatus}', validationCounts={diagnostics.SceneSubmissionValidationCpuOpaqueCount}/{diagnostics.SceneSubmissionValidationGpuOpaqueCount}, " +
@@ -452,7 +454,10 @@ internal sealed class SampleDiagnosticsReporter
             $"{diagnostics.DdgiTraceReflectDisabledAlbedoLuminance:F4}/{diagnostics.DdgiTraceReflectDisabledHitCount}, " +
             $"ddgiSampledProbeUse currentFrustum/sideRear/staleAge={diagnostics.DdgiSampledProbeCurrentFrustumCount}/{diagnostics.DdgiSampledProbeSideRearCount}/{diagnostics.DdgiSampledProbeStaleAgeCount}, " +
             $"ddgiSupportReject inactive/zeroAlpha/lowQuality={diagnostics.DdgiSupportRejectedInactiveCount}/{diagnostics.DdgiSupportRejectedZeroIrradianceAlphaCount}/{diagnostics.DdgiSupportRejectedLowQualityCount}, " +
-            $"ddgiFastGather attempt/accepted/reject spatial/support/data/ownership={diagnostics.DdgiFastGatherAttemptCount}/{diagnostics.DdgiFastGatherAcceptedCount}/{diagnostics.DdgiFastGatherRejectedZeroSpatialCount}/{diagnostics.DdgiFastGatherRejectedZeroSupportCount}/{diagnostics.DdgiFastGatherRejectedZeroDataCount}/{diagnostics.DdgiFastGatherRejectedZeroOwnershipCount}, " +
+            $"ddgiFastGather status={diagnostics.DdgiFastGatherStatus}, attempt/accepted/reject spatial/support/data/ownership={diagnostics.DdgiFastGatherAttemptCount}/{diagnostics.DdgiFastGatherAcceptedCount}/{diagnostics.DdgiFastGatherRejectedZeroSpatialCount}/{diagnostics.DdgiFastGatherRejectedZeroSupportCount}/{diagnostics.DdgiFastGatherRejectedZeroDataCount}/{diagnostics.DdgiFastGatherRejectedZeroOwnershipCount}, " +
+            $"simpleGather one/two/recovery={diagnostics.SimpleDdgiGatherMultiplicity.OneGatherPixelCount}/{diagnostics.SimpleDdgiGatherMultiplicity.TwoGatherPixelCount}/{diagnostics.SimpleDdgiGatherMultiplicity.RecoveryGatherPixelCount}, " +
+            $"simpleGatherRates one/second/recovery={diagnostics.SimpleDdgiGatherMultiplicity.OneGatherFraction:P2}/{diagnostics.SimpleDdgiGatherMultiplicity.SecondGatherFraction:P2}/{diagnostics.SimpleDdgiGatherMultiplicity.RecoveryGatherFraction:P2}, " +
+            $"secondReasons ring/missing/recovery/edge/ownership/debug={diagnostics.SimpleDdgiGatherMultiplicity.RingTransitionBlendCount}/{diagnostics.SimpleDdgiGatherMultiplicity.MissingOrInvalidPrimarySupportCount}/{diagnostics.SimpleDdgiGatherMultiplicity.RecoveryCount}/{diagnostics.SimpleDdgiGatherMultiplicity.CoverageEdgeCount}/{diagnostics.SimpleDdgiGatherMultiplicity.PrimaryOwnershipBelowThresholdCount}/{diagnostics.SimpleDdgiGatherMultiplicity.DebugOrDiagnosticOnlyCount}, " +
             $"ddgiShaderFallback attempt/accepted/empty={diagnostics.DdgiShaderGatherFallbackAttemptCount}/{diagnostics.DdgiShaderGatherFallbackAcceptedCount}/{diagnostics.DdgiShaderGatherFallbackEmptyCount}, " +
             $"ddgiTrace diagSamples/hit/miss/rayLum/directLum/directNoShadowLum/emissiveLum/stableLum/skyLum/zeroDirect/directHit=" +
             $"{diagnostics.DdgiTraceEnergySampleCount}/{diagnostics.DdgiTraceEnergyHitCount}/{diagnostics.DdgiTraceEnergyMissCount}/" +
@@ -476,8 +481,20 @@ internal sealed class SampleDiagnosticsReporter
             $"warmup={diagnostics.DdgiWarmupState}:{diagnostics.DdgiWarmedVisibleProbeFraction:F3}/{diagnostics.DdgiWarmedLocalProbeFraction:F3}/{diagnostics.DdgiWarmedCascade0ProbeFraction:F3}, " +
             $"volumeDesign={FormatDdgiVolumeDesignSummary(diagnostics)}, " +
             $"classification={diagnostics.DdgiProbeClassificationCount}, cpuSsgiUs={diagnostics.CpuSsgiRecordMicroseconds}, cpuDdgiUs={diagnostics.CpuDdgiRecordMicroseconds}, " +
+            $"cpuSimpleDdgiUs={diagnostics.CpuSimpleDdgiRecordMicroseconds}, cpuFarFieldUs={diagnostics.CpuFarFieldRecordMicroseconds}, cpuGiUs={diagnostics.CpuGlobalIlluminationRecordMicroseconds}, cpuAsBuildUs={diagnostics.CpuAccelerationStructureBuildMicroseconds}, " +
             $"gpuSsgiUs={diagnostics.GpuSsgiTraceMicroseconds + diagnostics.GpuSsgiTemporalMicroseconds + diagnostics.GpuSsgiDenoiseMicroseconds}, " +
             $"gpuDdgiUs={diagnostics.GpuDdgiUpdateMicroseconds}, bytes={diagnostics.GlobalIlluminationRenderTargetBytes + diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes + diagnostics.AccelerationStructureBytes}.");
+        SimpleDdgiUploadTiming upload = diagnostics.SimpleDdgiUploadTiming;
+        Console.WriteLine(
+            $"Frame diagnostics Simple DDGI upload: totalUs={upload.TotalMicroseconds}, " +
+            $"layout/readback/capacity/invalidation/scheduler/importance/queue/lifecycle/atlas/bufferUpload/otherUs=" +
+            $"{upload.LayoutMicroseconds}/{upload.ReadbackMicroseconds}/{upload.CapacityMicroseconds}/{upload.InvalidationMicroseconds}/" +
+            $"{upload.SchedulerRefreshMicroseconds}/{upload.ImportanceMicroseconds}/{upload.QueueBuildMicroseconds}/{upload.LifecycleTelemetryMicroseconds}/" +
+            $"{upload.AtlasMaintenanceMicroseconds}/{upload.BufferUploadMicroseconds}/{upload.OtherMicroseconds}, " +
+            $"readbackProbes={upload.ReadbackProbeCount}, schedulerEntries={upload.SchedulerEntryRefreshCount}, " +
+            $"schedulerWake={upload.SchedulerWakeEntryRefreshCount}/{upload.SchedulerWakeRefreshBudget}:saturated={upload.SchedulerWakeBudgetSaturated}, " +
+            $"schedulerFullRebuilds={upload.SchedulerFullRebuildCount}, visibilityEntries={upload.VisibilityEntryRefreshCount}, " +
+            $"stateDirtySlots/runs={upload.StateDirtySlotCount}/{upload.StateUploadRunCount}.");
     }
 
     private static void PrintDdgiSchedulerDiagnostics(RendererDiagnostics diagnostics)

@@ -311,6 +311,11 @@ namespace Njulf.Tests
                         false,
                         ddgiLayeredReceiverCountersEnabled: true) & 32u,
                     Is.EqualTo(32u));
+                Assert.That(
+                    GPUForwardPushConstants.PackDiagnosticFlags(
+                        false,
+                        decalReceiveShadows: true) & 64u,
+                    Is.EqualTo(64u));
             });
         }
 
@@ -789,6 +794,10 @@ namespace Njulf.Tests
                 Assert.That(
                     ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_LOD_FALLBACK"),
                     Is.EqualTo(FieldWordOffset<GPUSceneSubmissionCounters>(nameof(GPUSceneSubmissionCounters.DirectionalShadowLodFallbackCount))));
+                Assert.That(
+                    ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_OPAQUE_LOD_DECIMATED"),
+                    Is.EqualTo(FieldWordOffset<GPUSceneSubmissionCounters>(nameof(GPUSceneSubmissionCounters.OpaqueLodDecimatedCount))));
+                Assert.That(ReadShaderFile("common.glsl"), Does.Contain("uint OpaqueLodDecimatedCount;"));
 
                 Assert.That(ReadShaderUIntConstant("shadow_depth.task", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_STATIC_SHADOW_BASE"), Is.EqualTo(staticBase));
                 Assert.That(ReadShaderUIntConstant("shadow_depth.task", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_DYNAMIC_SHADOW_BASE"), Is.EqualTo(dynamicBase));

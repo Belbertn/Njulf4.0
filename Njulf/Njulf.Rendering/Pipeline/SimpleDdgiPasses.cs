@@ -32,6 +32,33 @@ namespace Njulf.Rendering.Pipeline
             return checked((uint)Math.Max(1UL, (rayCount + 63UL) / 64UL));
         }
 
+        protected override void Dispatch(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            GPUSimpleDdgiPushConstants pushConstants)
+        {
+            ReadOnlySpan<SimpleDdgiRayDispatchBatch> batches =
+                VolumeManager.RayDispatchBatches;
+            if (batches.IsEmpty)
+            {
+                base.Dispatch(cmd, sceneData, pushConstants);
+                return;
+            }
+
+            foreach (ref readonly SimpleDdgiRayDispatchBatch batch in batches)
+            {
+                pushConstants.DispatchQueueOffset = checked((uint)batch.QueueOffset);
+                pushConstants.DispatchProbeCount = checked((uint)batch.ProbeCount);
+                pushConstants.DispatchRaysPerProbe = checked((uint)batch.RaysPerProbe);
+                ulong rayCount = checked(
+                    (ulong)batch.ProbeCount * (ulong)batch.RaysPerProbe);
+                PushConstantsAndDispatch(
+                    cmd,
+                    pushConstants,
+                    checked((uint)Math.Max(1UL, (rayCount + 63UL) / 64UL)));
+            }
+        }
+
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             // The trace is the transaction producer.  If the ray-query resource is
@@ -121,6 +148,33 @@ namespace Njulf.Rendering.Pipeline
         {
             ulong rayCount = checked((ulong)Math.Max(0, VolumeManager.ProbesToUpdate) * (ulong)Math.Max(1, VolumeManager.RaysPerProbe));
             return checked((uint)Math.Max(1UL, (rayCount + 63UL) / 64UL));
+        }
+
+        protected override void Dispatch(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            GPUSimpleDdgiPushConstants pushConstants)
+        {
+            ReadOnlySpan<SimpleDdgiRayDispatchBatch> batches =
+                VolumeManager.RayDispatchBatches;
+            if (batches.IsEmpty)
+            {
+                base.Dispatch(cmd, sceneData, pushConstants);
+                return;
+            }
+
+            foreach (ref readonly SimpleDdgiRayDispatchBatch batch in batches)
+            {
+                pushConstants.DispatchQueueOffset = checked((uint)batch.QueueOffset);
+                pushConstants.DispatchProbeCount = checked((uint)batch.ProbeCount);
+                pushConstants.DispatchRaysPerProbe = checked((uint)batch.RaysPerProbe);
+                ulong rayCount = checked(
+                    (ulong)batch.ProbeCount * (ulong)batch.RaysPerProbe);
+                PushConstantsAndDispatch(
+                    cmd,
+                    pushConstants,
+                    checked((uint)Math.Max(1UL, (rayCount + 63UL) / 64UL)));
+            }
         }
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
@@ -656,6 +710,26 @@ namespace Njulf.Rendering.Pipeline
             }
 
             GPUSimpleDdgiPushConstants pushConstants = CreatePushConstants(sceneData);
+            Dispatch(cmd, sceneData, pushConstants);
+            InsertWriteBarrier(cmd);
+        }
+
+        protected virtual void Dispatch(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            GPUSimpleDdgiPushConstants pushConstants)
+        {
+            PushConstantsAndDispatch(
+                cmd,
+                pushConstants,
+                CalculateGroupCount(sceneData));
+        }
+
+        protected void PushConstantsAndDispatch(
+            CommandBuffer cmd,
+            GPUSimpleDdgiPushConstants pushConstants,
+            uint groupCount)
+        {
             _context.Api.CmdPushConstants(
                 cmd,
                 _pipelineLayout,
@@ -663,9 +737,7 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 (uint)Marshal.SizeOf<GPUSimpleDdgiPushConstants>(),
                 &pushConstants);
-
-            _context.Api.CmdDispatch(cmd, CalculateGroupCount(sceneData), 1, 1);
-            InsertWriteBarrier(cmd);
+            _context.Api.CmdDispatch(cmd, groupCount, 1, 1);
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

@@ -32,6 +32,9 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint TransportWriteIrradianceAtlasBufferIndex;
     uint TransportGeneration;
     uint PrimaryDirectionalLightIndex;
+    uint DispatchQueueOffset;
+    uint DispatchProbeCount;
+    uint DispatchRaysPerProbe;
 } pc;
 
 const float SIMPLE_DDGI_RELOCATION_TARGET_DISTANCE = 0.10;
@@ -40,12 +43,12 @@ const float SIMPLE_DDGI_RELOCATION_MIN_BACKFACE_RATIO = 0.10;
 
 vec4 ReadSimpleRayDirectionHit(uint rayResultIndex)
 {
-    return ReadStorageVec4(pc.RayResultScratchBufferIndex, rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 4u);
+    return ReadStorageAlignedVec4Uniform(pc.RayResultScratchBufferIndex, rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 4u);
 }
 
 uint ReadSimpleRayVisibilityHit(uint rayResultIndex)
 {
-    return ReadStorageWord(
+    return ReadStorageWordUniform(
         pc.RayResultScratchBufferIndex,
         rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 7u);
 }
@@ -64,12 +67,12 @@ void WriteRelocationClassification(
     float hitRatio)
 {
     uint baseWord = probeIndex * SIMPLE_DDGI_RELOCATION_CLASSIFICATION_STRIDE_WORDS;
-    WriteStorageVec4(pc.RelocationClassificationBufferIndex, baseWord, vec4(relocation, relocationDistance));
-    WriteStorageVec4(pc.RelocationClassificationBufferIndex, baseWord + 4u, vec4(activeWeight, softInvalidScore, closeRatio, backfaceRatio));
+    WriteStorageVec4Uniform(pc.RelocationClassificationBufferIndex, baseWord, vec4(relocation, relocationDistance));
+    WriteStorageVec4Uniform(pc.RelocationClassificationBufferIndex, baseWord + 4u, vec4(activeWeight, softInvalidScore, closeRatio, backfaceRatio));
     // Statistics.z was previously unused. Keeping the hard score alongside the
     // raw ratios makes the production classifier observable without changing
     // the 48-byte ABI consumed by debug tooling and readback.
-    WriteStorageVec4(pc.RelocationClassificationBufferIndex, baseWord + 8u, vec4(nearestHitDistance, missRatio, hardInvalidScore, hitRatio));
+    WriteStorageVec4Uniform(pc.RelocationClassificationBufferIndex, baseWord + 8u, vec4(nearestHitDistance, missRatio, hardInvalidScore, hitRatio));
 }
 
 void main()

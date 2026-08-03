@@ -5,6 +5,176 @@ using System.Collections.Generic;
 
 namespace Njulf.Rendering.Data
 {
+    [Flags]
+    public enum SimpleDdgiCapacityTransitionReason : uint
+    {
+        None = 0,
+        InitialAllocation = 1u << 0,
+        QualityTier = 1u << 1,
+        Topology = 1u << 2,
+        ProbeCapacity = 1u << 3,
+        RayCapacity = 1u << 4,
+        RequestCapacity = 1u << 5,
+        ReadbackMode = 1u << 6,
+        SampledAtlasMode = 1u << 7,
+        SampledAtlasBudget = 1u << 8,
+        TransportMode = 1u << 9,
+        LiveResourceMismatch = 1u << 10,
+        FeatureDisabled = 1u << 11
+    }
+
+    /// <summary>
+    /// Byte-exact evidence for one named capacity owner. A resource can be
+    /// listed without transitioning so snapshots can distinguish a stable
+    /// provisioned capacity from emitted work.
+    /// </summary>
+    public readonly record struct SimpleDdgiCapacityResourceTelemetry(
+        ulong PreviousBytes,
+        ulong RequiredBytes,
+        bool Transitioned);
+
+    public enum SimpleDdgiTransportProbeStateReason
+    {
+        Inactive = 0,
+        SourceStale = 1,
+        GlobalConvergenceBarrier = 2,
+        InvalidResidual = 3,
+        MinimumSolverGenerationIncomplete = 4,
+        ResidualAboveThreshold = 5,
+        StableWindowIncomplete = 6,
+        Converged = 7,
+        Count = 8
+    }
+
+    public sealed record SimpleDdgiTransportRingConvergenceTelemetry(
+        int VolumeIndex,
+        SimpleDdgiVolumePurpose Purpose,
+        int ProbeCount,
+        int SourceReadyProbeCount,
+        int SourceStaleProbeCount,
+        int PendingProbeCount,
+        int ConvergedProbeCount,
+        IReadOnlyList<int> ProbeStateReasonCounts,
+        IReadOnlyList<int> ResidualDistributionCounts,
+        IReadOnlyList<int> SourceEpochDistributionCounts,
+        IReadOnlyList<int> SolverGenerationDistributionCounts)
+    {
+        public int ScheduledProbeCount { get; init; }
+        public ulong ScheduledRayCount { get; init; }
+        public int ResidualQualifiedNotConvergedProbeCount { get; init; }
+        public int SolverCompletionLatencySampleCount { get; init; }
+        public int SolverCompletionLatencyP50Frames { get; init; }
+        public int SolverCompletionLatencyP95Frames { get; init; }
+        public int SolverCompletionLatencyMaxFrames { get; init; }
+        /// <summary>
+        /// Work-weighted attribution from the inclusive transport timestamp;
+        /// this is an estimate until the ring owns a distinct timestamp scope.
+        /// </summary>
+        public double EstimatedTransportMilliseconds { get; init; }
+        /// <summary>Probe-weighted attribution from the inclusive blend timestamp.</summary>
+        public double EstimatedBlendMilliseconds { get; init; }
+    }
+
+    public sealed record SimpleDdgiTransportConvergenceTelemetry(
+        int ReadbackValid,
+        int ParticipatingProbeCount,
+        int SourceRepairProbeCount,
+        int PendingConvergenceProbeCount,
+        int ConvergedProbeCount,
+        int InactiveProbeCount,
+        ulong DispatchLaneCount,
+        ulong UsefulDispatchLaneCount,
+        ulong NoOpDispatchLaneCount,
+        float ResidualThreshold,
+        IReadOnlyList<SimpleDdgiTransportRingConvergenceTelemetry> Rings)
+    {
+        public int ResidualQualifiedNotConvergedProbeCount { get; init; }
+        /// <summary>
+        /// Source-stale participants whose only reason is scheduled periodic or
+        /// inactive-classification maintenance. They are eligible settled probes
+        /// waiting for their bounded background refresh, not urgent repair work.
+        /// </summary>
+        public int RoutineSourceRepairProbeCount { get; init; }
+        /// <summary>
+        /// Source-ready probes temporarily solving because a scheduled refresh
+        /// woke their local transport neighborhood.
+        /// </summary>
+        public int RoutineMaintenancePendingProbeCount { get; init; }
+        public int DispatchBatchCount { get; init; }
+        public static SimpleDdgiTransportConvergenceTelemetry Empty { get; } = new(
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0f,
+            Array.Empty<SimpleDdgiTransportRingConvergenceTelemetry>());
+    }
+
+    /// <summary>
+    /// Allocation-free attribution for Simple-DDGI capacity reconciliation.
+    /// StableKeyHit is the production fast path: no plan, driver lookup,
+    /// descriptor registration, resource transition, or device wait occurred.
+    /// </summary>
+    public readonly record struct SimpleDdgiCapacityTiming
+    {
+        public bool StableKeyHit { get; init; }
+        public long CpuProbeStateMicroseconds { get; init; }
+        public long PlanCreationMicroseconds { get; init; }
+        public long PredicateMicroseconds { get; init; }
+        public long BufferSizeLookupMicroseconds { get; init; }
+        public long DeviceIdleWaitMicroseconds { get; init; }
+        public long BufferTransitionMicroseconds { get; init; }
+        public long ReadbackReconciliationMicroseconds { get; init; }
+        public long SampledAtlasBudgetMicroseconds { get; init; }
+        public long SampledAtlasEnsureMicroseconds { get; init; }
+        public long DescriptorRegistrationMicroseconds { get; init; }
+        public long RetiredResourceDestructionMicroseconds { get; init; }
+        public int BufferSizeLookupCount { get; init; }
+        public int TransitionCount { get; init; }
+        public int DeviceIdleWaitCount { get; init; }
+        public int DescriptorRegistrationCount { get; init; }
+        public int RetiredResourceDestructionCount { get; init; }
+        public ulong RequiredLiveBytes { get; init; }
+        public SimpleDdgiCapacityTransitionReason TransitionReason { get; init; }
+        public SimpleDdgiCapacityResourceTelemetry IrradianceAtlas { get; init; }
+        public SimpleDdgiCapacityResourceTelemetry VisibilityAtlas { get; init; }
+        public SimpleDdgiCapacityResourceTelemetry TransportIrradiance { get; init; }
+        public SimpleDdgiCapacityResourceTelemetry TransportSourceCache { get; init; }
+        public SimpleDdgiCapacityResourceTelemetry RayScratch { get; init; }
+        public SimpleDdgiCapacityResourceTelemetry ProbeState { get; init; }
+        public SimpleDdgiCapacityResourceTelemetry UpdateQueue { get; init; }
+        public SimpleDdgiCapacityResourceTelemetry RelocationClassification { get; init; }
+        public SimpleDdgiCapacityResourceTelemetry ReadbackBuffers { get; init; }
+        public SimpleDdgiCapacityResourceTelemetry SampledAtlas { get; init; }
+    }
+
+    /// <summary>
+    /// Allocation-free phase timing and work counters for the Simple-DDGI CPU
+    /// upload path. Times are mutually exclusive; Other is unclassified overhead
+    /// and keeps the phase sum reconcilable with Total.
+    /// </summary>
+    public readonly record struct SimpleDdgiUploadTiming
+    {
+        public long TotalMicroseconds { get; init; }
+        public long LayoutMicroseconds { get; init; }
+        public long ReadbackMicroseconds { get; init; }
+        public long CapacityMicroseconds { get; init; }
+        public long InvalidationMicroseconds { get; init; }
+        public long SchedulerRefreshMicroseconds { get; init; }
+        public long ImportanceMicroseconds { get; init; }
+        public long QueueBuildMicroseconds { get; init; }
+        public long LifecycleTelemetryMicroseconds { get; init; }
+        public long AtlasMaintenanceMicroseconds { get; init; }
+        public long BufferUploadMicroseconds { get; init; }
+        public long OtherMicroseconds { get; init; }
+        public int ReadbackProbeCount { get; init; }
+        public int SchedulerEntryRefreshCount { get; init; }
+        public int SchedulerWakeEntryRefreshCount { get; init; }
+        public int SchedulerWakeRefreshBudget { get; init; }
+        public int SchedulerWakeBudgetSaturated { get; init; }
+        public int SchedulerFullRebuildCount { get; init; }
+        public int VisibilityEntryRefreshCount { get; init; }
+        public int StateDirtySlotCount { get; init; }
+        public int StateUploadRunCount { get; init; }
+        public SimpleDdgiCapacityTiming CapacityDetails { get; init; }
+    }
+
     public sealed record TextureAssetMemoryEntry(
         string SourcePath,
         uint Width,
@@ -196,7 +366,7 @@ namespace Njulf.Rendering.Data
         int DirectionalShadowPcfRadius,
         int SpotShadowPcfRadius,
         int PointShadowPcfRadius,
-        int ForwardShadowReceiverMeshletCount,
+        int ForwardShadowReceiverMeshletCapacity,
         int SpotShadowsEnabled,
         int SpotShadowCandidateCount,
         int SpotShadowSelectedCount,
@@ -308,6 +478,9 @@ namespace Njulf.Rendering.Data
         long GpuReflectionProbeCaptureMicroseconds,
         long GpuReflectionProbePrefilterMicroseconds)
     {
+        [Obsolete("This value is addressable receiver capacity, not emitted work. Use ForwardShadowReceiverMeshletCapacity.")]
+        public int ForwardShadowReceiverMeshletCount => ForwardShadowReceiverMeshletCapacity;
+
         public IReadOnlyList<TextureAssetMemoryEntry> LargestTextureAssets { get; init; } = [];
         public IReadOnlyList<MeshletQualityEntry> MeshletQualityEntries { get; init; } = [];
         public ulong StableSceneInputUploadBytes { get; init; }
@@ -341,6 +514,7 @@ namespace Njulf.Rendering.Data
         public ulong WeightedOitRenderTargetBytes { get; init; }
         public int WeightedOitRenderTargetCount { get; init; }
         public int GeometryDecalsEnabled { get; init; }
+        public int DecalReceiveShadows { get; init; }
         public int DecalReceiveGlobalIllumination { get; init; }
         public float GeometryDecalDepthBias { get; init; }
         public float GeometryDecalSlopeScaledDepthBias { get; init; }
@@ -354,6 +528,7 @@ namespace Njulf.Rendering.Data
         public long MaterialTotalCompileMicroseconds { get; init; }
         public long MaterialCompileP95Microseconds { get; init; }
         public int MaterialCompileTimingSampleCount { get; init; }
+        public long MaterialLastUploadMicroseconds { get; init; }
         public long MaterialUploadP95Microseconds { get; init; }
         public int MaterialUploadTimingSampleCount { get; init; }
         public long MaterialLegacyV1FallbackCount { get; init; }
@@ -543,6 +718,7 @@ namespace Njulf.Rendering.Data
         public int GpuTimingEnabled { get; init; }
         public int GpuTimingPending { get; init; }
         public int GpuTimingValid { get; init; }
+        public float GpuTimestampPeriodNanoseconds { get; init; }
         public string GpuTimingUnavailableReason { get; init; } = string.Empty;
         public int GpuTimingFrameLatency { get; init; }
         public long CpuHiZDepthTransitionMicroseconds { get; init; }
@@ -643,6 +819,7 @@ namespace Njulf.Rendering.Data
         public int SceneSubmissionGpuLod1EmittedCount { get; init; }
         public int SceneSubmissionGpuLod2EmittedCount { get; init; }
         public int SceneSubmissionGpuMissingLodFallbackCount { get; init; }
+        public int SceneSubmissionGpuOpaqueLodDecimatedCount { get; init; }
         public int SceneSubmissionValidationValid { get; init; }
         public string SceneSubmissionValidationStatus { get; init; } = string.Empty;
         public int SceneSubmissionValidationCpuOpaqueCount { get; init; }
@@ -685,6 +862,12 @@ namespace Njulf.Rendering.Data
         public uint CaptureRenderWidth { get; init; }
         public uint CaptureRenderHeight { get; init; }
         public ulong CaptureSceneContentRevision { get; init; }
+        /// <summary>
+        /// Stable authored-scene identity excluding the renderer feature that a
+        /// paired performance capture intentionally varies.
+        /// </summary>
+        public string CaptureSceneAssetHash { get; init; } = "unknown-scene-asset";
+        public string CaptureSceneStateHash { get; init; } = "unknown-scene-state";
         public RenderFeatureIsolationMode ActiveFeatureIsolation { get; init; } = RenderFeatureIsolationMode.FullFrame;
         public int SkippedRenderPassCount { get; init; }
         public int GraphPlannedBarrierCount { get; init; }
@@ -869,6 +1052,8 @@ namespace Njulf.Rendering.Data
         public int StreamedGiAccelerationStructuresFeatureEnabled { get; init; }
         /// <summary>Detailed investigation counters were requested, even if the active path was rolled back.</summary>
         public int DdgiDetailedCountersRequested { get; init; }
+        /// <summary>The running binary contains the diagnostic shader path.</summary>
+        public int DdgiDetailedCountersCompiled { get; init; }
         /// <summary>Detailed GPU investigation atomics are enabled for this capture.</summary>
         public int DdgiDetailedCountersEnabled { get; init; }
         /// <summary>Inclusive forward draw scope containing active GI gather work.</summary>
@@ -925,6 +1110,8 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiTransportPendingSolverProbeCount { get; init; }
         public int SimpleDdgiTransportGlobalConvergencePending { get; init; }
         public int SimpleDdgiTransportGlobalConvergenceElapsedFrames { get; init; }
+        public SimpleDdgiTransportConvergenceTelemetry SimpleDdgiTransportConvergence { get; init; } =
+            SimpleDdgiTransportConvergenceTelemetry.Empty;
         public ulong SimpleDdgiTransportCalibrationChangeCount { get; init; }
         public ulong SimpleDdgiTransportIrradianceAtlasBytes { get; init; }
         public ulong SimpleDdgiTransportSourceCacheBytes { get; init; }
@@ -976,6 +1163,17 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiSampledAtlasGroupCount { get; init; }
         public int SimpleDdgiSampledAtlasLayersPerTexture { get; init; }
         public ulong SimpleDdgiSampledAtlasImageBytes { get; init; }
+        public ulong SimpleDdgiRayScratchBytes { get; init; }
+        public ulong SimpleDdgiProbeStateBytes { get; init; }
+        public ulong SimpleDdgiProbeUpdateQueueBytes { get; init; }
+        public ulong SimpleDdgiRelocationClassificationBytes { get; init; }
+        public ulong SimpleDdgiProbeStateReadbackBytes { get; init; }
+        public int SimpleDdgiRetiredBufferCount { get; init; }
+        public ulong SimpleDdgiRetiredBufferBytes { get; init; }
+        /// <summary>Optional sampled-image mirror duplicating canonical SSBO atlas data.</summary>
+        public ulong SimpleDdgiDuplicateMirrorBytes { get; init; }
+        /// <summary>Simple-DDGI bytes retained while the feature is inactive.</summary>
+        public ulong SimpleDdgiDisabledRetainedBytes { get; init; }
         public string SimpleDdgiSampledAtlasFallbackReason { get; init; } = string.Empty;
         public int FarFieldPagedMode { get; init; }
         public int FarFieldPagePoolCapacity { get; init; }
@@ -1009,6 +1207,8 @@ namespace Njulf.Rendering.Data
         public uint SimpleDdgiLowVisibilitySampleCount { get; init; }
         public uint SimpleDdgiGatherSampleCount { get; init; }
         public uint SimpleDdgiSecondVolumeGatherCount { get; init; }
+        public SimpleDdgiGatherMultiplicityCounters SimpleDdgiGatherMultiplicity { get; init; }
+        public DecalFragmentAttributionCounters DecalFragmentAttribution { get; init; }
         public IReadOnlyList<uint> SimpleDdgiGatherPrimaryRejectionCounts { get; init; } = [];
         public IReadOnlyList<uint> SimpleDdgiGatherFallbackRejectionCounts { get; init; } = [];
         public IReadOnlyList<uint> SimpleDdgiGatherRecoveryRejectionCounts { get; init; } = [];
@@ -1156,6 +1356,8 @@ namespace Njulf.Rendering.Data
         public uint DdgiFastGatherRejectedZeroSupportCount { get; init; }
         public uint DdgiFastGatherRejectedZeroDataCount { get; init; }
         public uint DdgiFastGatherRejectedZeroOwnershipCount { get; init; }
+        /// <summary>Explicit applicability/configuration explanation for fast gather.</summary>
+        public string DdgiFastGatherStatus { get; init; } = "unavailable";
         public uint DdgiShaderGatherFallbackAttemptCount { get; init; }
         public uint DdgiShaderGatherFallbackAcceptedCount { get; init; }
         public uint DdgiShaderGatherFallbackEmptyCount { get; init; }
@@ -1312,6 +1514,7 @@ namespace Njulf.Rendering.Data
         public long CpuSsgiRecordMicroseconds { get; init; }
         public long CpuDdgiRecordMicroseconds { get; init; }
         public long CpuSimpleDdgiRecordMicroseconds { get; init; }
+        public SimpleDdgiUploadTiming SimpleDdgiUploadTiming { get; init; }
         public long CpuFarFieldRecordMicroseconds { get; init; }
         public long CpuGlobalIlluminationRecordMicroseconds { get; init; }
         public long CpuGlobalIlluminationRecordP95Microseconds { get; init; }
@@ -1417,6 +1620,14 @@ namespace Njulf.Rendering.Data
         public int AccelerationStructureBottomLevelCount { get; init; }
         public int AccelerationStructureTopLevelInstanceCount { get; init; }
         public int AccelerationStructureBlasBuildCount { get; init; }
+        public int AccelerationStructureBlasCompactionQueryCount { get; init; }
+        public int AccelerationStructureBlasCompactionCount { get; init; }
+        public ulong AccelerationStructureBlasCompactionSourceBytes { get; init; }
+        public ulong AccelerationStructureBlasCompactionBytesSaved { get; init; }
+        public ulong AccelerationStructureBlasCompactedResidentBytesSaved { get; init; }
+        public int AccelerationStructureBlasCompactionPendingCount { get; init; }
+        public int AccelerationStructureBlasCompactionQueryOverflowCount { get; init; }
+        public int AccelerationStructureBlasCompactionQueryReadbackFailureCount { get; init; }
         public int AccelerationStructureTlasBuildCount { get; init; }
         public int AccelerationStructureTlasUpdateCount { get; init; }
         public int AccelerationStructureTlasSkipCount { get; init; }
@@ -1436,6 +1647,7 @@ namespace Njulf.Rendering.Data
         public ulong AccelerationStructureRayQueryMetadataUploadBytes { get; init; }
         public long CpuAccelerationStructureBuildMicroseconds { get; init; }
         public long CpuAccelerationStructureBlasBuildMicroseconds { get; init; }
+        public long CpuAccelerationStructureBlasCompactionMicroseconds { get; init; }
         public long CpuAccelerationStructureTlasBuildMicroseconds { get; init; }
         public long CpuAccelerationStructureInstanceUploadMicroseconds { get; init; }
         public long GpuAccelerationStructureBlasMicroseconds { get; init; }
@@ -1616,7 +1828,7 @@ namespace Njulf.Rendering.Data
             DirectionalShadowPcfRadius: 0,
             SpotShadowPcfRadius: 0,
             PointShadowPcfRadius: 0,
-            ForwardShadowReceiverMeshletCount: 0,
+            ForwardShadowReceiverMeshletCapacity: 0,
             SpotShadowsEnabled: 0,
             SpotShadowCandidateCount: 0,
             SpotShadowSelectedCount: 0,

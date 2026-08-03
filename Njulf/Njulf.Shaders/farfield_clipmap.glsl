@@ -70,16 +70,16 @@ struct FarFieldPageReference
 FarFieldClipmapParams ReadFarFieldClipmapParams(uint bufferIndex)
 {
     FarFieldClipmapParams p;
-    vec4 origin = ReadStorageVec4(bufferIndex, 0u);
-    vec4 resolution = ReadStorageVec4(bufferIndex, 4u);
-    vec4 trace = ReadStorageVec4(bufferIndex, 8u);
-    vec4 bake = ReadStorageVec4(bufferIndex, 12u);
-    vec4 diagnostics = ReadStorageVec4(bufferIndex, 16u);
-    vec4 jumpFlood = ReadStorageVec4(bufferIndex, 20u);
-    vec4 paging = ReadStorageVec4(bufferIndex, 24u);
-    vec4 pagingLayout = ReadStorageVec4(bufferIndex, 28u);
-    vec4 camera = ReadStorageVec4(bufferIndex, 32u);
-    vec4 materialPayload = ReadStorageVec4(bufferIndex, 36u);
+    vec4 origin = ReadStorageAlignedVec4Uniform(bufferIndex, 0u);
+    vec4 resolution = ReadStorageAlignedVec4Uniform(bufferIndex, 4u);
+    vec4 trace = ReadStorageAlignedVec4Uniform(bufferIndex, 8u);
+    vec4 bake = ReadStorageAlignedVec4Uniform(bufferIndex, 12u);
+    vec4 diagnostics = ReadStorageAlignedVec4Uniform(bufferIndex, 16u);
+    vec4 jumpFlood = ReadStorageAlignedVec4Uniform(bufferIndex, 20u);
+    vec4 paging = ReadStorageAlignedVec4Uniform(bufferIndex, 24u);
+    vec4 pagingLayout = ReadStorageAlignedVec4Uniform(bufferIndex, 28u);
+    vec4 camera = ReadStorageAlignedVec4Uniform(bufferIndex, 32u);
+    vec4 materialPayload = ReadStorageAlignedVec4Uniform(bufferIndex, 36u);
     p.origin = origin.xyz;
     p.voxelSize = max(origin.w, 0.0001);
     p.resolution = uvec3(max(resolution.xyz, vec3(1.0)));
@@ -161,7 +161,7 @@ bool ReadFarFieldVoxelMaterial(
     uint wordOffset = FarFieldVoxelPayloadWordOffset(logicalVoxelIndex, p);
     if (p.materialPayloadVersion < FAR_FIELD_MATERIAL_V2_VERSION)
     {
-        uint packed = ReadStorageWord(bufferIndex, wordOffset);
+        uint packed = ReadStorageWordUniform(bufferIndex, wordOffset);
         if ((packed & 0x80000000u) == 0u)
             return false;
 
@@ -176,18 +176,19 @@ bool ReadFarFieldVoxelMaterial(
         return true;
     }
 
-    uint winnerKey = ReadStorageWord(bufferIndex, wordOffset + 0u);
-    uint metadata = ReadStorageWord(bufferIndex, wordOffset + 1u);
+    uvec4 payload0 = ReadStorageAlignedUVec4Uniform(bufferIndex, wordOffset);
+    uint winnerKey = payload0.x;
+    uint metadata = payload0.y;
     if (winnerKey == FAR_FIELD_MATERIAL_V2_EMPTY_KEY ||
         (metadata & FAR_FIELD_MATERIAL_V2_OCCUPIED_BIT) == 0u)
     {
         return false;
     }
 
-    uint emissionRg = ReadStorageWord(bufferIndex, wordOffset + 3u);
-    uint emissionBAndOcclusion = ReadStorageWord(bufferIndex, wordOffset + 4u);
-    material.diffuseReflectance = DecodeFarFieldDiffuseRgb10(
-        ReadStorageWord(bufferIndex, wordOffset + 2u));
+    uvec4 payload1 = ReadStorageAlignedUVec4Uniform(bufferIndex, wordOffset + 4u);
+    uint emissionRg = payload0.w;
+    uint emissionBAndOcclusion = payload1.x;
+    material.diffuseReflectance = DecodeFarFieldDiffuseRgb10(payload0.z);
     material.emissiveRadiance = vec3(
         unpackHalf2x16(emissionRg),
         unpackHalf2x16(emissionBAndOcclusion).x);
@@ -195,13 +196,12 @@ bool ReadFarFieldVoxelMaterial(
         p.materialPayloadVersion >= FAR_FIELD_MATERIAL_OCCLUSION_VERSION
             ? clamp(unpackHalf2x16(emissionBAndOcclusion).y, 0.0, 1.0)
             : 1.0;
-    material.geometricNormal = DecodeFarFieldOctahedralNormal(
-        ReadStorageWord(bufferIndex, wordOffset + 5u));
+    material.geometricNormal = DecodeFarFieldOctahedralNormal(payload1.y);
     material.coverage = float(metadata & 0xffu) / 255.0;
     material.normalCone = float((metadata >> 8u) & 0xffu) / 255.0;
     material.materialFlags = (metadata >> 16u) & FAR_FIELD_MATERIAL_V2_STORED_FLAG_MASK;
-    material.materialRevision = ReadStorageWord(bufferIndex, wordOffset + 6u);
-    material.transportProfileRevision = ReadStorageWord(bufferIndex, wordOffset + 7u);
+    material.materialRevision = payload1.z;
+    material.transportProfileRevision = payload1.w;
     return true;
 }
 
@@ -211,11 +211,11 @@ bool FarFieldVoxelOccupied(
     FarFieldClipmapParams p)
 {
     uint wordOffset = FarFieldVoxelPayloadWordOffset(logicalVoxelIndex, p);
-    uint firstWord = ReadStorageWord(bufferIndex, wordOffset);
+    uint firstWord = ReadStorageWordUniform(bufferIndex, wordOffset);
     if (p.materialPayloadVersion < FAR_FIELD_MATERIAL_V2_VERSION)
         return (firstWord & 0x80000000u) != 0u;
 
-    uint metadata = ReadStorageWord(bufferIndex, wordOffset + 1u);
+    uint metadata = ReadStorageWordUniform(bufferIndex, wordOffset + 1u);
     return firstWord != FAR_FIELD_MATERIAL_V2_EMPTY_KEY &&
         (metadata & FAR_FIELD_MATERIAL_V2_OCCUPIED_BIT) != 0u;
 }
@@ -274,7 +274,7 @@ uint FarFieldPackedDistanceWordIndex(uint voxelIndex)
 float ReadFarFieldDistanceVoxels(ivec3 voxel, FarFieldClipmapParams p)
 {
     uint voxelIndex = FarFieldVoxelIndex(voxel, p);
-    uint packed = ReadStorageWord(p.distanceBufferIndex, FarFieldPackedDistanceWordIndex(voxelIndex));
+    uint packed = ReadStorageWordUniform(p.distanceBufferIndex, FarFieldPackedDistanceWordIndex(voxelIndex));
     uint encoded = ((voxelIndex & 1u) == 0u) ? (packed & 0xffffu) : ((packed >> 16u) & 0xffffu);
     return float(encoded) * (1.0 / 256.0);
 }
@@ -325,17 +325,17 @@ bool FindFarFieldPage(
     for (uint probe = 0u; probe < p.pageTableCapacity; probe++)
     {
         uint base = tableIndex * FAR_FIELD_PAGE_TABLE_ENTRY_WORDS;
-        uint flags = ReadStorageWord(p.pageTableBufferIndex, base + 3u);
+        uint flags = ReadStorageWordUniform(p.pageTableBufferIndex, base + 3u);
         if ((flags & FAR_FIELD_PAGE_ALLOCATED_FLAG) == 0u)
             return false;
 
         if ((flags & FAR_FIELD_PAGE_CASCADE_MASK) == cascade &&
-            int(ReadStorageWord(p.pageTableBufferIndex, base + 0u)) == worldPage.x &&
-            int(ReadStorageWord(p.pageTableBufferIndex, base + 1u)) == worldPage.y &&
-            int(ReadStorageWord(p.pageTableBufferIndex, base + 2u)) == worldPage.z)
+            int(ReadStorageWordUniform(p.pageTableBufferIndex, base + 0u)) == worldPage.x &&
+            int(ReadStorageWordUniform(p.pageTableBufferIndex, base + 1u)) == worldPage.y &&
+            int(ReadStorageWordUniform(p.pageTableBufferIndex, base + 2u)) == worldPage.z)
         {
-            page.physicalPageIndex = ReadStorageWord(p.pageTableBufferIndex, base + 4u);
-            page.generation = ReadStorageWord(p.pageTableBufferIndex, base + 5u);
+            page.physicalPageIndex = ReadStorageWordUniform(p.pageTableBufferIndex, base + 4u);
+            page.generation = ReadStorageWordUniform(p.pageTableBufferIndex, base + 5u);
             page.allocated = true;
             page.valid = (flags & FAR_FIELD_PAGE_VALID_FLAG) != 0u && page.physicalPageIndex < p.pagePoolCapacity;
             return true;
@@ -372,7 +372,9 @@ float ReadFarFieldPagedDistanceVoxels(ivec3 voxel, FarFieldClipmapParams p, FarF
 {
     uint voxelIndex = FarFieldVoxelIndex(voxel, p);
     uint pageVoxelOffset = FarFieldPageVoxelOffset(p, page);
-    uint packed = ReadStorageWord(p.distanceBufferIndex, (pageVoxelOffset >> 1u) + FarFieldPackedDistanceWordIndex(voxelIndex));
+    uint packed = ReadStorageWordUniform(
+        p.distanceBufferIndex,
+        (pageVoxelOffset >> 1u) + FarFieldPackedDistanceWordIndex(voxelIndex));
     uint encoded = ((voxelIndex & 1u) == 0u) ? (packed & 0xffffu) : ((packed >> 16u) & 0xffffu);
     return float(encoded) * (1.0 / 256.0);
 }
@@ -828,7 +830,7 @@ uint ReadFarFieldDebugPackedVoxel(
 {
     if (p.materialPayloadVersion < FAR_FIELD_MATERIAL_V2_VERSION)
     {
-        return ReadStorageWord(
+        return ReadStorageWordUniform(
             p.voxelBufferIndex,
             FarFieldVoxelPayloadWordOffset(logicalVoxelIndex, p));
     }

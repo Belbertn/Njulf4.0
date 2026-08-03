@@ -734,6 +734,10 @@ namespace Njulf.Tests
                 DdgiEmissiveSkippedSkinnedObjectCount = 0,
                 DdgiEmissiveSkippedSkinnedImportance = 0.0
             };
+            RendererDiagnostics numericallyZeroDiagnostics = passingDiagnostics with
+            {
+                DdgiEmissiveSkippedEnergyFraction = 1.65e-16f
+            };
             RendererDiagnostics nonFiniteDiagnostics = passingDiagnostics with
             {
                 DdgiEmissiveSkippedEnergyFraction = float.NaN
@@ -741,6 +745,7 @@ namespace Njulf.Tests
 
             RenderBudgetSnapshot failing = Evaluate(profile, failingDiagnostics);
             RenderBudgetSnapshot passing = Evaluate(profile, passingDiagnostics);
+            RenderBudgetSnapshot numericallyZero = Evaluate(profile, numericallyZeroDiagnostics);
             RenderBudgetSnapshot nonFinite = Evaluate(profile, nonFiniteDiagnostics);
 
             Assert.Multiple(() =>
@@ -770,6 +775,14 @@ namespace Njulf.Tests
                     Is.EqualTo(RenderBudgetStatus.WithinBudget));
                 Assert.That(
                     Metric(passing, RenderBudgetEvaluator.DdgiEmissiveUnsupportedSkinnedImportanceMetricName).Status,
+                    Is.EqualTo(RenderBudgetStatus.WithinBudget));
+
+                BudgetMetric numericallyZeroMetric = Metric(
+                    numericallyZero,
+                    RenderBudgetEvaluator.DdgiEmissiveSkippedEnergyMetricName);
+                Assert.That(numericallyZeroMetric.Value, Is.Zero);
+                Assert.That(
+                    numericallyZeroMetric.Status,
                     Is.EqualTo(RenderBudgetStatus.WithinBudget));
 
                 Assert.That(

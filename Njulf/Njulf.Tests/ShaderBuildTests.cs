@@ -27,7 +27,9 @@ public sealed class ShaderBuildTests
         "forward_compacted_diagnostics.task",
         "forward_visibility_compact.comp",
         "forward.mesh",
+        "forward_compacted.mesh",
         "forward_simple.mesh",
+        "forward_simple_compacted.mesh",
         "forward.frag",
         "forward_opaque.frag",
         "forward_opaque_ddgi.frag",
@@ -113,6 +115,41 @@ public sealed class ShaderBuildTests
             uint magic = BinaryPrimitives.ReadUInt32LittleEndian(magicBytes);
             Assert.That(magic, Is.EqualTo(0x07230203), $"Shader resource '{resourceName}' is not SPIR-V bytecode.");
         }
+    }
+
+    [Test]
+    public void ProductionShaderBuild_CompilesDetailedDdgiAtomicsOutAndAuditsSpirv()
+    {
+        string common = ReadRepoText("Njulf.Shaders", "common.glsl");
+        string project = ReadRepoText("Njulf.Shaders", "Njulf.Shaders.csproj");
+        string verifier = ReadRepoText(
+            "Njulf.Shaders",
+            "VerifyProductionDiagnosticAtomics.ps1");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                common,
+                Does.Contain("#define NJULF_GPU_DIAGNOSTIC_COUNTERS 0")
+                    .And.Contain("#define NJULF_DDGI_DETAILED_COUNTERS 0"));
+            Assert.That(
+                ExtractFunction(common, "void IncrementRendererDiagnostic("),
+                Does.Contain("#if NJULF_GPU_DIAGNOSTIC_COUNTERS"));
+            Assert.That(
+                ExtractFunction(common, "void AddRendererDiagnostic("),
+                Does.Contain("#if NJULF_DDGI_DETAILED_COUNTERS"));
+            Assert.That(
+                project,
+                Does.Contain("-DNJULF_DDGI_DETAILED_COUNTERS=0")
+                    .And.Contain("VerifyProductionDdgiDiagnosticAtomics")
+                    .And.Contain("ShippingPerformance")
+                    .And.Contain("VerifyProductionDiagnosticAtomics.ps1"));
+            Assert.That(
+                verifier,
+                Does.Contain("$opAtomicIAdd = 234")
+                    .And.Contain("forward*.frag.spv")
+                    .And.Contain("ddgi_simple_*.comp.spv"));
+        });
     }
 
     [Test]
@@ -873,8 +910,9 @@ public sealed class ShaderBuildTests
             Assert.That(common, Does.Contain("const uint GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS = 1u << 0;"));
             Assert.That(common, Does.Contain("int ShadowFlags;"));
             Assert.That(common, Does.Contain("float ShadowStrength;"));
-            Assert.That(common, Does.Contain("light.ShadowFlags = int(ReadStorageWord(uint(LIGHT_BUFFER_INDEX), baseWord + 13u));"));
-            Assert.That(common, Does.Contain("light.ShadowStrength = ReadStorageFloat(uint(LIGHT_BUFFER_INDEX), baseWord + 14u);"));
+            Assert.That(common, Does.Contain("uvec4 typeShadow = ReadStorageAlignedUVec4Uniform(lightBufferIndex, baseWord + 12u);"));
+            Assert.That(common, Does.Contain("light.ShadowFlags = int(typeShadow.y);"));
+            Assert.That(common, Does.Contain("light.ShadowStrength = uintBitsToFloat(typeShadow.z);"));
             Assert.That(common, Does.Contain("float EvaluateNjulfPunctualRangeAttenuation("));
             Assert.That(common, Does.Contain("float EvaluateNjulfSpotAttenuation("));
             Assert.That(forward, Does.Contain("attenuation = EvaluateNjulfPunctualRangeAttenuation(distanceToLight, light.Range);"));
@@ -2321,6 +2359,9 @@ public sealed class ShaderBuildTests
                 "ApplyGpuLodSelection(command, effectiveLod, pc.Push.GpuShadowLodBias)"));
             Assert.That(sceneCompaction, Does.Contain(
                 "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_LOD_FALLBACK"));
+            Assert.That(sceneCompaction, Does.Contain(
+                "SCENE_SUBMISSION_COUNTER_OPAQUE_LOD_DECIMATED"));
+            Assert.That(sceneCompaction, Does.Contain("lod0LocalIndex >= meshletCount"));
             Assert.That(compactionPass, Does.Contain("GpuLod1DistanceRatio = gpuLod1DistanceRatio"));
             Assert.That(compactionPass, Does.Contain("GpuLod2DistanceRatio = gpuLod2DistanceRatio"));
             Assert.That(compactionPass, Does.Contain("GpuShadowLodBias = checked((uint)Math.Clamp"));
@@ -2554,6 +2595,35 @@ public sealed class ShaderBuildTests
             Assert.That(taskShader, Does.Contain("SCENE_SIMPLE_NORMAL_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX"));
             Assert.That(taskShader, Does.Contain("SCENE_FULL_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX"));
             Assert.That(taskShader, Does.Contain("SceneCompactedEmittedCounterWord"));
+        });
+    }
+
+    [Test]
+    public void CompactedIndirectForward_UsesMeshOnlyShadersWithCounterGatedDirectFallback()
+    {
+        string shaderProject = ReadRepoText("Njulf.Shaders", "Njulf.Shaders.csproj");
+        string fullMesh = ReadRepoText("Njulf.Shaders", "forward.mesh");
+        string simpleMesh = ReadRepoText("Njulf.Shaders", "forward_simple.mesh");
+        string pipeline = ReadRepoText("Njulf.Rendering", "Pipeline", "PipelineObjects", "MeshPipeline.cs");
+        string forwardPass = ReadRepoText("Njulf.Rendering", "Pipeline", "ForwardPlusPass.cs");
+        string sceneSurfacePass = ReadRepoText("Njulf.Rendering", "Pipeline", "SceneSurfacePass.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shaderProject, Does.Contain("-DFORWARD_COMPACTED_MESH=1"));
+            Assert.That(shaderProject, Does.Contain("forward_compacted.mesh.spv"));
+            Assert.That(shaderProject, Does.Contain("forward_simple_compacted.mesh.spv"));
+            Assert.That(fullMesh, Does.Contain("#ifdef FORWARD_COMPACTED_MESH"));
+            Assert.That(fullMesh, Does.Contain("#define FORWARD_MESH_LOCAL_SIZE 64"));
+            Assert.That(fullMesh, Does.Contain("layout(local_size_x = FORWARD_MESH_LOCAL_SIZE"));
+            Assert.That(fullMesh, Does.Contain("uint drawCommandIndex = gl_WorkGroupID.x;"));
+            Assert.That(simpleMesh, Does.Contain("#ifdef FORWARD_COMPACTED_MESH"));
+            Assert.That(simpleMesh, Does.Contain("#define FORWARD_MESH_LOCAL_SIZE 64"));
+            Assert.That(pipeline, Does.Match("taskShaderName: null,\\s*\\\"forward_compacted\\.mesh\\.spv\\\""));
+            Assert.That(pipeline, Does.Match("taskShaderName: null,\\s*\\\"forward_simple_compacted\\.mesh\\.spv\\\""));
+            Assert.That(pipeline, Does.Contain("if (taskModule.Handle != 0)"));
+            Assert.That(forwardPass, Does.Contain("ForwardTaskShaderCompactedMeshOnly"));
+            Assert.That(sceneSurfacePass, Does.Match("_meshPipeline\\.SceneSurfacePipeline,\\s*compactedDrawCapacity"));
         });
     }
 

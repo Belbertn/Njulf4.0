@@ -159,7 +159,7 @@ namespace Njulf.Rendering.Pipeline
             sceneData.ForwardSimpleMeshletCount = 0;
             sceneData.ForwardFullMaterialMeshletCount = 0;
             sceneData.ForwardLocalProbeMeshletCount = 0;
-            sceneData.ForwardShadowReceiverMeshletCount = 0;
+            sceneData.ForwardShadowReceiverMeshletCapacity = 0;
             sceneData.SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ResolveForwardPath(sceneData);
             sceneData.SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderLegacyCull;
             sceneData.SceneSubmissionIndirectDispatchSkipReason =
@@ -174,7 +174,7 @@ namespace Njulf.Rendering.Pipeline
                 if (sceneData.ForwardVisibilityCompactionActive)
                 {
                     sceneData.SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ForwardPathGpuCompactedIndirect;
-                    sceneData.SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedEmit;
+                    sceneData.SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedMeshOnly;
                     sceneData.SceneSubmissionIndirectDispatchSkipReason = string.Empty;
                     UpdateCompactedForwardVariantDiagnostics(sceneData);
                     UpdateCompactedForwardShadowDiagnostics(
@@ -194,7 +194,7 @@ namespace Njulf.Rendering.Pipeline
                     if (indirectSkipReason.Length == 0)
                     {
                         sceneData.SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ForwardPathGpuCompactedIndirect;
-                        sceneData.SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedEmit;
+                        sceneData.SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedMeshOnly;
                         UpdateCompactedForwardVariantDiagnostics(sceneData);
                         UpdateCompactedForwardShadowDiagnostics(sceneData, compactedDrawCapacity);
                         DrawCompactedForwardBucketsIndirect(
@@ -233,7 +233,7 @@ namespace Njulf.Rendering.Pipeline
                 sceneData.ForwardSimpleMeshletCount = variantSelection.SimpleMeshletCount;
                 sceneData.ForwardFullMaterialMeshletCount = variantSelection.FullMaterialMeshletCount;
                 sceneData.ForwardLocalProbeMeshletCount = variantSelection.LocalProbeMeshletCount;
-                sceneData.ForwardShadowReceiverMeshletCount = ResolveForwardShadowReceiverMeshletCount(sceneData);
+                sceneData.ForwardShadowReceiverMeshletCapacity = ResolveForwardShadowReceiverMeshletCapacity(sceneData);
 
                 DrawForwardBucket(
                     cmd,
@@ -341,12 +341,12 @@ namespace Njulf.Rendering.Pipeline
             Data.SceneRenderingData sceneData,
             int compactedDrawCapacity)
         {
-            sceneData.ForwardShadowReceiverMeshletCount = HasForwardShadowReceivers(sceneData)
+            sceneData.ForwardShadowReceiverMeshletCapacity = HasForwardShadowReceivers(sceneData)
                 ? Math.Max(0, compactedDrawCapacity)
                 : 0;
         }
 
-        private static int ResolveForwardShadowReceiverMeshletCount(Data.SceneRenderingData sceneData)
+        private static int ResolveForwardShadowReceiverMeshletCapacity(Data.SceneRenderingData sceneData)
         {
             if (!HasForwardShadowReceivers(sceneData))
                 return 0;
@@ -596,9 +596,13 @@ namespace Njulf.Rendering.Pipeline
                 &pushConstants);
 
             VkBuffer indirect = _bufferManager.GetBuffer(indirectBufferHandle);
-            int diagnosticTaskCount = Math.Max(0, meshletCapacity);
-            sceneData.SceneSubmissionGpuIndirectMeshletTaskCount += diagnosticTaskCount;
-            sceneData.ForwardTaskInvocations += diagnosticTaskCount;
+            // meshletCapacity is an allocation bound, not executed work. Keep the
+            // legacy ForwardTaskInvocations diagnostic as a submitted-workgroup
+            // compatibility metric even though this indirect path is mesh-only.
+            // The fence-safe readback corrects it to the exact emitted count.
+            sceneData.ForwardTaskInvocations = Math.Max(
+                sceneData.ForwardTaskInvocations,
+                sceneData.SceneSubmissionGpuIndirectMeshletTaskCount);
             _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
                 cmd,
                 indirect,

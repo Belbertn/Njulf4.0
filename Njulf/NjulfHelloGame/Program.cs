@@ -23,6 +23,14 @@ internal static class Program
 {
     public static int Main(string[] args)
     {
+        if (SampleBenchmarkPairComparisonCli.TryRun(
+                args,
+                Console.Out,
+                Console.Error,
+                out int benchmarkComparisonExitCode))
+        {
+            return benchmarkComparisonExitCode;
+        }
         if (SampleMaterialGiComparisonCli.TryRun(
                 args,
                 Console.Out,
@@ -74,6 +82,7 @@ internal sealed class HelloGame : Game
     private const SampleEnvironmentMode EnvironmentMode = SampleEnvironmentMode.ProceduralOutdoor;
     private const SamplePerformanceScenario DefaultInteractiveScenario = SamplePerformanceScenario.Normal;
     private const int BaselineCaptureFrameCount = 1;
+    internal const float BenchmarkSimulationDeltaSeconds = 1.0f / 60.0f;
 
     private SampleInputController? _inputController;
     private SampleSceneLoader? _sceneLoader;
@@ -126,8 +135,11 @@ internal sealed class HelloGame : Game
 
         Name = "Njulf Hello Game";
         WindowTitle = "Njulf Hello Game - Mesh Shader glTF Sample";
-        WindowWidth = 1600;
-        WindowHeight = 900;
+        WindowWidth = _smokeOptions.Benchmark.Enabled ? 1920 : 1600;
+        WindowHeight = _smokeOptions.Benchmark.Enabled ? 1080 : 900;
+        WindowBorderStyle = _smokeOptions.Benchmark.Enabled
+            ? Silk.NET.Windowing.WindowBorder.Hidden
+            : Silk.NET.Windowing.WindowBorder.Resizable;
         VSync = _smokeOptions.KhronosMaterialGiRenderedGate is null &&
                 (!_smokeOptions.Benchmark.Enabled || !_smokeOptions.Benchmark.DisableVSync);
     }
@@ -362,7 +374,17 @@ internal sealed class HelloGame : Game
                 _smokeOptions.PerformanceScenario,
                 Exit,
                 () => SampleRenderSettingsFingerprint.Capture(
-                    renderer.Settings));
+                    renderer.Settings),
+                outputPath =>
+                {
+                    // This is armed only after the final timing sample, so the
+                    // readback and debug permission cannot contaminate the
+                    // ProductionTiming distribution.
+                    renderer.Settings.Debug.Enabled = true;
+                    renderer.Settings.Debug.AllowScreenshots = true;
+                    return renderer.RequestLinearHdrCapture(outputPath);
+                },
+                renderer.GetLinearHdrCaptureResult);
             Console.WriteLine(
                 $"Benchmark armed: warmup={_smokeOptions.Benchmark.WarmupFrameCount}, " +
                 $"measure={_smokeOptions.Benchmark.MeasureFrameCount}, vsync={(VSync ? "on" : "off")}");
@@ -449,6 +471,17 @@ internal sealed class HelloGame : Game
         SampleGlobalIlluminationValidation.ConfigureSchedulerMode(renderer.Settings, _smokeOptions.DdgiSchedulerModeOverride);
         renderer.Settings.Transparency.Mode = _smokeOptions.TransparencyMode;
         _materialGiRolloutBootstrap.Apply(renderer.Settings, Console.Out);
+        if (_smokeOptions.Benchmark.Enabled)
+        {
+            // A controlled timing window must not let completed GPU timings
+            // change the following frame's update population. Adaptive DDGI
+            // budgeting remains available in normal rendering and explicit
+            // experiments, but the canonical benchmark uses the authored cap.
+            renderer.Settings.GlobalIllumination.DdgiAdaptiveBudgetingEnabled = false;
+            SampleBenchmarkCaptureVariant.Apply(
+                renderer.Settings,
+                _smokeOptions.Benchmark.CaptureVariant);
+        }
     }
 
     protected override void OnResize(int width, int height)
@@ -459,15 +492,21 @@ internal sealed class HelloGame : Game
 
     protected override void Update(float deltaTime)
     {
+        float simulationDeltaTime = ResolveSimulationDeltaTime(
+            deltaTime,
+            _smokeOptions.Benchmark.Enabled);
         ApplyPendingSmokeResize();
         ObserveSmokeWindowMutation();
         _smokeRunner?.OnUpdate(_drawnFrames);
 #if NJULF_EDITOR
-        UpdateEditor(deltaTime);
+        UpdateEditor(simulationDeltaTime);
 #endif
         if (_materialGiCaptureRunner == null &&
             _khronosMaterialGiRenderedGateRunner == null)
-            _inputController?.Update(deltaTime, WindowWidth, WindowHeight);
+            _inputController?.Update(
+                simulationDeltaTime,
+                WindowWidth,
+                WindowHeight);
         _materialGiCaptureRunner?.PrepareFrame();
         _khronosMaterialGiRenderedGateRunner?.PrepareFrame();
         if (_smokeOptions.Mode == SampleSmokeMode.LongRun)
@@ -475,12 +514,20 @@ internal sealed class HelloGame : Game
 
         if (AssetManifest.RotationSpeed != 0f)
         {
-            _modelRotation += deltaTime * AssetManifest.RotationSpeed;
+            _modelRotation +=
+                simulationDeltaTime * AssetManifest.RotationSpeed;
             _sceneLoader?.ApplyModelRotation(_modelRotation);
         }
 
-        base.Update(deltaTime);
+        base.Update(simulationDeltaTime);
     }
+
+    internal static float ResolveSimulationDeltaTime(
+        float hostDeltaTime,
+        bool benchmarkEnabled) =>
+        benchmarkEnabled
+            ? BenchmarkSimulationDeltaSeconds
+            : hostDeltaTime;
 
     protected override void Draw()
     {

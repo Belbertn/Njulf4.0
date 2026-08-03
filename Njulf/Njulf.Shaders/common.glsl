@@ -912,6 +912,7 @@ struct GPUSceneSubmissionCounters
     uint FullOpaqueEmittedCount;
     uint FullOpaqueOverflowCount;
     uint DirectionalShadowLodFallbackCount;
+    uint OpaqueLodDecimatedCount;
 };
 
 struct GPUSceneOpaqueCompactionPushConstants
@@ -1279,6 +1280,15 @@ layout(set = 0, binding = 0) buffer BindlessStorageBuffer
     uint Words[];
 } BindlessStorageBuffers[];
 
+// Read-only vector view of the same storage-buffer descriptors. This is used
+// only by accessors that can prove a dynamically-uniform descriptor index; the
+// alternate view lets SPIR-V retain 128-bit loads instead of scalarizing every
+// four-word structure member at the source level.
+layout(set = 0, binding = 0) readonly buffer BindlessStorageVectorBuffer
+{
+    uvec4 Vectors[];
+} BindlessStorageVectorBuffers[];
+
 layout(set = 1, binding = 0) uniform sampler2D BindlessTextures[];
 layout(set = 1, binding = 0) uniform sampler2DArray BindlessArrayTextures[];
 layout(set = 1, binding = 0) uniform samplerCube BindlessCubeTextures[];
@@ -1323,7 +1333,7 @@ const int SIZEOF_GPU_FOLIAGE_INSTANCE = 64;
 const int SIZEOF_GPU_FOLIAGE_MESHLET_DRAW_COMMAND = 48;
 const int SIZEOF_GPU_FOLIAGE_COUNTERS = 40;
 const int SIZEOF_GPU_FOLIAGE_DISPATCH_ARGS = 16;
-const int SIZEOF_GPU_SCENE_SUBMISSION_COUNTERS = 276;
+const int SIZEOF_GPU_SCENE_SUBMISSION_COUNTERS = 280;
 const int SIZEOF_GPU_SCENE_OPAQUE_COMPACTION_PUSH_CONSTANTS = 168;
 const int SIZEOF_GPU_FORWARD_VISIBILITY_COMPACTION_PUSH_CONSTANTS = 92;
 const int SIZEOF_GPU_FOLIAGE_CULL_PUSH_CONSTANTS = 52;
@@ -1926,6 +1936,26 @@ const uint DDGI_TRACE_UNSUPPORTED_ALBEDO_LUMINANCE_COUNTER = DDGI_ALBEDO_COUNTER
 const uint DDGI_TRACE_UNSUPPORTED_COUNT_COUNTER = DDGI_ALBEDO_COUNTER_BASE + 9u;
 const uint DDGI_TRACE_REFLECT_DISABLED_ALBEDO_LUMINANCE_COUNTER = DDGI_ALBEDO_COUNTER_BASE + 10u;
 const uint DDGI_TRACE_REFLECT_DISABLED_COUNT_COUNTER = DDGI_ALBEDO_COUNTER_BASE + 11u;
+// Mutually exclusive forward-gather attribution, appended after the albedo ABI.
+const uint SIMPLE_DDGI_GATHER_MULTIPLICITY_COUNTER_BASE = DDGI_ALBEDO_COUNTER_BASE + 12u;
+const uint SIMPLE_DDGI_ONE_GATHER_PIXEL_COUNTER = SIMPLE_DDGI_GATHER_MULTIPLICITY_COUNTER_BASE + 0u;
+const uint SIMPLE_DDGI_TWO_GATHER_PIXEL_COUNTER = SIMPLE_DDGI_GATHER_MULTIPLICITY_COUNTER_BASE + 1u;
+const uint SIMPLE_DDGI_RECOVERY_GATHER_PIXEL_COUNTER = SIMPLE_DDGI_GATHER_MULTIPLICITY_COUNTER_BASE + 2u;
+const uint SIMPLE_DDGI_SECOND_GATHER_RING_TRANSITION_COUNTER = SIMPLE_DDGI_GATHER_MULTIPLICITY_COUNTER_BASE + 3u;
+const uint SIMPLE_DDGI_SECOND_GATHER_MISSING_INVALID_PRIMARY_COUNTER = SIMPLE_DDGI_GATHER_MULTIPLICITY_COUNTER_BASE + 4u;
+const uint SIMPLE_DDGI_SECOND_GATHER_RECOVERY_COUNTER = SIMPLE_DDGI_GATHER_MULTIPLICITY_COUNTER_BASE + 5u;
+const uint SIMPLE_DDGI_SECOND_GATHER_COVERAGE_EDGE_COUNTER = SIMPLE_DDGI_GATHER_MULTIPLICITY_COUNTER_BASE + 6u;
+const uint SIMPLE_DDGI_SECOND_GATHER_OWNERSHIP_BELOW_COUNTER = SIMPLE_DDGI_GATHER_MULTIPLICITY_COUNTER_BASE + 7u;
+const uint SIMPLE_DDGI_SECOND_GATHER_DEBUG_ONLY_COUNTER = SIMPLE_DDGI_GATHER_MULTIPLICITY_COUNTER_BASE + 8u;
+// Sparse 16x16 geometry-decal fragment attribution. Values are accumulated
+// with weight 256 and exported as sampled full-frame estimates.
+const uint DECAL_FRAGMENT_ATTRIBUTION_COUNTER_BASE = SIMPLE_DDGI_GATHER_MULTIPLICITY_COUNTER_BASE + 9u;
+const uint DECAL_ESTIMATED_INVOCATION_COUNTER = DECAL_FRAGMENT_ATTRIBUTION_COUNTER_BASE + 0u;
+const uint DECAL_ESTIMATED_BACKFACE_KILLED_COUNTER = DECAL_FRAGMENT_ATTRIBUTION_COUNTER_BASE + 1u;
+const uint DECAL_ESTIMATED_COVERAGE_KILLED_COUNTER = DECAL_FRAGMENT_ATTRIBUTION_COUNTER_BASE + 2u;
+const uint DECAL_ESTIMATED_SURVIVING_COUNTER = DECAL_FRAGMENT_ATTRIBUTION_COUNTER_BASE + 3u;
+const uint DECAL_ESTIMATED_DDGI_GATHER_COUNTER = DECAL_FRAGMENT_ATTRIBUTION_COUNTER_BASE + 4u;
+const uint DECAL_ESTIMATED_SHADOW_EVALUATION_COUNTER = DECAL_FRAGMENT_ATTRIBUTION_COUNTER_BASE + 5u;
 const float DDGI_THIN_LUMINANCE_SCALE = 4096.0;
 const float DDGI_SHADOW_VISIBILITY_HIT_DISTANCE_SCALE = 256.0;
 const float DIRECTIONAL_SHADOW_RECEIVER_DEPTH_QUANTIZATION_SCALE = 65535.0;
@@ -1956,9 +1986,57 @@ const uint MESHLET_TASK_GROUP_SIZE = 1u;
 #define NJULF_GPU_DIAGNOSTIC_COUNTERS 0
 #endif
 
+#ifndef NJULF_DDGI_DETAILED_COUNTERS
+#define NJULF_DDGI_DETAILED_COUNTERS 0
+#endif
+
 uint ReadStorageWord(uint bufferIndex, uint wordOffset)
 {
     return BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[wordOffset];
+}
+
+// Most renderer parameter/state descriptors are selected from push constants or
+// immutable parameter blocks and are therefore dynamically uniform for the
+// entire draw/dispatch.  Keep that contract explicit: decorating those indices
+// as non-uniform forces some drivers to emit a descriptor-waterfall loop even
+// though every lane addresses the same descriptor.
+uint ReadStorageWordUniform(uint bufferIndex, uint wordOffset)
+{
+    return BindlessStorageBuffers[bufferIndex].Words[wordOffset];
+}
+
+float ReadStorageFloatUniform(uint bufferIndex, uint wordOffset)
+{
+    return uintBitsToFloat(ReadStorageWordUniform(bufferIndex, wordOffset));
+}
+
+uvec4 ReadStorageUVec4(uint bufferIndex, uint wordOffset)
+{
+    return uvec4(
+        BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[wordOffset + 0u],
+        BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[wordOffset + 1u],
+        BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[wordOffset + 2u],
+        BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[wordOffset + 3u]);
+}
+
+uvec4 ReadStorageUVec4Uniform(uint bufferIndex, uint wordOffset)
+{
+    // A general word offset cannot safely be reconstructed from two aligned
+    // vector loads: the second load can cross the descriptor range for the last
+    // record in a tightly packed buffer. Keep the uniform-descriptor benefit
+    // here and reserve true 128-bit loads for the aligned accessor below.
+    return uvec4(
+        ReadStorageWordUniform(bufferIndex, wordOffset + 0u),
+        ReadStorageWordUniform(bufferIndex, wordOffset + 1u),
+        ReadStorageWordUniform(bufferIndex, wordOffset + 2u),
+        ReadStorageWordUniform(bufferIndex, wordOffset + 3u));
+}
+
+// wordOffset must be four-word aligned. Keep this separate from the general
+// accessor so hot structure headers compile to one unconditional vector load.
+uvec4 ReadStorageAlignedUVec4Uniform(uint bufferIndex, uint wordOffset)
+{
+    return BindlessStorageVectorBuffers[bufferIndex].Vectors[wordOffset >> 2u];
 }
 
 void WriteStorageWord(uint bufferIndex, uint wordOffset, uint value)
@@ -1966,9 +2044,19 @@ void WriteStorageWord(uint bufferIndex, uint wordOffset, uint value)
     BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[wordOffset] = value;
 }
 
+void WriteStorageWordUniform(uint bufferIndex, uint wordOffset, uint value)
+{
+    BindlessStorageBuffers[bufferIndex].Words[wordOffset] = value;
+}
+
 void WriteStorageFloat(uint bufferIndex, uint wordOffset, float value)
 {
     WriteStorageWord(bufferIndex, wordOffset, floatBitsToUint(value));
+}
+
+void WriteStorageFloatUniform(uint bufferIndex, uint wordOffset, float value)
+{
+    WriteStorageWordUniform(bufferIndex, wordOffset, floatBitsToUint(value));
 }
 
 void WriteStorageVec4(uint bufferIndex, uint wordOffset, vec4 value)
@@ -1979,16 +2067,28 @@ void WriteStorageVec4(uint bufferIndex, uint wordOffset, vec4 value)
     WriteStorageFloat(bufferIndex, wordOffset + 3u, value.w);
 }
 
+void WriteStorageVec4Uniform(uint bufferIndex, uint wordOffset, vec4 value)
+{
+    WriteStorageFloatUniform(bufferIndex, wordOffset + 0u, value.x);
+    WriteStorageFloatUniform(bufferIndex, wordOffset + 1u, value.y);
+    WriteStorageFloatUniform(bufferIndex, wordOffset + 2u, value.z);
+    WriteStorageFloatUniform(bufferIndex, wordOffset + 3u, value.w);
+}
+
 void IncrementRendererDiagnostic(uint frameIndex, uint counterIndex)
 {
+#if NJULF_GPU_DIAGNOSTIC_COUNTERS
     uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) + frameIndex;
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[counterIndex], 1u);
+#endif
 }
 
 void AddRendererDiagnostic(uint frameIndex, uint counterIndex, uint value)
 {
+#if NJULF_DDGI_DETAILED_COUNTERS
     uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) + frameIndex;
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[counterIndex], value);
+#endif
 }
 
 void IncrementRendererDiagnosticOptional(uint frameIndex, uint counterIndex)
@@ -2020,11 +2120,27 @@ vec3 ReadStorageVec3(uint bufferIndex, uint wordOffset)
 
 vec4 ReadStorageVec4(uint bufferIndex, uint wordOffset)
 {
-    return vec4(
-        ReadStorageFloat(bufferIndex, wordOffset + 0u),
-        ReadStorageFloat(bufferIndex, wordOffset + 1u),
-        ReadStorageFloat(bufferIndex, wordOffset + 2u),
-        ReadStorageFloat(bufferIndex, wordOffset + 3u));
+    return uintBitsToFloat(ReadStorageUVec4(bufferIndex, wordOffset));
+}
+
+vec4 ReadStorageVec4Uniform(uint bufferIndex, uint wordOffset)
+{
+    return uintBitsToFloat(ReadStorageUVec4Uniform(bufferIndex, wordOffset));
+}
+
+vec4 ReadStorageAlignedVec4Uniform(uint bufferIndex, uint wordOffset)
+{
+    return uintBitsToFloat(
+        ReadStorageAlignedUVec4Uniform(bufferIndex, wordOffset));
+}
+
+mat4 ReadStorageAlignedMat4Uniform(uint bufferIndex, uint wordOffset)
+{
+    return mat4(
+        ReadStorageAlignedVec4Uniform(bufferIndex, wordOffset + 0u),
+        ReadStorageAlignedVec4Uniform(bufferIndex, wordOffset + 4u),
+        ReadStorageAlignedVec4Uniform(bufferIndex, wordOffset + 8u),
+        ReadStorageAlignedVec4Uniform(bufferIndex, wordOffset + 12u));
 }
 
 mat4 ReadStorageMat4(uint bufferIndex, uint wordOffset)
@@ -2532,37 +2648,49 @@ GPUVertex ReadVertexFromBuffer(uint bufferIndex, uint vertexIndex)
 vec3 ReadSplitVertexPosition(uint vertexIndex)
 {
     uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX_POSITION_STREAM / 4);
-    return ReadStorageVec3(uint(VERTEX_POSITION_BUFFER_INDEX), baseWord + 0u);
+    return ReadStorageAlignedVec4Uniform(
+        uint(VERTEX_POSITION_BUFFER_INDEX),
+        baseWord).xyz;
 }
 
 vec3 ReadSplitVertexNormal(uint vertexIndex)
 {
     uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX_NORMAL_TANGENT_STREAM / 4);
-    return ReadStorageVec3(uint(VERTEX_NORMAL_TANGENT_BUFFER_INDEX), baseWord + 0u);
+    return ReadStorageAlignedVec4Uniform(
+        uint(VERTEX_NORMAL_TANGENT_BUFFER_INDEX),
+        baseWord).xyz;
 }
 
 vec4 ReadSplitVertexTangent(uint vertexIndex)
 {
     uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX_NORMAL_TANGENT_STREAM / 4);
-    return ReadStorageVec4(uint(VERTEX_NORMAL_TANGENT_BUFFER_INDEX), baseWord + 4u);
+    return ReadStorageAlignedVec4Uniform(
+        uint(VERTEX_NORMAL_TANGENT_BUFFER_INDEX),
+        baseWord + 4u);
 }
 
 vec2 ReadSplitVertexTexCoord(uint vertexIndex)
 {
     uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX_UV_COLOR_STREAM / 4);
-    return ReadStorageVec2(uint(VERTEX_UV_COLOR_BUFFER_INDEX), baseWord + 0u);
+    return ReadStorageAlignedVec4Uniform(
+        uint(VERTEX_UV_COLOR_BUFFER_INDEX),
+        baseWord).xy;
 }
 
 vec2 ReadSplitVertexTexCoord2(uint vertexIndex)
 {
     uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX_UV_COLOR_STREAM / 4);
-    return ReadStorageVec2(uint(VERTEX_UV_COLOR_BUFFER_INDEX), baseWord + 2u);
+    return ReadStorageAlignedVec4Uniform(
+        uint(VERTEX_UV_COLOR_BUFFER_INDEX),
+        baseWord).zw;
 }
 
 vec4 ReadSplitVertexColor(uint vertexIndex)
 {
     uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX_UV_COLOR_STREAM / 4);
-    return ReadStorageVec4(uint(VERTEX_UV_COLOR_BUFFER_INDEX), baseWord + 4u);
+    return ReadStorageAlignedVec4Uniform(
+        uint(VERTEX_UV_COLOR_BUFFER_INDEX),
+        baseWord + 4u);
 }
 
 GPUVertex ReadSplitVertex(uint vertexIndex)
@@ -3100,123 +3228,138 @@ GPUMaterialData ReadMaterial(uint materialIndex)
 {
     uint baseWord = materialIndex * uint(SIZEOF_GPU_MATERIAL_DATA / 4);
     GPUMaterialData material;
-    material.Albedo = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 0u);
-    material.Emissive = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 4u);
-    material.NormalScaleBias = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 8u);
-    material.MetallicRoughnessAO = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 12u);
-    material.BaseColorOffsetScale = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 16u);
-    material.NormalOffsetScale = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 20u);
-    material.MetallicRoughnessOffsetScale = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 24u);
-    material.OcclusionOffsetScale = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 28u);
-    material.EmissiveOffsetScale = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 32u);
-    material.TextureRotations = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 36u);
-    material.TextureTexCoordSets = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 40u);
-    material.OcclusionBinding = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 44u);
-    material.AlbedoTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 48u));
-    material.NormalTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 49u));
-    material.MetallicRoughnessTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 50u));
-    material.OcclusionTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 51u));
-    material.EmissiveTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 52u));
-    material.FeatureFlags = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 53u);
-    material.ExtensionDataIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 54u));
-    material.TransportFlags = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 55u);
-    material.TransportProfileRevision = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 56u);
-    material.PackedMeanMetallicRoughness = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 57u);
-    material.TransportProfileQuality = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 58u);
-    material.MaterialRevision = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 59u);
-    material.TextureContentRevision = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 60u);
-    material.PackedMeanGiDirectionalDiffuseBaseRg =
-        ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 61u);
-    material.PackedMeanGiDirectionalDiffuseBaseBAndF0R =
-        ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 62u);
-    material.PackedMeanGiDielectricF0Gb =
-        ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 63u);
-    material.DdgiAverageAlbedo = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 64u);
-    material.DdgiAverageEmissive = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 68u);
-    material.DdgiAverageTransmission = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 72u);
-    material.DdgiMaterialPolicy = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 76u);
+    uint materialBufferIndex = uint(MATERIAL_DATA_BUFFER_INDEX);
+    material.Albedo = ReadStorageAlignedVec4Uniform(materialBufferIndex, baseWord + 0u);
+    material.Emissive = ReadStorageAlignedVec4Uniform(materialBufferIndex, baseWord + 4u);
+    material.NormalScaleBias = ReadStorageAlignedVec4Uniform(materialBufferIndex, baseWord + 8u);
+    material.MetallicRoughnessAO = ReadStorageAlignedVec4Uniform(materialBufferIndex, baseWord + 12u);
+    material.BaseColorOffsetScale = ReadStorageAlignedVec4Uniform(materialBufferIndex, baseWord + 16u);
+    material.NormalOffsetScale = ReadStorageAlignedVec4Uniform(materialBufferIndex, baseWord + 20u);
+    material.MetallicRoughnessOffsetScale = ReadStorageAlignedVec4Uniform(materialBufferIndex, baseWord + 24u);
+    material.OcclusionOffsetScale = ReadStorageAlignedVec4Uniform(materialBufferIndex, baseWord + 28u);
+    material.EmissiveOffsetScale = ReadStorageAlignedVec4Uniform(materialBufferIndex, baseWord + 32u);
+    material.TextureRotations = ReadStorageAlignedVec4Uniform(materialBufferIndex, baseWord + 36u);
+    material.TextureTexCoordSets = ReadStorageAlignedVec4Uniform(materialBufferIndex, baseWord + 40u);
+    material.OcclusionBinding = ReadStorageAlignedVec4Uniform(materialBufferIndex, baseWord + 44u);
+    uvec4 textureBindings = ReadStorageAlignedUVec4Uniform(materialBufferIndex, baseWord + 48u);
+    uvec4 transportMetadata = ReadStorageAlignedUVec4Uniform(materialBufferIndex, baseWord + 52u);
+    uvec4 revisionMetadata = ReadStorageAlignedUVec4Uniform(materialBufferIndex, baseWord + 56u);
+    uvec4 directionalMetadata = ReadStorageAlignedUVec4Uniform(materialBufferIndex, baseWord + 60u);
+    material.AlbedoTextureIndex = int(textureBindings.x);
+    material.NormalTextureIndex = int(textureBindings.y);
+    material.MetallicRoughnessTextureIndex = int(textureBindings.z);
+    material.OcclusionTextureIndex = int(textureBindings.w);
+    material.EmissiveTextureIndex = int(transportMetadata.x);
+    material.FeatureFlags = transportMetadata.y;
+    material.ExtensionDataIndex = int(transportMetadata.z);
+    material.TransportFlags = transportMetadata.w;
+    material.TransportProfileRevision = revisionMetadata.x;
+    material.PackedMeanMetallicRoughness = revisionMetadata.y;
+    material.TransportProfileQuality = revisionMetadata.z;
+    material.MaterialRevision = revisionMetadata.w;
+    material.TextureContentRevision = directionalMetadata.x;
+    material.PackedMeanGiDirectionalDiffuseBaseRg = directionalMetadata.y;
+    material.PackedMeanGiDirectionalDiffuseBaseBAndF0R = directionalMetadata.z;
+    material.PackedMeanGiDielectricF0Gb = directionalMetadata.w;
+    material.DdgiAverageAlbedo = ReadStorageAlignedVec4Uniform(materialBufferIndex, baseWord + 64u);
+    material.DdgiAverageEmissive = ReadStorageAlignedVec4Uniform(materialBufferIndex, baseWord + 68u);
+    material.DdgiAverageTransmission = ReadStorageAlignedVec4Uniform(materialBufferIndex, baseWord + 72u);
+    material.DdgiMaterialPolicy = ReadStorageAlignedVec4Uniform(materialBufferIndex, baseWord + 76u);
     return material;
 }
 
 GPUMaterialExtensionData ReadMaterialExtension(uint extensionIndex)
 {
     uint baseWord = extensionIndex * uint(SIZEOF_GPU_MATERIAL_EXTENSION_DATA / 4);
+    uint bufferIndex = uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX);
     GPUMaterialExtensionData data;
-    data.Clearcoat = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 0u);
-    data.SheenColor = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 4u);
-    data.Anisotropy = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 8u);
-    data.Transmission = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 12u);
-    data.AttenuationColor = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 16u);
-    data.Subsurface = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 20u);
-    data.SpecularColor = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 24u);
-    data.Iridescence = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 28u);
-    data.Dispersion = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 32u);
-    data.ClearcoatOffsetScale = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 36u);
-    data.ClearcoatRoughnessOffsetScale = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 40u);
-    data.ClearcoatNormalOffsetScale = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 44u);
-    data.SheenColorOffsetScale = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 48u);
-    data.SheenRoughnessOffsetScale = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 52u);
-    data.AnisotropyOffsetScale = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 56u);
-    data.TransmissionOffsetScale = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 60u);
-    data.ThicknessOffsetScale = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 64u);
-    data.SpecularOffsetScale = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 68u);
-    data.SpecularColorOffsetScale = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 72u);
-    data.IridescenceOffsetScale = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 76u);
-    data.IridescenceThicknessOffsetScale = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 80u);
-    data.SubsurfaceOffsetScale = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 84u);
-    data.ExtensionTextureRotations0 = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 88u);
-    data.ExtensionTextureRotations1 = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 92u);
-    data.ExtensionTextureRotations2 = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 96u);
-    data.ExtensionTextureRotations3 = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 100u);
-    data.ExtensionTextureTexCoordSets0 = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 104u);
-    data.ExtensionTextureTexCoordSets1 = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 108u);
-    data.ExtensionTextureTexCoordSets2 = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 112u);
-    data.ExtensionTextureTexCoordSets3 = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 116u);
-    data.ClearcoatTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 120u));
-    data.ClearcoatRoughnessTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 121u));
-    data.ClearcoatNormalTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 122u));
-    data.SheenColorTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 123u));
-    data.SheenRoughnessTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 124u));
-    data.AnisotropyTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 125u));
-    data.TransmissionTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 126u));
-    data.ThicknessTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 127u));
-    data.SubsurfaceTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 128u));
-    data.SpecularTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 129u));
-    data.SpecularColorTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 130u));
-    data.IridescenceTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 131u));
-    data.IridescenceThicknessTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 132u));
-    data.Padding0 = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 133u));
-    data.Padding1 = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 134u));
-    data.Padding2 = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 135u));
-    data.Padding3 = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 136u));
+    data.Clearcoat = ReadStorageVec4Uniform(bufferIndex, baseWord + 0u);
+    data.SheenColor = ReadStorageVec4Uniform(bufferIndex, baseWord + 4u);
+    data.Anisotropy = ReadStorageVec4Uniform(bufferIndex, baseWord + 8u);
+    data.Transmission = ReadStorageVec4Uniform(bufferIndex, baseWord + 12u);
+    data.AttenuationColor = ReadStorageVec4Uniform(bufferIndex, baseWord + 16u);
+    data.Subsurface = ReadStorageVec4Uniform(bufferIndex, baseWord + 20u);
+    data.SpecularColor = ReadStorageVec4Uniform(bufferIndex, baseWord + 24u);
+    data.Iridescence = ReadStorageVec4Uniform(bufferIndex, baseWord + 28u);
+    data.Dispersion = ReadStorageVec4Uniform(bufferIndex, baseWord + 32u);
+    data.ClearcoatOffsetScale = ReadStorageVec4Uniform(bufferIndex, baseWord + 36u);
+    data.ClearcoatRoughnessOffsetScale = ReadStorageVec4Uniform(bufferIndex, baseWord + 40u);
+    data.ClearcoatNormalOffsetScale = ReadStorageVec4Uniform(bufferIndex, baseWord + 44u);
+    data.SheenColorOffsetScale = ReadStorageVec4Uniform(bufferIndex, baseWord + 48u);
+    data.SheenRoughnessOffsetScale = ReadStorageVec4Uniform(bufferIndex, baseWord + 52u);
+    data.AnisotropyOffsetScale = ReadStorageVec4Uniform(bufferIndex, baseWord + 56u);
+    data.TransmissionOffsetScale = ReadStorageVec4Uniform(bufferIndex, baseWord + 60u);
+    data.ThicknessOffsetScale = ReadStorageVec4Uniform(bufferIndex, baseWord + 64u);
+    data.SpecularOffsetScale = ReadStorageVec4Uniform(bufferIndex, baseWord + 68u);
+    data.SpecularColorOffsetScale = ReadStorageVec4Uniform(bufferIndex, baseWord + 72u);
+    data.IridescenceOffsetScale = ReadStorageVec4Uniform(bufferIndex, baseWord + 76u);
+    data.IridescenceThicknessOffsetScale = ReadStorageVec4Uniform(bufferIndex, baseWord + 80u);
+    data.SubsurfaceOffsetScale = ReadStorageVec4Uniform(bufferIndex, baseWord + 84u);
+    data.ExtensionTextureRotations0 = ReadStorageVec4Uniform(bufferIndex, baseWord + 88u);
+    data.ExtensionTextureRotations1 = ReadStorageVec4Uniform(bufferIndex, baseWord + 92u);
+    data.ExtensionTextureRotations2 = ReadStorageVec4Uniform(bufferIndex, baseWord + 96u);
+    data.ExtensionTextureRotations3 = ReadStorageVec4Uniform(bufferIndex, baseWord + 100u);
+    data.ExtensionTextureTexCoordSets0 = ReadStorageVec4Uniform(bufferIndex, baseWord + 104u);
+    data.ExtensionTextureTexCoordSets1 = ReadStorageVec4Uniform(bufferIndex, baseWord + 108u);
+    data.ExtensionTextureTexCoordSets2 = ReadStorageVec4Uniform(bufferIndex, baseWord + 112u);
+    data.ExtensionTextureTexCoordSets3 = ReadStorageVec4Uniform(bufferIndex, baseWord + 116u);
+    uvec4 textureIndices0 = ReadStorageUVec4Uniform(bufferIndex, baseWord + 120u);
+    uvec4 textureIndices1 = ReadStorageUVec4Uniform(bufferIndex, baseWord + 124u);
+    uvec4 textureIndices2 = ReadStorageUVec4Uniform(bufferIndex, baseWord + 128u);
+    uvec4 textureIndices3 = ReadStorageUVec4Uniform(bufferIndex, baseWord + 132u);
+    data.ClearcoatTextureIndex = int(textureIndices0.x);
+    data.ClearcoatRoughnessTextureIndex = int(textureIndices0.y);
+    data.ClearcoatNormalTextureIndex = int(textureIndices0.z);
+    data.SheenColorTextureIndex = int(textureIndices0.w);
+    data.SheenRoughnessTextureIndex = int(textureIndices1.x);
+    data.AnisotropyTextureIndex = int(textureIndices1.y);
+    data.TransmissionTextureIndex = int(textureIndices1.z);
+    data.ThicknessTextureIndex = int(textureIndices1.w);
+    data.SubsurfaceTextureIndex = int(textureIndices2.x);
+    data.SpecularTextureIndex = int(textureIndices2.y);
+    data.SpecularColorTextureIndex = int(textureIndices2.z);
+    data.IridescenceTextureIndex = int(textureIndices2.w);
+    data.IridescenceThicknessTextureIndex = int(textureIndices3.x);
+    data.Padding0 = int(textureIndices3.y);
+    data.Padding1 = int(textureIndices3.z);
+    data.Padding2 = int(textureIndices3.w);
+    data.Padding3 = int(ReadStorageWordUniform(bufferIndex, baseWord + 136u));
     return data;
 }
 
 GPUTiledLightHeader ReadTiledLightHeader(uint tileIndex)
 {
     uint baseWord = tileIndex * uint(SIZEOF_GPU_TILED_LIGHT_HEADER / 4);
+    uvec4 packed = ReadStorageAlignedUVec4Uniform(
+        uint(TILED_LIGHT_HEADER_BUFFER_INDEX),
+        baseWord);
     GPUTiledLightHeader header;
-    header.LightCount = ReadStorageWord(uint(TILED_LIGHT_HEADER_BUFFER_INDEX), baseWord + 0u);
-    header.LightOffset = ReadStorageWord(uint(TILED_LIGHT_HEADER_BUFFER_INDEX), baseWord + 1u);
-    header.OverflowCount = ReadStorageWord(uint(TILED_LIGHT_HEADER_BUFFER_INDEX), baseWord + 2u);
-    header.Padding1 = ReadStorageWord(uint(TILED_LIGHT_HEADER_BUFFER_INDEX), baseWord + 3u);
+    header.LightCount = packed.x;
+    header.LightOffset = packed.y;
+    header.OverflowCount = packed.z;
+    header.Padding1 = packed.w;
     return header;
 }
 
 GPULight ReadLight(uint lightIndex)
 {
     uint baseWord = lightIndex * uint(SIZEOF_GPU_LIGHT / 4);
+    uint lightBufferIndex = uint(LIGHT_BUFFER_INDEX);
+    vec4 positionIntensity = ReadStorageAlignedVec4Uniform(lightBufferIndex, baseWord + 0u);
+    vec4 colorRange = ReadStorageAlignedVec4Uniform(lightBufferIndex, baseWord + 4u);
+    vec4 directionAngle = ReadStorageAlignedVec4Uniform(lightBufferIndex, baseWord + 8u);
+    uvec4 typeShadow = ReadStorageAlignedUVec4Uniform(lightBufferIndex, baseWord + 12u);
     GPULight light;
-    light.Position = ReadStorageVec3(uint(LIGHT_BUFFER_INDEX), baseWord + 0u);
-    light.Intensity = ReadStorageFloat(uint(LIGHT_BUFFER_INDEX), baseWord + 3u);
-    light.Color = ReadStorageVec3(uint(LIGHT_BUFFER_INDEX), baseWord + 4u);
-    light.Range = ReadStorageFloat(uint(LIGHT_BUFFER_INDEX), baseWord + 7u);
-    light.Direction = ReadStorageVec3(uint(LIGHT_BUFFER_INDEX), baseWord + 8u);
-    light.SpotAngle = ReadStorageFloat(uint(LIGHT_BUFFER_INDEX), baseWord + 11u);
-    light.Type = int(ReadStorageWord(uint(LIGHT_BUFFER_INDEX), baseWord + 12u));
-    light.ShadowFlags = int(ReadStorageWord(uint(LIGHT_BUFFER_INDEX), baseWord + 13u));
-    light.ShadowStrength = ReadStorageFloat(uint(LIGHT_BUFFER_INDEX), baseWord + 14u);
-    light.Padding0 = int(ReadStorageWord(uint(LIGHT_BUFFER_INDEX), baseWord + 15u));
+    light.Position = positionIntensity.xyz;
+    light.Intensity = positionIntensity.w;
+    light.Color = colorRange.xyz;
+    light.Range = colorRange.w;
+    light.Direction = directionAngle.xyz;
+    light.SpotAngle = directionAngle.w;
+    light.Type = int(typeShadow.x);
+    light.ShadowFlags = int(typeShadow.y);
+    light.ShadowStrength = uintBitsToFloat(typeShadow.z);
+    light.Padding0 = int(typeShadow.w);
     return light;
 }
 
@@ -3243,86 +3386,91 @@ GPUDdgiEmissiveSource ReadDdgiEmissiveSource(uint sourceIndex)
 {
     uint baseWord = sourceIndex * uint(SIZEOF_GPU_DDGI_EMISSIVE_SOURCE / 4);
     GPUDdgiEmissiveSource source;
-    source.Vertex0Area = ReadStorageVec4(uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX), baseWord + 0u);
-    source.Edge1AliasProbability = ReadStorageVec4(uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX), baseWord + 4u);
-    source.Edge2AliasFlags = ReadStorageVec4(uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX), baseWord + 8u);
-    source.RadianceSelectionProbability = ReadStorageVec4(uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX), baseWord + 12u);
+    uint sourceBufferIndex = uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX);
+    source.Vertex0Area = ReadStorageAlignedVec4Uniform(sourceBufferIndex, baseWord + 0u);
+    source.Edge1AliasProbability = ReadStorageAlignedVec4Uniform(sourceBufferIndex, baseWord + 4u);
+    source.Edge2AliasFlags = ReadStorageAlignedVec4Uniform(sourceBufferIndex, baseWord + 8u);
+    source.RadianceSelectionProbability = ReadStorageAlignedVec4Uniform(sourceBufferIndex, baseWord + 12u);
     return source;
 }
 
 uint ReadTiledLightIndex(uint lightListOffset)
 {
     uint baseWord = lightListOffset * uint(SIZEOF_GPU_LIGHT_INDEX / 4);
-    return ReadStorageWord(uint(TILED_LIGHT_INDICES_BUFFER_INDEX), baseWord + 0u);
+    return ReadStorageWordUniform(uint(TILED_LIGHT_INDICES_BUFFER_INDEX), baseWord + 0u);
 }
 
 mat4 ReadShadowMatrix(uint cascadeIndex)
 {
     uint baseWord = uint(OFFSET_GPU_SHADOW_DATA_LIGHT_VIEW_PROJECTION0 / 4) + cascadeIndex * 16u;
     return mat4(
-        ReadStorageVec4(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), baseWord + 0u),
-        ReadStorageVec4(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), baseWord + 4u),
-        ReadStorageVec4(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), baseWord + 8u),
-        ReadStorageVec4(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), baseWord + 12u));
+        ReadStorageAlignedVec4Uniform(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), baseWord + 0u),
+        ReadStorageAlignedVec4Uniform(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), baseWord + 4u),
+        ReadStorageAlignedVec4Uniform(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), baseWord + 8u),
+        ReadStorageAlignedVec4Uniform(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), baseWord + 12u));
 }
 
 int ReadLocalSpotShadowIndex(uint lightIndex)
 {
     uint baseWord = lightIndex * uint(SIZEOF_GPU_LOCAL_LIGHT_SHADOW_INDEX / 4);
-    return int(ReadStorageWord(uint(LOCAL_LIGHT_SHADOW_INDEX_BUFFER_INDEX), baseWord + 0u));
+    return int(ReadStorageWordUniform(uint(LOCAL_LIGHT_SHADOW_INDEX_BUFFER_INDEX), baseWord + 0u));
 }
 
 int ReadLocalPointShadowIndex(uint lightIndex)
 {
     uint baseWord = lightIndex * uint(SIZEOF_GPU_LOCAL_LIGHT_SHADOW_INDEX / 4);
-    return int(ReadStorageWord(uint(LOCAL_LIGHT_SHADOW_INDEX_BUFFER_INDEX), baseWord + 1u));
+    return int(ReadStorageWordUniform(uint(LOCAL_LIGHT_SHADOW_INDEX_BUFFER_INDEX), baseWord + 1u));
 }
 
 GPUEnvironmentData ReadEnvironmentDataFrom(uint bufferIndex)
 {
+    uvec4 textureIndices = ReadStorageAlignedUVec4Uniform(bufferIndex, 0u);
+    vec4 intensities = ReadStorageAlignedVec4Uniform(bufferIndex, 4u);
+    uvec4 controls = ReadStorageAlignedUVec4Uniform(bufferIndex, 8u);
+    uvec4 transition = ReadStorageAlignedUVec4Uniform(bufferIndex, 12u);
     GPUEnvironmentData environment;
-    environment.EnvironmentTextureIndex = int(ReadStorageWord(bufferIndex, 0u));
-    environment.IrradianceTextureIndex = int(ReadStorageWord(bufferIndex, 1u));
-    environment.PrefilteredTextureIndex = int(ReadStorageWord(bufferIndex, 2u));
-    environment.BrdfLutTextureIndex = int(ReadStorageWord(bufferIndex, 3u));
-    environment.SkyIntensity = ReadStorageFloat(bufferIndex, 4u);
-    environment.DiffuseIntensity = ReadStorageFloat(bufferIndex, 5u);
-    environment.SpecularIntensity = ReadStorageFloat(bufferIndex, 6u);
-    environment.RotationRadians = ReadStorageFloat(bufferIndex, 7u);
-    environment.PrefilteredMipCount = ReadStorageWord(bufferIndex, 8u);
-    environment.Enabled = ReadStorageWord(bufferIndex, 9u);
-    environment.DebugView = ReadStorageWord(bufferIndex, 10u);
-    environment.DebugMipLevel = ReadStorageWord(bufferIndex, 11u);
-    environment.NextPrefilteredTextureIndex = int(ReadStorageWord(bufferIndex, 12u));
-    environment.SourceKind = ReadStorageWord(bufferIndex, 13u);
-    environment.AtmosphereFlags = ReadStorageWord(bufferIndex, 14u);
-    environment.PrefilteredBlend = ReadStorageFloat(bufferIndex, 15u);
-    environment.SunDirectionAndAngularRadius = ReadStorageVec4(bufferIndex, 16u);
-    environment.SunRadianceAndElevation = ReadStorageVec4(bufferIndex, 20u);
-    environment.MoonDirectionAndAngularRadius = ReadStorageVec4(bufferIndex, 24u);
-    environment.MoonRadianceAndNightBlend = ReadStorageVec4(bufferIndex, 28u);
-    environment.GroundAlbedoAndTurbidity = ReadStorageVec4(bufferIndex, 32u);
-    environment.AtmosphereParameters = ReadStorageVec4(bufferIndex, 36u);
-    environment.GroundRadianceAndAirglow = ReadStorageVec4(bufferIndex, 40u);
-    environment.HosekParametersR0 = ReadStorageVec4(bufferIndex, 44u);
-    environment.HosekParametersR1 = ReadStorageVec4(bufferIndex, 48u);
-    environment.HosekParametersR2 = ReadStorageVec4(bufferIndex, 52u);
-    environment.HosekParametersG0 = ReadStorageVec4(bufferIndex, 56u);
-    environment.HosekParametersG1 = ReadStorageVec4(bufferIndex, 60u);
-    environment.HosekParametersG2 = ReadStorageVec4(bufferIndex, 64u);
-    environment.HosekParametersB0 = ReadStorageVec4(bufferIndex, 68u);
-    environment.HosekParametersB1 = ReadStorageVec4(bufferIndex, 72u);
-    environment.HosekParametersB2 = ReadStorageVec4(bufferIndex, 76u);
-    environment.HosekRadiances = ReadStorageVec4(bufferIndex, 80u);
-    environment.DiffuseIrradianceSh0 = ReadStorageVec4(bufferIndex, 84u);
-    environment.DiffuseIrradianceSh1 = ReadStorageVec4(bufferIndex, 88u);
-    environment.DiffuseIrradianceSh2 = ReadStorageVec4(bufferIndex, 92u);
-    environment.DiffuseIrradianceSh3 = ReadStorageVec4(bufferIndex, 96u);
-    environment.DiffuseIrradianceSh4 = ReadStorageVec4(bufferIndex, 100u);
-    environment.DiffuseIrradianceSh5 = ReadStorageVec4(bufferIndex, 104u);
-    environment.DiffuseIrradianceSh6 = ReadStorageVec4(bufferIndex, 108u);
-    environment.DiffuseIrradianceSh7 = ReadStorageVec4(bufferIndex, 112u);
-    environment.DiffuseIrradianceSh8 = ReadStorageVec4(bufferIndex, 116u);
+    environment.EnvironmentTextureIndex = int(textureIndices.x);
+    environment.IrradianceTextureIndex = int(textureIndices.y);
+    environment.PrefilteredTextureIndex = int(textureIndices.z);
+    environment.BrdfLutTextureIndex = int(textureIndices.w);
+    environment.SkyIntensity = intensities.x;
+    environment.DiffuseIntensity = intensities.y;
+    environment.SpecularIntensity = intensities.z;
+    environment.RotationRadians = intensities.w;
+    environment.PrefilteredMipCount = controls.x;
+    environment.Enabled = controls.y;
+    environment.DebugView = controls.z;
+    environment.DebugMipLevel = controls.w;
+    environment.NextPrefilteredTextureIndex = int(transition.x);
+    environment.SourceKind = transition.y;
+    environment.AtmosphereFlags = transition.z;
+    environment.PrefilteredBlend = uintBitsToFloat(transition.w);
+    environment.SunDirectionAndAngularRadius = ReadStorageAlignedVec4Uniform(bufferIndex, 16u);
+    environment.SunRadianceAndElevation = ReadStorageAlignedVec4Uniform(bufferIndex, 20u);
+    environment.MoonDirectionAndAngularRadius = ReadStorageAlignedVec4Uniform(bufferIndex, 24u);
+    environment.MoonRadianceAndNightBlend = ReadStorageAlignedVec4Uniform(bufferIndex, 28u);
+    environment.GroundAlbedoAndTurbidity = ReadStorageAlignedVec4Uniform(bufferIndex, 32u);
+    environment.AtmosphereParameters = ReadStorageAlignedVec4Uniform(bufferIndex, 36u);
+    environment.GroundRadianceAndAirglow = ReadStorageAlignedVec4Uniform(bufferIndex, 40u);
+    environment.HosekParametersR0 = ReadStorageAlignedVec4Uniform(bufferIndex, 44u);
+    environment.HosekParametersR1 = ReadStorageAlignedVec4Uniform(bufferIndex, 48u);
+    environment.HosekParametersR2 = ReadStorageAlignedVec4Uniform(bufferIndex, 52u);
+    environment.HosekParametersG0 = ReadStorageAlignedVec4Uniform(bufferIndex, 56u);
+    environment.HosekParametersG1 = ReadStorageAlignedVec4Uniform(bufferIndex, 60u);
+    environment.HosekParametersG2 = ReadStorageAlignedVec4Uniform(bufferIndex, 64u);
+    environment.HosekParametersB0 = ReadStorageAlignedVec4Uniform(bufferIndex, 68u);
+    environment.HosekParametersB1 = ReadStorageAlignedVec4Uniform(bufferIndex, 72u);
+    environment.HosekParametersB2 = ReadStorageAlignedVec4Uniform(bufferIndex, 76u);
+    environment.HosekRadiances = ReadStorageAlignedVec4Uniform(bufferIndex, 80u);
+    environment.DiffuseIrradianceSh0 = ReadStorageAlignedVec4Uniform(bufferIndex, 84u);
+    environment.DiffuseIrradianceSh1 = ReadStorageAlignedVec4Uniform(bufferIndex, 88u);
+    environment.DiffuseIrradianceSh2 = ReadStorageAlignedVec4Uniform(bufferIndex, 92u);
+    environment.DiffuseIrradianceSh3 = ReadStorageAlignedVec4Uniform(bufferIndex, 96u);
+    environment.DiffuseIrradianceSh4 = ReadStorageAlignedVec4Uniform(bufferIndex, 100u);
+    environment.DiffuseIrradianceSh5 = ReadStorageAlignedVec4Uniform(bufferIndex, 104u);
+    environment.DiffuseIrradianceSh6 = ReadStorageAlignedVec4Uniform(bufferIndex, 108u);
+    environment.DiffuseIrradianceSh7 = ReadStorageAlignedVec4Uniform(bufferIndex, 112u);
+    environment.DiffuseIrradianceSh8 = ReadStorageAlignedVec4Uniform(bufferIndex, 116u);
     return environment;
 }
 
@@ -3642,57 +3790,65 @@ vec3 SampleEnvironmentPrefilteredRadiance(
 
 GPUReflectionProbeHeader ReadReflectionProbeHeader()
 {
+    uint bufferIndex = uint(REFLECTION_PROBE_BUFFER_INDEX);
+    uvec4 textureControls = ReadStorageAlignedUVec4Uniform(bufferIndex, 0u);
+    uvec4 lightingControls = ReadStorageAlignedUVec4Uniform(bufferIndex, 4u);
+    uvec4 debugControls = ReadStorageAlignedUVec4Uniform(bufferIndex, 8u);
     GPUReflectionProbeHeader header;
-    header.ProbeCount = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 0u));
-    header.MaxProbesPerPixel = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 1u));
-    header.ProbeCubemapArrayTextureIndex = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 2u));
-    header.DebugTextureIndex = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 3u));
-    header.Intensity = ReadStorageFloat(uint(REFLECTION_PROBE_BUFFER_INDEX), 4u);
-    header.GlobalFallbackIntensity = ReadStorageFloat(uint(REFLECTION_PROBE_BUFFER_INDEX), 5u);
-    header.ProbeMipCount = ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 6u);
-    header.Flags = ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 7u);
-    header.DebugView = ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 8u);
-    header.DebugProbeIndex = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 9u));
-    header.DebugCubemapFace = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 10u));
-    header.DebugMipLevel = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 11u));
+    header.ProbeCount = int(textureControls.x);
+    header.MaxProbesPerPixel = int(textureControls.y);
+    header.ProbeCubemapArrayTextureIndex = int(textureControls.z);
+    header.DebugTextureIndex = int(textureControls.w);
+    header.Intensity = uintBitsToFloat(lightingControls.x);
+    header.GlobalFallbackIntensity = uintBitsToFloat(lightingControls.y);
+    header.ProbeMipCount = lightingControls.z;
+    header.Flags = lightingControls.w;
+    header.DebugView = debugControls.x;
+    header.DebugProbeIndex = int(debugControls.y);
+    header.DebugCubemapFace = int(debugControls.z);
+    header.DebugMipLevel = int(debugControls.w);
     return header;
 }
 
 GPUReflectionProbe ReadReflectionProbe(uint probeIndex)
 {
     uint baseWord = uint(SIZEOF_GPU_REFLECTION_PROBE_HEADER / 4) + probeIndex * uint(SIZEOF_GPU_REFLECTION_PROBE / 4);
+    uint bufferIndex = uint(REFLECTION_PROBE_BUFFER_INDEX);
     GPUReflectionProbe probe;
     probe.WorldToProbe = mat4(
-        ReadStorageVec4(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 0u),
-        ReadStorageVec4(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 4u),
-        ReadStorageVec4(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 8u),
-        ReadStorageVec4(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 12u));
-    probe.PositionAndRadius = ReadStorageVec4(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 16u);
-    probe.BoxMin = ReadStorageVec4(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 20u);
-    probe.BoxMax = ReadStorageVec4(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 24u);
-    probe.BlendParams = ReadStorageVec4(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 28u);
-    probe.CubemapArrayIndex = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 32u));
-    probe.Shape = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 33u));
-    probe.Flags = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 34u));
-    probe.Priority = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 35u));
+        ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 0u),
+        ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 4u),
+        ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 8u),
+        ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 12u));
+    probe.PositionAndRadius = ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 16u);
+    probe.BoxMin = ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 20u);
+    probe.BoxMax = ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 24u);
+    probe.BlendParams = ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 28u);
+    uvec4 metadata = ReadStorageAlignedUVec4Uniform(bufferIndex, baseWord + 32u);
+    probe.CubemapArrayIndex = int(metadata.x);
+    probe.Shape = int(metadata.y);
+    probe.Flags = int(metadata.z);
+    probe.Priority = int(metadata.w);
     return probe;
 }
 
 GPUSpotShadow ReadSpotShadow(uint shadowIndex)
 {
     uint baseWord = shadowIndex * uint(SIZEOF_GPU_SPOT_SHADOW / 4);
+    uint bufferIndex = uint(SPOT_SHADOW_DATA_BUFFER_INDEX);
     GPUSpotShadow shadow;
     shadow.LightViewProjection = mat4(
-        ReadStorageVec4(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 0u),
-        ReadStorageVec4(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 4u),
-        ReadStorageVec4(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 8u),
-        ReadStorageVec4(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 12u));
-    shadow.AtlasScaleOffset = ReadStorageVec4(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 16u);
-    shadow.BiasStrengthTexelSize = ReadStorageVec4(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 20u);
-    shadow.LightIndex = int(ReadStorageWord(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 24u));
-    shadow.AtlasTile = int(ReadStorageWord(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 25u));
-    shadow.PcfRadius = int(ReadStorageWord(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 26u));
-    shadow.Enabled = int(ReadStorageWord(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 27u));
+        ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 0u),
+        ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 4u),
+        ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 8u),
+        ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 12u));
+    shadow.AtlasScaleOffset = ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 16u);
+    shadow.BiasStrengthTexelSize = ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 20u);
+    uvec4 metadata = ReadStorageAlignedUVec4Uniform(bufferIndex, baseWord + 24u);
+    shadow.LightIndex = int(metadata.x);
+    shadow.AtlasTile = int(metadata.y);
+    shadow.PcfRadius = int(metadata.z);
+    shadow.Enabled = int(metadata.w);
     return shadow;
 }
 
@@ -3700,10 +3856,10 @@ mat4 ReadPointShadowFaceMatrix(uint shadowIndex, uint faceIndex)
 {
     uint baseWord = shadowIndex * uint(SIZEOF_GPU_POINT_SHADOW / 4) + faceIndex * 16u;
     return mat4(
-        ReadStorageVec4(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 0u),
-        ReadStorageVec4(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 4u),
-        ReadStorageVec4(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 8u),
-        ReadStorageVec4(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 12u));
+        ReadStorageAlignedVec4Uniform(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 0u),
+        ReadStorageAlignedVec4Uniform(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 4u),
+        ReadStorageAlignedVec4Uniform(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 8u),
+        ReadStorageAlignedVec4Uniform(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 12u));
 }
 
 GPUPointShadow ReadPointShadow(uint shadowIndex)
@@ -3716,33 +3872,34 @@ GPUPointShadow ReadPointShadow(uint shadowIndex)
     shadow.FaceViewProjection3 = ReadPointShadowFaceMatrix(shadowIndex, 3u);
     shadow.FaceViewProjection4 = ReadPointShadowFaceMatrix(shadowIndex, 4u);
     shadow.FaceViewProjection5 = ReadPointShadowFaceMatrix(shadowIndex, 5u);
-    shadow.PositionRange = ReadStorageVec4(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 96u);
-    shadow.BiasStrengthTexelSize = ReadStorageVec4(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 100u);
-    shadow.LightIndex = int(ReadStorageWord(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 104u));
-    shadow.CubemapIndex = int(ReadStorageWord(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 105u));
-    shadow.PcfRadius = int(ReadStorageWord(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 106u));
-    shadow.Enabled = int(ReadStorageWord(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 107u));
+    shadow.PositionRange = ReadStorageAlignedVec4Uniform(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 96u);
+    shadow.BiasStrengthTexelSize = ReadStorageAlignedVec4Uniform(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 100u);
+    uvec4 metadata = ReadStorageAlignedUVec4Uniform(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 104u);
+    shadow.LightIndex = int(metadata.x);
+    shadow.CubemapIndex = int(metadata.y);
+    shadow.PcfRadius = int(metadata.z);
+    shadow.Enabled = int(metadata.w);
     return shadow;
 }
 
 vec4 ReadShadowCascadeSplits()
 {
-    return ReadStorageVec4(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), uint(OFFSET_GPU_SHADOW_DATA_CASCADE_SPLITS / 4));
+    return ReadStorageAlignedVec4Uniform(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), uint(OFFSET_GPU_SHADOW_DATA_CASCADE_SPLITS / 4));
 }
 
 vec4 ReadShadowSettings()
 {
-    return ReadStorageVec4(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), uint(OFFSET_GPU_SHADOW_DATA_SETTINGS / 4));
+    return ReadStorageAlignedVec4Uniform(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), uint(OFFSET_GPU_SHADOW_DATA_SETTINGS / 4));
 }
 
 vec4 ReadShadowIndices()
 {
-    return ReadStorageVec4(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), uint(OFFSET_GPU_SHADOW_DATA_INDICES / 4));
+    return ReadStorageAlignedVec4Uniform(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), uint(OFFSET_GPU_SHADOW_DATA_INDICES / 4));
 }
 
 vec4 ReadShadowCascadeTransitionData()
 {
-    return ReadStorageVec4(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), uint(OFFSET_GPU_SHADOW_DATA_CASCADE_TRANSITION_DATA / 4));
+    return ReadStorageAlignedVec4Uniform(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), uint(OFFSET_GPU_SHADOW_DATA_CASCADE_TRANSITION_DATA / 4));
 }
 
 void WriteTiledLightHeader(uint tileIndex, uint lightCount, uint lightOffset, uint overflowCount)

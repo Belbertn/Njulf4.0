@@ -363,6 +363,94 @@ public sealed class SampleDdgiBenchmarkSuiteTests
     }
 
     [Test]
+    public void ProductionGate_PassesSettledSimpleDdgiWithoutRequiringAsyncOrFullDdgiClipmaps()
+    {
+        string[] simplePasses =
+        [
+            "SimpleDdgiTracePass",
+            "SimpleDdgiRelocateClassifyPass",
+            "SimpleDdgiTransportPass",
+            "SimpleDdgiBlendPass",
+            "SimpleDdgiPublishPass",
+            "SsgiCompositePass",
+            "ForwardPlusPass"
+        ];
+        var convergence = new SimpleDdgiTransportConvergenceTelemetry(
+            ReadbackValid: 1,
+            ParticipatingProbeCount: 10_000,
+            SourceRepairProbeCount: 0,
+            PendingConvergenceProbeCount: 400,
+            ConvergedProbeCount: 9_600,
+            InactiveProbeCount: 500,
+            DispatchLaneCount: 400,
+            UsefulDispatchLaneCount: 400,
+            NoOpDispatchLaneCount: 0,
+            ResidualThreshold: 0.03f,
+            Rings: []);
+        SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
+        {
+            ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationDdgiActive = 1,
+            GlobalIlluminationSsgiActive = 0,
+            GlobalIlluminationRayQueryActive = 1,
+            SimpleDdgiActive = 1,
+            SimpleDdgiTransportV2Active = 1,
+            SimpleDdgiTransportGlobalConvergencePending = 0,
+            SimpleDdgiTransportConvergence = convergence,
+            DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 0,
+            DdgiProbeVolumeCount = 3,
+            DdgiCascadeCount = 0,
+            DdgiProbesUpdated = 400,
+            DdgiGatherTileCount = 8_040,
+            DdgiGatherSelectedClipmapTileCount = 8_040,
+            DdgiGatherFallbackTileCount = 0,
+            AccelerationStructureTopLevelInstanceCount = 444,
+            AccelerationStructureStaticInstanceCandidateCount = 444,
+            AccelerationStructureStaticInstanceResidentCount = 444,
+            DdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL,
+            DdgiCurrentIrradianceAtlasBytes = 24UL * 1024UL * 1024UL,
+            DdgiCurrentVisibilityAtlasBytes = 16UL * 1024UL * 1024UL,
+            ProductionPipelineDeclaredPasses =
+                ["SsgiTracePass", "SsgiTemporalPass", "SsgiDenoisePass", .. simplePasses],
+            ProductionPipelineActivePasses = simplePasses,
+            Graph = CreateGraph(simplePasses, [])
+        }, gpuPasses:
+        [
+            new SampleBenchmarkTimingStats("DdgiTracePass", 4, 0.2, 0.1, 0.3, 0.3),
+            new SampleBenchmarkTimingStats("SimpleDdgiTransportPass", 4, 1.0, 0.9, 1.1, 1.1),
+            new SampleBenchmarkTimingStats("SimpleDdgiBlendPass", 4, 0.3, 0.2, 0.4, 0.4),
+            new SampleBenchmarkTimingStats("DdgiRelocateClassifyPass", 4, 0.1, 0.1, 0.1, 0.1),
+            new SampleBenchmarkTimingStats("DdgiPublishPass", 4, 0.1, 0.1, 0.1, 0.1)
+        ]) with
+        {
+            CpuStages =
+            [
+                new SampleBenchmarkTimingStats("SimpleDdgiUpload", 4, 1.2, 1.0, 1.4, 1.4),
+                new SampleBenchmarkTimingStats("SimpleDdgiUpload.Capacity", 4, 0.02, 0.01, 0.03, 0.03)
+            ],
+            SimpleDdgiTransportBlendMilliseconds =
+                new SampleBenchmarkTimingStats(
+                    "Simple DDGI transport + blend",
+                    4,
+                    1.3,
+                    1.1,
+                    1.5,
+                    1.5)
+        };
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Passed, Is.True);
+            Assert.That(gate.Failures, Is.Empty);
+        });
+    }
+
+    [Test]
     public void ProductionGate_RejectsIncompleteSponzaRaySceneAndInactiveRequestedFarField()
     {
         SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
@@ -661,7 +749,7 @@ public sealed class SampleDdgiBenchmarkSuiteTests
     }
 
     [Test]
-    public void ProductionGate_FailsWhenDdgiAsyncComputeIsDisabled()
+    public void ProductionGate_DoesNotRequireOptionalAsyncCompute()
     {
         SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
         {
@@ -691,8 +779,9 @@ public sealed class SampleDdgiBenchmarkSuiteTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(gate.Passed, Is.False);
-            Assert.That(gate.Failures.Select(failure => failure.Name), Does.Contain("ddgi-async-compute-enabled"));
+            Assert.That(
+                gate.Failures.Select(failure => failure.Name),
+                Does.Not.Contain("ddgi-async-compute-state-consistent"));
         });
     }
 
@@ -718,6 +807,8 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             DdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL,
             DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
             DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiDetailedCountersCompiled = 1,
+            DdgiDetailedCountersEnabled = 1,
             DdgiForwardEstimateCountersReadbackValid = 1,
             DdgiForwardEstimateSampleCount = 1000,
             DdgiForwardEstimateZeroVisibleButCoveredCount = 250,
@@ -1156,6 +1247,8 @@ public sealed class SampleDdgiBenchmarkSuiteTests
     {
         return diagnostics with
         {
+            DdgiDetailedCountersCompiled = 1,
+            DdgiDetailedCountersEnabled = 1,
             DdgiForwardEstimateCountersReadbackValid = 1,
             DdgiForwardEstimateSampleCount = 1000,
             DdgiForwardEstimateZeroVisibleButCoveredCount = 0,
@@ -1184,6 +1277,18 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             DdgiTextureBytes = 16UL * 1024UL * 1024UL,
             DdgiBufferBytes = 4UL * 1024UL * 1024UL,
             DdgiGpuSchedulerBufferBytes = 1UL * 1024UL * 1024UL,
+            GpuMemoryBudgetBytes = diagnostics.GpuMemoryBudgetBytes > 0
+                ? diagnostics.GpuMemoryBudgetBytes
+                : 2UL * 1024UL * 1024UL * 1024UL,
+            TrackedGpuMemoryBytes = diagnostics.TrackedGpuMemoryBytes > 0
+                ? diagnostics.TrackedGpuMemoryBytes
+                : 1UL * 1024UL * 1024UL * 1024UL,
+            AsyncComputeEnabled = diagnostics.DdgiAsyncComputeEnabled != 0
+                ? 1
+                : diagnostics.AsyncComputeEnabled,
+            AsyncComputeSupported = diagnostics.DdgiAsyncComputeEnabled != 0
+                ? 1
+                : diagnostics.AsyncComputeSupported,
             DdgiBlendEnergyIrradianceLuminanceAverage = diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage > 0.0f ? diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage : 0.70f,
             DdgiTraceEnergyEmissiveLuminanceAverage = diagnostics.DdgiTraceEnergyEmissiveLuminanceAverage,
             DdgiGpuSchedulerReadbackValid = diagnostics.DdgiSchedulerMode == DdgiSchedulerMode.CpuGpuCompare && diagnostics.DdgiGpuSchedulerReadbackValid == 0 ? 1 : diagnostics.DdgiGpuSchedulerReadbackValid,

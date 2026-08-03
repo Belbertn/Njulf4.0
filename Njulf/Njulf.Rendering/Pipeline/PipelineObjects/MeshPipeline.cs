@@ -212,9 +212,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             string forwardTaskShaderName = GpuMeshletCountersEnabled
                 ? "forward_diagnostics.task.spv"
                 : "forward.task.spv";
-            string forwardCompactedTaskShaderName = GpuMeshletCountersEnabled
-                ? "forward_compacted_diagnostics.task.spv"
-                : "forward_compacted.task.spv";
             bool ssgiEnabled = Settings.GlobalIllumination.EffectiveUseSsgi;
             SsgiColorAttachmentsEnabled = ssgiEnabled;
             bool materialTransportProvenanceEnabled =
@@ -307,8 +304,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _context.SetDebugName(_forwardPipeline.Handle, ObjectType.Pipeline, "Opaque Forward Plus Mesh Pipeline");
 
             _forwardCompactedPipeline = CreateGraphicsPipeline(
-                forwardCompactedTaskShaderName,
-                "forward.mesh.spv",
+                taskShaderName: null,
+                "forward_compacted.mesh.spv",
                 forwardOpaqueFragmentShaderName,
                 colorFormat,
                 depthFormat,
@@ -352,8 +349,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _context.SetDebugName(_forwardSimpleFullInputPipeline.Handle, ObjectType.Pipeline, "Simple Full-Input Opaque Forward Plus Mesh Pipeline");
 
             _forwardCompactedSimplePipeline = CreateGraphicsPipeline(
-                forwardCompactedTaskShaderName,
-                "forward_simple.mesh.spv",
+                taskShaderName: null,
+                "forward_simple_compacted.mesh.spv",
                 forwardOpaqueSimpleFragmentShaderName,
                 colorFormat,
                 depthFormat,
@@ -367,8 +364,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _context.SetDebugName(_forwardCompactedSimplePipeline.Handle, ObjectType.Pipeline, "Compacted Simple Opaque Forward Plus Mesh Pipeline");
 
             _forwardCompactedSimpleFullInputPipeline = CreateGraphicsPipeline(
-                forwardCompactedTaskShaderName,
-                "forward.mesh.spv",
+                taskShaderName: null,
+                "forward_compacted.mesh.spv",
                 forwardOpaqueSimpleFullInputFragmentShaderName,
                 colorFormat,
                 depthFormat,
@@ -431,8 +428,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _context.SetDebugName(_sceneSurfaceSimplePipeline.Handle, ObjectType.Pipeline, "Simple Scene Surface Mesh Pipeline");
 
             _sceneSurfaceCompactedPipeline = CreateSceneSurfaceGraphicsPipeline(
-                forwardCompactedTaskShaderName,
-                "forward.mesh.spv",
+                taskShaderName: null,
+                "forward_compacted.mesh.spv",
                 "scene_surface.frag.spv",
                 depthFormat);
             _context.SetDebugName(_sceneSurfaceCompactedPipeline.Handle, ObjectType.Pipeline, "Compacted Scene Surface Mesh Pipeline");
@@ -447,7 +444,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         }
 
         private VkPipeline CreateGraphicsPipeline(
-            string taskShaderName,
+            string? taskShaderName,
             string meshShaderName,
             string? fragmentShaderName,
             Format colorFormat,
@@ -466,8 +463,11 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             try
             {
-                taskModule = ShaderModuleLoader.Load(_context, taskShaderName);
-                _context.SetDebugName(taskModule.Handle, ObjectType.ShaderModule, taskShaderName);
+                if (taskShaderName != null)
+                {
+                    taskModule = ShaderModuleLoader.Load(_context, taskShaderName);
+                    _context.SetDebugName(taskModule.Handle, ObjectType.ShaderModule, taskShaderName);
+                }
                 meshModule = ShaderModuleLoader.Load(_context, meshShaderName);
                 _context.SetDebugName(meshModule.Handle, ObjectType.ShaderModule, meshShaderName);
                 if (fragmentShaderName != null)
@@ -580,7 +580,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         }
 
         private VkPipeline CreateSceneSurfaceGraphicsPipeline(
-            string taskShaderName,
+            string? taskShaderName,
             string meshShaderName,
             string fragmentShaderName,
             Format depthFormat)
@@ -591,8 +591,11 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             try
             {
-                taskModule = ShaderModuleLoader.Load(_context, taskShaderName);
-                _context.SetDebugName(taskModule.Handle, ObjectType.ShaderModule, taskShaderName);
+                if (taskShaderName != null)
+                {
+                    taskModule = ShaderModuleLoader.Load(_context, taskShaderName);
+                    _context.SetDebugName(taskModule.Handle, ObjectType.ShaderModule, taskShaderName);
+                }
                 meshModule = ShaderModuleLoader.Load(_context, meshShaderName);
                 _context.SetDebugName(meshModule.Handle, ObjectType.ShaderModule, meshShaderName);
                 fragmentModule = ShaderModuleLoader.Load(_context, fragmentShaderName);
@@ -623,15 +626,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format? materialTransportProvenanceFormat = null)
         {
             var stages = stackalloc PipelineShaderStageCreateInfo[3];
-            stages[0] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
-            stages[1] = CreateShaderStageInfo(ShaderStageFlags.MeshBitExt, meshModule);
-
-            uint stageCount = 2;
+            int stageCount = 0;
+            if (taskModule.Handle != 0)
+                stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
+            stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.MeshBitExt, meshModule);
             if (fragmentModule.Handle != 0)
-            {
-                stages[2] = CreateShaderStageInfo(ShaderStageFlags.FragmentBit, fragmentModule);
-                stageCount = 3;
-            }
+                stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.FragmentBit, fragmentModule);
 
             var vertexInputInfo = new PipelineVertexInputStateCreateInfo
             {
@@ -752,7 +752,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 SType = StructureType.GraphicsPipelineCreateInfo,
                 PNext = &renderingInfo,
-                StageCount = stageCount,
+                StageCount = checked((uint)stageCount),
                 PStages = stages,
                 PVertexInputState = &vertexInputInfo,
                 PInputAssemblyState = &inputAssemblyInfo,
@@ -792,9 +792,11 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format depthFormat)
         {
             var stages = stackalloc PipelineShaderStageCreateInfo[3];
-            stages[0] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
-            stages[1] = CreateShaderStageInfo(ShaderStageFlags.MeshBitExt, meshModule);
-            stages[2] = CreateShaderStageInfo(ShaderStageFlags.FragmentBit, fragmentModule);
+            int stageCount = 0;
+            if (taskModule.Handle != 0)
+                stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
+            stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.MeshBitExt, meshModule);
+            stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.FragmentBit, fragmentModule);
 
             var vertexInputInfo = new PipelineVertexInputStateCreateInfo
             {
@@ -910,7 +912,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 SType = StructureType.GraphicsPipelineCreateInfo,
                 PNext = &renderingInfo,
-                StageCount = 3,
+                StageCount = checked((uint)stageCount),
                 PStages = stages,
                 PVertexInputState = &vertexInputInfo,
                 PInputAssemblyState = &inputAssemblyInfo,
@@ -948,9 +950,11 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format depthFormat)
         {
             var stages = stackalloc PipelineShaderStageCreateInfo[3];
-            stages[0] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
-            stages[1] = CreateShaderStageInfo(ShaderStageFlags.MeshBitExt, meshModule);
-            stages[2] = CreateShaderStageInfo(ShaderStageFlags.FragmentBit, fragmentModule);
+            int stageCount = 0;
+            if (taskModule.Handle != 0)
+                stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
+            stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.MeshBitExt, meshModule);
+            stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.FragmentBit, fragmentModule);
 
             var vertexInputInfo = new PipelineVertexInputStateCreateInfo
             {
@@ -1055,7 +1059,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 SType = StructureType.GraphicsPipelineCreateInfo,
                 PNext = &renderingInfo,
-                StageCount = 3,
+                StageCount = checked((uint)stageCount),
                 PStages = stages,
                 PVertexInputState = &vertexInputInfo,
                 PInputAssemblyState = &inputAssemblyInfo,

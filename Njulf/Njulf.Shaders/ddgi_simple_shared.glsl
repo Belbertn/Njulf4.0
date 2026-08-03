@@ -16,6 +16,13 @@
 #define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 0
 #endif
 
+// Release/ShippingPerformance pass zero from the shader project. This is a
+// compile-time boundary, not a runtime feature flag: production SPIR-V contains
+// no reachable DDGI investigation atomic or diagnostic sampling branch.
+#ifndef NJULF_DDGI_DETAILED_COUNTERS
+#define NJULF_DDGI_DETAILED_COUNTERS 0
+#endif
+
 const float SIMPLE_DDGI_PI = 3.14159265359;
 const uint SIMPLE_DDGI_FLAG_ENABLED = 1u << 0;
 const uint SIMPLE_DDGI_FLAG_FAR_FIELD_ENABLED = 1u << 1;
@@ -40,6 +47,7 @@ const uint SIMPLE_DDGI_FLAG_LIGHTING_CHANGE_ACTIVE = 1u << 10;
 const uint SIMPLE_DDGI_FLAG_TRANSPORT_V2 = 1u << 11;
 // Bits 12..19 contain the packed second-volume ownership threshold.
 const uint SIMPLE_DDGI_FLAG_THIN_SURFACE_TRANSMISSION = 1u << 20;
+const uint SIMPLE_DDGI_FLAG_FORCE_LEGACY_FAR_FIELD_FALLBACK = 1u << 21;
 // A normalized [0, 1] second-volume early-out threshold is packed into the
 // otherwise-unused high flag bits. This preserves the fixed params header ABI.
 const uint SIMPLE_DDGI_SECOND_VOLUME_OWNERSHIP_THRESHOLD_SHIFT = 12u;
@@ -50,17 +58,20 @@ const uint SIMPLE_DDGI_MAX_RAYS_PER_PROBE = 256u;
 const uint SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS = 8u;
 const uint SIMPLE_DDGI_TRANSPORT_RAY_CACHE_ABI_VERSION = 2u;
 const uint SIMPLE_DDGI_HEADER_WORDS = 52u;
+const uint SIMPLE_DDGI_FLAGS_WORD = 14u;
 const uint SIMPLE_DDGI_VOLUME_STRIDE_WORDS = 24u;
 const uint SIMPLE_DDGI_MAX_VOLUME_COUNT = 16u;
 // The hot path normally samples one authoritative volume and one fallback.
 // Additional coarser recovery volumes are sampled only while the accumulated
 // ownership remains below the minimum support ramp. This closes inactive-probe
 // holes without turning healthy overlaps into extra eight-corner gathers.
-// Volume metadata and recovery are bounded by the configured maximum. The gather must not
-// assume that a primary, secondary, and one recovery ring are sufficient: a
-// stale tile entry or an unsupported fine ring can require walking farther
-// through the containing clipmap rings.
-const uint SIMPLE_DDGI_MAX_GATHER_VOLUME_SAMPLES = SIMPLE_DDGI_MAX_VOLUME_COUNT;
+// Two recovery gathers cover the production hierarchy with the greatest depth:
+// one authored volume plus the near/mid/far clipmap rings. The environment
+// complement remains the defined boundary condition if all four sampled fields
+// are unsupported. Capping full eight-corner gathers independently from the
+// complete metadata walk prevents a pathological stack of authored volumes
+// from expanding one fragment or solver ray into sixteen atlas gathers.
+const uint SIMPLE_DDGI_MAX_RECOVERY_GATHER_SAMPLES = 2u;
 // The CPU clamps the uploaded table to SIMPLE_DDGI_MAX_VOLUME_COUNT. Keep the
 // selection loops statically bounded as well: drivers can unroll the small
 // metadata-only walk, while a corrupt runtime count cannot turn one shaded
@@ -134,6 +145,10 @@ const float SIMPLE_DDGI_VISIBILITY_VARIANCE_SPACING_CAP = 4.0;
 const float SIMPLE_DDGI_SOLVER_OWNERSHIP_SUPPORT_RAMP = 0.02;
 // Missing probe ownership may attenuate sky bounce, but must never annihilate it.
 const float SIMPLE_DDGI_MINIMUM_SKY_VISIBILITY = 0.10;
+// Keep every environment-fallback call site on one numerical contract. Below
+// this contribution the FP16 lighting pipeline cannot retain a meaningful
+// delta, while entering the far-field cone tracer is exceptionally expensive.
+const float SIMPLE_DDGI_ENVIRONMENT_FALLBACK_MIN_WEIGHT = 0.0001;
 const uint SIMPLE_DDGI_AUTHORED_VOLUME_CASCADE = 0xffffffffu;
 const uint SIMPLE_DDGI_PROBE_STATE_STRIDE_WORDS = 8u;
 const uint SIMPLE_DDGI_PROBE_UPDATE_STRIDE_WORDS = 8u;
@@ -252,13 +267,19 @@ struct SimpleDdgiParams
 
 bool SimpleDdgiDetailedDiagnosticsEnabled(SimpleDdgiParams params)
 {
+#if NJULF_DDGI_DETAILED_COUNTERS
     return (params.flags & SIMPLE_DDGI_FLAG_DETAILED_DIAGNOSTICS_ENABLED) != 0u;
+#else
+    return false;
+#endif
 }
 
 void AddSimpleDdgiDiagnostic(SimpleDdgiParams params, uint frameIndex, uint counterIndex, uint value)
 {
+#if NJULF_DDGI_DETAILED_COUNTERS
     if (SimpleDdgiDetailedDiagnosticsEnabled(params))
         AddRendererDiagnostic(frameIndex, counterIndex, value);
+#endif
 }
 
 // These renderer-owned slots describe the active DDGI transport path. Full and
@@ -545,36 +566,38 @@ uint SimpleDdgiProbeStateBase(uint probeIndex)
 SimpleDdgiProbeState ReadSimpleDdgiProbeState(uint bufferIndex, uint probeIndex)
 {
     uint baseWord = SimpleDdgiProbeStateBase(probeIndex);
-    vec4 relocationAndActive = ReadStorageVec4(bufferIndex, baseWord);
+    vec4 relocationAndActive = ReadStorageAlignedVec4Uniform(bufferIndex, baseWord);
+    uvec4 metadata = ReadStorageAlignedUVec4Uniform(bufferIndex, baseWord + 4u);
     SimpleDdgiProbeState state;
     state.relocation = relocationAndActive.xyz;
     state.activeWeight = relocationAndActive.w;
-    state.flags = ReadStorageWord(bufferIndex, baseWord + 4u);
-    state.age = ReadStorageWord(bufferIndex, baseWord + 5u);
-    state.classification = ReadStorageWord(bufferIndex, baseWord + 6u);
-    state.luminanceChangeEma = uintBitsToFloat(ReadStorageWord(bufferIndex, baseWord + 7u));
+    state.flags = metadata.x;
+    state.age = metadata.y;
+    state.classification = metadata.z;
+    state.luminanceChangeEma = uintBitsToFloat(metadata.w);
     return state;
 }
 
 void WriteSimpleDdgiProbeState(uint bufferIndex, uint probeIndex, SimpleDdgiProbeState state)
 {
     uint baseWord = SimpleDdgiProbeStateBase(probeIndex);
-    WriteStorageVec4(bufferIndex, baseWord, vec4(state.relocation, state.activeWeight));
-    WriteStorageWord(bufferIndex, baseWord + 4u, state.flags);
-    WriteStorageWord(bufferIndex, baseWord + 5u, state.age);
-    WriteStorageWord(bufferIndex, baseWord + 6u, state.classification);
-    WriteStorageWord(bufferIndex, baseWord + 7u, floatBitsToUint(max(state.luminanceChangeEma, 0.0)));
+    WriteStorageVec4Uniform(bufferIndex, baseWord, vec4(state.relocation, state.activeWeight));
+    WriteStorageWordUniform(bufferIndex, baseWord + 4u, state.flags);
+    WriteStorageWordUniform(bufferIndex, baseWord + 5u, state.age);
+    WriteStorageWordUniform(bufferIndex, baseWord + 6u, state.classification);
+    WriteStorageWordUniform(bufferIndex, baseWord + 7u, floatBitsToUint(max(state.luminanceChangeEma, 0.0)));
 }
 
 SimpleDdgiProbeUpdate ReadSimpleDdgiProbeUpdate(uint bufferIndex, uint queueOffset)
 {
     uint baseWord = queueOffset * SIMPLE_DDGI_PROBE_UPDATE_STRIDE_WORDS;
+    uvec4 header = ReadStorageAlignedUVec4Uniform(bufferIndex, baseWord);
     SimpleDdgiProbeUpdate update;
-    update.probeIndex = ReadStorageWord(bufferIndex, baseWord);
-    update.volumeIndex = ReadStorageWord(bufferIndex, baseWord + 1u);
-    update.flags = ReadStorageWord(bufferIndex, baseWord + 2u);
-    update.expectedGeneration = ReadStorageWord(bufferIndex, baseWord + 3u);
-    update.sourceRayCount = ReadStorageWord(bufferIndex, baseWord + 4u);
+    update.probeIndex = header.x;
+    update.volumeIndex = header.y;
+    update.flags = header.z;
+    update.expectedGeneration = header.w;
+    update.sourceRayCount = ReadStorageWordUniform(bufferIndex, baseWord + 4u);
     return update;
 }
 
@@ -653,19 +676,19 @@ uint SimpleDdgiUpdateMaxShadedLights(SimpleDdgiProbeUpdate update, uint fallback
 SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
 {
     SimpleDdgiParams p;
-    vec4 originAndSpacing = ReadStorageVec4(bufferIndex, 0u);
-    vec4 grid = ReadStorageVec4(bufferIndex, 4u);
-    vec4 atlas = ReadStorageVec4(bufferIndex, 8u);
-    vec4 hysteresis = ReadStorageVec4(bufferIndex, 12u);
-    vec4 environment = ReadStorageVec4(bufferIndex, 16u);
-    vec4 updateRange = ReadStorageVec4(bufferIndex, 20u);
-    vec4 debugAndBias = ReadStorageVec4(bufferIndex, 24u);
-    vec4 rotation = ReadStorageVec4(bufferIndex, 28u);
-    vec4 bias = ReadStorageVec4(bufferIndex, 32u);
-    vec4 reserved = ReadStorageVec4(bufferIndex, 36u);
-    vec4 biasLimits = ReadStorageVec4(bufferIndex, 40u);
-    vec4 transportIndices = ReadStorageVec4(bufferIndex, 44u);
-    vec4 transportControls = ReadStorageVec4(bufferIndex, 48u);
+    vec4 originAndSpacing = ReadStorageAlignedVec4Uniform(bufferIndex, 0u);
+    vec4 grid = ReadStorageAlignedVec4Uniform(bufferIndex, 4u);
+    vec4 atlas = ReadStorageAlignedVec4Uniform(bufferIndex, 8u);
+    vec4 hysteresis = ReadStorageAlignedVec4Uniform(bufferIndex, 12u);
+    vec4 environment = ReadStorageAlignedVec4Uniform(bufferIndex, 16u);
+    vec4 updateRange = ReadStorageAlignedVec4Uniform(bufferIndex, 20u);
+    vec4 debugAndBias = ReadStorageAlignedVec4Uniform(bufferIndex, 24u);
+    vec4 rotation = ReadStorageAlignedVec4Uniform(bufferIndex, 28u);
+    vec4 bias = ReadStorageAlignedVec4Uniform(bufferIndex, 32u);
+    vec4 reserved = ReadStorageAlignedVec4Uniform(bufferIndex, 36u);
+    vec4 biasLimits = ReadStorageAlignedVec4Uniform(bufferIndex, 40u);
+    vec4 transportIndices = ReadStorageAlignedVec4Uniform(bufferIndex, 44u);
+    vec4 transportControls = ReadStorageAlignedVec4Uniform(bufferIndex, 48u);
     p.origin = originAndSpacing.xyz;
     p.spacing = max(originAndSpacing.w, 0.001);
     p.gridCount = uvec3(max(grid.xyz, vec3(1.0)));
@@ -715,12 +738,12 @@ SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
 SimpleDdgiVolume ReadSimpleDdgiVolume(uint bufferIndex, uint volumeIndex)
 {
     uint baseWord = SIMPLE_DDGI_HEADER_WORDS + volumeIndex * SIMPLE_DDGI_VOLUME_STRIDE_WORDS;
-    vec4 originAndSpacing = ReadStorageVec4(bufferIndex, baseWord + 0u);
-    vec4 gridAndFirst = ReadStorageVec4(bufferIndex, baseWord + 4u);
-    vec4 worldMinAndEdge = ReadStorageVec4(bufferIndex, baseWord + 8u);
-    vec4 worldMaxAndKind = ReadStorageVec4(bufferIndex, baseWord + 12u);
-    vec4 updateRange = ReadStorageVec4(bufferIndex, baseWord + 16u);
-    vec4 raysAndReserved = ReadStorageVec4(bufferIndex, baseWord + 20u);
+    vec4 originAndSpacing = ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 0u);
+    vec4 gridAndFirst = ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 4u);
+    vec4 worldMinAndEdge = ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 8u);
+    vec4 worldMaxAndKind = ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 12u);
+    vec4 updateRange = ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 16u);
+    vec4 raysAndReserved = ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 20u);
 
     SimpleDdgiVolume volume;
     volume.origin = originAndSpacing.xyz;
@@ -987,19 +1010,19 @@ void WriteSimpleDdgiTransportRayCache(
     uint probeGeneration)
 {
     uint baseWord = SimpleDdgiTransportRayCacheBase(probeIndex, directionRayIndex, p);
-    WriteStorageVec4(
+    WriteStorageVec4Uniform(
         bufferIndex,
         baseWord,
         vec4(clamp(sourceRadiance, vec3(0.0), vec3(65504.0)), max(distance, 0.0)));
-    WriteStorageWord(bufferIndex, baseWord + 4u, PackSimpleDdgiTransportOctDirection(direction));
-    WriteStorageWord(bufferIndex, baseWord + 5u, PackSimpleDdgiTransportOctDirection(normal));
-    WriteStorageWord(
+    WriteStorageWordUniform(bufferIndex, baseWord + 4u, PackSimpleDdgiTransportOctDirection(direction));
+    WriteStorageWordUniform(bufferIndex, baseWord + 5u, PackSimpleDdgiTransportOctDirection(normal));
+    WriteStorageWordUniform(
         bufferIndex,
         baseWord + 6u,
         packUnorm4x8(vec4(
             clamp(diffuseReflectance, vec3(0.0), vec3(1.0)),
             clamp(materialOcclusion, 0.0, 1.0))));
-    WriteStorageWord(
+    WriteStorageWordUniform(
         bufferIndex,
         baseWord + 7u,
         packUnorm4x8(vec4(
@@ -1008,7 +1031,7 @@ void WriteSimpleDdgiTransportRayCache(
     uint flags = SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG |
         (hitKind >= 0.5 ? SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG : 0u) |
         (hitKind > 1.5 ? SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG : 0u);
-    WriteStorageWord(
+    WriteStorageWordUniform(
         bufferIndex,
         baseWord + 8u,
         (probeGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK) | flags);
@@ -1034,7 +1057,7 @@ bool ReadSimpleDdgiTransportRayCache(
         return false;
 
     uint baseWord = SimpleDdgiTransportRayCacheBase(probeIndex, directionRayIndex, p);
-    uint generationAndFlags = ReadStorageWord(bufferIndex, baseWord + 8u);
+    uint generationAndFlags = ReadStorageWordUniform(bufferIndex, baseWord + 8u);
     if ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG) == 0u ||
         (generationAndFlags & SIMPLE_DDGI_UPDATE_GENERATION_MASK) !=
             (expectedProbeGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK))
@@ -1042,15 +1065,16 @@ bool ReadSimpleDdgiTransportRayCache(
         return false;
     }
 
-    vec4 sourceRadianceDistance = ReadStorageVec4(bufferIndex, baseWord);
+    vec4 sourceRadianceDistance = ReadStorageVec4Uniform(bufferIndex, baseWord);
     cache.sourceRadiance = max(sourceRadianceDistance.rgb, vec3(0.0));
     cache.distance = max(sourceRadianceDistance.w, 0.0);
-    cache.direction = UnpackSimpleDdgiTransportOctDirection(ReadStorageWord(bufferIndex, baseWord + 4u));
-    cache.normal = UnpackSimpleDdgiTransportOctDirection(ReadStorageWord(bufferIndex, baseWord + 5u));
-    vec4 packedSurface = unpackUnorm4x8(ReadStorageWord(bufferIndex, baseWord + 6u));
+    uvec4 surface = ReadStorageUVec4Uniform(bufferIndex, baseWord + 4u);
+    cache.direction = UnpackSimpleDdgiTransportOctDirection(surface.x);
+    cache.normal = UnpackSimpleDdgiTransportOctDirection(surface.y);
+    vec4 packedSurface = unpackUnorm4x8(surface.z);
     cache.diffuseReflectance = packedSurface.rgb;
     cache.transmittedDiffuseReflectance =
-        unpackUnorm4x8(ReadStorageWord(bufferIndex, baseWord + 7u)).rgb;
+        unpackUnorm4x8(surface.w).rgb;
     cache.materialOcclusion = packedSurface.a;
     cache.generationAndFlags = generationAndFlags;
     return true;
@@ -1073,8 +1097,8 @@ float SimpleDdgiTransportRayCacheHitKind(SimpleDdgiTransportRayCache cache)
 vec4 ReadSimpleDdgiAtlasTexel(uint bufferIndex, uint probeIndex, uint texelIndex, uint texelsPerProbe)
 {
     uint word = SimpleDdgiAtlasWord(probeIndex, texelIndex, texelsPerProbe);
-    vec2 xy = unpackHalf2x16(ReadStorageWord(bufferIndex, word));
-    vec2 zw = unpackHalf2x16(ReadStorageWord(bufferIndex, word + 1u));
+    vec2 xy = unpackHalf2x16(ReadStorageWordUniform(bufferIndex, word));
+    vec2 zw = unpackHalf2x16(ReadStorageWordUniform(bufferIndex, word + 1u));
     return vec4(xy, zw);
 }
 
@@ -1082,8 +1106,8 @@ void WriteSimpleDdgiAtlasTexel(uint bufferIndex, uint probeIndex, uint texelInde
 {
     value = clamp(value, vec4(0.0), vec4(65504.0));
     uint word = SimpleDdgiAtlasWord(probeIndex, texelIndex, texelsPerProbe);
-    WriteStorageWord(bufferIndex, word, packHalf2x16(value.xy));
-    WriteStorageWord(bufferIndex, word + 1u, packHalf2x16(value.zw));
+    WriteStorageWordUniform(bufferIndex, word, packHalf2x16(value.xy));
+    WriteStorageWordUniform(bufferIndex, word + 1u, packHalf2x16(value.zw));
 }
 
 uint SimpleDdgiDirectionTexel(vec3 direction, uint texelsPerProbe)
@@ -1312,28 +1336,28 @@ bool ReadSimpleDdgiForwardTileCandidates(out SimpleDdgiForwardTileCandidates can
     candidates.secondaryVolumeIndex = SIMPLE_DDGI_GATHER_TILE_INVALID_VOLUME_INDEX;
     candidates.flags = SIMPLE_DDGI_GATHER_TILE_FALLBACK_FLAG;
 
-    uint headerFlags = ReadStorageWord(uint(DDGI_GATHER_TILE_BUFFER_INDEX), 3u);
+    uint headerFlags = ReadStorageWordUniform(uint(DDGI_GATHER_TILE_BUFFER_INDEX), 3u);
     uint requiredHeaderFlags = SIMPLE_DDGI_GATHER_TILE_HEADER_ENABLED_FLAG |
         SIMPLE_DDGI_GATHER_TILE_HEADER_SIMPLE_DDGI_FLAG;
     if ((headerFlags & requiredHeaderFlags) != requiredHeaderFlags)
         return false;
 
-    uint tileCountX = max(ReadStorageWord(uint(DDGI_GATHER_TILE_BUFFER_INDEX), 0u), 1u);
-    uint tileCountY = max(ReadStorageWord(uint(DDGI_GATHER_TILE_BUFFER_INDEX), 1u), 1u);
-    uint tileSize = max(ReadStorageWord(uint(DDGI_GATHER_TILE_BUFFER_INDEX), 2u), 1u);
+    uint tileCountX = max(ReadStorageWordUniform(uint(DDGI_GATHER_TILE_BUFFER_INDEX), 0u), 1u);
+    uint tileCountY = max(ReadStorageWordUniform(uint(DDGI_GATHER_TILE_BUFFER_INDEX), 1u), 1u);
+    uint tileSize = max(ReadStorageWordUniform(uint(DDGI_GATHER_TILE_BUFFER_INDEX), 2u), 1u);
     uvec2 pixel = uvec2(max(gl_FragCoord.xy, vec2(0.0)));
     uvec2 tileCoord = min(pixel / tileSize, uvec2(tileCountX - 1u, tileCountY - 1u));
     uint tileIndex = tileCoord.x + tileCoord.y * tileCountX;
     uint tileBaseWord = uint(SIZEOF_GPU_DDGI_GATHER_TILE_HEADER) / 4u +
         tileIndex * (uint(SIZEOF_GPU_DDGI_GATHER_TILE) / 4u);
 
-    candidates.primaryVolumeIndex = ReadStorageWord(
+    candidates.primaryVolumeIndex = ReadStorageWordUniform(
         uint(DDGI_GATHER_TILE_BUFFER_INDEX),
         tileBaseWord + uint(OFFSET_GPU_DDGI_GATHER_TILE_LOCAL_VOLUME_INDEX) / 4u);
-    candidates.secondaryVolumeIndex = ReadStorageWord(
+    candidates.secondaryVolumeIndex = ReadStorageWordUniform(
         uint(DDGI_GATHER_TILE_BUFFER_INDEX),
         tileBaseWord + uint(OFFSET_GPU_DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VOLUME_INDEX) / 4u);
-    candidates.flags = ReadStorageWord(
+    candidates.flags = ReadStorageWordUniform(
         uint(DDGI_GATHER_TILE_BUFFER_INDEX),
         tileBaseWord + uint(OFFSET_GPU_DDGI_GATHER_TILE_FLAGS) / 4u);
     return true;
@@ -1793,7 +1817,11 @@ vec3 SimpleDdgiEnvironmentIrradianceFallback(vec3 safeNormal, SimpleDdgiParams p
     return max(p.environmentRadiance, vec3(0.0)) * p.environmentIntensity * skyWeight;
 }
 
-float EstimateFarFieldSkyVisibility(vec3 worldPos, vec3 surfaceNormal)
+float EstimateFarFieldSkyVisibility(
+    vec3 worldPos,
+    vec3 surfaceNormal,
+    SimpleDdgiParams simpleParams,
+    uint diagnosticSampleWeight)
 {
     FarFieldClipmapParams farField = ReadFarFieldClipmapParams(uint(FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX));
     if (!farField.enabled)
@@ -1839,15 +1867,30 @@ float EstimateFarFieldSkyVisibility(vec3 worldPos, vec3 surfaceNormal)
 
     float normalizedVisibility = clamp(visibility / float(coneCount), 0.0, 1.0);
     float effectiveVisibility = max(normalizedVisibility, SIMPLE_DDGI_MINIMUM_SKY_VISIBILITY);
-    SimpleDdgiParams simpleParams = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
-    uint diagnosticFrame = simpleParams.frameIndex % uint(FRAMES_IN_FLIGHT);
-    AddSimpleDdgiDiagnostic(simpleParams, diagnosticFrame, DDGI_INVESTIGATION_SKY_VISIBILITY_SAMPLE_COUNTER, 1u);
-    AddSimpleDdgiDiagnostic(
-        simpleParams,
-        diagnosticFrame,
-        DDGI_INVESTIGATION_SKY_VISIBILITY_ACCUM_COUNTER,
-        uint(clamp(effectiveVisibility, 0.0, 16.0) * 1024.0 + 0.5));
+    if (diagnosticSampleWeight != 0u)
+    {
+        // Fragment callers use a 16x16 sparse sample and pass a weight of 256.
+        // The counters therefore retain their estimated full-frame meaning while
+        // replacing millions of fully contended atomics with a few thousand.
+        uint diagnosticFrame = simpleParams.frameIndex % uint(FRAMES_IN_FLIGHT);
+        AddSimpleDdgiDiagnostic(
+            simpleParams,
+            diagnosticFrame,
+            DDGI_INVESTIGATION_SKY_VISIBILITY_SAMPLE_COUNTER,
+            diagnosticSampleWeight);
+        AddSimpleDdgiDiagnostic(
+            simpleParams,
+            diagnosticFrame,
+            DDGI_INVESTIGATION_SKY_VISIBILITY_ACCUM_COUNTER,
+            uint(clamp(effectiveVisibility, 0.0, 16.0) * 1024.0 + 0.5) *
+                diagnosticSampleWeight);
+    }
     return effectiveVisibility;
+}
+
+uint ReadSimpleDdgiFlags(uint bufferIndex)
+{
+    return ReadStorageWordUniform(bufferIndex, SIMPLE_DDGI_FLAGS_WORD);
 }
 
 SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
@@ -1931,10 +1974,13 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
     return result;
 }
 
-SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 viewDir)
+SimpleDdgiGatherResult SampleSimpleDdgiGather(
+    SimpleDdgiParams p,
+    vec3 worldPos,
+    vec3 normal,
+    vec3 viewDir)
 {
     SimpleDdgiGatherResult empty = EmptySimpleDdgiGatherResult();
-    SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
     if ((p.flags & (SIMPLE_DDGI_FLAG_ENABLED | SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED)) !=
             (SIMPLE_DDGI_FLAG_ENABLED | SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) ||
         p.probeCount == 0u || p.volumeCount == 0u)
@@ -2006,16 +2052,24 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 v
         p,
         diagnosticFrame,
         DDGI_INVESTIGATION_SIMPLE_VOLUME_SAMPLED_GATHER_COUNTER_BASE + selectedVolumeIndex);
-    // Bound fallback work by the contribution it can still replace. The old
-    // separate edgeWeight >= 0.999 test forced a complete second eight-probe
-    // gather even when the primary already owned more than the configured 95%
-    // threshold. Preserve the same outer-edge ownership fade when early-out wins.
+    // Bound fallback work by probe-field ownership, not by receiver visibility
+    // or the normal-facing interpolation weight. Those terms select a stable
+    // estimate inside one field; treating them as missing coverage made almost
+    // every interior receiver sample a coarser ring as well. A second gather is
+    // still required at a ring edge, after a bias-domain crossing, or when the
+    // primary field lacks the configured fraction of valid probe data.
     float selectedDirectionalAuthority = SimpleDdgiDirectionalGatherAuthority(selected);
+    bool selectedDirectionalSupportUsable =
+        selected.directionalSupport >= SIMPLE_DDGI_OWNERSHIP_DIRECTIONAL_SUPPORT_RAMP;
     float selectedTransitionOwnership =
-        selected.ownership * edgeWeight * selectedDirectionalAuthority;
+        selectedDirectionalSupportUsable ? selected.validSupport * edgeWeight : 0.0;
     if (!selectedBiasOutsideSelectionDomain &&
         selectedTransitionOwnership >= p.secondVolumeOwnershipEarlyOutThreshold)
     {
+        AddSimpleDdgiGatherDiagnostic(
+            p,
+            diagnosticFrame,
+            SIMPLE_DDGI_ONE_GATHER_PIXEL_COUNTER);
         selected.spatialCoverage *= edgeWeight;
         selected.ownership *= edgeWeight;
         selected.transitionWeight = edgeWeight;
@@ -2053,6 +2107,33 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 v
     }
     if (foundFallback)
     {
+        // Select one attribution before gathering. Recovery can replace this
+        // classification below, but no receiver can contribute to two reason
+        // buckets for the same second-volume event.
+        uint secondGatherReasonCounter =
+            SIMPLE_DDGI_SECOND_GATHER_DEBUG_ONLY_COUNTER;
+        if (selectedBiasOutsideSelectionDomain)
+        {
+            secondGatherReasonCounter =
+                SIMPLE_DDGI_SECOND_GATHER_COVERAGE_EDGE_COUNTER;
+        }
+        else if (selected.validProbeCount == 0u || selected.validSupport <= 0.000001)
+        {
+            secondGatherReasonCounter =
+                SIMPLE_DDGI_SECOND_GATHER_MISSING_INVALID_PRIMARY_COUNTER;
+        }
+        else if (edgeWeight < 0.999)
+        {
+            secondGatherReasonCounter =
+                SIMPLE_DDGI_SECOND_GATHER_RING_TRANSITION_COUNTER;
+        }
+        else if (selectedTransitionOwnership <
+                 p.secondVolumeOwnershipEarlyOutThreshold)
+        {
+            secondGatherReasonCounter =
+                SIMPLE_DDGI_SECOND_GATHER_OWNERSHIP_BELOW_COUNTER;
+        }
+
         bool fallbackBiasOutsideSelectionDomain;
         vec3 fallbackInterpolationPosition = SimpleDdgiResolveInterpolationPosition(
             fallbackVolume,
@@ -2095,8 +2176,9 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 v
         // let one containing coarser ring fill that missing mass instead of
         // promoting the tiny remainder to full radiometric authority.
         uint recoveryBaseVolumeIndex = fallbackVolumeIndex;
+        bool recoveryGathered = false;
         for (uint recoverySample = 0u;
-             recoverySample < SIMPLE_DDGI_MAX_GATHER_VOLUME_SAMPLES - 2u;
+             recoverySample < SIMPLE_DDGI_MAX_RECOVERY_GATHER_SAMPLES;
              recoverySample++)
         {
             if (combined.ownership >= SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP &&
@@ -2129,6 +2211,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 v
                     SIMPLE_DDGI_GATHER_ROLE_RECOVERY,
                     recoveryInterpolationPosition,
                     safeNormal);
+                recoveryGathered = true;
                 AddSimpleDdgiGatherDiagnostic(
                     p,
                     diagnosticFrame,
@@ -2142,6 +2225,19 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 v
             }
         }
 
+        AddSimpleDdgiGatherDiagnostic(
+            p,
+            diagnosticFrame,
+            recoveryGathered
+                ? SIMPLE_DDGI_RECOVERY_GATHER_PIXEL_COUNTER
+                : SIMPLE_DDGI_TWO_GATHER_PIXEL_COUNTER);
+        AddSimpleDdgiGatherDiagnostic(
+            p,
+            diagnosticFrame,
+            recoveryGathered
+                ? SIMPLE_DDGI_SECOND_GATHER_RECOVERY_COUNTER
+                : secondGatherReasonCounter);
+
         return combined;
     }
 
@@ -2151,17 +2247,27 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 v
     selected.spatialCoverage *= edgeWeight;
     selected.ownership *= edgeWeight;
     selected.transitionWeight = edgeWeight;
+    AddSimpleDdgiGatherDiagnostic(
+        p,
+        diagnosticFrame,
+        SIMPLE_DDGI_ONE_GATHER_PIXEL_COUNTER);
     return selected;
 }
 
+SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 viewDir)
+{
+    SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    return SampleSimpleDdgiGather(p, worldPos, normal, viewDir);
+}
+
 vec3 SampleSimpleDdgiUnifiedIrradiance(
+    SimpleDdgiParams p,
     vec3 worldPos,
     vec3 normal,
     vec3 viewDir,
     bool allowFallback,
     out float ownershipOut)
 {
-    SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
     if ((p.flags & SIMPLE_DDGI_FLAG_ENABLED) == 0u)
     {
         ownershipOut = 0.0;
@@ -2169,7 +2275,7 @@ vec3 SampleSimpleDdgiUnifiedIrradiance(
     }
 
     vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
-    SimpleDdgiGatherResult gather = SampleSimpleDdgiGather(worldPos, safeNormal, viewDir);
+    SimpleDdgiGatherResult gather = SampleSimpleDdgiGather(p, worldPos, safeNormal, viewDir);
     float radiometricOwnership = SimpleDdgiRadiometricOwnership(gather);
     float leakAttenuation = SimpleDdgiLeakAttenuation(gather, p);
     float effectiveOwnership = radiometricOwnership * leakAttenuation;
@@ -2181,7 +2287,7 @@ vec3 SampleSimpleDdgiUnifiedIrradiance(
         // missing probe ownership receives the environment complement; otherwise
         // a wall leak would merely be replaced by unoccluded sky irradiance.
         float fallbackWeight = (1.0 - radiometricOwnership) * p.environmentFallbackIntensity;
-        if (fallbackWeight > 0.0001)
+        if (fallbackWeight > SIMPLE_DDGI_ENVIRONMENT_FALLBACK_MIN_WEIGHT)
         {
             // Environment fallback represents the receiver's missing diffuse
             // ownership. It is intentionally evaluated at stable receiver space,
@@ -2189,12 +2295,46 @@ vec3 SampleSimpleDdgiUnifiedIrradiance(
             // cannot change diffuse fallback energy at a fixed world point.
             vec3 fallback = SimpleDdgiEnvironmentIrradianceFallback(safeNormal, p);
             if ((p.flags & SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u)
-                fallback *= EstimateFarFieldSkyVisibility(worldPos, safeNormal);
+                fallback *= EstimateFarFieldSkyVisibility(worldPos, safeNormal, p, 1u);
             irradiance += fallback * fallbackWeight;
         }
     }
 
     return clamp(irradiance, vec3(0.0), vec3(64.0));
+}
+
+vec3 SampleSimpleDdgiUnifiedIrradiance(
+    vec3 worldPos,
+    vec3 normal,
+    vec3 viewDir,
+    bool allowFallback,
+    out float ownershipOut)
+{
+    SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    return SampleSimpleDdgiUnifiedIrradiance(
+        p,
+        worldPos,
+        normal,
+        viewDir,
+        allowFallback,
+        ownershipOut);
+}
+
+vec3 SampleSimpleDdgiUnifiedIrradiance(
+    SimpleDdgiParams p,
+    vec3 worldPos,
+    vec3 normal,
+    vec3 viewDir,
+    bool allowFallback)
+{
+    float ignoredOwnership;
+    return SampleSimpleDdgiUnifiedIrradiance(
+        p,
+        worldPos,
+        normal,
+        viewDir,
+        allowFallback,
+        ignoredOwnership);
 }
 
 vec3 SampleSimpleDdgiUnifiedIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir, bool allowFallback)
@@ -2204,13 +2344,13 @@ vec3 SampleSimpleDdgiUnifiedIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir,
 }
 
 vec3 SampleSimpleDdgiSolverBounceIrradiance(
+    SimpleDdgiParams p,
     vec3 worldPos,
     vec3 normal,
     vec3 viewDir,
     out float solverOwnershipOut,
     out float fallbackWeightOut)
 {
-    SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
     if ((p.flags & SIMPLE_DDGI_FLAG_ENABLED) == 0u)
     {
         solverOwnershipOut = 0.0;
@@ -2219,7 +2359,7 @@ vec3 SampleSimpleDdgiSolverBounceIrradiance(
     }
 
     vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
-    SimpleDdgiGatherResult gather = SampleSimpleDdgiGather(worldPos, safeNormal, viewDir);
+    SimpleDdgiGatherResult gather = SampleSimpleDdgiGather(p, worldPos, safeNormal, viewDir);
     float spatialCoverage = clamp(gather.spatialCoverage, 0.0, 1.0);
     float solverOwnership = spatialCoverage * smoothstep(
         0.0,
@@ -2236,7 +2376,7 @@ vec3 SampleSimpleDdgiSolverBounceIrradiance(
 
     float fallbackWeight = (1.0 - solverOwnership) * p.environmentFallbackIntensity;
     fallbackWeightOut = fallbackWeight;
-    if (fallbackWeight > 0.0001)
+    if (fallbackWeight > SIMPLE_DDGI_ENVIRONMENT_FALLBACK_MIN_WEIGHT)
     {
         // This is a fixed-point boundary condition, not receiver-visible sky.
         // Visibility-gating an ownership deficit makes missing coverage a
@@ -2246,6 +2386,40 @@ vec3 SampleSimpleDdgiSolverBounceIrradiance(
     }
 
     return clamp(irradiance, vec3(0.0), vec3(64.0));
+}
+
+vec3 SampleSimpleDdgiSolverBounceIrradiance(
+    vec3 worldPos,
+    vec3 normal,
+    vec3 viewDir,
+    out float solverOwnershipOut,
+    out float fallbackWeightOut)
+{
+    SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    return SampleSimpleDdgiSolverBounceIrradiance(
+        p,
+        worldPos,
+        normal,
+        viewDir,
+        solverOwnershipOut,
+        fallbackWeightOut);
+}
+
+vec3 SampleSimpleDdgiSolverBounceIrradiance(
+    SimpleDdgiParams p,
+    vec3 worldPos,
+    vec3 normal,
+    vec3 viewDir)
+{
+    float ignoredOwnership;
+    float ignoredFallbackWeight;
+    return SampleSimpleDdgiSolverBounceIrradiance(
+        p,
+        worldPos,
+        normal,
+        viewDir,
+        ignoredOwnership,
+        ignoredFallbackWeight);
 }
 
 vec3 SampleSimpleDdgiSolverBounceIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir)
@@ -2260,9 +2434,12 @@ vec3 SampleSimpleDdgiSolverBounceIrradiance(vec3 worldPos, vec3 normal, vec3 vie
         ignoredFallbackWeight);
 }
 
-SimpleDdgiDebugSample SampleSimpleDdgiDebug(vec3 worldPos, vec3 normal, vec3 viewDir)
+SimpleDdgiDebugSample SampleSimpleDdgiDebug(
+    SimpleDdgiParams p,
+    vec3 worldPos,
+    vec3 normal,
+    vec3 viewDir)
 {
-    SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
     uint selectedVolumeIndex;
     SimpleDdgiVolume volume;
     float edgeWeight;
@@ -2310,10 +2487,16 @@ SimpleDdgiDebugSample SampleSimpleDdgiDebug(vec3 worldPos, vec3 normal, vec3 vie
     return result;
 }
 
+SimpleDdgiDebugSample SampleSimpleDdgiDebug(vec3 worldPos, vec3 normal, vec3 viewDir)
+{
+    SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    return SampleSimpleDdgiDebug(p, worldPos, normal, viewDir);
+}
+
 vec3 SampleSimpleDdgiIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir)
 {
     SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
-    return SampleSimpleDdgiUnifiedIrradiance(worldPos, normal, viewDir, true) * p.indirectIntensity;
+    return SampleSimpleDdgiUnifiedIrradiance(p, worldPos, normal, viewDir, true) * p.indirectIntensity;
 }
 
 #endif

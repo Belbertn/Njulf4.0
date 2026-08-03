@@ -27,6 +27,11 @@ namespace Njulf.Rendering.Resources
         internal const byte StaticOpaqueInstanceMask = 0x01;
         private const ulong MinResourceBufferSize = 16;
         private const ulong IndexStride = sizeof(uint);
+        private const int MaxBlasCompactionQueriesPerFrame = 4096;
+        // Keep the fence-safe source-retirement overlap below the global
+        // residency headroom while still draining a large static scene during
+        // normal warm-up. One oversized BLAS is allowed to make progress.
+        private const ulong MaxBlasCompactionDestinationBytesPerFrame = 32UL * 1024UL * 1024UL;
         private const ulong HashStart = 14695981039346656037UL;
         private const ulong HashPrime = 1099511628211UL;
         private static readonly ulong VertexPositionStride = (ulong)Marshal.SizeOf<GPUVertexPositionStream>();
@@ -56,6 +61,15 @@ namespace Njulf.Rendering.Resources
         private readonly List<GPUDdgiRayQueryInstance> _rayQueryInstanceScratch = new();
         private readonly List<RetiredAccelerationStructureResource> _retiredAccelerationStructures = new();
         private readonly List<RetiredBufferResource> _retiredBuffers = new();
+        private readonly QueryPool[] _blasCompactionQueryPools =
+            new QueryPool[RenderingConstants.FramesInFlight];
+        private readonly List<PendingBlasCompactionQuery>[] _pendingBlasCompactionQueries =
+            new List<PendingBlasCompactionQuery>[RenderingConstants.FramesInFlight];
+        private readonly ulong[][] _blasCompactionQueryResults =
+            new ulong[RenderingConstants.FramesInFlight][];
+        private readonly bool[] _blasCompactionQueryPoolResetThisFrame =
+            new bool[RenderingConstants.FramesInFlight];
+        private readonly Queue<ReadyBlasCompaction> _readyBlasCompactions = new();
         private ulong _retiredAccelerationStructureBytes;
         private ulong _retiredBufferBytes;
 
@@ -89,6 +103,15 @@ namespace Njulf.Rendering.Resources
         private int _lastBlasEvictionCount;
         private ulong _lastBlasEvictionBytes;
         private int _lastBlasBudgetRejectedCount;
+        private long _lastBlasCompactionMicroseconds;
+        private int _lastBlasCompactionQueryCount;
+        private int _lastBlasCompactionCount;
+        private ulong _lastBlasCompactionSourceBytes;
+        private ulong _lastBlasCompactionBytesSaved;
+        private int _lastBlasCompactionQueryOverflowCount;
+        private int _lastBlasCompactionQueryReadbackFailureCount;
+        private ulong _bottomLevelAccelerationStructureCompactedBytesSaved;
+        private bool _blasCompactionQueriesDisabled;
         private AccelerationStructureResidencyPolicy _residencyPolicy;
         private ulong _lastTlasInstanceSignature;
         private bool _hasTlasInstanceSignature;
@@ -107,6 +130,13 @@ namespace Njulf.Rendering.Resources
             _meshManager = meshManager ?? throw new ArgumentNullException(nameof(meshManager));
             _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
             _rayQueryStorageView = _rayQueryStorageScratch.AsReadOnly();
+            for (int i = 0; i < _pendingBlasCompactionQueries.Length; i++)
+            {
+                _pendingBlasCompactionQueries[i] =
+                    new List<PendingBlasCompactionQuery>(256);
+                _blasCompactionQueryResults[i] =
+                    new ulong[MaxBlasCompactionQueriesPerFrame];
+            }
             _khrAccelerationStructure = context.KhrAccelerationStructure;
             _scratchBufferAddressAlignment = context.RayQuerySupported && _khrAccelerationStructure != null
                 ? QueryScratchBufferAddressAlignment(context)
@@ -129,6 +159,13 @@ namespace Njulf.Rendering.Resources
         public int TopLevelInstanceCount { get; private set; }
         public ulong AccelerationStructureBytes { get; private set; }
         public ulong BottomLevelAccelerationStructureBytes { get; private set; }
+        /// <summary>
+        /// Bytes removed from the currently resident BLAS working set by
+        /// VK_KHR_acceleration_structure compaction. This is active residency,
+        /// not a cumulative allocation counter.
+        /// </summary>
+        public ulong BottomLevelAccelerationStructureCompactedBytesSaved =>
+            _bottomLevelAccelerationStructureCompactedBytesSaved;
         public ulong TopLevelAccelerationStructureBytes => _tlas.Size;
         /// <summary>
         /// Bytes retained only until all in-flight frames can no longer reference a
@@ -232,6 +269,14 @@ namespace Njulf.Rendering.Resources
             ResetFrameDiagnostics();
             BeginFrameResourceRetirement();
             _residencyPolicy = residencyPolicy ?? AccelerationStructureResidencyPolicy.Disabled;
+            ValidateCompactionFrameIndex(frameIndex);
+            _blasCompactionQueryPoolResetThisFrame[frameIndex] = false;
+
+            // BeginFrame has already observed this frame slot's fence. Query
+            // results are therefore read without VK_QUERY_RESULT_WAIT_BIT and
+            // cannot introduce a hidden CPU/GPU synchronization point.
+            if (Supported)
+                ResolveCompletedBlasCompactionQueries(frameIndex);
 
             if (!enabled)
             {
@@ -262,6 +307,7 @@ namespace Njulf.Rendering.Resources
                 PruneUnusedBottomLevelAccelerationStructures();
 
                 bool missingBlas = HasMissingBottomLevelAccelerationStructures(_instanceScratch);
+                bool pendingBlasCompaction = _readyBlasCompactions.Count > 0;
                 ulong additionalTlasBudgetReservation = 0;
                 if (missingBlas)
                 {
@@ -271,18 +317,20 @@ namespace Njulf.Rendering.Resources
                         estimatedTlasBytes,
                         _tlas.Size);
                 }
-                if (missingBlas)
+                if (missingBlas || pendingBlasCompaction)
                     gpuTimestamps?.BeginPass(commandBuffer, frameIndex, "AccelerationStructureBlasPass");
                 try
                 {
+                    ProcessReadyBlasCompactions(commandBuffer);
                     EnsureBottomLevelAccelerationStructures(
                         _instanceScratch,
                         commandBuffer,
-                        additionalTlasBudgetReservation);
+                        additionalTlasBudgetReservation,
+                        frameIndex);
                 }
                 finally
                 {
-                    if (missingBlas)
+                    if (missingBlas || pendingBlasCompaction)
                         gpuTimestamps?.EndPass(commandBuffer, frameIndex);
                 }
 
@@ -436,6 +484,22 @@ namespace Njulf.Rendering.Resources
                 return;
             }
 
+            if (!RequiresStaticResidencySelection(_residencyPolicy))
+            {
+                // High-quality tiers keep the complete detailed ray-query set:
+                // distance is unbounded and the instance cap is effectively open.
+                // Counting still preserves diagnostics, but world-bound transforms
+                // and an O(N log N) nearest-first sort cannot change admission.
+                for (int i = 0; i < instances.Count; i++)
+                {
+                    if (instances[i].Domain == AccelerationStructureGeometryDomain.Static)
+                        _lastStaticInstanceCandidateCount++;
+                }
+
+                _lastStaticInstanceResidentCount = _lastStaticInstanceCandidateCount;
+                return;
+            }
+
             _residentInstanceScratch.Clear();
             _staticResidencyCandidateScratch.Clear();
             float residentDistance = Math.Max(0.0f, _residencyPolicy.StaticResidentDistance);
@@ -476,6 +540,19 @@ namespace Njulf.Rendering.Resources
             _lastStaticInstanceCulledCount += _staticResidencyCandidateScratch.Count - staticResidentCount;
             instances.Clear();
             instances.AddRange(_residentInstanceScratch);
+        }
+
+        internal static bool RequiresStaticResidencySelection(
+            AccelerationStructureResidencyPolicy policy)
+        {
+            if (!policy.Enabled)
+                return false;
+
+            float distance = Math.Max(0.0f, policy.StaticResidentDistance);
+            bool boundedDistance = float.IsFinite(distance) &&
+                distance < MathF.Sqrt(float.MaxValue);
+            bool boundedInstanceCount = policy.MaximumStaticInstances < int.MaxValue;
+            return boundedDistance || boundedInstanceCount;
         }
 
         /// <summary>
@@ -728,7 +805,8 @@ namespace Njulf.Rendering.Resources
         private void EnsureBottomLevelAccelerationStructures(
             IReadOnlyList<StaticOpaqueInstance> instances,
             CommandBuffer commandBuffer,
-            ulong additionalTlasBudgetReservation)
+            ulong additionalTlasBudgetReservation,
+            int frameIndex)
         {
             _unavailableMeshScratch.Clear();
             foreach (StaticOpaqueInstance instance in instances)
@@ -759,6 +837,11 @@ namespace Njulf.Rendering.Resources
                 AdvanceResourceGeneration();
                 AccelerationStructureBytes = checked(AccelerationStructureBytes + blas.Size);
                 InsertAccelerationStructureBuildBarrier(commandBuffer);
+                TrackBottomLevelCompactionQuery(
+                    instance.Mesh,
+                    blas,
+                    commandBuffer,
+                    frameIndex);
             }
         }
 
@@ -885,6 +968,23 @@ namespace Njulf.Rendering.Resources
         {
             return currentBytes > budgetBytes || additionalBytes > budgetBytes - currentBytes;
         }
+
+        internal static bool ShouldCompactBottomLevelAccelerationStructure(
+            ulong sourceSize,
+            ulong queriedCompactedSize) =>
+            queriedCompactedSize > 0 &&
+            Math.Max(MinResourceBufferSize, queriedCompactedSize) < sourceSize;
+
+        internal static bool FitsBlasCompactionFrameBudget(
+            ulong destinationBytesThisFrame,
+            ulong nextDestinationBytes,
+            ulong frameBudgetBytes) =>
+            // One oversized BLAS must still make forward progress.
+            destinationBytesThisFrame == 0 ||
+            !WouldExceedBudget(
+                destinationBytesThisFrame,
+                nextDestinationBytes,
+                frameBudgetBytes);
 
         internal static ulong CalculateScratchMemoryBudgetBytes(ulong activeAccelerationStructureBudgetBytes)
         {
@@ -1038,6 +1138,270 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        private void TrackBottomLevelCompactionQuery(
+            MeshHandle mesh,
+            BottomLevelAccelerationStructure blas,
+            CommandBuffer commandBuffer,
+            int frameIndex)
+        {
+            if (_blasCompactionQueriesDisabled)
+                return;
+
+            List<PendingBlasCompactionQuery> pending =
+                _pendingBlasCompactionQueries[frameIndex];
+            if (pending.Count >= MaxBlasCompactionQueriesPerFrame)
+            {
+                _lastBlasCompactionQueryOverflowCount++;
+                return;
+            }
+
+            // A non-empty slot at this point means its completed results could
+            // not be read. Never reset or overwrite unresolved queries; the
+            // BLAS remains valid and simply stays uncompacted.
+            if (!_blasCompactionQueryPoolResetThisFrame[frameIndex] &&
+                pending.Count != 0)
+            {
+                _lastBlasCompactionQueryOverflowCount++;
+                return;
+            }
+
+            if (!EnsureBlasCompactionQueryPool(frameIndex))
+                return;
+
+            QueryPool queryPool = _blasCompactionQueryPools[frameIndex];
+            if (!_blasCompactionQueryPoolResetThisFrame[frameIndex])
+            {
+                _context.Api.CmdResetQueryPool(
+                    commandBuffer,
+                    queryPool,
+                    0,
+                    MaxBlasCompactionQueriesPerFrame);
+                _blasCompactionQueryPoolResetThisFrame[frameIndex] = true;
+            }
+
+            uint queryIndex = checked((uint)pending.Count);
+            AccelerationStructureKHR accelerationStructure = blas.Handle;
+            _khrAccelerationStructure!.CmdWriteAccelerationStructuresProperties(
+                commandBuffer,
+                1,
+                &accelerationStructure,
+                QueryType.AccelerationStructureCompactedSizeKhr,
+                queryPool,
+                queryIndex);
+            pending.Add(new PendingBlasCompactionQuery(mesh, blas));
+            _lastBlasCompactionQueryCount++;
+        }
+
+        private bool EnsureBlasCompactionQueryPool(int frameIndex)
+        {
+            if (_blasCompactionQueryPools[frameIndex].Handle != 0)
+                return true;
+
+            var createInfo = new QueryPoolCreateInfo
+            {
+                SType = StructureType.QueryPoolCreateInfo,
+                QueryType = QueryType.AccelerationStructureCompactedSizeKhr,
+                QueryCount = MaxBlasCompactionQueriesPerFrame
+            };
+            Result result = _context.Api.CreateQueryPool(
+                _context.Device,
+                &createInfo,
+                null,
+                out QueryPool queryPool);
+            if (result != Result.Success)
+            {
+                // Compaction is a quality-neutral residency optimization. Query
+                // allocation failure must not disable the authoritative ray-
+                // query representation itself.
+                _blasCompactionQueriesDisabled = true;
+                _lastBlasCompactionQueryOverflowCount++;
+                return false;
+            }
+
+            _blasCompactionQueryPools[frameIndex] = queryPool;
+            _context.SetDebugName(
+                queryPool.Handle,
+                ObjectType.QueryPool,
+                $"BLAS Compacted Size Query Pool Frame {frameIndex}");
+            return true;
+        }
+
+        private void ResolveCompletedBlasCompactionQueries(int frameIndex)
+        {
+            List<PendingBlasCompactionQuery> pending =
+                _pendingBlasCompactionQueries[frameIndex];
+            if (pending.Count == 0)
+                return;
+
+            QueryPool queryPool = _blasCompactionQueryPools[frameIndex];
+            if (queryPool.Handle == 0)
+            {
+                _lastBlasCompactionQueryReadbackFailureCount++;
+                return;
+            }
+
+            ulong[] results = _blasCompactionQueryResults[frameIndex];
+            fixed (ulong* resultPtr = results)
+            {
+                Result result = _context.Api.GetQueryPoolResults(
+                    _context.Device,
+                    queryPool,
+                    0,
+                    checked((uint)pending.Count),
+                    checked((nuint)(pending.Count * sizeof(ulong))),
+                    resultPtr,
+                    sizeof(ulong),
+                    QueryResultFlags.Result64Bit);
+                if (result != Result.Success)
+                {
+                    _lastBlasCompactionQueryReadbackFailureCount++;
+                    return;
+                }
+            }
+
+            for (int i = 0; i < pending.Count; i++)
+            {
+                PendingBlasCompactionQuery query = pending[i];
+                if (!ShouldCompactBottomLevelAccelerationStructure(
+                        query.Source.Size,
+                        results[i]))
+                {
+                    continue;
+                }
+
+                ulong compactedSize = Math.Max(MinResourceBufferSize, results[i]);
+
+                _readyBlasCompactions.Enqueue(new ReadyBlasCompaction(
+                    query.Mesh,
+                    query.Source,
+                    compactedSize));
+            }
+
+            pending.Clear();
+        }
+
+        private void ProcessReadyBlasCompactions(CommandBuffer commandBuffer)
+        {
+            if (_readyBlasCompactions.Count == 0)
+                return;
+
+            long start = Stopwatch.GetTimestamp();
+            ulong destinationBytesThisFrame = 0;
+            bool replacedAny = false;
+            while (_readyBlasCompactions.Count > 0)
+            {
+                ReadyBlasCompaction candidate = _readyBlasCompactions.Peek();
+                if (!_blasCache.TryGetValue(
+                        candidate.Mesh,
+                        out BottomLevelAccelerationStructure? current) ||
+                    !ReferenceEquals(current, candidate.Source))
+                {
+                    _readyBlasCompactions.Dequeue();
+                    continue;
+                }
+
+                ulong compactedSize = candidate.CompactedSize;
+                if (compactedSize >= current.Size)
+                {
+                    _readyBlasCompactions.Dequeue();
+                    continue;
+                }
+
+                bool exceedsFrameBudget =
+                    !FitsBlasCompactionFrameBudget(
+                        destinationBytesThisFrame,
+                        compactedSize,
+                        MaxBlasCompactionDestinationBytesPerFrame);
+                if (exceedsFrameBudget)
+                    break;
+
+                // The copy destination becomes active residency. The old source
+                // then enters the fence-safe retirement ledger, so admission is
+                // governed by the larger source size rather than only by the
+                // compact destination allocation.
+                if (!CanReserveTransientBytes(current.Size))
+                    break;
+
+                _readyBlasCompactions.Dequeue();
+                BufferHandle compactStorage = _bufferManager.CreateDeviceBuffer(
+                    compactedSize,
+                    BufferUsageFlags.AccelerationStructureStorageBitKhr |
+                        BufferUsageFlags.ShaderDeviceAddressBit,
+                    requireDeviceAddress: true,
+                    MemoryBudgetCategory.GlobalIllumination,
+                    $"BLAS Mesh {candidate.Mesh.Index} Compacted");
+                AccelerationStructureKHR compactHandle = default;
+                try
+                {
+                    compactHandle = CreateAccelerationStructure(
+                        compactStorage,
+                        compactedSize,
+                        AccelerationStructureTypeKHR.BottomLevelKhr,
+                        $"BLAS Mesh {candidate.Mesh.Index} Compacted");
+                    var copyInfo = new CopyAccelerationStructureInfoKHR
+                    {
+                        SType = StructureType.CopyAccelerationStructureInfoKhr,
+                        Src = current.Handle,
+                        Dst = compactHandle,
+                        Mode = CopyAccelerationStructureModeKHR.CompactKhr
+                    };
+                    _khrAccelerationStructure!.CmdCopyAccelerationStructure(
+                        commandBuffer,
+                        &copyInfo);
+
+                    var replacement = new BottomLevelAccelerationStructure(
+                        compactHandle,
+                        compactStorage,
+                        compactedSize,
+                        current.UncompactedSize)
+                    {
+                        LastUsedFrameSerial = current.LastUsedFrameSerial
+                    };
+                    _blasCache[candidate.Mesh] = replacement;
+                    RetireAccelerationStructureResource(
+                        current.Handle,
+                        current.StorageBuffer,
+                        current.Size);
+                    destinationBytesThisFrame = checked(
+                        destinationBytesThisFrame + compactedSize);
+                    _lastBlasCompactionCount++;
+                    _lastBlasCompactionSourceBytes = checked(
+                        _lastBlasCompactionSourceBytes + current.Size);
+                    _lastBlasCompactionBytesSaved = checked(
+                        _lastBlasCompactionBytesSaved + current.Size - compactedSize);
+                    replacedAny = true;
+                    AdvanceResourceGeneration();
+                    InsertAccelerationStructureBuildBarrier(commandBuffer);
+                }
+                catch
+                {
+                    DestroyAccelerationStructureResource(
+                        compactHandle,
+                        compactStorage);
+                    throw;
+                }
+            }
+
+            if (replacedAny)
+            {
+                // BLAS device addresses changed. Even if instance transforms are
+                // identical, the TLAS instance array must be uploaded again and
+                // the TLAS rebuilt against the compacted children.
+                _hasTlasInstanceSignature = false;
+                _lastTlasInstanceSignature = 0;
+                _lastTlasInstanceCount = 0;
+                RecalculateAccelerationStructureBytes();
+            }
+
+            _lastBlasCompactionMicroseconds += ElapsedMicroseconds(start);
+        }
+
+        private static void ValidateCompactionFrameIndex(int frameIndex)
+        {
+            if (frameIndex < 0 || frameIndex >= RenderingConstants.FramesInFlight)
+                throw new ArgumentOutOfRangeException(nameof(frameIndex));
+        }
+
         private AccelerationStructureGeometryKHR CreateBottomLevelGeometry(MeshInfo meshInfo)
         {
             ulong vertexAddress = checked(_bufferManager.GetBufferDeviceAddress(_meshManager.VertexPositionBuffer) +
@@ -1078,7 +1442,8 @@ namespace Njulf.Rendering.Resources
             {
                 SType = StructureType.AccelerationStructureBuildGeometryInfoKhr,
                 Type = AccelerationStructureTypeKHR.BottomLevelKhr,
-                Flags = BuildAccelerationStructureFlagsKHR.PreferFastTraceBitKhr,
+                Flags = BuildAccelerationStructureFlagsKHR.PreferFastTraceBitKhr |
+                    BuildAccelerationStructureFlagsKHR.AllowCompactionBitKhr,
                 Mode = BuildAccelerationStructureModeKHR.BuildKhr,
                 DstAccelerationStructure = destination,
                 GeometryCount = 1,
@@ -1756,6 +2121,15 @@ namespace Njulf.Rendering.Resources
                 // tracking. Keep its shape stable, but report every retired
                 // acceleration-structure-associated allocation through it.
                 RetiredResourceBytes,
+                _lastBlasCompactionMicroseconds,
+                _lastBlasCompactionQueryCount,
+                _lastBlasCompactionCount,
+                _lastBlasCompactionSourceBytes,
+                _lastBlasCompactionBytesSaved,
+                BottomLevelAccelerationStructureCompactedBytesSaved,
+                GetPendingBlasCompactionCount(),
+                _lastBlasCompactionQueryOverflowCount,
+                _lastBlasCompactionQueryReadbackFailureCount,
                 _lastFallbackReason);
         }
 
@@ -1777,19 +2151,39 @@ namespace Njulf.Rendering.Resources
             _lastBlasEvictionCount = 0;
             _lastBlasEvictionBytes = 0;
             _lastBlasBudgetRejectedCount = 0;
+            _lastBlasCompactionMicroseconds = 0;
+            _lastBlasCompactionQueryCount = 0;
+            _lastBlasCompactionCount = 0;
+            _lastBlasCompactionSourceBytes = 0;
+            _lastBlasCompactionBytesSaved = 0;
+            _lastBlasCompactionQueryOverflowCount = 0;
+            _lastBlasCompactionQueryReadbackFailureCount = 0;
         }
 
         private void RecalculateAccelerationStructureBytes()
         {
             ulong bytes = _tlas.Size;
             ulong bottomLevelBytes = 0;
+            ulong compactedBytesSaved = 0;
             foreach (BottomLevelAccelerationStructure blas in _blasCache.Values)
             {
                 bottomLevelBytes = checked(bottomLevelBytes + blas.Size);
                 bytes = checked(bytes + blas.Size);
+                compactedBytesSaved = checked(
+                    compactedBytesSaved + blas.UncompactedSize - blas.Size);
             }
             BottomLevelAccelerationStructureBytes = bottomLevelBytes;
+            _bottomLevelAccelerationStructureCompactedBytesSaved =
+                compactedBytesSaved;
             AccelerationStructureBytes = bytes;
+        }
+
+        private int GetPendingBlasCompactionCount()
+        {
+            int count = _readyBlasCompactions.Count;
+            for (int i = 0; i < _pendingBlasCompactionQueries.Length; i++)
+                count = checked(count + _pendingBlasCompactionQueries[i].Count);
+            return count;
         }
 
         private void DestroyTopLevelAccelerationStructure(bool defer)
@@ -1913,6 +2307,17 @@ namespace Njulf.Rendering.Resources
             if (_rayQueryInstanceBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_rayQueryInstanceBuffer);
             DrainRetiredResources(force: true);
+            for (int i = 0; i < _blasCompactionQueryPools.Length; i++)
+            {
+                if (_blasCompactionQueryPools[i].Handle != 0)
+                {
+                    _context.Api.DestroyQueryPool(
+                        _context.Device,
+                        _blasCompactionQueryPools[i],
+                        null);
+                    _blasCompactionQueryPools[i] = default;
+                }
+            }
         }
 
         internal readonly record struct StaticOpaqueInstance(
@@ -1929,17 +2334,37 @@ namespace Njulf.Rendering.Resources
                 AccelerationStructureKHR handle,
                 BufferHandle storageBuffer,
                 ulong size)
+                : this(handle, storageBuffer, size, size)
+            {
+            }
+
+            public BottomLevelAccelerationStructure(
+                AccelerationStructureKHR handle,
+                BufferHandle storageBuffer,
+                ulong size,
+                ulong uncompactedSize)
             {
                 Handle = handle;
                 StorageBuffer = storageBuffer;
                 Size = size;
+                UncompactedSize = Math.Max(size, uncompactedSize);
             }
 
             public AccelerationStructureKHR Handle { get; }
             public BufferHandle StorageBuffer { get; }
             public ulong Size { get; }
+            public ulong UncompactedSize { get; }
             public ulong LastUsedFrameSerial { get; set; }
         }
+
+        private readonly record struct PendingBlasCompactionQuery(
+            MeshHandle Mesh,
+            BottomLevelAccelerationStructure Source);
+
+        private readonly record struct ReadyBlasCompaction(
+            MeshHandle Mesh,
+            BottomLevelAccelerationStructure Source,
+            ulong CompactedSize);
 
         private readonly record struct StaticResidencyCandidate(
             StaticOpaqueInstance Instance,
@@ -2066,5 +2491,14 @@ namespace Njulf.Rendering.Resources
         ulong BottomLevelAccelerationStructureBytes,
         ulong TopLevelAccelerationStructureBytes,
         ulong RetiredAccelerationStructureBytes,
+        long BlasCompactionMicroseconds,
+        int BlasCompactionQueryCount,
+        int BlasCompactionCount,
+        ulong BlasCompactionSourceBytes,
+        ulong BlasCompactionBytesSaved,
+        ulong BottomLevelAccelerationStructureCompactedBytesSaved,
+        int PendingBlasCompactionCount,
+        int BlasCompactionQueryOverflowCount,
+        int BlasCompactionQueryReadbackFailureCount,
         string FallbackReason);
 }

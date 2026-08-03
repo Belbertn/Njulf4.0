@@ -39,6 +39,7 @@ namespace Njulf.Rendering.Data
         public const string ForwardTaskShaderLegacyCull = "LegacyCullTask";
         public const string ForwardTaskShaderCompactedCounter = "CompactedCounterTask";
         public const string ForwardTaskShaderCompactedEmit = "CompactedEmitTask";
+        public const string ForwardTaskShaderCompactedMeshOnly = "CompactedMeshOnly";
 
         private const string NoEligibleGpuSubmissionReason =
             "no eligible opaque/depth/shadow meshlets for GPU scene submission";

@@ -4,9 +4,15 @@
 
 #include "common.glsl"
 
-layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+#ifdef FORWARD_COMPACTED_MESH
+#define FORWARD_MESH_LOCAL_SIZE 64
+#else
+#define FORWARD_MESH_LOCAL_SIZE 128
+#endif
+layout(local_size_x = FORWARD_MESH_LOCAL_SIZE, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 126) out;
 
+#ifndef FORWARD_COMPACTED_MESH
 struct ForwardTaskPayload
 {
     uint DrawCommandIndex;
@@ -14,6 +20,7 @@ struct ForwardTaskPayload
 };
 
 taskPayloadSharedEXT ForwardTaskPayload forwardPayload;
+#endif
 shared uint meshNegativeDeterminant;
 
 layout(location = 0) out vec3 meshNormal[];
@@ -30,17 +37,28 @@ layout(push_constant) uniform ForwardPushConstantBlock
 
 void main()
 {
+#ifdef FORWARD_COMPACTED_MESH
+    uint drawCommandIndex = gl_WorkGroupID.x;
+    if (drawCommandIndex >= pc.Push.MeshletDrawCount)
+    {
+        if (gl_LocalInvocationIndex == 0u)
+            SetMeshOutputsEXT(0u, 0u);
+        return;
+    }
+#else
     if (forwardPayload.Visible == 0u)
     {
         if (gl_LocalInvocationIndex == 0u)
             SetMeshOutputsEXT(0u, 0u);
         return;
     }
+    uint drawCommandIndex = forwardPayload.DrawCommandIndex;
+#endif
 
     GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(
         pc.Push.MeshletDrawBufferBaseIndex,
         pc.Push.CurrentFrameIndex,
-        forwardPayload.DrawCommandIndex);
+        drawCommandIndex);
     GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
     uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
     uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);

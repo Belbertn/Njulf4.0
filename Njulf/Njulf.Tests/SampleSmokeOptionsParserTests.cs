@@ -46,6 +46,23 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable(
             "NJULF_RENDERER_BENCHMARK_BUDGET_PROFILE",
             null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_PAIR_ID", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_VARIANT", null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_BENCHMARK_REQUIRE_PRODUCTION",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_BENCHMARK_HDR_REFERENCE",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_BENCHMARK_HDR_CANDIDATE",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_BENCHMARK_SHADER_PROFILE",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_BENCHMARK_REQUIRE_SHADER_PROFILE",
+            null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_VALIDATION", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_QUALITY_PRESET", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_LONG_RUN_REPORT", null);
@@ -406,7 +423,9 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(settings.GlobalIllumination.DdgiHysteresisResponse, Is.EqualTo(1.0f));
             Assert.That(settings.GlobalIllumination.TemporalEnabled, Is.False);
             Assert.That(settings.GlobalIllumination.DenoiserEnabled, Is.False);
-            Assert.That(settings.Diagnostics.DdgiForwardEstimateCountersEnabled, Is.True);
+            Assert.That(
+                settings.Diagnostics.DdgiForwardEstimateCountersEnabled,
+                Is.EqualTo(RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled));
             Assert.That(settings.Environment.Enabled, Is.False);
             Assert.That(settings.Environment.SkyIntensity, Is.EqualTo(0.0f));
             Assert.That(settings.Environment.DiffuseIntensity, Is.EqualTo(0.0f));
@@ -885,6 +904,7 @@ public sealed class SampleSmokeOptionsParserTests
         Assert.Multiple(() =>
         {
             Assert.That(options.Benchmark.Enabled, Is.True);
+            Assert.That(options.AsyncComputeModeOverride, Is.EqualTo(AsyncComputeMode.Disabled));
             Assert.That(options.Benchmark.ReportPath, Is.EqualTo(System.IO.Path.GetFullPath(reportPath)));
             Assert.That(options.Benchmark.WarmupFrameCount, Is.EqualTo(0));
             Assert.That(options.Benchmark.MeasureFrameCount, Is.EqualTo(8));
@@ -917,6 +937,18 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(options.Benchmark.WarmupFrameCount, Is.EqualTo(30));
             Assert.That(options.Benchmark.MeasureFrameCount, Is.EqualTo(120));
         });
+    }
+
+    [Test]
+    public void Benchmark_PreservesExplicitAsyncModeForControlledComparison()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--benchmark",
+            "--async-compute-mode", "auto"
+        });
+
+        Assert.That(options.AsyncComputeModeOverride, Is.EqualTo(AsyncComputeMode.Auto));
     }
 
     [Test]
@@ -953,6 +985,58 @@ public sealed class SampleSmokeOptionsParserTests
                 Is.EqualTo(RenderBudgetProfileKind.Ultra4k60));
             Assert.That(options.EnableGpuTiming, Is.True);
         });
+    }
+
+    [Test]
+    public void ParsesLockedBenchmarkEvidenceAndVariantOptions()
+    {
+        string reference = Path.Combine(Path.GetTempPath(), "reference.pfm");
+        string candidate = Path.Combine(Path.GetTempPath(), "candidate.pfm");
+        string shaderProfile = Path.Combine(Path.GetTempPath(), "shader-profile.json");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--benchmark-pair-id", "sponza-right-wall-20260802",
+            "--benchmark-variant", "decal-shadows-disabled",
+            "--benchmark-hdr-reference", reference,
+            "--benchmark-hdr-candidate", candidate,
+            "--benchmark-shader-profile", shaderProfile,
+            "--benchmark-require-shader-profile"
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Benchmark.Enabled, Is.True);
+            Assert.That(
+                options.Benchmark.CapturePairId,
+                Is.EqualTo("sponza-right-wall-20260802"));
+            Assert.That(
+                options.Benchmark.CaptureVariant,
+                Is.EqualTo("decal-shadows-disabled"));
+            Assert.That(
+                options.Benchmark.HdrReferencePath,
+                Is.EqualTo(Path.GetFullPath(reference)));
+            Assert.That(
+                options.Benchmark.HdrCandidatePath,
+                Is.EqualTo(Path.GetFullPath(candidate)));
+            Assert.That(
+                options.Benchmark.ShaderProfileArtifactPath,
+                Is.EqualTo(Path.GetFullPath(shaderProfile)));
+            Assert.That(options.Benchmark.RequireShaderProfileEvidence, Is.True);
+        });
+    }
+
+    [Test]
+    public void BenchmarkHdrCandidate_RequiresReferenceGate()
+    {
+        Assert.That(
+            () => SampleSmokeOptionsParser.Parse(
+            [
+                "--benchmark-hdr-candidate",
+                Path.Combine(Path.GetTempPath(), "candidate.pfm")
+            ]),
+            Throws.ArgumentException.With.Message.Contains(
+                "requires --benchmark-hdr-reference"));
     }
 
     [Test]

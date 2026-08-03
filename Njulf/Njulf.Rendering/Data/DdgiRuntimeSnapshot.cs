@@ -273,6 +273,74 @@ namespace Njulf.Rendering.Data
         public uint ZeroEffectiveButCoveredCount => ZeroEffectiveButSpatiallyCoveredCount;
     }
 
+    public readonly record struct SimpleDdgiGatherMultiplicityCounters(
+        uint OneGatherPixelCount,
+        uint TwoGatherPixelCount,
+        uint RecoveryGatherPixelCount,
+        uint RingTransitionBlendCount,
+        uint MissingOrInvalidPrimarySupportCount,
+        uint RecoveryCount,
+        uint CoverageEdgeCount,
+        uint PrimaryOwnershipBelowThresholdCount,
+        uint DebugOrDiagnosticOnlyCount)
+    {
+        public static SimpleDdgiGatherMultiplicityCounters Empty { get; } = default;
+
+        public ulong ClassifiedSecondGatherCount =>
+            (ulong)RingTransitionBlendCount +
+            MissingOrInvalidPrimarySupportCount +
+            RecoveryCount +
+            CoverageEdgeCount +
+            PrimaryOwnershipBelowThresholdCount +
+            DebugOrDiagnosticOnlyCount;
+
+        public ulong ClassifiedPixelCount =>
+            (ulong)OneGatherPixelCount + TwoGatherPixelCount + RecoveryGatherPixelCount;
+
+        public double OneGatherFraction => ClassifiedPixelCount > 0
+            ? OneGatherPixelCount / (double)ClassifiedPixelCount
+            : 0.0;
+
+        public double SecondGatherFraction => ClassifiedPixelCount > 0
+            ? ((ulong)TwoGatherPixelCount + RecoveryGatherPixelCount) /
+              (double)ClassifiedPixelCount
+            : 0.0;
+
+        public double RecoveryGatherFraction => ClassifiedPixelCount > 0
+            ? RecoveryGatherPixelCount / (double)ClassifiedPixelCount
+            : 0.0;
+    }
+
+    /// <summary>
+    /// Sparse 16x16 diagnostic-grid estimates for the geometry-decal fragment
+    /// path. Counts are already multiplied by <see cref="SampleWeight"/> and
+    /// therefore estimate full-resolution work; they are not exact hardware
+    /// invocation counters.
+    /// </summary>
+    public readonly record struct DecalFragmentAttributionCounters(
+        uint EstimatedInvocationCount,
+        uint EstimatedBackFaceKilledCount,
+        uint EstimatedCoverageKilledCount,
+        uint EstimatedSurvivingCount,
+        uint EstimatedDdgiGatherCount,
+        uint EstimatedShadowEvaluationCount)
+    {
+        public const int SampleStride = 16;
+        public const int SampleWeight = SampleStride * SampleStride;
+        public static DecalFragmentAttributionCounters Empty { get; } = default;
+
+        public ulong EstimatedKilledCount =>
+            (ulong)EstimatedBackFaceKilledCount + EstimatedCoverageKilledCount;
+
+        public double EstimatedCoverageFraction => EstimatedInvocationCount > 0
+            ? EstimatedSurvivingCount / (double)EstimatedInvocationCount
+            : 0.0;
+
+        public double EstimatedInvocationToCoverageRatio => EstimatedSurvivingCount > 0
+            ? EstimatedInvocationCount / (double)EstimatedSurvivingCount
+            : 0.0;
+    }
+
     public readonly record struct DdgiInvestigationCounters(
         int ReadbackValid,
         uint SimpleForwardSampleCount,
@@ -329,6 +397,8 @@ namespace Njulf.Rendering.Data
         uint FarFieldStepBucket4Count)
     {
         public static DdgiInvestigationCounters Empty { get; } = default;
+        public SimpleDdgiGatherMultiplicityCounters GatherMultiplicity { get; init; }
+        public DecalFragmentAttributionCounters DecalFragmentAttribution { get; init; }
     }
 
     public readonly record struct ThinSurfaceTransportCounters(

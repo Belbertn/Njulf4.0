@@ -125,7 +125,10 @@ namespace Njulf.Rendering.Pipeline
                 DrawSurfaceBucket(
                     cmd,
                     sceneData,
-                    _meshPipeline.SceneSurfaceCompactedPipeline,
+                    // A direct dispatch has only an allocation bound. Keep the
+                    // counter-gating task stage so stale compacted-buffer tail
+                    // entries can never reach the mesh stage.
+                    _meshPipeline.SceneSurfacePipeline,
                     compactedDrawCapacity,
                     BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferBase);
                 return;

@@ -49,6 +49,7 @@ public sealed class SceneSubmissionDiagnosticsPolicyTests
             Assert.That(SceneSubmissionDiagnosticsPolicy.ResolveForwardPath(sceneData), Is.EqualTo(SceneSubmissionDiagnosticsPolicy.ForwardPathGpuCompactedDirect));
             Assert.That(SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedEmit, Is.EqualTo("CompactedEmitTask"));
             Assert.That(SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedCounter, Is.EqualTo("CompactedCounterTask"));
+            Assert.That(SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedMeshOnly, Is.EqualTo("CompactedMeshOnly"));
         });
     }
 

@@ -388,12 +388,16 @@ vec2 MaterialDdgiHitUv(vec2 uv0, vec2 uv1, float texCoordSet, vec4 offsetScale, 
 GPUDdgiRayQueryInstance ReadDdgiRayQueryInstance(uint instanceIndex)
 {
     uint baseWord = instanceIndex * uint(SIZEOF_GPU_DDGI_RAY_QUERY_INSTANCE / 4);
+    uint bufferIndex = uint(DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX);
+    uvec4 header = ReadStorageAlignedUVec4Uniform(bufferIndex, baseWord);
     GPUDdgiRayQueryInstance instance;
-    instance.VertexOffset = ReadStorageWord(uint(DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX), baseWord + 0u);
-    instance.IndexOffset = ReadStorageWord(uint(DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX), baseWord + 1u);
-    instance.MaterialIndex = ReadStorageWord(uint(DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX), baseWord + 2u);
-    instance.Padding0 = ReadStorageWord(uint(DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX), baseWord + 3u);
-    instance.WorldMatrixInverseTranspose = ReadStorageMat4(uint(DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX), baseWord + 4u);
+    instance.VertexOffset = header.x;
+    instance.IndexOffset = header.y;
+    instance.MaterialIndex = header.z;
+    instance.Padding0 = header.w;
+    instance.WorldMatrixInverseTranspose = ReadStorageAlignedMat4Uniform(
+        bufferIndex,
+        baseWord + 4u);
     return instance;
 }
 
@@ -412,9 +416,9 @@ bool ResolveCommittedHitSurface(
 {
     GPUDdgiRayQueryInstance instance = ReadDdgiRayQueryInstance(instanceIndex);
     uint triangleIndexBase = instance.IndexOffset + primitiveIndex * 3u;
-    uint i0 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 0u);
-    uint i1 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 1u);
-    uint i2 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 2u);
+    uint i0 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 0u);
+    uint i1 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 1u);
+    uint i2 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 2u);
     uint v0 = instance.VertexOffset + i0;
     uint v1 = instance.VertexOffset + i1;
     uint v2 = instance.VertexOffset + i2;
@@ -838,9 +842,9 @@ bool DdgiCandidatePassesOpacityPolicy(
         return true;
 
     uint triangleIndexBase = instance.IndexOffset + primitiveIndex * 3u;
-    uint i0 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 0u);
-    uint i1 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 1u);
-    uint i2 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 2u);
+    uint i0 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 0u);
+    uint i1 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 1u);
+    uint i2 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 2u);
     uint v0 = instance.VertexOffset + i0;
     uint v1 = instance.VertexOffset + i1;
     uint v2 = instance.VertexOffset + i2;
@@ -930,9 +934,9 @@ vec3 ResolveDdgiThinCandidateTransmittance(
     {
         GPUDdgiRayQueryInstance instance = ReadDdgiRayQueryInstance(instanceIndex);
         uint triangleIndexBase = instance.IndexOffset + primitiveIndex * 3u;
-        uint i0 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 0u);
-        uint i1 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 1u);
-        uint i2 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 2u);
+        uint i0 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 0u);
+        uint i1 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 1u);
+        uint i2 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 2u);
         uint v0 = instance.VertexOffset + i0;
         uint v1 = instance.VertexOffset + i1;
         uint v2 = instance.VertexOffset + i2;

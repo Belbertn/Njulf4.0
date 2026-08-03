@@ -1,6 +1,7 @@
 using System;
 using Njulf.Core.Math;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Diagnostics;
 
 namespace NjulfHelloGame;
 
@@ -13,13 +14,14 @@ namespace NjulfHelloGame;
 public static class SampleSponzaGlobalIlluminationProfile
 {
     // Sponza Palace is in Dubrovnik. Start in the early afternoon on the summer
-    // solstice, with the solar azimuth still aligned to the courtyard-facing
-    // canonical key. The higher sun is spectrally closer to neutral daylight
-    // and retains useful, readable shadows inside the galleries.
-    public const float DefaultSolarTimeHours = 13.5f;
+    // solstice. Aim the high sun across the courtyard so it strikes the long
+    // rows of hanging curtains instead of travelling nearly parallel to them.
+    // The elevation remains spectrally close to neutral daylight and retains
+    // useful, readable shadows inside the galleries.
+    public const float DefaultSolarTimeHours = 14.5f;
     public const float DefaultLatitudeDegrees = 42.6507f;
     public const int DefaultDayOfYear = 172;
-    public const float DefaultNorthOffsetDegrees = -152.10127f;
+    public const float DefaultNorthOffsetDegrees = -115.0f;
     public const float DefaultTimeScale = 60.0f;
     public const float DefaultTurbidity = 2.0f;
     public const float DefaultGroundAlbedo = 0.16f;
@@ -72,8 +74,13 @@ public static class SampleSponzaGlobalIlluminationProfile
         settings.Shadows.PointConstantDepthBias = 0.0003f;
         settings.Shadows.PointPcfRadius = 1;
         settings.GlobalIllumination.SimpleDdgiLayoutAdmissionMode = SimpleDdgiLayoutAdmissionMode.Reject;
-        settings.Diagnostics.DdgiForwardEstimateCountersEnabled = true;
-        settings.Diagnostics.DirectionalShadowReceiverCountersEnabled = true;
+        // The same locked scene drives both clean timing and investigation.
+        // Production binaries must not be disqualified by a validation overlay
+        // that requests shader counters they deliberately do not contain.
+        settings.Diagnostics.DdgiForwardEstimateCountersEnabled =
+            RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled;
+        settings.Diagnostics.DirectionalShadowReceiverCountersEnabled =
+            RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled;
         // Locked captures compare a single, immutable authored key. Normal
         // Sponza uses the astronomical driver configured below; the capture
         // overlay is the deliberate deterministic exception.
