@@ -55,6 +55,8 @@ namespace Njulf.Rendering.Core
         private uint _transferQueueFamilyIndex;
         private uint _computeQueueFamilyIndex;
         private uint _computeQueueIndex;
+        private QueueFlags _graphicsQueueFlags;
+        private QueueFlags _computeQueueFlags;
         private Queue _graphicsQueue;
         private Queue _transferQueue;
         private Queue _computeQueue;
@@ -92,6 +94,8 @@ namespace Njulf.Rendering.Core
         public uint GraphicsQueueFamilyIndex => _graphicsQueueFamilyIndex;
         public uint TransferQueueFamilyIndex => _transferQueueFamilyIndex;
         public uint ComputeQueueFamilyIndex => _computeQueueFamilyIndex;
+        public QueueFlags GraphicsQueueFlags => _graphicsQueueFlags;
+        public QueueFlags ComputeQueueFlags => _computeQueueFlags;
         public Queue GraphicsQueue => _graphicsQueue;
         public Queue TransferQueue => _transferQueue;
         public Queue ComputeQueue => _computeQueue;
@@ -527,6 +531,13 @@ namespace Njulf.Rendering.Core
             _graphicsQueueFamilyIndex = graphicsFamily;
             _transferQueueFamilyIndex = transferFamily;
             _computeQueueFamilyIndex = computeFamily;
+            uint selectedQueueFamilyCount = 0;
+            _vk.GetPhysicalDeviceQueueFamilyProperties(_physicalDevice, &selectedQueueFamilyCount, null);
+            var selectedQueueFamilies = new QueueFamilyProperties[selectedQueueFamilyCount];
+            fixed (QueueFamilyProperties* selectedFamiliesPtr = selectedQueueFamilies)
+                _vk.GetPhysicalDeviceQueueFamilyProperties(_physicalDevice, &selectedQueueFamilyCount, selectedFamiliesPtr);
+            _graphicsQueueFlags = selectedQueueFamilies[graphicsFamily].QueueFlags;
+            _computeQueueFlags = selectedQueueFamilies[computeFamily].QueueFlags;
             _hasDedicatedTransferQueue = graphicsFamily != transferFamily;
             _hasDedicatedComputeQueue = graphicsFamily != computeFamily;
             _hasIndependentComputeQueue = _hasDedicatedComputeQueue || computeUsesSecondaryGraphicsQueue;

@@ -1575,6 +1575,13 @@ namespace Njulf.Rendering.Data
         private float _intensity = 1.0f;
         private float _globalFallbackIntensity = 1.0f;
         private int _maxProbeCapturesPerFrame;
+        private int _maxConcurrentProbeCaptures = 1;
+        private int _maxProbeCaptureFacesPerFrame = 1;
+        private int _maxProbePrefilterMipsPerFrame = 1;
+        private int _reflectionCaptureGpuBudgetMicroseconds = 500;
+        private float _minimumEnvironmentRecaptureIntervalSeconds = 8.0f;
+        private float _maximumEnvironmentCaptureAgeSeconds = 60.0f;
+        private int _reflectionCaptureRetryLimit = 3;
         private int _debugProbeIndex;
         private int _debugCubemapFace;
         private int _debugMipLevel;
@@ -1621,6 +1628,16 @@ namespace Njulf.Rendering.Data
             get => _maxProbeCapturesPerFrame;
             set => _maxProbeCapturesPerFrame = value < 0 ? 0 : value > 4 ? 4 : value;
         }
+
+        public int MaxConcurrentProbeCaptures { get => _maxConcurrentProbeCaptures; set => _maxConcurrentProbeCaptures = Math.Clamp(value, 1, 4); }
+        public int MaxProbeCaptureFacesPerFrame { get => _maxProbeCaptureFacesPerFrame; set => _maxProbeCaptureFacesPerFrame = Math.Clamp(value, 0, 6); }
+        public int MaxProbePrefilterMipsPerFrame { get => _maxProbePrefilterMipsPerFrame; set => _maxProbePrefilterMipsPerFrame = Math.Clamp(value, 0, 16); }
+        public int ReflectionCaptureGpuBudgetMicroseconds { get => _reflectionCaptureGpuBudgetMicroseconds; set => _reflectionCaptureGpuBudgetMicroseconds = Math.Clamp(value, 0, 1_000); }
+        public float MinimumEnvironmentRecaptureIntervalSeconds { get => _minimumEnvironmentRecaptureIntervalSeconds; set => _minimumEnvironmentRecaptureIntervalSeconds = Math.Clamp(value, 0.0f, 3600.0f); }
+        public float MaximumEnvironmentCaptureAgeSeconds { get => _maximumEnvironmentCaptureAgeSeconds; set => _maximumEnvironmentCaptureAgeSeconds = Math.Clamp(value, 1.0f, 86_400.0f); }
+        public bool CaptureIncludesDdgi { get; set; }
+        public int ReflectionCaptureRetryLimit { get => _reflectionCaptureRetryLimit; set => _reflectionCaptureRetryLimit = Math.Clamp(value, 0, 16); }
+        public int ReflectionCaptureRetryBackoffFrames { get; set; } = 30;
 
         public ReflectionDebugView DebugView { get; set; } = ReflectionDebugView.None;
 
@@ -2247,6 +2264,7 @@ namespace Njulf.Rendering.Data
                 ? Clamp(value, 0.0f, 1.0f)
                 : 0.95f;
         }
+
         /// <summary>
         /// Diagnostic A/B control that evaluates the pre-gate far-field sky
         /// visibility path even when its radiometric weight is negligible. The
@@ -4129,6 +4147,9 @@ namespace Njulf.Rendering.Data
         /// their legacy graphics-only behavior during settings migration.
         /// </summary>
         public AsyncComputeMode Mode { get; set; } = AsyncComputeMode.Auto;
+
+        /// <summary>Atomic path explicitly authorized by a validation harness in Force mode.</summary>
+        public AsyncComputePath? ForceValidationPath { get; set; }
 
         /// <summary>
         /// Compatibility shim for settings written before <see cref="Mode"/> existed.  Setting this

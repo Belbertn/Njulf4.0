@@ -138,6 +138,8 @@ namespace Njulf.Rendering.Resources
             _renderGraph = renderGraph;
             SceneColor = new RenderTarget(_context, "HDR Scene Color", SceneColorFormat, extent, HdrSceneColorDescriptor);
             SceneDepth = new RenderTarget(_context, "Scene Depth", depthFormat, extent, SceneDepthDescriptor);
+            _renderGraph?.RegisterImportedRenderTarget(RenderGraphResourceId.SceneColor, SceneColor);
+            _renderGraph?.RegisterImportedRenderTarget(RenderGraphResourceId.SceneDepth, SceneDepth);
             FoggedSceneColor = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.FogOutput,
                 "Fogged HDR Scene Color",

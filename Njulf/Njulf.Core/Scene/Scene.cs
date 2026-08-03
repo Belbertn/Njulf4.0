@@ -30,6 +30,7 @@ namespace Njulf.Core.Scene
         private bool _clearDisposalPending;
         private bool _disposeInProgress;
         private bool _disposed;
+        private uint _reflectionProbeRevision;
 
         public Scene()
         {
@@ -50,6 +51,7 @@ namespace Njulf.Core.Scene
         public IReadOnlyList<RenderObject> RenderObjects => _readOnlyRenderObjects;
         public IReadOnlyList<IUpdateable> Updateables => _readOnlyUpdateables;
         public IReadOnlyList<ReflectionProbe> ReflectionProbes => _readOnlyReflectionProbes;
+        public uint ReflectionProbeRevision => _reflectionProbeRevision;
         public IReadOnlyList<GlobalIlluminationProbeVolume> GlobalIlluminationProbeVolumes => _readOnlyGlobalIlluminationProbeVolumes;
         public IReadOnlyList<ParticleEffectInstance> ParticleEffects => _readOnlyParticleEffects;
         public IReadOnlyList<StaticInstanceBatch> StaticInstanceBatches => _readOnlyStaticInstanceBatches;
@@ -80,6 +82,8 @@ namespace Njulf.Core.Scene
 
             EnsureCanAdd(reflectionProbe);
             _reflectionProbes.Add(reflectionProbe);
+            reflectionProbe.Changed += OnReflectionProbeChanged;
+            AdvanceReflectionProbeRevision();
         }
 
         public void Add(GlobalIlluminationProbeVolume probeVolume)
@@ -155,7 +159,11 @@ namespace Njulf.Core.Scene
         public void Remove(ReflectionProbe reflectionProbe)
         {
             EnsureMutable();
-            _reflectionProbes.Remove(reflectionProbe);
+            if (_reflectionProbes.Remove(reflectionProbe))
+            {
+                reflectionProbe.Changed -= OnReflectionProbeChanged;
+                AdvanceReflectionProbeRevision();
+            }
         }
 
         public void Remove(GlobalIlluminationProbeVolume probeVolume)
@@ -241,6 +249,12 @@ namespace Njulf.Core.Scene
 
         private void ClearEntityCollections()
         {
+            if (_reflectionProbes.Count > 0)
+            {
+                foreach (ReflectionProbe probe in _reflectionProbes)
+                    probe.Changed -= OnReflectionProbeChanged;
+                AdvanceReflectionProbeRevision();
+            }
             _renderObjects.Clear();
             _updateables.Clear();
             _reflectionProbes.Clear();
@@ -250,6 +264,11 @@ namespace Njulf.Core.Scene
             _foliagePrototypes.Clear();
             _foliagePatches.Clear();
         }
+
+        private void OnReflectionProbeChanged(ReflectionProbe probe) => AdvanceReflectionProbeRevision();
+
+        private void AdvanceReflectionProbeRevision() =>
+            _reflectionProbeRevision = _reflectionProbeRevision == uint.MaxValue ? 1u : _reflectionProbeRevision + 1u;
 
         /// <summary>Finds a scene-owned entity by its stable identifier.</summary>
         public IIdentifiedSceneEntity? FindById(Guid id)

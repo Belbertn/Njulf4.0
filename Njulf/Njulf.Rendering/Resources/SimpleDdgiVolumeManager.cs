@@ -15,6 +15,16 @@ using Vma;
 
 namespace Njulf.Rendering.Resources
 {
+    public enum SimpleDdgiTrackingState
+    {
+        Bootstrapping,
+        TrackingSourceCohort,
+        TrackingPropagation,
+        TrackingBounded,
+        StaticConverging,
+        StaticConverged,
+        CapacityLimited
+    }
     /// <summary>
     /// Deterministic priority buckets used by the bounded simple-DDGI update
     /// scheduler. Values are ordered intentionally; do not reorder them without
@@ -844,6 +854,16 @@ namespace Njulf.Rendering.Resources
                     _settings.GlobalIllumination.SimpleDdgiStableMaintenanceUpdateCount);
         public int SourceRefreshTargetProbeCount => _sourceRefreshTargetProbeCount;
         public int SourceRefreshCapacityShortfall => _sourceRefreshCapacityShortfall;
+        public ulong SourceRefreshTargetRayCount => checked(
+            (ulong)Math.Max(_sourceRefreshTargetProbeCount, 0) *
+            (ulong)Math.Max(_transportSourceCacheRayCapacity, 1));
+        public ulong SourceRefreshRayCapacityShortfall =>
+            SourceRefreshTargetRayCount > (ulong)Math.Max(
+                _settings.GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget, 0)
+                ? SourceRefreshTargetRayCount - (ulong)Math.Max(
+                    _settings.GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget, 0)
+                : 0UL;
+        public SimpleDdgiTrackingState TrackingState => ResolveTrackingState();
         public bool SourceCohortTransitionActive =>
             TransportV2Active && _sourceCohortTransitionActive;
         public ulong SourceCohortTransitionCount => _sourceCohortTransitionCount;
@@ -4750,6 +4770,19 @@ namespace Njulf.Rendering.Resources
 
             if (staleCount == 0)
                 _sourceCohortTransitionActive = false;
+        }
+
+        private SimpleDdgiTrackingState ResolveTrackingState()
+        {
+            if (_probeCount <= 0 || !_hasLightingSignature)
+                return SimpleDdgiTrackingState.Bootstrapping;
+            if (_sourceRefreshCapacityShortfall > 0 || SourceRefreshRayCapacityShortfall > 0UL)
+                return SimpleDdgiTrackingState.CapacityLimited;
+            if (_sourceCohortTransitionActive || _sourceStepStaleProbeCount > 0)
+                return SimpleDdgiTrackingState.TrackingSourceCohort;
+            if (TransportGlobalConvergencePending)
+                return SimpleDdgiTrackingState.TrackingPropagation;
+            return SimpleDdgiTrackingState.StaticConverged;
         }
 
         private void QueueSourceRefreshThroughputCohort(

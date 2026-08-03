@@ -2501,12 +2501,13 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
-    public void HiZBuildPass_CachesMipMetadataAndBatchesFinalLayoutTransition()
+    public void HiZBuildPass_CachesMipMetadataAndLeavesCrossPassLayoutsToGraph()
     {
         string source = ReadRepoText("Njulf.Rendering", "Pipeline", "HiZBuildPass.cs");
         string sceneData = ReadRepoText("Njulf.Rendering", "Data", "SceneRenderingData.cs");
         string diagnostics = ReadRepoText("Njulf.Rendering", "Data", "RendererDiagnostics.cs");
         string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
+        string renderGraph = ReadRepoText("Njulf.Rendering", "Pipeline", "RenderGraph.cs");
 
         Assert.Multiple(() =>
         {
@@ -2516,26 +2517,25 @@ public sealed class ShaderBuildTests
             Assert.That(source, Does.Contain("DescriptorSet DescriptorSet"));
             Assert.That(source, Does.Contain("GPUHiZBuildPushConstants PushConstants"));
             Assert.That(source, Does.Contain("private static readonly uint PushConstantSize"));
-            Assert.That(source, Does.Contain("PyramidSampledReadStages = PipelineStageFlags2.AllCommandsBit"));
             Assert.That(source, Does.Contain("uint DispatchGroupCountX"));
             Assert.That(source, Does.Contain("uint DispatchGroupCountY"));
             Assert.That(source, Does.Contain("ImageMemoryBarrier2 MipWriteToNextReadBarrier"));
             Assert.That(source, Does.Contain("ImageLayout sourceLayout = mip == 0"));
             Assert.That(source, Does.Contain(": ImageLayout.General;"));
             Assert.That(source, Does.Contain("AddMipWriteToNextReadDependency"));
-            Assert.That(source, Does.Contain("TransitionDepthAndPyramidToGeneral(cmd);"));
-            Assert.That(source, Does.Contain("ImageMemoryBarrierCount = barrierCount"));
-            Assert.That(source, Does.Contain("SetTrackedLayout(ImageLayout.DepthStencilReadOnlyOptimal)"));
+            Assert.That(source, Does.Not.Contain("TransitionDepthAndPyramidToGeneral(cmd);"));
+            Assert.That(source, Does.Not.Contain("SetTrackedLayout(ImageLayout.DepthStencilReadOnlyOptimal)"));
             Assert.That(source, Does.Contain("ImageLayout.General,"));
-            Assert.That(source, Does.Contain("TransitionPyramidToShaderRead(cmd);"));
-            Assert.That(source, Does.Contain("LevelCount = _pyramid.MipLevels"));
+            Assert.That(source, Does.Not.Contain("TransitionPyramidToShaderRead(cmd);"));
+            Assert.That(renderGraph, Does.Contain("ExecuteGraphFinalBarriers"));
+            Assert.That(renderGraph, Does.Contain("usage.FinalImageLayout"));
             Assert.That(source, Does.Not.Contain("TransitionMipToShaderRead"));
             Assert.That(source, Does.Contain("CpuHiZDepthTransitionMicroseconds"));
             Assert.That(source, Does.Contain("CpuHiZPyramidTransitionMicroseconds"));
             Assert.That(source, Does.Contain("CpuHiZDescriptorBindMicroseconds"));
             Assert.That(source, Does.Contain("CpuHiZPushDispatchMicroseconds"));
             Assert.That(source, Does.Contain("CpuHiZFinalBarrierMicroseconds"));
-            Assert.That(source, Does.Contain("serial per-mip dependencies"));
+            Assert.That(source, Does.Contain("per-mip compute write/read dependencies"));
             Assert.That(sceneData, Does.Contain("CpuHiZDepthTransitionMicroseconds"));
             Assert.That(diagnostics, Does.Contain("CpuHiZDescriptorBindMicroseconds"));
             Assert.That(renderer, Does.Contain("CpuHiZFinalBarrierMicroseconds = sceneData.CpuHiZFinalBarrierMicroseconds"));

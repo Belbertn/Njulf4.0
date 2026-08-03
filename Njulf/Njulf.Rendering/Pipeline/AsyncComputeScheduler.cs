@@ -15,7 +15,9 @@ namespace Njulf.Rendering.Pipeline
     public sealed record AsyncComputeQueueCapabilities(
         bool HasIndependentComputeQueue,
         uint GraphicsQueueFamily,
-        uint ComputeQueueFamily)
+        uint ComputeQueueFamily,
+        QueueFlags GraphicsQueueFlags = QueueFlags.GraphicsBit | QueueFlags.ComputeBit | QueueFlags.TransferBit,
+        QueueFlags ComputeQueueFlags = QueueFlags.ComputeBit | QueueFlags.TransferBit)
     {
         /// <summary>
         /// True when compute work runs on a separately created queue submission stream.  The
@@ -34,7 +36,9 @@ namespace Njulf.Rendering.Pipeline
         bool AutoTimingEligible,
         AsyncComputePathStatus AutoTimingStatus,
         string Reason = "",
-        bool IsAutoTimingProbe = false);
+        bool IsAutoTimingProbe = false,
+        bool CorrectnessCertified = true,
+        bool ForceValidationAuthorized = true);
 
     public sealed record AsyncComputePassRequest(
         string Name,
@@ -223,6 +227,16 @@ namespace Njulf.Rendering.Pipeline
                     status = AsyncComputePathStatus.UnsupportedQueue;
                     reason = "No separately created compute queue is available.";
                 }
+                else if (input.Mode == AsyncComputeMode.Auto && !eligibility.CorrectnessCertified)
+                {
+                    status = AsyncComputePathStatus.Uncertified;
+                    reason = "Auto cannot submit this path until its correctness evidence is source-certified.";
+                }
+                else if (input.Mode == AsyncComputeMode.ForceEnabledForValidation && !eligibility.ForceValidationAuthorized)
+                {
+                    status = AsyncComputePathStatus.Uncertified;
+                    reason = "Force mode requires an explicit atomic validation-path selector from the validation harness.";
+                }
                 else if (input.Mode == AsyncComputeMode.Auto && !eligibility.AutoTimingEligible && !eligibility.IsAutoTimingProbe)
                 {
                     status = eligibility.AutoTimingStatus is AsyncComputePathStatus.PendingWarmup or AsyncComputePathStatus.NoMeasuredBenefit
@@ -352,6 +366,7 @@ namespace Njulf.Rendering.Pipeline
             try
             {
                 transfers = BuildTransfers(input, segments);
+                ValidateTransferQueueScopes(input.QueueCapabilities, transfers);
                 QueueOwnershipTransferValidator.Validate(transfers, segments, requireSemaphoreEdges: false);
             }
             catch (InvalidOperationException exception)
@@ -451,6 +466,17 @@ namespace Njulf.Rendering.Pipeline
                             errors.Add(error);
                     }
 
+                    var capabilities = new QueueStageCapabilities(input.QueueCapabilities.ComputeQueueFlags);
+                    if (!capabilities.SupportsScope(usage.StageMask, usage.AccessMask))
+                    {
+                        string error =
+                            $"Pass '{pass.Name}' declares unsupported compute-queue scope for '{usage.Resource}': " +
+                            $"family={input.QueueCapabilities.ComputeQueueFamily}, flags={input.QueueCapabilities.ComputeQueueFlags}, " +
+                            $"stage={usage.StageMask}, access={usage.AccessMask} (VUID-vkCmdPipelineBarrier2-commandBuffer-09675/09676).";
+                        if (seen.Add(error))
+                            errors.Add(error);
+                    }
+
                     IReadOnlyList<RenderGraphConcreteResourceBinding> bindings =
                         input.ResourceBindings.GetBindings(usage.Resource, input.FrameIndex);
                     if (bindings.Count == 0)
@@ -481,6 +507,39 @@ namespace Njulf.Rendering.Pipeline
             }
 
             return errors;
+        }
+
+        private static void ValidateTransferQueueScopes(
+            AsyncComputeQueueCapabilities queues,
+            IReadOnlyList<QueueOwnershipTransfer> transfers)
+        {
+            foreach (QueueOwnershipTransfer transfer in transfers)
+            {
+                QueueFlags sourceFlags = transfer.SourceQueue == AsyncComputeQueue.Graphics
+                    ? queues.GraphicsQueueFlags
+                    : queues.ComputeQueueFlags;
+                QueueFlags destinationFlags = transfer.DestinationQueue == AsyncComputeQueue.Graphics
+                    ? queues.GraphicsQueueFlags
+                    : queues.ComputeQueueFlags;
+                var source = new QueueStageCapabilities(sourceFlags);
+                var destination = new QueueStageCapabilities(destinationFlags);
+                if (!source.SupportsScope(transfer.SourceStageMask, transfer.SourceAccessMask))
+                {
+                    throw new InvalidOperationException(
+                        $"Transfer {transfer.Id} release for '{transfer.Binding.Name}' uses unsupported scope " +
+                        $"on {transfer.SourceQueue} family {transfer.SourceQueueFamily} ({sourceFlags}): " +
+                        $"stage={transfer.SourceStageMask}, access={transfer.SourceAccessMask} " +
+                        "(VUID-vkCmdPipelineBarrier2-commandBuffer-09675/09676).");
+                }
+                if (!destination.SupportsScope(transfer.DestinationStageMask, transfer.DestinationAccessMask))
+                {
+                    throw new InvalidOperationException(
+                        $"Transfer {transfer.Id} acquire for '{transfer.Binding.Name}' uses unsupported scope " +
+                        $"on {transfer.DestinationQueue} family {transfer.DestinationQueueFamily} ({destinationFlags}): " +
+                        $"stage={transfer.DestinationStageMask}, access={transfer.DestinationAccessMask} " +
+                        "(VUID-vkCmdPipelineBarrier2-commandBuffer-09675/09676).");
+                }
+            }
         }
 
         private static List<MutableSegment> CreateSegments(

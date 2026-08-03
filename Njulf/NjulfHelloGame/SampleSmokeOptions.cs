@@ -38,7 +38,8 @@ public sealed record SampleSmokeOptions(
     ulong LongRunMemoryGrowthToleranceBytes = 1_048_576,
     double LongRunMinutes = 0.0,
     SampleKhronosMaterialGiRenderedGateOptions? KhronosMaterialGiRenderedGate = null,
-    string? MaterialGiQualificationManifestPath = null)
+    string? MaterialGiQualificationManifestPath = null,
+    AsyncComputePath? AsyncComputeValidationPath = null)
 {
     public SampleBenchmarkOptions Benchmark { get; init; } = Benchmark ?? SampleBenchmarkOptions.Disabled;
 

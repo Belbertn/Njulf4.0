@@ -1,11 +1,12 @@
 using System;
 using Njulf.Rendering.Core;
+using Njulf.Rendering.Pipeline;
 using Silk.NET.Vulkan;
 using GpuAllocator = Vma;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed unsafe class RenderTarget : IDisposable
+    public sealed unsafe class RenderTarget : IDisposable, IRenderGraphLayoutTrackedImage
     {
         private readonly VulkanContext _context;
         private GpuAllocator.Allocation* _allocation;

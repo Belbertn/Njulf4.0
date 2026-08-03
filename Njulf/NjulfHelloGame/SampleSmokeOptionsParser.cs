@@ -59,6 +59,7 @@ public static class SampleSmokeOptionsParser
         "--scene-submission-validation",
         "--async-compute",
         "--async-compute-mode",
+        "--async-compute-path",
         "--far-field-clipmap",
         "--far-field-force-all",
         "--ddgi-scheduler-mode"
@@ -154,6 +155,8 @@ public static class SampleSmokeOptionsParser
             "NJULF_RENDERER_ASYNC_COMPUTE");
         AsyncComputeMode? asyncComputeModeOverride = ParseAsyncComputeMode(
             Environment.GetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE_MODE"));
+        AsyncComputePath? asyncComputeValidationPath = ParseAsyncComputePath(
+            Environment.GetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE_PATH"));
         if (asyncComputeModeOverride.HasValue)
             enableAsyncCompute =
                 asyncComputeModeOverride == AsyncComputeMode.ForceEnabledForValidation;
@@ -421,6 +424,10 @@ public static class SampleSmokeOptionsParser
                         throw new ArgumentException("--async-compute-mode requires auto, disabled, or forced.");
                     enableAsyncCompute =
                         asyncComputeModeOverride == AsyncComputeMode.ForceEnabledForValidation;
+                    break;
+                case "--async-compute-path":
+                    asyncComputeValidationPath = ParseAsyncComputePath(value) ??
+                        throw new ArgumentException("--async-compute-path requires a known atomic async path.");
                     break;
                 case "--far-field-clipmap":
                     enableFarFieldClipmap = ParseBool(value, optionName);
@@ -876,7 +883,19 @@ public static class SampleSmokeOptionsParser
             longRunMemoryGrowthToleranceBytes,
             longRunMinutes,
             khronosRenderedGate,
-            materialGiQualificationManifestPath);
+            materialGiQualificationManifestPath,
+            asyncComputeValidationPath);
+    }
+
+    private static AsyncComputePath? ParseAsyncComputePath(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        string normalized = value.Trim().Replace("-", string.Empty, StringComparison.Ordinal);
+        foreach (AsyncComputePath path in Enum.GetValues<AsyncComputePath>())
+            if (string.Equals(path.ToString(), normalized, StringComparison.OrdinalIgnoreCase))
+                return path;
+        throw new ArgumentException($"Unknown async compute path '{value}'.");
     }
 
     private static string ReadValue(string[] args, ref int index)

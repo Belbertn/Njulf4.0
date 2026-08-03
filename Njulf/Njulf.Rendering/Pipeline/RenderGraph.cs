@@ -18,6 +18,12 @@ namespace Njulf.Rendering.Pipeline
         private readonly Dictionary<RenderGraphResourceId, RenderGraphResourceDescriptor> _resources = new();
         private readonly Dictionary<string, List<RenderGraphResourceUsage>> _passResourceUsages = new(StringComparer.Ordinal);
         private readonly Dictionary<RenderGraphResourceId, List<RenderTarget>> _ownedRenderTargets = new();
+        // Imported renderer targets participate in the same primary-command-buffer layout
+        // planning as graph-owned targets, but the graph must never dispose them.
+        private readonly Dictionary<RenderGraphResourceId, List<RenderTarget>> _importedRenderTargets = new();
+        // Some imported images, such as the multi-mip Hi-Z pyramid, are not RenderTargets but
+        // still need graph-owned layout transitions before secondary command buffers consume them.
+        private readonly Dictionary<RenderGraphResourceId, List<IRenderGraphLayoutTrackedImage>> _importedImageTargets = new();
         private readonly RenderGraphResourceBindings _concreteResourceBindings = new();
         private readonly Dictionary<RenderGraphResourceId, RenderGraphResourceUsage> _lastResourceUsages = new();
         private readonly List<RenderGraphPlannedBarrier> _framePlannedBarriers = new();
@@ -241,6 +247,73 @@ namespace Njulf.Rendering.Pipeline
             return target;
         }
 
+        /// <summary>
+        /// Registers a renderer-owned image target for graph layout planning.  Unlike
+        /// <see cref="CreateOwnedRenderTarget"/>, this does not transfer lifetime ownership to the graph.
+        /// Keeping these transitions on the primary command buffer is required before a secondary
+        /// command buffer may consume an imported image.
+        /// </summary>
+        internal void RegisterImportedRenderTarget(RenderGraphResourceId id, RenderTarget target)
+        {
+            if (target == null)
+                throw new ArgumentNullException(nameof(target));
+            if (!_resources.TryGetValue(id, out RenderGraphResourceDescriptor? resource))
+                throw new InvalidOperationException($"Cannot track render target for unregistered resource '{id}'.");
+            if (resource.Lifetime != RenderGraphResourceLifetime.Imported)
+            {
+                throw new InvalidOperationException(
+                    $"Resource '{id}' is not imported and cannot register a renderer-owned render target.");
+            }
+            if (!IsImageResource(resource.Kind))
+            {
+                throw new InvalidOperationException(
+                    $"Resource '{id}' is not an image and cannot register a renderer-owned render target.");
+            }
+
+            if (!_importedRenderTargets.TryGetValue(id, out List<RenderTarget>? targets))
+            {
+                targets = new List<RenderTarget>();
+                _importedRenderTargets.Add(id, targets);
+            }
+
+            if (!targets.Contains(target))
+                targets.Add(target);
+        }
+
+        /// <summary>
+        /// Registers an imported image with graph-visible layout state without transferring its
+        /// allocation lifetime to the graph. This supports imported mip chains that cannot be
+        /// represented by a single-mip <see cref="RenderTarget"/>.
+        /// </summary>
+        internal void RegisterImportedImageTarget(
+            RenderGraphResourceId id,
+            IRenderGraphLayoutTrackedImage target)
+        {
+            if (target == null)
+                throw new ArgumentNullException(nameof(target));
+            if (!_resources.TryGetValue(id, out RenderGraphResourceDescriptor? resource))
+                throw new InvalidOperationException($"Cannot track image for unregistered resource '{id}'.");
+            if (resource.Lifetime != RenderGraphResourceLifetime.Imported)
+            {
+                throw new InvalidOperationException(
+                    $"Resource '{id}' is not imported and cannot register a renderer-owned image.");
+            }
+            if (!IsImageResource(resource.Kind))
+            {
+                throw new InvalidOperationException(
+                    $"Resource '{id}' is not an image and cannot register a renderer-owned image.");
+            }
+
+            if (!_importedImageTargets.TryGetValue(id, out List<IRenderGraphLayoutTrackedImage>? targets))
+            {
+                targets = new List<IRenderGraphLayoutTrackedImage>();
+                _importedImageTargets.Add(id, targets);
+            }
+
+            if (!targets.Contains(target))
+                targets.Add(target);
+        }
+
         public void ReleaseOwnedRenderTarget(RenderGraphResourceId id, RenderTarget target)
         {
             if (target == null)
@@ -269,6 +342,28 @@ namespace Njulf.Rendering.Pipeline
             return _ownedRenderTargets.TryGetValue(id, out List<RenderTarget>? targets)
                 ? targets
                 : Array.Empty<RenderTarget>();
+        }
+
+        /// <summary>
+        /// Returns the targets whose layouts the graph may transition for this resource. Imported
+        /// targets remain owned by their renderer manager; graph-owned targets retain their existing
+        /// allocation/lifetime behavior.
+        /// </summary>
+        internal IReadOnlyList<RenderTarget> GetLayoutTrackedRenderTargets(RenderGraphResourceId id)
+        {
+            if (_ownedRenderTargets.TryGetValue(id, out List<RenderTarget>? ownedTargets))
+                return ownedTargets;
+
+            return _importedRenderTargets.TryGetValue(id, out List<RenderTarget>? importedTargets)
+                ? importedTargets
+                : Array.Empty<RenderTarget>();
+        }
+
+        internal IReadOnlyList<IRenderGraphLayoutTrackedImage> GetImportedImageTargets(RenderGraphResourceId id)
+        {
+            return _importedImageTargets.TryGetValue(id, out List<IRenderGraphLayoutTrackedImage>? targets)
+                ? targets
+                : Array.Empty<IRenderGraphLayoutTrackedImage>();
         }
 
         public void RecreateOwnedRenderTarget(RenderGraphResourceId id, RenderTarget target, Extent2D extent)
@@ -551,6 +646,7 @@ namespace Njulf.Rendering.Pipeline
                 if (!isComputeQueue && useSecondaryCommandBuffers && commandBuffers != null && pass.SupportsSecondaryCommandBuffer)
                 {
                     ExecuteSecondaryPass(commandBuffers, cmd, pass, frameIndex, sceneData, timestamps);
+                    ExecuteGraphFinalBarriers(cmd, pass.Name, sceneData, usesExplicitQueueTransfers);
                     continue;
                 }
 
@@ -563,6 +659,7 @@ namespace Njulf.Rendering.Pipeline
                 try
                 {
                     pass.Execute(cmd, frameIndex, sceneData, timestamps);
+                    ExecuteGraphFinalBarriers(cmd, pass.Name, sceneData, usesExplicitQueueTransfers);
                 }
                 finally
                 {
@@ -644,16 +741,20 @@ namespace Njulf.Rendering.Pipeline
                     continue;
                 }
 
+                IReadOnlyList<RenderTarget> targets = GetLayoutTrackedRenderTargets(usage.Resource);
+                IReadOnlyList<IRenderGraphLayoutTrackedImage> importedImageTargets = GetImportedImageTargets(usage.Resource);
                 if (usage.ImageLayout == ImageLayout.Undefined ||
                     !_resources.TryGetValue(usage.Resource, out RenderGraphResourceDescriptor? resource) ||
                     !IsImageResource(resource.Kind) ||
-                    !_ownedRenderTargets.TryGetValue(usage.Resource, out List<RenderTarget>? targets))
+                    (targets.Count == 0 && importedImageTargets.Count == 0))
                 {
                     _lastResourceUsages[usage.Resource] = effectiveUsage;
                     continue;
                 }
 
                 foreach (RenderTarget target in targets)
+                    PlanAndExecuteImageBarrier(cmd, passName, effectiveUsage, previous, hasPrevious, target, sceneData);
+                foreach (IRenderGraphLayoutTrackedImage target in importedImageTargets)
                     PlanAndExecuteImageBarrier(cmd, passName, effectiveUsage, previous, hasPrevious, target, sceneData);
 
                 _lastResourceUsages[usage.Resource] = effectiveUsage;
@@ -666,7 +767,7 @@ namespace Njulf.Rendering.Pipeline
             RenderGraphResourceUsage usage,
             RenderGraphResourceUsage previous,
             bool hasPrevious,
-            RenderTarget target,
+            IRenderGraphLayoutTrackedImage target,
             SceneRenderingData sceneData)
         {
             ImageLayout oldLayout = target.Layout;
@@ -986,6 +1087,74 @@ namespace Njulf.Rendering.Pipeline
                 pass.OnSwapchainRecreated();
         }
 
+        private void ExecuteGraphFinalBarriers(
+            CommandBuffer cmd,
+            string passName,
+            SceneRenderingData sceneData,
+            bool usesExplicitQueueTransfers)
+        {
+            // A compiled cross-queue transfer owns the pass-exit transition. Recording a second
+            // local transition would make its release/acquire old-layout contract stale.
+            if (usesExplicitQueueTransfers ||
+                !_passResourceUsages.TryGetValue(passName, out List<RenderGraphResourceUsage>? usages))
+                return;
+
+            foreach (RenderGraphResourceUsage usage in usages)
+            {
+                IReadOnlyList<RenderTarget> targets = GetLayoutTrackedRenderTargets(usage.Resource);
+                IReadOnlyList<IRenderGraphLayoutTrackedImage> importedImageTargets = GetImportedImageTargets(usage.Resource);
+                if (usage.FinalImageLayout == ImageLayout.Undefined ||
+                    usage.FinalImageLayout == usage.ImageLayout ||
+                    (targets.Count == 0 && importedImageTargets.Count == 0))
+                {
+                    continue;
+                }
+
+                foreach (RenderTarget target in targets)
+                    ExecuteGraphFinalBarrier(cmd, passName, usage, target, sceneData);
+                foreach (IRenderGraphLayoutTrackedImage target in importedImageTargets)
+                    ExecuteGraphFinalBarrier(cmd, passName, usage, target, sceneData);
+            }
+        }
+
+        private void ExecuteGraphFinalBarrier(
+            CommandBuffer cmd,
+            string passName,
+            RenderGraphResourceUsage usage,
+            IRenderGraphLayoutTrackedImage target,
+            SceneRenderingData sceneData)
+        {
+            ImageLayout oldLayout = target.Layout;
+            if (oldLayout == usage.FinalImageLayout)
+                return;
+            target.TransitionToLayout(
+                cmd,
+                usage.FinalImageLayout,
+                PipelineStageFlags2.AllCommandsBit,
+                AccessFlags2.ShaderSampledReadBit,
+                usage.StageMask,
+                usage.AccessMask);
+            var barrier = new RenderGraphPlannedBarrier(
+                passName,
+                usage.Resource,
+                usage.Access,
+                RenderGraphResourceAccess.Read,
+                oldLayout,
+                usage.FinalImageLayout,
+                usage.StageMask,
+                usage.AccessMask,
+                PipelineStageFlags2.AllCommandsBit,
+                AccessFlags2.ShaderSampledReadBit,
+                usage.QueueIntent,
+                usage.QueueIntent,
+                QueueOwnershipTransition: false,
+                Executed: true);
+            _framePlannedBarriers.Add(barrier);
+            sceneData.GraphPlannedBarrierCount++;
+            sceneData.GraphExecutedBarrierCount++;
+            AppendBarrierSummary(barrier);
+        }
+
         private void AdvanceResourceAllocationGeneration()
         {
             _resourceAllocationGeneration++;
@@ -1009,6 +1178,9 @@ namespace Njulf.Rendering.Pipeline
                 foreach (RenderTarget target in targets)
                     target.Dispose();
             }
+
+            _importedRenderTargets.Clear();
+            _importedImageTargets.Clear();
         }
         
         public void Dispose()

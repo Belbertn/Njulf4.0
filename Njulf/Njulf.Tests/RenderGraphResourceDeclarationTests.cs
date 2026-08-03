@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Pipeline;
+using Njulf.Rendering.Resources;
 using NUnit.Framework;
 using Silk.NET.Vulkan;
 
@@ -316,6 +317,104 @@ public sealed class RenderGraphResourceDeclarationTests
     }
 
     [Test]
+    public void RegisterImportedRenderTarget_TracksImportedImagesForLayoutPlanningWithoutTakingOwnership()
+    {
+        var graph = new RenderGraph();
+        graph.RegisterResource(CreateSceneColorDescriptor());
+        var target = (RenderTarget)RuntimeHelpers.GetUninitializedObject(typeof(RenderTarget));
+
+        graph.RegisterImportedRenderTarget(RenderGraphResourceId.SceneColor, target);
+        graph.RegisterImportedRenderTarget(RenderGraphResourceId.SceneColor, target);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(graph.OwnsResource(RenderGraphResourceId.SceneColor), Is.False);
+            Assert.That(graph.GetLayoutTrackedRenderTargets(RenderGraphResourceId.SceneColor), Is.EqualTo(new[] { target }));
+        });
+    }
+
+    [Test]
+    public void RegisterImportedRenderTarget_RejectsGraphOwnedResources()
+    {
+        var graph = new RenderGraph();
+        graph.RegisterResource(CreateLdrSceneColorDescriptor());
+        var target = (RenderTarget)RuntimeHelpers.GetUninitializedObject(typeof(RenderTarget));
+
+        Assert.That(
+            () => graph.RegisterImportedRenderTarget(RenderGraphResourceId.LdrSceneColor, target),
+            Throws.InvalidOperationException.With.Message.Contains("not imported"));
+    }
+
+    [Test]
+    public void RegisterImportedImageTarget_TracksStandaloneMipChainsWithoutTakingOwnership()
+    {
+        var graph = new RenderGraph();
+        graph.RegisterResource(new RenderGraphResourceDescriptor(
+            RenderGraphResourceId.HiZPyramid,
+            "Hi-Z pyramid",
+            RenderGraphResourceKind.ImageChain,
+            Format.R32Sfloat,
+            RenderGraphResourceSizePolicy.HalfResolution,
+            RenderGraphResourceLifetime.Imported,
+            Persistent: true));
+        var target = new LayoutTrackedImageStub();
+
+        graph.RegisterImportedImageTarget(RenderGraphResourceId.HiZPyramid, target);
+        graph.RegisterImportedImageTarget(RenderGraphResourceId.HiZPyramid, target);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(graph.OwnsResource(RenderGraphResourceId.HiZPyramid), Is.False);
+            Assert.That(graph.GetImportedImageTargets(RenderGraphResourceId.HiZPyramid), Is.EqualTo(new[] { target }));
+        });
+    }
+
+    [Test]
+    public void ImportedImageTarget_ReceivesGraphEntryAndFinalLayouts()
+    {
+        var graph = new RenderGraph();
+        graph.RegisterResource(new RenderGraphResourceDescriptor(
+            RenderGraphResourceId.HiZPyramid,
+            "Hi-Z pyramid",
+            RenderGraphResourceKind.ImageChain,
+            Format.R32Sfloat,
+            RenderGraphResourceSizePolicy.HalfResolution,
+            RenderGraphResourceLifetime.Imported,
+            Persistent: true));
+        graph.DeclarePassResources(
+            "HiZBuildPass",
+            new RenderGraphResourceUsage(
+                RenderGraphResourceId.HiZPyramid,
+                RenderGraphResourceAccess.Write,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                ImageLayout.General,
+                RenderGraphQueueIntent.Compute,
+                ImageLayout.ShaderReadOnlyOptimal));
+        var target = new LayoutTrackedImageStub();
+        graph.RegisterImportedImageTarget(RenderGraphResourceId.HiZPyramid, target);
+        var sceneData = new SceneRenderingData();
+
+        ExecuteGraphPlannedBarriers(graph, "HiZBuildPass", sceneData);
+        ExecuteGraphFinalBarriers(graph, "HiZBuildPass", sceneData);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(target.Layout, Is.EqualTo(ImageLayout.ShaderReadOnlyOptimal));
+            Assert.That(target.Transitions, Is.EqualTo(new[]
+            {
+                ImageLayout.General,
+                ImageLayout.ShaderReadOnlyOptimal
+            }));
+            Assert.That(graph.LastPlannedBarriers.Select(barrier => barrier.NewLayout), Is.EqualTo(new[]
+            {
+                ImageLayout.General,
+                ImageLayout.ShaderReadOnlyOptimal
+            }));
+        });
+    }
+
+    [Test]
     public void CompleteSplitExecution_PublishesOneBarrierSummaryEntryPerBarrierAndPreservesAsyncPlanSummary()
     {
         var graph = new RenderGraph();
@@ -376,6 +475,49 @@ public sealed class RenderGraphResourceDeclarationTests
             RenderGraphResourceSizePolicy.SceneResolution,
             RenderGraphResourceLifetime.Imported,
             Persistent: true);
+    }
+
+    private sealed class LayoutTrackedImageStub : IRenderGraphLayoutTrackedImage
+    {
+        public List<ImageLayout> Transitions { get; } = new();
+        public ImageLayout Layout { get; private set; } = ImageLayout.Undefined;
+
+        public void TransitionToLayout(
+            CommandBuffer cmd,
+            ImageLayout newLayout,
+            PipelineStageFlags2 dstStage,
+            AccessFlags2 dstAccess,
+            PipelineStageFlags2? srcStage = null,
+            AccessFlags2? srcAccess = null,
+            bool force = false)
+        {
+            Layout = newLayout;
+            Transitions.Add(newLayout);
+        }
+    }
+
+    private static void ExecuteGraphPlannedBarriers(
+        RenderGraph graph,
+        string passName,
+        SceneRenderingData sceneData)
+    {
+        MethodInfo method = typeof(RenderGraph).GetMethod(
+            "ExecuteGraphPlannedBarriers",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingMethodException(typeof(RenderGraph).FullName, "ExecuteGraphPlannedBarriers");
+        method.Invoke(graph, new object[] { default(CommandBuffer), passName, sceneData, false, false });
+    }
+
+    private static void ExecuteGraphFinalBarriers(
+        RenderGraph graph,
+        string passName,
+        SceneRenderingData sceneData)
+    {
+        MethodInfo method = typeof(RenderGraph).GetMethod(
+            "ExecuteGraphFinalBarriers",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingMethodException(typeof(RenderGraph).FullName, "ExecuteGraphFinalBarriers");
+        method.Invoke(graph, new object[] { default(CommandBuffer), passName, sceneData, false });
     }
 
     private static RenderGraphResourceDescriptor CreateLdrSceneColorDescriptor()
@@ -447,4 +589,5 @@ public sealed class RenderGraphResourceDeclarationTests
         {
         }
     }
+
 }

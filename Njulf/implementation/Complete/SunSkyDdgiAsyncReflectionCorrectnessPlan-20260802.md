@@ -1,9 +1,10 @@
 # Sun, Sky, DDGI, Async Compute, and Reflection Correctness Plan
 
-Status: Ready for implementation  
-Date: 2026-08-02  
-Primary scene: Sponza plaza and curtain views  
-Scope: The three correctness failures found while validating the moved plaza sun  
+Status: Revised and ready for phased implementation\
+Original date: 2026-08-02\
+Revised: 2026-08-03\
+Primary scene: Sponza plaza and curtain views\
+Scope: The three correctness failures found while validating the moved plaza sun\
 Production code changed by this document: None
 
 ## 1. Required outcome
@@ -30,6 +31,15 @@ The finished behavior is:
 5. The Sponza curtains receive the moved direct sun immediately, indirect light
    follows within its declared DDGI tracking budget, and local specular
    reflections eventually publish and then remain valid during recapture.
+6. The fixes preserve the current stable-capacity DDGI fast path, add no
+   unbounded per-frame work, and meet explicit CPU, GPU, upload, and memory
+   budgets. A correctness-clean feature that misses its production budget stays
+   disabled or on its graphics fallback until it is profitable.
+
+Correctness and performance are equal exit gates. Validation-clean output is
+not sufficient if the implementation adds a frame hitch, a device-wide wait, a
+steady-state allocation, an unnecessary full-field scan, or enough resident
+memory to consume the target GPU's required headroom.
 
 This plan narrows and completes the relevant work in:
 
@@ -37,9 +47,65 @@ This plan narrows and completes the relevant work in:
 - [RealtimeGiProductionClosurePlan-20260715.md](Complete/RealtimeGiProductionClosurePlan-20260715.md)
 - [Phase10ReflectionSupportPlan.md](../Plans/Complete/Phase10ReflectionSupportPlan.md)
 
+### 1.1 Non-goals and implementation constraints
+
+- Do not replace the post-plan Simple-DDGI persistent scheduler, stable-capacity
+  fast path, compact dispatch, convergence retirement, or incremental readback.
+- Do not create a new global owner for all generations. Each subsystem owns its
+  versions; `VulkanRenderer` assembles a read-only diagnostic snapshot.
+- Do not duplicate the Simple-DDGI source cache or add a stable atlas unless the
+  measured seam escalation gate in Section 5.5 requires it.
+- Do not put reflection capture on async compute in the initial closure.
+- Do not add detailed GPU atomics or full-probe readbacks to
+  `ShippingPerformance`. Exact investigation counters belong in validation or
+  `DetailedInvestigation` builds.
+- Do not use `WaitIdle` for ordinary admission, plan rejection, capture
+  completion, recapture, or resource retirement.
+- Do not waive an existing production-performance gate. This plan may use
+  locked A/B deltas to attribute its own cost, but the combined release remains
+  subject to the active production budget profile.
+
 ## 2. Confirmed baseline
 
-### 2.1 What is already correct
+### 2.1 Current-tree revision delta
+
+The original audits were captured before the DDGI performance pass completed.
+The current tree now includes the work recorded in
+[NsightDdgiPerformancePassImplementationStatus-20260802.md](NsightDdgiPerformancePassImplementationStatus-20260802.md):
+
+- a generation-owned stable-capacity fast path with no steady-state resource
+  planning or device wait;
+- persistent probe queues, a wake heap, incremental readback, retained scratch
+  storage, and ray-count-specific dispatch batches;
+- exact incremental source/convergence telemetry, converged-probe retirement,
+  compact transport/blend dispatch, and a source-throughput floor;
+- production shader auditing that keeps detailed DDGI atomics out of shipping
+  forward and Simple-DDGI modules;
+- locked benchmark identities, repeat/A-B comparison, and post-timing linear-HDR
+  comparison.
+
+The latest [`final-v13-a` stationary capture](../.tmp/nsight-ddgi/final-v13-a.json)
+and its repeat set show that this newer baseline is materially faster than the
+audit binary in CPU scheduling, while still leaving
+the three issues in this plan open. In the current report set:
+
+| Metric | Current result | Interpretation for this plan |
+|---|---:|---|
+| Renderer CPU P95 | 3.667-3.787 ms | Preserve the existing <=6 ms pass. |
+| GI GPU P95 | 1.329-1.394 ms | Preserve the existing <=2.5 ms pass. |
+| Transport plus blend P95 | 0.792-0.868 ms | Preserve the existing <=2.25 ms pass. |
+| GI CPU P95 | 2.002-2.026 ms | Existing <=0.25 ms production gate remains open; do not regress it. |
+| GPU frame P95 | 26.253-26.509 ms | Existing 10 ms production gate remains open; do not hide it with feature-specific timing. |
+| Tracked memory | 78.57% of 2 GiB | New residency must preserve at least 20% headroom. |
+| Reflection lifecycle | 2 queued, 0 completed | The missing capture consumer remains current. |
+
+The stationary captures intentionally disable animated time and async compute,
+so they do not supersede the moving-sun or forced-async reproductions. Phase 0
+must regenerate those reports from the implementation baseline used by the
+first change. Until then, the old counts are historical reproduction evidence,
+not current-binary acceptance numbers.
+
+### 2.2 What is already correct
 
 The following should be preserved, not replaced:
 
@@ -59,18 +125,29 @@ The following should be preserved, not replaced:
   does not add an unconditional second sky contribution.
 - Global environment specular prefiltering already uses complete-mip builds,
   ping-pong textures, and an explicit crossfade.
+- `SimpleDdgiVolumeManager` already tracks source generations, source-ready and
+  stale populations, cohort progress, capacity shortfall, and solver
+  convergence. Extend these structures instead of building parallel state.
+- `ResolveSourceRefreshThroughputTarget` and the persistent source-refresh
+  queues already reserve a probe-count throughput floor. The missing extension
+  is ray-equivalent capacity and admission feedback.
+- Async planning already has concrete resource bindings, resource-plan
+  generations, stale-plan rejection, graphics fallback, timeline segmentation,
+  and distinct release/acquire recording. Preserve these foundations.
+- Reflection probes already have stable authored-ID-to-layer mapping, shader
+  fallback flags, and a persistent published cubemap array.
 - Graphics-only execution is a validation-clean reference path.
 
 The first issue is therefore cadence and state admission, not a missing
 sun/sky-to-DDGI shader connection.
 
-### 2.2 Evidence for the three failures
+### 2.3 Evidence for the three failures
 
 | Issue | Reproduction evidence | Consequence |
 |---|---|---|
-| DDGI atmosphere starvation | The 420-frame [sun/sky audit](../.tmp/ddgi-sun-sky-audit.json) recorded 22 cohort transitions, 9,028 stale probes, source-step P95/max age of 419 frames (13.165 seconds), 3,012 source-ready probes, zero converged probes, and 370 frames of global-convergence pending state. | A new GI source generation arrives before the prior source sweep drains, so bounced lighting never reaches a bounded tracking state. |
-| Invalid async synchronization | The five-frame [forced-async audit](../.tmp/ddgi-async-validation-audit.json) recorded 30 Vulkan validation errors. The equivalent [graphics-only audit](../.tmp/ddgi-graphics-validation-audit.json) recorded zero. The long Auto audit recorded 20 errors. | Compute-only command buffers contain graphics-only stage masks and at least one image-layout history disagrees with actual use. Auto timing probes are not safe. |
-| Reflection capture not executed | The long audit reports two probes queued, zero completed, and zero CPU/GPU capture or prefilter time. `TryBeginCapture`, `PublishCapture`, and `CancelCapture` have no production caller. | Authored probes keep using the global environment fallback; the queue and diagnostics imply work that never happens. |
+| DDGI atmosphere starvation | The historical 420-frame [sun/sky audit](../.tmp/ddgi-sun-sky-audit.json) recorded 22 cohort transitions, 9,028 stale probes, source-step P95/max age of 419 frames (13.165 seconds), 3,012 source-ready probes, zero converged probes, and 370 frames of global-convergence pending state. Current code still admits every quantized candidate immediately, while the current stationary report still resolves an eight-second source-refresh target. | A new GI source generation can arrive before the prior source sweep drains, so bounced lighting cannot enter bounded tracking. Exact current counts require the Phase 0 rerun. |
+| Invalid async synchronization | The historical five-frame [forced-async audit](../.tmp/ddgi-async-validation-audit.json) recorded 30 Vulkan validation errors. The equivalent [graphics-only audit](../.tmp/ddgi-graphics-validation-audit.json) recorded zero. The long Auto audit recorded 20 errors. Current Hi-Z recording still contains a pass-local scene-depth barrier with graphics-only stages, and Auto can still select an uncertified timing probe. | Compute-only command buffers can contain graphics-only stage masks, and pass-local layout mutation can disagree with graph state. Auto timing probes are not safe. |
+| Reflection capture not executed | Both the historical long audit and the post-plan `final-v13` stationary capture report two probes queued and zero completed. `TryBeginCapture`, `PublishCapture`, and `CancelCapture` still have no production caller. | Authored probes keep using the global environment fallback; the queue and diagnostics imply work that never happens. |
 
 The current Sponza settings make the first failure deterministic:
 
@@ -96,28 +173,33 @@ Their versions must be explicit rather than inferred from frame number.
 | Product | Update policy | May lag visible sun? | Publication rule |
 |---|---|---:|---|
 | Visual atmosphere and direct sun | Every frame | No | Immediately uploaded for the current frame. |
-| Global specular prefilter | Latest-wins complete build plus crossfade | Yes | A full mip chain must finish before becoming the next sampled texture. |
+| Global specular prefilter | Latest-wins complete build plus crossfade, versioned independently from DDGI admission | Yes | A full mip chain must finish before becoming the next sampled texture. Holding a DDGI cohort must not hold the next specular candidate. |
 | DDGI atmosphere source | Latest-wins admitted snapshots | Yes | An admitted signature stays immutable until its source cohort reaches the release condition. |
 | Local reflection probe | Budgeted capture of a composite scene/environment version | Yes | All six faces and every mip must be GPU-complete before metadata exposes the new capture. |
 
-The shared version ledger should expose at least:
+The renderer's read-only version snapshot should expose at least:
 
 - `VisualEnvironmentGeneration`
+- `RequestedSpecularEnvironmentGeneration`
+- `PublishedSpecularEnvironmentGeneration`
 - `RequestedGiEnvironmentGeneration`
 - `AdmittedGiEnvironmentGeneration`
 - `CompletedGiSourceCohortGeneration`
 - `StaticGiConvergedGeneration`
-- `PublishedSpecularEnvironmentGeneration`
 - `SceneRadianceRevision`
 - per-probe requested and published `ReflectionCaptureVersion`
 
 These are monotonic identifiers. Wraparound uses the same nonzero wrap policy as
 the current DDGI generations. Equality is meaningful; ordering across wrap is
-not required.
+not required. The snapshot aggregates versions for diagnostics and capture
+requests; it does not move mutation authority out of the owning subsystem.
 
 ### 3.2 No mixed authority
 
 - The environment controller owns requested versus admitted atmosphere state.
+- The global specular prefilter owns its requested/building/published snapshot
+  independently. It may copy the current visual atmosphere when a build starts,
+  but it must not key new work from `AdmittedGiEnvironmentGeneration`.
 - `SimpleDdgiVolumeManager` owns source-cohort progress and reports feedback; it
   must not silently select a different environment buffer than the admitted
   signature describes.
@@ -154,6 +236,44 @@ Recommended DDGI public states are:
 - `StaticConverged`
 - `CapacityLimited`
 
+### 3.5 Stable-path and performance invariants
+
+- A frame with no new atmosphere candidate, no async plan-generation change,
+  and no reflection work performs no managed allocation, no full-probe scan, no
+  descriptor rewrite, no new GPU readback, and no device-wide wait for these
+  features.
+- DDGI admission is O(1) in probe count. It consumes the previous completed
+  incremental cohort summary; it never calculates admission by scanning probe
+  arrays on the render thread.
+- Async queue/stage/resource validation runs when queue capabilities, settings,
+  pass declarations, or concrete binding generation changes. An accepted plan
+  is cached; stable frames validate its generation with constant work.
+- Reflection scheduling work is proportional to changed tickets and the bounded
+  work selected for the frame. Initial scene synchronization may inspect active
+  probes once; steady-state scheduling must not rebuild or sort the full probe
+  set every frame.
+- Conditional graph passes with no selected work emit no capture commands,
+  ownership transfers, or timestamp queries.
+- Production diagnostics reuse already-owned CPU state. Exact GPU mismatch and
+  attribution counters are compiled into validation or
+  `DetailedInvestigation`, not shipping shaders.
+
+Initial incremental budgets, measured against a locked same-binary feature-off
+variant, are:
+
+| Work | CPU P95 delta | GPU/frame delta | Additional constraints |
+|---|---:|---:|---|
+| GI admission/version snapshot | <=0.05 ms | No new pass | Zero steady-state allocation; metadata residency <=64 KiB. |
+| Stable async-plan cache hit | <=0.05 ms | N/A | Full validation only on plan-generation changes. |
+| Reflection enabled, no queued/in-flight work | <=0.02 ms | 0 ms | No empty capture/prefilter/copy command recording. |
+| Reflection capture work | <=0.25 ms record time | 0.50 ms scheduling target; 1.00 ms profile ceiling | Default one scratch slot and one face or bounded mip group per frame. |
+
+The numbers above are initial hard engineering targets, not permission to relax
+the active production profile. If a single reflection face cannot meet the
+profile ceiling, reduce resolution/work quality through the memory/quality plan
+or keep dynamic capture disabled on that profile. Async work has its separate
+profitability gate in Section 6.7.
+
 ## 4. Phase 0: freeze evidence and install safety rails
 
 This phase must land before any behavior change. It prevents the fixes from
@@ -169,7 +289,9 @@ Add three scripted scenarios to the existing sample smoke/capture harness:
    - Fixed `DeltaTime` runs at 30, 60, and 120 Hz.
    - `TimeScale = 60`, `GiSunStepDegrees = 0.25`, and
      `GiTargetSourceSweepSeconds = 8`.
-   - At least 10 minutes for the normal regression; 30 minutes for the soak.
+   - The fast contract tier runs at least three configured source-sweep
+     intervals at each rate. The PR integration tier runs five simulated
+     minutes at 60 Hz. The nightly tier runs 30 minutes.
 2. `GiSponzaFreezeAfterAtmosphereStep`
    - Run the animated sun through several candidates.
    - Freeze time immediately after a candidate is requested.
@@ -177,22 +299,33 @@ Add three scripted scenarios to the existing sample smoke/capture harness:
 3. `GiSponzaReflectionProbeLifecycle`
    - Two authored probes.
    - Initial load, capture, sun change, recapture, resize, shader reload, and
-     scene reload.
+      scene reload.
+
+Retain `GiSponzaRightWallStationary` as the performance control. For each
+feature change, capture a same-binary feature-off/feature-on pair after the
+timing window has settled. The moving-sun baseline must also retain a
+development-only `LegacyImmediateGiAdmission` variant until PR 3 is accepted so
+the new controller's work reduction and visual lag are attributable.
 
 Every report records fixed timestep, camera/view hash, scene revision, shader
 bundle hash, GPU/driver identity, queue-family flags, settings fingerprint, and
-the validation configuration.
+the validation configuration. It also records executable/dirty-worktree
+identity, build flavor, active feature-isolation variant, source cohort state,
+and whether detailed diagnostics are compiled. Reuse the existing benchmark
+identity and pair-comparison contracts rather than inventing another report
+format.
 
 ### 4.2 Async quarantine
 
-Until path certification in Section 7:
+Until path certification in Section 6:
 
 - `AsyncComputeMode.Auto` must not launch an uncertified path, including a timing
   probe.
 - Add `Uncertified` and `QuarantinedAfterValidationError` path statuses.
 - `ForceEnabledForValidation` may run an uncertified path only through an
-  explicit validation harness invocation. It still performs all static plan
-  validation.
+  explicit validation harness invocation with a selected atomic path such as
+  `--async-compute-path HiZBuild`. Merely loading a settings file with Force mode
+  is not sufficient authority. It still performs all static plan validation.
 - The default user-facing result may remain `Auto`, but with zero active paths
   until they are certified. If that distinction cannot be made without a large
   refactor, temporarily default to `Disabled`.
@@ -217,13 +350,33 @@ Add counters and snapshot fields for:
 - reflection queued/in-flight/completion-wait/published/failed counts and
   cumulative totals.
 
+Derive scalar counts from the existing incremental scheduler and ticket state.
+Do not add a per-frame full-probe reduction, synchronous query readback, or
+shipping shader atomic for observability. Exact GPU generation-mismatch and
+per-path attribution counters are validation-build evidence; shipping reports
+retain coarse fail-closed state and timing.
+
+Before behavior changes, capture these current-binary controls:
+
+- stationary graphics-only ProductionTiming repeat pair;
+- animated graphics-only admission baseline;
+- forced Hi-Z-only validation reproduction, followed by the currently failing
+  candidate combination only if the single-path harness is not yet available;
+- reflection lifecycle baseline showing queue state and zero consumer work;
+- tracked-memory and upload baseline with reflection scratch absent.
+
 ### 4.4 Phase 0 exit criteria
 
 - The three deterministic scenarios produce schema-valid reports.
+- The historical failure reports have current-binary replacements with locked
+  identity. Historical counts remain linked only as provenance.
 - Graphics-only Sponza remains at zero validation warnings and errors.
 - Normal `Auto` does not record an uncertified compute segment.
 - The reports can distinguish requested from admitted atmosphere changes and
   queued from actually submitted reflection capture work.
+- Stationary graphics-only timing passes the existing repeat-comparison rules;
+  Phase 0 instrumentation adds no production DDGI shader atomics, no new device
+  wait, and no tracked-memory category without an owner.
 
 ## 5. Issue 1: bounded procedural-sky tracking in DDGI
 
@@ -235,6 +388,12 @@ then advances the source generation, and `UpdateLightingDirtyState` marks the
 entire source cache stale. At the Sponza cadence, the next generation arrives in
 about one second while the declared refresh budget is eight seconds.
 
+The post-plan scheduler improvements do not change that admission boundary.
+They already provide persistent source-refresh queues, an incremental stale
+population, a throughput target, source generations, and convergence retirement.
+Those are the feedback producer for this fix. Do not introduce a second cohort
+tracker or scan `_probeSourceLightingGenerations` from `VulkanRenderer`.
+
 The repair is to separate candidate creation from admission. It must not slow
 the visible atmosphere or direct lighting.
 
@@ -242,6 +401,13 @@ the visible atmosphere or direct lighting.
 
 Create a GPU-independent `GiAtmosphereAdmissionController` with deterministic
 inputs and outputs so it can be exhaustively unit tested.
+
+Implement the controller as allocation-free value state. Candidate coefficients
+live in preallocated environment-owned snapshots; controller decisions carry
+signatures/generations and indices or immutable value records, not cloned arrays
+or per-frame collections. One call is made per rendered frame using the latest
+candidate and the previous completed DDGI cohort summary. It must not wait for a
+readback or call into Vulkan.
 
 Inputs:
 
@@ -266,6 +432,10 @@ Outputs:
 The controller owns one admitted snapshot and at most one pending snapshot. A
 new candidate replaces the pending snapshot; intermediate candidates are
 counted as coalesced, not queued.
+
+Candidate replacement and `Hold` are O(1), perform zero managed allocation, and
+do not rewrite the GI buffer, DDGI signature, source generation, or specular
+prefilter state.
 
 The normal state flow is:
 
@@ -323,13 +493,22 @@ Use these rules in priority order:
 Refactor `EnvironmentManager` to hold distinct records:
 
 - `_visualAtmosphereFrame`
+- `_requestedSpecularAtmosphereFrame` or an equivalent independently versioned
+  build candidate
 - `_requestedGiAtmosphereFrame`
 - `_admittedGiAtmosphereFrame`
-- requested/admitted signatures and generations
+- requested/published specular signatures and generations
+- requested/admitted GI signatures and generations
 
 `Update` continues computing visual and requested state every frame. A new
 admission call, made by `VulkanRenderer` using the previous completed DDGI
 feedback, is the only operation that changes the admitted GI frame.
+
+Compute the visual atmosphere once per frame as today. Compute a requested GI
+coefficient snapshot only when its quantized signature changes, and copy the
+current visual coefficients into a specular build snapshot only when a build
+actually starts. Do not evaluate the sky model independently for three consumers
+on every frame.
 
 The admitted record must drive all of the following together:
 
@@ -344,6 +523,24 @@ advance the signature while retaining the old GI buffer.
 
 The visible environment buffer, visible directional light, shadow maps, and
 sky rendering continue to use the current visual frame.
+
+Global specular prefiltering is deliberately separate. A new prefilter build
+captures the latest visual/specular candidate when its scratch target becomes
+available and retains that immutable snapshot until every mip finishes. It must
+not use the admitted GI signature as its requested-work key. This preserves the
+existing latest-wins ping-pong/crossfade behavior even while DDGI holds an
+eight-second cohort.
+
+Upload `_giEnvironmentBuffer` only when the admitted snapshot changes or the
+buffer/bindless resource generation is recreated. A held candidate must not
+produce identical staging traffic every frame. If a frames-in-flight hazard
+requires a per-slot buffer instead, make that ownership explicit and measure the
+upload; do not retain an unconditional upload by accident.
+
+The admission call consumes completed feedback from an earlier frame and never
+blocks for current GPU work. The admitted CPU record, GI buffer upload, dirty
+signature, and atmosphere-owned DDGI light substitution become one renderer
+transaction for the frame in which admission occurs.
 
 ### 5.5 Make source generation safety explicit
 
@@ -368,9 +565,12 @@ Enforce these contracts in CPU state, push constants, and shaders:
 - Relocation, scrolling, and slot reuse clear the relevant generation markers
   before the physical slot can be sampled as current.
 
-Add a GPU diagnostic counter for every rejected cache reuse or publish caused
-by a generation mismatch. The production acceptance value is zero; a nonzero
-value is evidence of a correctness bug, not normal pressure.
+Fail closed in every build when cache reuse or publication generations do not
+match. Add exact GPU counters for rejected reuse/publication to validation and
+`DetailedInvestigation` builds, plus CPU-side transaction assertions in all
+builds. Do not reintroduce production diagnostic atomics. The acceptance value
+in validation evidence is zero; a nonzero value is a correctness bug, not
+normal pressure.
 
 If the curtain and checkerboard transition captures still show unacceptable
 generation seams after these rules, add one `SimpleDdgiStableIrradianceAtlas`
@@ -386,16 +586,22 @@ frame. Extend its contract:
 - Calculate required probe and ray work, not just probe count. Maintenance tiers
   with fewer rays must not be counted as a complete source refresh unless they
   satisfy the source-cache ABI.
+- Extend the existing persistent source-refresh queues and incremental
+  histograms; do not rebuild a cohort list or scan all probes each frame.
 - Reserve the current admitted cohort before background maintenance.
 - Keep visible repair ahead of nonvisible throughput work, but guarantee the
   remaining cohort its declared minimum share each frame.
 - Report capacity shortfall before dispatch.
 - If the hard update/ray budget cannot meet the requested sweep time, retain the
-  current admitted generation, enter `CapacityLimited`, and expose the minimum
-  achievable sweep time. Never create unbounded generations to imitate
-  responsiveness.
-- Recompute frame targets from bounded observed FPS exactly as today; test 30,
-  60, 120, and variable-frame-rate sequences.
+  current admitted generation while its cohort drains, enter `CapacityLimited`,
+  and expose the minimum achievable sweep time. Once that cohort completes,
+  admit the latest pending candidate; capacity pressure may lengthen the
+  declared lag but must not permanently freeze time-of-day. Never create
+  unbounded generations to imitate responsiveness.
+- Deterministic benchmark scenarios derive targets from their nominal fixed
+  rate. Interactive rendering uses a bounded, slowly varying observed-rate
+  estimate so a hitch cannot suddenly multiply work. Test 30, 60, 120, variable
+  frame rate, and long-hitch sequences.
 
 ### 5.7 Cadence diagnostics and authoring guidance
 
@@ -440,7 +646,11 @@ Add unit tests covering:
 - time freeze with a pending candidate;
 - cache reuse and publish generation matching;
 - scrolling or slot reuse during a cohort;
-- source-capacity shortfall and recovery.
+- source-capacity shortfall and recovery;
+- zero allocations over a long steady-state controller loop;
+- held candidates causing no GI upload or dirty-signature change;
+- specular requested/published generations advancing independently while the GI
+  generation is held.
 
 Extend the deterministic integration scenario with these assertions:
 
@@ -460,6 +670,19 @@ Extend the deterministic integration scenario with these assertions:
 Visual tests use locked-exposure linear HDR crops of both curtains and a diffuse
 interior patch. The accepted sequence must change smoothly without black
 flashes, energy spikes, or a permanent old-sun imprint.
+
+Performance acceptance for this issue:
+
+- admission plus version-snapshot CPU P95 delta is <=0.05 ms;
+- the steady held path allocates zero bytes and adds zero GI upload bytes;
+- no new GPU pass, device wait, full-probe readback, or per-frame full-field scan
+  is introduced;
+- the moving-sun candidate materially reduces source traces and invalidations
+  relative to legacy immediate admission; additional useful propagation is
+  allowed, but GI GPU P95 remains within the active budget and no-op dispatch
+  lanes do not increase;
+- the stationary graphics-only repeat remains within the existing benchmark
+  comparer's tolerance for every material pass at or above 0.50 ms.
 
 ### 5.9 Issue 1 implementation map
 
@@ -505,6 +728,13 @@ Changing one mask to `AllCommands` is not a sufficient fix. The planner must
 make invalid synchronization unrepresentable, and each concrete image must have
 one layout authority.
 
+Preserve the current async foundation: `AsyncComputeScheduler`, concrete
+resource bindings and their generations, stale-plan rejection,
+`AsyncComputeRecoverablePlanRetryGate`, timeline segments, isolated Auto timing,
+graphics fallback, and `QueueOwnershipTransferRecorder`. The missing work is
+queue-stage proof, transactional layout authority, certification/quarantine,
+and removal of cross-pass barriers still recorded by individual passes.
+
 ### 6.2 Add queue-stage capability validation
 
 Create a pure `QueueStageCapabilities` helper from the actual Vulkan queue flags
@@ -524,10 +754,37 @@ never repair a bad declaration by silently masking unsupported bits; that would
 discard the dependency the declaration claimed to need. Reject the async plan
 and run graphics instead.
 
+Validate access masks against both the selected stages and the concrete resource
+usage. Queue support alone is insufficient: a stage-supported barrier with an
+incompatible access bit is still invalid. Treat `None`/ignored scopes explicitly
+for release and acquire halves instead of passing them through the ordinary
+stage-access compatibility table.
+
 Add structured errors containing pass, resource, allocation identity, queue
 family/flags, stage/access mask, layout, segment, and release/acquire side.
 
-### 6.3 Compile paired transfer operations explicitly
+Build and cache capabilities from the actual queue-family flags. Run full stage
+validation when the compiled submission-plan generation changes, not by walking
+every pass/resource on every stable frame. The final recorder consumes already
+validated barrier records; validation-build assertions may recheck individual
+records without allocating diagnostic strings on success.
+
+Replace per-frame topology construction with retained enum-indexed arrays,
+bitsets, and compiled segment templates. The cache key includes queue/settings,
+declaration and concrete-resource generations, selected atomic paths, and the
+executable pass mask. A changed zero-work/pass mask may select or compile a
+bounded cached variant, but it must not reuse transfers for a skipped producer.
+Give this variant cache a fixed, profile-declared capacity and deterministic
+eviction; expose hits, misses, rebuild cost, and fallback reason. It must never
+grow with frame history or compile an unbounded set of incidental masks. Stable
+eligibility/timing updates mutate retained scalar state and allocate nothing.
+
+### 6.3 Audit and complete the existing paired transfer operations
+
+`QueueOwnershipTransferRecorder` already emits distinct release and acquire
+halves with ignored opposite scopes, and the scheduler already creates timeline
+edges. Keep that implementation and make its compiled record the only input to
+recording; do not build a parallel transfer system.
 
 Represent the two recorded halves of a transfer separately in the compiled
 plan:
@@ -545,6 +802,11 @@ not emit a pretend ownership transfer.
 
 `QueueOwnershipTransferRecorder` should consume these prevalidated barrier
 records. It should not reinterpret broad logical usages while recording.
+
+Add an immutable transfer identity and validate that release/acquire records
+match resource generation, allocation identity, byte/subresource range,
+families, layouts, and semaphore edge. Coalesce only adjacent ranges with
+identical scopes; never widen a range merely to reduce barrier count.
 
 ### 6.4 Make render-graph layout state authoritative
 
@@ -565,6 +827,13 @@ between the mirror and committed graph state is a validation failure.
 
 Internal barriers are limited to subresources used entirely inside one pass,
 such as Hi-Z mip N write to mip N+1 read.
+
+Compile projected state into the cached submission plan. Commit owner/layout
+state only after all matching command buffers have been recorded successfully;
+submission failure follows the existing terminal fault path. Stable frames do
+only the plan-generation check. Resource recreation creates a new generation
+with explicit initial layout/owner and cannot inherit projected state from the
+retired generation.
 
 ### 6.5 Repair Hi-Z first
 
@@ -595,6 +864,10 @@ Required changes:
   together.
 - Subresource ranges must cover the exact aspect, mip count, and array layers;
   per-mip dependencies must not accidentally transition untouched mips.
+
+The repaired pass must not add a replacement opening/closing barrier locally.
+Its command recording owns only dispatches and the per-mip compute dependency;
+entry and exit state come from the accepted graph plan.
 
 ### 6.6 Audit and certify every path independently
 
@@ -633,6 +906,14 @@ all certified paths together.
 Extend `AsyncComputePassCatalog` or a companion catalog with a static
 certification state and evidence revision.
 
+Every path starts `Uncertified`. Promoting it to `CertifiedCorrectness` is a
+reviewed source change that names an evidence revision, atomic path membership,
+validated queue topologies, lifecycle report IDs, and output-equivalence result.
+Correctness certification is hardware/topology scoped where required and is
+separate from the runtime timing decision. Changing a pass's declared usages,
+barriers, relevant shader bundle, scheduler recording, or atomic path membership
+invalidates its evidence revision.
+
 `Auto` may activate a path only when all are true:
 
 - every pass in the atomic path is statically certified;
@@ -650,6 +931,13 @@ never promote a path.
 Certification is not profitability. A validation-clean path with no measured
 benefit remains on graphics in `Auto`.
 
+Auto may collect timing only for `CertifiedCorrectness` paths. Use at least
+three locked graphics/async pairs after warmup. The initial profitability gate
+remains at least 3% median GPU-frame improvement, no GPU-frame P95 regression,
+no material-pass P95 regression above the existing comparer tolerance, and no
+meaningful CPU submit/record regression. A path that later regresses may be
+demoted without losing correctness certification.
+
 ### 6.8 Async tests and acceptance gates
 
 Unit tests:
@@ -663,6 +951,9 @@ Unit tests:
 - image subresource and buffer-range coalescing boundaries;
 - initial `Undefined` and steady-state layout plans;
 - projected layout rollback after rejected/stale plans;
+- stage/access compatibility, including the ignored side of ownership transfer;
+- bounded compiled-plan variant eviction and rebuild after an executable-mask
+  change;
 - path quarantine and Auto timing exclusion.
 
 Integration matrix for every path alone and all paths together:
@@ -687,6 +978,14 @@ Acceptance:
 - a path is production-enabled only if median GPU frame time improves by a
   predeclared threshold and P95 does not regress. Use 3% as the initial threshold
   unless a profile-specific budget supersedes it.
+- stable accepted-plan CPU P95 delta is <=0.05 ms and performs zero managed
+  allocation;
+- a plan-generation rebuild records its compilation/validation cost separately
+  and does not cause a device-wide wait;
+- an inactive or unprofitable async path emits no compute submission, ownership
+  transfer, or timing query;
+- validation/certification telemetry uses compact reason IDs on the hot path and
+  formats detailed text only when exporting a snapshot or reporting failure.
 
 ### 6.9 Issue 2 implementation map
 
@@ -730,6 +1029,21 @@ completion.
 Extract a GPU-independent `ReflectionProbeCaptureScheduler` so state transitions
 can be unit tested without a Vulkan device.
 
+The scheduler owns compact per-probe state plus a dirty queue and a bounded
+priority structure. Requests update one probe in O(log N) or better and allocate
+nothing after capacity initialization. Camera-dependent priority may be updated
+lazily for queued candidates; do not sort every authored probe every frame.
+
+Cache active-probe selection, layer mapping, GPU metadata, and authored
+revision. Rebuild them only when the scene/probe revision, reflection settings,
+resource generation, or published-availability flags change. Replace the
+current per-frame temporary lists/sets with retained scratch storage, and skip
+metadata upload when its payload is unchanged. Editor probe mutation must
+advance an explicit scene-owned `ReflectionProbeRevision`; add/remove and every
+semantically relevant `ReflectionProbe` setter notify that owner, and removal or
+scene disposal detaches notification. Detecting mutation by hashing or scanning
+every probe each frame is not acceptable.
+
 Each capture ticket contains:
 
 - unique ticket serial;
@@ -752,12 +1066,21 @@ Queued
   -> AwaitingGpuCompletion
   -> Published
 
-Any pre-publication failure -> RetryPending or Cancelled
+Any pre-publication failure -> RetryPending, DeferredChangingScene, or Cancelled
 Any superseding request     -> keep current work or replace with latest by policy
 ```
 
 Only one pending version per probe is retained. New requests merge reason flags
 and replace the pending target version. They do not enqueue duplicates.
+Before destination-copy commit, a superseding version that invalidates a
+non-snapshotted input cancels at the next work-unit boundary and requeues latest.
+After commit, the current ticket finishes against its pinned destination and the
+latest version remains the single pending request. No policy may mix versions
+inside one ticket.
+
+Ticket payloads use immutable value snapshots and stable handles. They must not
+retain mutable `Scene`, material, or authored-probe object references across
+frames.
 
 ### 7.3 Preserve old published captures
 
@@ -779,6 +1102,13 @@ published layer valid. It is removed only when:
 Metadata continues exposing the old layer while recapture runs. The first-ever
 capture remains on global-environment fallback until publication.
 
+Remove the current recapture behavior that clears `_capturedProbeIds` at request
+time. Resource resize/reallocation becomes a generation transaction: allocate
+and initialize the replacement, copy compatible published layers when possible,
+switch descriptors only after completion, and retire the old image behind the
+frame/timeline completion primitive. Reflection-owned code must not call
+`WaitIdle` during this path.
+
 ### 7.4 Add persistent scratch capture resources
 
 Do not render or prefilter directly into the sampled published layer.
@@ -789,8 +1119,38 @@ Allocate, through the reflection memory budget:
   chain per allowed concurrent capture;
 - one reusable depth target per active face recorder, or a documented layered
   depth target;
+- one small slot-owned capture frame-data/light snapshot buffer so all faces use
+  the same admitted environment and direct-light coefficients;
 - face and mip views required by raster and compute passes;
 - optional timestamp queries for capture and prefilter stages.
+
+The scratch cube includes `ColorAttachment`, `Storage`, `Sampled`,
+`TransferSrc`, and `TransferDst` usage as actually required. The published array
+remains sampled/transfer-addressable and is never used as prefilter scratch.
+Calculate exact residency before allocation:
+
+```text
+scratch cube bytes = 6 * bytesPerPixel * sum(max(1, resolution >> mip)^2)
+depth bytes        = active depth targets * resolution^2 * depth bytesPerPixel
+```
+
+The formula is a payload lower bound and a cross-check, not the allocator charge.
+The budget authority is the queried Vulkan memory requirement and actual
+allocator-attributed image/buffer bytes, including alignment and heap-block slack
+attributable to the allocation. Track engine host/object overhead for views,
+samplers, descriptors, and simultaneously retired generations separately.
+Reject or downscale before binding an allocation that would cross either the
+reflection component budget or the global headroom gate.
+
+Default to one concurrent scratch cube. More slots require evidence that both
+the reflection component budget and the global >=20% tracked-memory headroom
+survive peak coexistence with retired generations.
+
+Create views, reusable descriptor state, timestamp ranges, and capture/prefilter
+pipelines with the scratch resource generation. No image view, descriptor pool,
+pipeline, or shader compilation may occur while advancing an ordinary ticket.
+Reuse the existing GGX importance-sampling implementation and sequence where its
+roughness/pdf contract matches; do not maintain a drifting second filter kernel.
 
 Mip 0 receives the six raw radiance faces. Mips 1..N-1 receive GGX-prefiltered
 radiance. After all work is complete, copy the full scratch subresource range to
@@ -802,22 +1162,33 @@ untracked memory.
 
 ### 7.5 Add three graph-visible passes
 
-Add graph resources for reflection capture radiance/depth and declare the
-published cubemap array as a written resource before it is sampled.
+Add graph resources for reflection capture radiance/depth and declare both the
+current-frame reads and the eventual published-array write. Scratch work is not
+visible to the current frame and should run after the latency-critical main-view
+work when dependencies allow. The destination copy is ordered after all
+current-frame readers of the old layer; completion and metadata publication make
+the new layer available to a future frame. No reader can interleave with the
+multi-subresource destination copy.
 
 1. `ReflectionProbeCapturePass`
    - Acquires one ticket/face within the per-frame budget.
    - Renders one or more 90-degree cube faces from the probe position.
    - Writes linear scene radiance into scratch mip 0.
 2. `ReflectionProbePrefilterPass`
-   - Reads completed mip 0.
+   - Starts only after all six faces of the coherent ticket's mip 0 are complete
+     and visible to the prefilter stage.
    - Importance-samples GGX for each requested roughness mip.
    - Processes a bounded number of mips/faces per frame.
 3. `ReflectionProbePublishPass`
    - Copies all faces/mips from scratch into the stable array layer.
    - Transitions the published range for shader sampling.
    - Enqueues a completion token; it does not call logical publication merely
-     because commands were recorded.
+      because commands were recorded.
+
+All three passes are conditional. When no face, mip group, or copy is selected,
+`WillExecute` is false and the graph emits no empty pass, barrier, query, or
+submission. Prefer one tail graphics segment for selected reflection work so
+capture does not introduce an early wait before forward shading.
 
 Run these passes on graphics initially. Do not add them to async candidates
 until Section 6 is complete and the reflection path is independently
@@ -827,6 +1198,13 @@ validation-clean.
 
 Use the existing material and lighting model where possible, with an explicit
 reflection-capture view flag rather than a second drifting material shader.
+
+Reuse immutable scene/material/light/acceleration-structure data already
+prepared for the frame. Build only the face-specific camera constants and
+bounded visibility list. Use the existing GPU scene-submission/culling path when
+it supports a cube face; otherwise use a retained scratch list and frustum-cull
+per face. Do not rebuild materials, BLASes, or whole-scene upload payloads for a
+probe face.
 
 The capture must include:
 
@@ -848,6 +1226,33 @@ It must exclude:
 
 The capture is linear HDR. There is no exposure baked into the cubemap.
 
+The capture version freezes one coherent admitted environment/direct-light
+snapshot for all six faces. Global specular prefilter may publish newer visual
+sky data independently while a local capture is in progress; the ticket never
+mixes those versions between faces.
+
+Materialize that small environment/light snapshot into the ticket's persistent
+scratch slot before its first face. Before recording every later unit, verify the
+scene-radiance, material, light, capture-AS, and relevant resource generations.
+If a non-snapshotted input changed, cancel before destination-copy commit, retain
+the old published probe, and requeue the latest version. Do not pin or duplicate
+the whole scene merely to finish an obsolete capture.
+
+Define the initial capture-participant contract explicitly. Continuously moving
+geometry must either be excluded from the static probe capture, represented by a
+ticket-stable capture snapshot/AS generation with accounted lifetime, or force a
+safe retry. Repeated version churn transitions the probe to a bounded
+`DeferredChangingScene`/fallback state with reason and age telemetry; it must not
+spin, allocate, exceed the retry budget, or publish faces from different scene
+versions. Supporting fully dynamic participants is a separate quality tier, not
+an implicit source of unbounded retries in the first closure.
+
+`CaptureIncludesDdgi` remains false unless one sampled DDGI publication
+generation can be held stable for every face. Readiness of a generation alone is
+not sufficient if the atlas will continue mutating underneath the ticket. If the
+renderer cannot pin a stable sampled generation within the DDGI memory/lifetime
+contract, keep DDGI out of local capture and record that reason.
+
 Do not reuse camera-dependent shadow data when it lacks probe coverage. Prefer
 ray-query shadow visibility in the capture view when the acceleration structure
 is current; otherwise define and test a conservative shadow fallback.
@@ -868,7 +1273,8 @@ or array retirement must be deferred behind the same completion primitive. A
 newer request may queue, but it cannot cancel a copy that is already recorded.
 The old cubemap remains intact while faces and mips are built in scratch. It is
 replaced only when the final copy executes, after the complete scratch range is
-available and before any graph-declared reader of the destination range.
+available and before any later-frame graph-declared reader of the destination
+range.
 
 On a later frame, after that completion primitive is known signaled:
 
@@ -880,6 +1286,10 @@ On a later frame, after that completion primitive is known signaled:
 4. Upload metadata that marks captured radiance available.
 5. Increment both this-frame and cumulative completion counters.
 6. Release the scratch slot for another ticket.
+
+Completion handling polls an already-owned per-frame fence/timeline value. It
+never waits on the render thread. An unsignaled ticket remains in
+`AwaitingGpuCompletion` and contributes only constant-time queue bookkeeping.
 
 A ticket may be discarded before its destination copy is recorded. After that
 commit point it either completes against its pinned destination or follows the
@@ -898,7 +1308,12 @@ versioned requests.
 - admitted GI environment generation;
 - completed DDGI tracking generation when DDGI is included;
 - material/emissive revision;
+- capture acceleration-structure/resource generation;
 - capture shader/settings revision.
+
+Store the version as a compact value record with precomputed component
+revisions. Do not hash the entire scene or enumerate all lights/materials on
+each probe request; consume revisions already maintained by their owners.
 
 Policy:
 
@@ -940,9 +1355,19 @@ explicit budgets:
 Keep old serialized settings load-compatible. Map the legacy capture count to a
 safe default and write the new schema on the next explicit save.
 
-The first implementation should default to one face and one prefilter mip group
-per frame, then tune from measured GPU timestamps. A budget miss defers work; it
-does not publish partial data.
+The first implementation defaults to:
+
+- one concurrent capture;
+- one face or one bounded prefilter mip group per frame;
+- a 0.50 ms predicted GPU scheduling target;
+- a 1.00 ms per-frame profile ceiling;
+- no DDGI contribution until the non-DDGI capture path is accepted.
+
+Use timestamp-history EWMA per work kind/resolution to predict the next unit.
+When no unit fits the remaining budget, defer it. With no history, schedule at
+most one smallest legal unit. A repeated single-unit ceiling miss downscales or
+disables capture through an explicit quality decision; it never publishes
+partial data or silently exceeds the budget.
 
 ### 7.10 Reflection diagnostics
 
@@ -962,6 +1387,10 @@ Report:
 Rename or document `CapturesCompleted` so a per-frame counter cannot be mistaken
 for the total lifecycle result.
 
+Per-frame diagnostics read scheduler scalars and timestamp results already
+collected for budgeting. Per-probe progress lists are built only for an explicit
+snapshot/debug request, not every shipping frame.
+
 ### 7.11 Reflection tests and acceptance gates
 
 Unit tests:
@@ -972,10 +1401,17 @@ Unit tests:
 - latest-wins request coalescing and reason merging;
 - capture budget across faces/mips;
 - stale completion after delete/reload/reallocation;
+- scene/material/light/AS change between faces cancels before copy and requeues
+  the latest version;
+- continuous scene-version churn reaches bounded deferred/fallback state without
+  queue growth or retry spin;
+- one ticket uses identical environment/light snapshot bytes for all six faces;
 - retry/backoff and permanent failure;
 - six cube-view orientations;
 - mip/face/layer subresource ranges;
-- serialized setting migration.
+- serialized setting migration;
+- scene reflection-probe revision on add, remove, and property mutation;
+- unchanged revision reuses active selection and emits no metadata upload.
 
 Shader/graph tests:
 
@@ -984,6 +1420,8 @@ Shader/graph tests:
 - prefilter roughness maps monotonically across mips;
 - graph declares scratch writes, prefilter dependencies, copy, and published
   shader reads;
+- prefilter cannot execute until all six mip-0 faces of the same ticket are
+  complete;
 - reflection capture remains graphics-only until separately certified.
 
 Integration/visual tests:
@@ -1007,6 +1445,24 @@ probes, complete mip chains, no recursive local reflections, no exposure baked
 into captures, and no single-frame hitch above the declared capture budget plus
 measurement tolerance.
 
+Performance and lifetime acceptance additionally require:
+
+- <=0.02 ms CPU P95 delta while enabled but idle and exactly zero GPU work;
+- <=0.25 ms CPU record P95 on capture-work frames;
+- predicted capture work at or below the 0.50 ms target and measured work at or
+  below the 1.00 ms profile ceiling after timestamp warmup;
+- no reflection-owned device wait during load, recapture, resize, reload,
+  deletion, or retirement;
+- no per-frame authored-probe sort, scene/material rebuild, or managed
+  allocation after warmup;
+- no reflection metadata upload on an enabled-idle frame;
+- no image/view/descriptor/pipeline/shader creation while advancing an ordinary
+  ticket after resource-generation warmup;
+- peak scratch + published + retired residency keeps the reflection component
+  within budget and total tracked memory at or below 80% on the target profile;
+- the feature-off stationary repeat remains within the existing benchmark
+  tolerance, proving that conditional pass integration has no idle regression.
+
 ### 7.12 Issue 3 implementation map
 
 Primary files:
@@ -1021,6 +1477,8 @@ Primary files:
 - `Njulf.Rendering/VulkanRenderer.cs`
 - `Njulf.Rendering/Data/ReflectionProbeData.cs`
 - `Njulf.Rendering/Data/RenderSettings.cs`
+- `Njulf.Core/Scene/Scene.cs`
+- `Njulf.Core/Scene/ReflectionProbe.cs`
 - capture/prefilter shaders and pipeline objects
 
 Primary tests:
@@ -1036,15 +1494,23 @@ Primary tests:
 ## 8. Recommended implementation and PR sequence
 
 Keep the changes reviewable and leave a clean rollback point after every slice.
+Each PR includes its own same-binary control/candidate report; do not mix an
+unrelated renderer optimization into a correctness comparison.
 
 ### PR 1: Evidence, terminology, and safety
 
 - Add deterministic scenarios and version/capture diagnostics.
 - Add path certification/quarantine state.
 - Prevent uncertified Auto timing probes.
+- Capture current-binary graphics stationary, animated, forced-Hi-Z, and
+  reflection-lifecycle baselines.
+- Reuse the existing benchmark identity/pair format and keep new observability
+  out of shipping shaders.
 - No lighting algorithm or capture rendering change.
 
-Gate: graphics-only remains clean; normal Auto submits no uncertified path.
+Gate: graphics-only remains clean; normal Auto submits no uncertified path; the
+stationary repeat passes existing comparison tolerances; instrumentation adds no
+production shader atomics, device wait, or unowned memory.
 
 ### PR 2: GI atmosphere admission
 
@@ -1052,55 +1518,79 @@ Gate: graphics-only remains clean; normal Auto submits no uncertified path.
 - Wire the admitted frame atomically to GI environment buffer, dirty signature,
   DDGI directional snapshot, and fallback radiance.
 - Add latest-wins coalescing and freeze/scrub behavior.
+- Give global specular prefilter its own requested/building/published version and
+  skip held GI-buffer uploads.
 
 Gate: at 60x/0.25 degrees/8 seconds, generations no longer advance while the
-source cohort is active.
+source cohort is active; global specular builds still progress; admission CPU
+P95 delta is <=0.05 ms with zero held-path allocation/upload.
 
 ### PR 3: DDGI tracking and generation contract
 
-- Enforce current-generation cache reuse and publication.
-- Reserve source cohort capacity.
+- Audit and extend the existing current-generation cache reuse/publication
+  contract rather than replacing its arrays or queues.
+- Convert the existing probe-count source throughput floor to ray-equivalent
+  capacity and expose achievable lag.
 - Split `Tracking` from static convergence diagnostics.
-- Add mismatch counters and full cadence tests.
+- Add validation-build mismatch counters and full cadence tests.
 
-Gate: every admitted Sponza cohort drains and the frozen sequence converges.
+Gate: every admitted Sponza cohort drains, the frozen sequence converges,
+generation mismatch evidence is zero, moving-sun source traces/invalidations
+decrease relative to the legacy baseline without increasing no-op lanes, and the
+stationary repeat remains within tolerance.
 
 ### PR 4: Async synchronization foundation and Hi-Z
 
 - Add queue-stage validator and projected layout transaction.
-- Make transfer halves explicit.
+- Audit and retain the existing paired transfer recorder/timeline edges.
 - Remove duplicate Hi-Z cross-pass transitions.
 - Certify Hi-Z alone.
 
 Gate: forced Hi-Z is validation-clean through lifecycle tests and matches
-graphics output.
+graphics output; stable accepted-plan CPU P95 delta is <=0.05 ms with zero
+allocation and no device wait.
 
 ### PR 5: Remaining async path certification
 
 - Audit AO blur, bloom, far field, fog, particles, Simple DDGI, full DDGI, and
   SSGI one scheduling unit at a time.
 - Enable Auto eligibility only after each path's evidence gate.
+- Capture at least three locked graphics/async pairs for profitability after
+  correctness certification.
 
 Gate: all enabled combinations are validation-clean; nonprofitable paths remain
-on graphics.
+on graphics; every Auto-enabled path improves median GPU frame by at least 3%,
+does not regress P95/material-pass budgets, and does not meaningfully regress CPU
+record/submit time.
 
 ### PR 6: Reflection scheduler and safe resource model
 
 - Extract/test the capture state machine.
 - Preserve old published layers during recapture.
-- Add scratch resources, budget accounting, and completion tokens.
+- Add one default scratch slot, exact budget accounting, completion tokens, and
+  deferred generation retirement without reflection-owned `WaitIdle`.
+- Add conditional graph resource/pass declarations whose no-work path records
+  nothing.
+- Add scene-owned reflection-probe revisioning and cache unchanged selection,
+  metadata, and uploads.
 - No scene capture rendering yet; fallback remains expected for first captures.
 
-Gate: state and lifetime tests pass; no partial layer can be exposed.
+Gate: state and lifetime tests pass; no partial layer can be exposed; enabled-idle
+CPU P95 delta is <=0.02 ms with zero GPU work; peak memory preserves component
+budget and >=20% target-profile headroom.
 
 ### PR 7: Reflection capture, prefilter, and publication
 
 - Add graph passes and capture-view shader mode.
-- Render six faces, prefilter all mips, copy, wait for completion, and publish.
+- Render six coherent faces, prefilter all mips, copy, and publish on a later
+  frame after the completion token signals.
+- Tail-schedule bounded graphics work, reuse existing scene/material/AS data, and
+  poll completion without a CPU wait.
 - Add orientation and chrome/roughness visual tests.
 
 Gate: two Sponza probes publish complete, useful local reflections with zero
-validation errors.
+validation errors; capture record P95 is <=0.25 ms and warmed GPU work stays
+within the 0.50 ms target/1.00 ms ceiling.
 
 ### PR 8: Dynamic recapture integration and production soak
 
@@ -1109,7 +1599,10 @@ validation errors.
 - Run full moving-sun, async, reflection, resize, reload, and soak matrix.
 - Update defaults only after the release report passes.
 
-Gate: all Section 10 release criteria pass in one reproducible report set.
+Gate: all Section 10 release criteria pass in one reproducible report set,
+including inherited production-performance gates or an explicitly approved
+profile revision. Features that are correctness-complete but not performant
+remain disabled/fallback on the affected profile.
 
 ## 9. Cross-system test matrix
 
@@ -1123,11 +1616,21 @@ Gate: all Section 10 release criteria pass in one reproducible report set.
 | Reflection | none, one, two Sponza, capacity limit, delete/re-add, recapture while valid |
 | Lifecycle | first load, warm run, resize, minimize/restore, shader reload, scene reload, quality change, shutdown |
 | Validation | standard, synchronization validation, GPU-assisted where supported |
+| Build/evidence | validation build, `DetailedInvestigation`, `ShippingPerformance` with validation and detailed counters off |
+| Work state | disabled, enabled-idle, first work, steady work, capacity/resource-generation change, failure/retry |
+| Memory | steady residency, scratch active, old/new generations coexisting, retirement completed, budget rejection |
 | Output | locked-exposure linear HDR, curtain ROI, diffuse interior ROI, chrome/rough spheres, debug overlays |
 
 Run fast unit/contract tests on every PR. Run five-minute deterministic scenarios
 on PRs 2, 3, 4, and 7. Run the 10,000-frame and two-hour soak only after the
 individual gates are clean.
+
+Validation and `DetailedInvestigation` runs establish correctness and
+attribution; they are not performance evidence. Production timing uses
+`ShippingPerformance`, validation off, detailed GPU counters absent, a settled
+workload, and the existing identity lock. Capture at least three repeats for a
+promotion decision. Report disabled/idle cost separately from active work so an
+amortized feature cannot hide a permanent per-frame tax.
 
 ## 10. Final release criteria
 
@@ -1168,7 +1671,34 @@ the following.
 - Captures are linear, correctly oriented, recursion-free, and budgeted.
 - Moving-sun recapture remains coalesced and within the declared maximum age.
 
-### 10.4 Combined soak
+### 10.4 Performance and operational cost
+
+- The unchanged stationary feature-off control remains within the existing
+  repeat-comparer tolerances.
+- GI admission/version snapshot CPU P95 delta is <=0.05 ms, allocates nothing in
+  steady state, and held candidates add no GI upload bytes or GPU dispatch.
+- Stable async-plan validation CPU P95 delta is <=0.05 ms with zero allocation;
+  each Auto-enabled path satisfies its >=3% median benefit and P95
+  non-regression gates.
+- Reflection enabled-idle CPU P95 delta is <=0.02 ms with zero GPU work. Active
+  record P95 is <=0.25 ms and warmed capture work stays within the 0.50 ms
+  target/1.00 ms profile ceiling.
+- Reflection enabled-idle frames perform no probe scan/sort and no metadata
+  upload when the scene-owned reflection revision is unchanged.
+- No new ordinary-path `WaitIdle`, synchronous GPU readback, per-frame
+  full-probe scan/sort, scene/material rebuild, or managed allocation is
+  attributable to these features.
+- Peak published + scratch + retired residency is fully tracked, remains within
+  component budgets, and leaves at least 20% tracked-memory headroom on the
+  target profile.
+- `ShippingPerformance` retains the production diagnostic-atomic audit and
+  performs no exact mismatch/attribution readback intended only for validation.
+- The active production profile still passes its global gates. With the current
+  profile these include renderer CPU <=6 ms, GPU frame <=10 ms, GI CPU <=0.25
+  ms, GI GPU <=2.5 ms, and tracked memory <=80%. This plan does not reinterpret
+  an inherited failure as acceptable merely because its own A/B delta is small.
+
+### 10.5 Combined soak
 
 - Two hours in the animated Sponza scenario.
 - At least 10,000 measured frames after warmup.
@@ -1188,6 +1718,9 @@ the following.
 - Reflection capture can be disabled while keeping authored metadata and global
   fallback. A failed capture feature must not disable global environment
   reflections.
+- Disabled/fallback modes execute the same zero-work conditional graph path used
+  by the performance baselines and retire feature-only scratch resources behind
+  normal frame completion.
 - Settings and snapshot schema changes remain backward-load-compatible.
 - No phase deletes old serialized fields until at least one full release cycle
   has loaded and migrated them successfully.
@@ -1198,11 +1731,18 @@ the following.
 |---|---|
 | Coalescing makes bounced sun appear delayed | This is intentional and bounded. Direct light remains current; diagnostics expose exact admitted age. Increase source capacity or lower time scale when a tighter contract is required. |
 | Requiring static convergence would freeze animated GI | Moving time uses bounded tracking. Static convergence begins only when the candidate stream becomes quiet. |
+| Admission duplicates or regresses the optimized scheduler | Admission consumes the existing incremental cohort summary and source queues. It is O(1), owns no probe collection, and must pass the stationary and moving-work A/B gates. |
+| Holding DDGI also freezes global specular updates | Specular requested/building/published versions are independent from requested/admitted GI versions; add an explicit test that advances one while the other is held. |
 | Full-field atomic DDGI publication consumes memory and increases latency | Start with strict per-probe generation gating and the existing canonical/private split. Add a 7.5 MiB stable atlas only if visual seam gates fail and the memory plan admits it. |
 | Async fixes merely silence validation | Require output equivalence, committed-state checks, lifecycle runs, and profitability after validation reaches zero. |
+| Async validation adds permanent planner overhead | Cache the fully validated plan by queue/settings/declaration/resource generation. Stable frames perform only constant-time generation checks. |
 | Reflection capture reuses camera-only data | Use an explicit capture-view lighting contract and ray-query shadows when camera shadow coverage is insufficient. |
 | Recapturing on every sun step is too expensive | Request from admitted/completed versions, coalesce latest, prioritize, and enforce minimum interval plus maximum age. |
+| One capture face exceeds the frame budget | Schedule only one unknown-cost unit, use timestamp history, then downscale or disable capture through an explicit quality decision rather than overrunning every frame. |
+| Scratch/retired images consume the remaining memory headroom | Default to one scratch slot, budget peak coexistence before allocation, reject/downscale before crossing 80% tracked residency, and release retired generations promptly. |
 | Capture publication races frames in flight | Publish metadata only after the destination-copy completion token signals and the ticket/layer/resource generation still match. |
+| New diagnostics invalidate performance evidence | Keep exact counters out of `ShippingPerformance`, reuse incremental CPU state, and capture correctness and timing in separate build configurations. |
+| Existing global performance gates already fail | Preserve locked A/B attribution, but do not call the combined result production-ready until the active global budget profile passes or is explicitly revised by its owner. |
 | Existing uncommitted renderer work overlaps these files | Implement in the PR slices above, rebase each slice onto the then-current tree, and never discard unrelated local changes. |
 
 ## 13. Authoritative external synchronization references

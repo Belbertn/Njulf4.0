@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Pipeline;
 
@@ -84,6 +85,11 @@ public static class AsyncComputePassCatalog
 
     public static bool IsProductionCandidate(string passName) =>
         GetClassification(passName) == AsyncComputePassClassification.ProductionAsyncCandidate;
+
+    /// <summary>Correctness promotion is an explicit, evidence-backed source decision.</summary>
+    public static bool IsCorrectnessCertified(AsyncComputePath path) => false;
+
+    public static string GetCertificationEvidenceRevision(AsyncComputePath path) => string.Empty;
 
     private static AsyncComputePassAuditEntry Candidate(string passName, string producers, string consumers, string rationale) =>
         new(passName, AsyncComputePassClassification.ProductionAsyncCandidate, producers, consumers, rationale);

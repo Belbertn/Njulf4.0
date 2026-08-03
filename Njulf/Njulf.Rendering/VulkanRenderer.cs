@@ -282,6 +282,7 @@ namespace Njulf.Rendering
         private bool _asyncComputeEmergencyFallbackLatched;
         private string _asyncComputeLastFallbackReason = string.Empty;
         private int _asyncComputeValidationFallbackCount;
+        private int _validationErrorCountAtPreviousFrameBoundary;
         private bool _deviceLost;
         private bool _frameSubmissionFaulted;
         private string _frameSubmissionFaultReason = string.Empty;
@@ -309,6 +310,29 @@ namespace Njulf.Rendering
         public MemoryHeapBudgetSnapshot CurrentMemoryHeapBudget => _context.GetMemoryHeapBudgetSnapshot();
         public DebugDrawList DebugDraw => _debugDraw;
         public DebugOverlaySettings DebugOverlays => Settings.Debug;
+        public LightingVersionSnapshot LightingVersions
+        {
+            get
+            {
+                uint completedSourceGeneration = _simpleDdgiVolumeManager is
+                    { SourceCohortTransitionActive: false, SourceStepStaleProbeCount: 0 }
+                        ? _simpleDdgiVolumeManager.SourceLightingGeneration
+                        : 0u;
+                uint convergedGeneration = _simpleDdgiVolumeManager is
+                    { TransportGlobalConvergencePending: false }
+                        ? _simpleDdgiVolumeManager.SourceLightingGeneration
+                        : 0u;
+                return new LightingVersionSnapshot(
+                    _environmentManager?.AtmosphereFrame.Revision ?? 0u,
+                    _environmentManager?.RequestedSpecularEnvironmentGeneration ?? 0u,
+                    _environmentManager?.PublishedSpecularEnvironmentGeneration ?? 0u,
+                    _environmentManager?.RequestedGiLightingGeneration ?? 0u,
+                    _environmentManager?.GiLightingGeneration ?? 0u,
+                    completedSourceGeneration,
+                    convergedGeneration,
+                    _captureSceneRevision == ulong.MaxValue ? 0UL : _captureSceneRevision);
+            }
+        }
         private bool MeshletDiagnosticCountersActive => _meshPipeline?.GpuMeshletCountersEnabled == true;
         public SelectedObjectInspection? SelectedObject
         {
@@ -622,6 +646,7 @@ namespace Njulf.Rendering
             _lastEffectiveResolutionScale = sceneResolutionScale;
             _lastRenderTargetRecreateReason = "Initial render targets";
             _hizDepthPyramid = new HiZDepthPyramid(_context, CreateHiZExtent(sceneRenderExtent));
+            _renderGraph.RegisterImportedImageTarget(RenderGraphResourceId.HiZPyramid, _hizDepthPyramid);
             _directionalShadowResources = new DirectionalShadowResources(_context, _bufferManager, Settings.Shadows);
             _spotShadowAtlas = new SpotShadowAtlas(_context, _bufferManager, Settings.Shadows);
             _pointShadowCubemapArray = new PointShadowCubemapArray(_context, _bufferManager, Settings.Shadows);
@@ -1230,6 +1255,16 @@ namespace Njulf.Rendering
                     _context.WaitIdle));
 
             _currentCommandBuffer = _cmd.BeginPrimaryGraphicsCommand(_currentFrame);
+            RendererValidationMessageSnapshot validationAtBoundary = _context.ValidationMessageSnapshot;
+            if (!_asyncComputeEmergencyFallbackLatched &&
+                _asyncComputeSubmittedComputeSegmentsThisFrame > 0 &&
+                validationAtBoundary.ErrorCount > _validationErrorCountAtPreviousFrameBoundary)
+            {
+                LatchAsyncComputeEmergencyFallback(
+                    $"Quarantined after {validationAtBoundary.ErrorCount - _validationErrorCountAtPreviousFrameBoundary} " +
+                    "Vulkan validation error(s) were observed while an async segment was active.");
+            }
+            _validationErrorCountAtPreviousFrameBoundary = validationAtBoundary.ErrorCount;
             _asyncComputePlanRecordedThisFrame = false;
             _asyncComputeSubmittedGraphicsSegmentsThisFrame = 0;
             _asyncComputeSubmittedComputeSegmentsThisFrame = 0;
@@ -1532,6 +1567,27 @@ namespace Njulf.Rendering
             _debugDraw.MaxLineSegments = Settings.Debug.MaxDebugLineSegments;
 
             _environmentManager?.UpdateFrameLighting(_lightManager);
+            if (_environmentManager != null)
+            {
+                bool simpleDdgiConsumesAtmosphere =
+                    Settings.GlobalIllumination.EffectiveUseSimpleDdgi &&
+                    _simpleDdgiVolumeManager is { TransportV2Active: true };
+                int participatingProbeCount = simpleDdgiConsumesAtmosphere
+                    ? _simpleDdgiVolumeManager!.ProbeCount
+                    : 0;
+                int staleProbeCount = simpleDdgiConsumesAtmosphere
+                    ? _simpleDdgiVolumeManager!.SourceStepStaleProbeCount
+                    : 0;
+                _environmentManager.ApplyGiAtmosphereAdmission(
+                    new GiAtmosphereCohortFeedback(
+                        simpleDdgiConsumesAtmosphere,
+                        participatingProbeCount,
+                        _simpleDdgiVolumeManager?.SourceCohortTransitionActive ?? false,
+                        staleProbeCount,
+                        VisiblePublicationBoundaryComplete: staleProbeCount == 0,
+                        MinimumPropagationBoundaryComplete: staleProbeCount == 0,
+                        AchievableSourceSweepSeconds: Settings.Environment.GiTargetSourceSweepSeconds));
+            }
             _lightManager.UploadToGPU(_stagingRing, _currentCommandBuffer);
             ulong lightUploadBytes = _lightManager.LastUploadBytes;
             LightFrameSnapshot lightSnapshot = _lightManager.GetFrameSnapshot();
@@ -6982,7 +7038,9 @@ namespace Njulf.Rendering
             var capabilities = new AsyncComputeQueueCapabilities(
                 supported,
                 _context.GraphicsQueueFamilyIndex,
-                _context.ComputeQueueFamilyIndex);
+                _context.ComputeQueueFamilyIndex,
+                _context.GraphicsQueueFlags,
+                _context.ComputeQueueFlags);
 
             AsyncComputePath[] allPaths = Enum.GetValues<AsyncComputePath>();
             var requestedByFeature = new Dictionary<AsyncComputePath, bool>(allPaths.Length);
@@ -7042,7 +7100,10 @@ namespace Njulf.Rendering
                     timingEligible,
                     timingStatus,
                     reason,
-                    IsAutoTimingProbe: isProbe));
+                    IsAutoTimingProbe: isProbe,
+                    CorrectnessCertified: AsyncComputePassCatalog.IsCorrectnessCertified(path),
+                    ForceValidationAuthorized: effectiveMode == AsyncComputeMode.ForceEnabledForValidation &&
+                        Settings.AsyncCompute.ForceValidationPath == path));
             }
 
             var passes = new List<AsyncComputePassRequest>(_renderGraph.PassNames.Count);
@@ -7831,6 +7892,17 @@ namespace Njulf.Rendering
                     new AsyncComputeTimingStats(0, 0, 0, 0));
             }
 
+            if (!AsyncComputePassCatalog.IsCorrectnessCertified(path))
+            {
+                return new AsyncComputeTimingDecision(
+                    AsyncComputePathStatus.Uncertified,
+                    Eligible: false,
+                    Active: false,
+                    "Path is quarantined from Auto until correctness certification is reviewed.",
+                    new AsyncComputeTimingStats(0, 0, 0, 0),
+                    new AsyncComputeTimingStats(0, 0, 0, 0));
+            }
+
             return _asyncComputeTimingPolicy.Evaluate(
                 CreateAsyncComputeTimingKey(path, sceneData),
                 Settings.AsyncCompute,
@@ -7886,6 +7958,8 @@ namespace Njulf.Rendering
             {
                 int index = (_nextAutoTimingProbePath + offset) % allPaths.Length;
                 AsyncComputePath path = allPaths[index];
+                if (!AsyncComputePassCatalog.IsCorrectnessCertified(path))
+                    continue;
                 if (!requestedByFeature.TryGetValue(path, out bool requested) || !requested)
                     continue;
                 if (!_asyncComputeTimingPolicy.CanCollectAsyncProbe(
@@ -8735,7 +8809,11 @@ namespace Njulf.Rendering
             if (_reflectionProbeManager == null)
                 return;
 
-            _reflectionProbeManager.Upload(scene.ReflectionProbes, _stagingRing, _currentCommandBuffer);
+            _reflectionProbeManager.Upload(
+                scene.ReflectionProbes,
+                _stagingRing,
+                _currentCommandBuffer,
+                scene.ReflectionProbeRevision);
             // Upload may allocate or recreate the cubemap array. Register only when the
             // manager marks its descriptor dirty; this keeps the global environment bound as
             // the explicit fallback until a local array is available.

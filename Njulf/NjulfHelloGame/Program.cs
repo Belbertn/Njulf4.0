@@ -463,6 +463,7 @@ internal sealed class HelloGame : Game
             renderer.Settings.AsyncCompute.Mode = _smokeOptions.AsyncComputeModeOverride.Value;
         else if (_smokeOptions.EnableAsyncCompute)
             renderer.Settings.AsyncCompute.Mode = AsyncComputeMode.ForceEnabledForValidation;
+        renderer.Settings.AsyncCompute.ForceValidationPath = _smokeOptions.AsyncComputeValidationPath;
         if (_smokeOptions.EnableFarFieldClipmap)
             renderer.Settings.GlobalIllumination.FarFieldClipmapEnabled = true;
         if (_smokeOptions.EnableFarFieldForceAll)

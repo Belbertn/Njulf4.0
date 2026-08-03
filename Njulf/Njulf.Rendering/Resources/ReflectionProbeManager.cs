@@ -34,6 +34,10 @@ namespace Njulf.Rendering.Resources
         private readonly Queue<Guid> _pendingCaptureProbeIds = new();
         private readonly HashSet<Guid> _queuedCaptureProbeIds = new();
         private readonly HashSet<Guid> _capturesInFlight = new();
+        private readonly List<(ReflectionProbe Probe, int OriginalIndex)> _selectionScratch =
+            new(AbsoluteMaxProbeCapacity);
+        private readonly HashSet<Guid> _selectionIds = new(AbsoluteMaxProbeCapacity);
+        private readonly List<ReflectionProbe> _selectedActiveProbes = new(AbsoluteMaxProbeCapacity);
 
         private BufferHandle _metadataBuffer;
         private GpuAllocator.Allocation* _cubemapArrayAllocation;
@@ -50,6 +54,11 @@ namespace Njulf.Rendering.Resources
         private ulong _estimatedBytes;
         private long _lastUploadMicroseconds;
         private int _capturesCompletedThisFrame;
+        private ulong _capturesCompletedTotal;
+        private uint _lastAuthoredRevision;
+        private ulong _lastSelectionSettingsSignature;
+        private bool _selectionInitialized;
+        private bool _metadataDirty = true;
         private bool _captureOnLoadQueued;
         private bool _descriptorDirty = true;
         private bool _disposed;
@@ -81,6 +90,8 @@ namespace Njulf.Rendering.Resources
         public long LastUploadMicroseconds => _lastUploadMicroseconds;
         public int CapturesQueued => _pendingCaptureProbeIds.Count + _capturesInFlight.Count;
         public int CapturesCompleted => _capturesCompletedThisFrame;
+        public ulong CapturesCompletedTotal => _capturesCompletedTotal;
+        public int PublishedProbeCount => _capturedProbeIds.Count;
         public Image CaptureImage => _cubemapArrayImage;
 
         public void Register(BindlessHeap bindlessHeap)
@@ -112,7 +123,18 @@ namespace Njulf.Rendering.Resources
             }
         }
 
-        public void Upload(IReadOnlyList<ReflectionProbe> authoredProbes, StagingRing stagingRing, CommandBuffer commandBuffer)
+        public void Upload(
+            IReadOnlyList<ReflectionProbe> authoredProbes,
+            StagingRing stagingRing,
+            CommandBuffer commandBuffer) =>
+            Upload(authoredProbes, stagingRing, commandBuffer,
+                _lastAuthoredRevision == uint.MaxValue ? 1u : _lastAuthoredRevision + 1u);
+
+        public void Upload(
+            IReadOnlyList<ReflectionProbe> authoredProbes,
+            StagingRing stagingRing,
+            CommandBuffer commandBuffer,
+            uint authoredRevision)
         {
             if (authoredProbes == null)
                 throw new ArgumentNullException(nameof(authoredProbes));
@@ -123,23 +145,42 @@ namespace Njulf.Rendering.Resources
 
             long uploadStart = Stopwatch.GetTimestamp();
             _capturesCompletedThisFrame = 0;
-            IReadOnlyList<ReflectionProbe> activeProbes = SelectActiveProbes(authoredProbes);
-            SynchronizeProbeLayers(activeProbes);
+            ulong selectionSettingsSignature = CreateSelectionSettingsSignature();
+            bool selectionChanged = !_selectionInitialized || authoredRevision != _lastAuthoredRevision ||
+                selectionSettingsSignature != _lastSelectionSettingsSignature;
+            if (selectionChanged)
+            {
+                SelectActiveProbes(authoredProbes);
+                SynchronizeProbeLayers(_selectedActiveProbes);
+                _lastAuthoredRevision = authoredRevision;
+                _lastSelectionSettingsSignature = selectionSettingsSignature;
+                _selectionInitialized = true;
+                _metadataDirty = true;
+            }
             EnsureCubemapArrayStorage(RequiredLayerCapacity());
             RegisterIfNeeded();
 
-            _activeProbeCount = ReflectionProbeData.BuildProbes(
-                activeProbes,
-                _settings.Reflections,
-                _probeScratch.AsSpan(0, AbsoluteMaxProbeCapacity),
-                probe => _layersByProbeId[probe.Id],
-                probe => _cubemapArrayImage.Handle != 0 && _capturedProbeIds.Contains(probe.Id));
+            if (_metadataDirty)
+            {
+                _activeProbeCount = ReflectionProbeData.BuildProbes(
+                    _selectedActiveProbes,
+                    _settings.Reflections,
+                    _probeScratch.AsSpan(0, AbsoluteMaxProbeCapacity),
+                    probe => _layersByProbeId[probe.Id],
+                    probe => _cubemapArrayImage.Handle != 0 && _capturedProbeIds.Contains(probe.Id));
+            }
             UpdateResourceMetrics();
 
             if (_settings.Reflections.CaptureOnLoad && !_captureOnLoadQueued && _activeProbeCount > 0)
             {
                 RequestRecaptureAll("load");
                 _captureOnLoadQueued = true;
+            }
+
+            if (!_metadataDirty)
+            {
+                _lastUploadMicroseconds = 0;
+                return;
             }
 
             GPUReflectionProbeHeader header = ReflectionProbeData.BuildHeader(
@@ -160,6 +201,7 @@ namespace Njulf.Rendering.Resources
                     PipelineStageFlags2.FragmentShaderBit,
                     AccessFlags2.ShaderStorageReadBit));
             _lastUploadMicroseconds = ElapsedMicroseconds(uploadStart);
+            _metadataDirty = false;
         }
 
         public void RequestRecaptureAll(string reason)
@@ -167,7 +209,6 @@ namespace Njulf.Rendering.Resources
             _ = reason ?? throw new ArgumentNullException(nameof(reason));
             foreach (Guid probeId in _layersByProbeId.Keys)
             {
-                _capturedProbeIds.Remove(probeId);
                 QueueCapture(probeId);
             }
         }
@@ -218,6 +259,8 @@ namespace Njulf.Rendering.Resources
             _capturesInFlight.Remove(capture.ProbeId);
             _capturedProbeIds.Add(capture.ProbeId);
             _capturesCompletedThisFrame++;
+            _capturesCompletedTotal++;
+            _metadataDirty = true;
         }
 
         public void CancelCapture(in ReflectionProbeCapture capture)
@@ -227,26 +270,27 @@ namespace Njulf.Rendering.Resources
             QueueCapture(capture.ProbeId);
         }
 
-        private IReadOnlyList<ReflectionProbe> SelectActiveProbes(IReadOnlyList<ReflectionProbe> authoredProbes)
+        private void SelectActiveProbes(IReadOnlyList<ReflectionProbe> authoredProbes)
         {
+            _selectedActiveProbes.Clear();
             if (!_settings.Reflections.Enabled ||
                 _settings.Reflections.Mode is ReflectionMode.Disabled or ReflectionMode.GlobalEnvironmentOnly ||
                 _settings.Reflections.MaxProbes == 0)
-                return Array.Empty<ReflectionProbe>();
+                return;
 
-            var probes = new List<(ReflectionProbe Probe, int OriginalIndex)>(authoredProbes.Count);
-            var ids = new HashSet<Guid>();
+            _selectionScratch.Clear();
+            _selectionIds.Clear();
             for (int i = 0; i < authoredProbes.Count; i++)
             {
                 ReflectionProbe? probe = authoredProbes[i];
                 if (probe == null)
                     continue;
-                if (probe.Id == Guid.Empty || !ids.Add(probe.Id))
+                if (probe.Id == Guid.Empty || !_selectionIds.Add(probe.Id))
                     throw new InvalidOperationException("Each live reflection probe must have a unique, non-empty Id.");
-                probes.Add((probe, i));
+                _selectionScratch.Add((probe, i));
             }
 
-            probes.Sort((a, b) =>
+            _selectionScratch.Sort((a, b) =>
             {
                 int priority = b.Probe.Priority.CompareTo(a.Probe.Priority);
                 if (priority != 0)
@@ -255,11 +299,25 @@ namespace Njulf.Rendering.Resources
                 return name != 0 ? name : a.OriginalIndex.CompareTo(b.OriginalIndex);
             });
 
-            int count = Math.Min(Math.Min(probes.Count, _settings.Reflections.MaxProbes), AbsoluteMaxProbeCapacity);
-            var selected = new ReflectionProbe[count];
+            int count = Math.Min(Math.Min(_selectionScratch.Count, _settings.Reflections.MaxProbes), AbsoluteMaxProbeCapacity);
             for (int i = 0; i < count; i++)
-                selected[i] = probes[i].Probe;
-            return selected;
+                _selectedActiveProbes.Add(_selectionScratch[i].Probe);
+        }
+
+        private ulong CreateSelectionSettingsSignature()
+        {
+            ulong hash = 14695981039346656037UL;
+            static ulong Add(ulong current, uint value) => (current ^ value) * 1099511628211UL;
+            hash = Add(hash, _settings.Reflections.Enabled ? 1u : 0u);
+            hash = Add(hash, (uint)_settings.Reflections.Mode);
+            hash = Add(hash, (uint)_settings.Reflections.MaxProbes);
+            hash = Add(hash, (uint)_settings.Reflections.MaxProbesPerPixel);
+            hash = Add(hash, _settings.Reflections.ProbeResolution);
+            hash = Add(hash, BitConverter.SingleToUInt32Bits(_settings.Reflections.Intensity));
+            hash = Add(hash, BitConverter.SingleToUInt32Bits(_settings.Reflections.GlobalFallbackIntensity));
+            hash = Add(hash, _settings.Reflections.BoxProjectionEnabled ? 1u : 0u);
+            hash = Add(hash, _settings.Reflections.ProbeBlendingEnabled ? 1u : 0u);
+            return hash;
         }
 
         private void SynchronizeProbeLayers(IReadOnlyList<ReflectionProbe> activeProbes)
@@ -285,6 +343,7 @@ namespace Njulf.Rendering.Resources
                     _capturedProbeIds.Remove(probeId);
                     _queuedCaptureProbeIds.Remove(probeId);
                     _capturesInFlight.Remove(probeId);
+                    _metadataDirty = true;
                 }
             }
 
@@ -309,6 +368,7 @@ namespace Njulf.Rendering.Resources
                 int layer = AllocateLayer();
                 _layersByProbeId.Add(probeId, layer);
                 QueueCapture(probeId);
+                _metadataDirty = true;
             }
         }
 
@@ -401,6 +461,7 @@ namespace Njulf.Rendering.Resources
                 _captureFaceViews[layer] = CreateView(ImageViewType.Type2D, layer, 1, 0, 1);
 
             _capturedProbeIds.Clear();
+            _metadataDirty = true;
             foreach (Guid probeId in _layersByProbeId.Keys)
                 QueueCapture(probeId);
             _descriptorDirty = true;

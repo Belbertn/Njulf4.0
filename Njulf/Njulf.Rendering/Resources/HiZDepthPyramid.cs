@@ -1,12 +1,14 @@
 using System;
 using System.Collections.Generic;
 using Njulf.Rendering.Core;
+using Njulf.Rendering.Pipeline;
+using Njulf.Rendering.Utilities;
 using Silk.NET.Vulkan;
 using GpuAllocator = Vma;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed unsafe class HiZDepthPyramid : IDisposable
+    public sealed unsafe class HiZDepthPyramid : IDisposable, IRenderGraphLayoutTrackedImage
     {
         public const uint MinimumUsefulMipDimension = 4;
 
@@ -30,6 +32,45 @@ namespace Njulf.Rendering.Resources
         public uint MipLevels { get; private set; }
         public Format Format => Format.R32Sfloat;
         public ImageLayout Layout { get; set; } = ImageLayout.Undefined;
+
+        /// <summary>
+        /// Transitions every pyramid mip as one graph-visible image range. Per-mip dependencies
+        /// within the downsample chain remain the responsibility of <c>HiZBuildPass</c>.
+        /// </summary>
+        public void TransitionToLayout(
+            CommandBuffer cmd,
+            ImageLayout newLayout,
+            PipelineStageFlags2 dstStage,
+            AccessFlags2 dstAccess,
+            PipelineStageFlags2? srcStage = null,
+            AccessFlags2? srcAccess = null,
+            bool force = false)
+        {
+            if (Layout == newLayout && !force)
+                return;
+
+            ImageLayout oldLayout = Layout;
+            var barrier = BarrierBuilder.CreateImageBarrier(
+                _image,
+                srcStage ?? RenderTarget.GetSourceStageForLayout(oldLayout),
+                srcAccess ?? RenderTarget.GetSourceAccessForLayout(oldLayout),
+                dstStage,
+                dstAccess,
+                oldLayout,
+                newLayout,
+                Vk.QueueFamilyIgnored,
+                Vk.QueueFamilyIgnored,
+                new ImageSubresourceRange
+                {
+                    AspectMask = ImageAspectFlags.ColorBit,
+                    BaseMipLevel = 0,
+                    LevelCount = MipLevels,
+                    BaseArrayLayer = 0,
+                    LayerCount = 1
+                });
+            BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
+            Layout = newLayout;
+        }
 
         public void Recreate(Extent2D extent)
         {

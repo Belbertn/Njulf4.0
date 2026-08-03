@@ -50,16 +50,21 @@ namespace Njulf.Rendering.Resources
         private int _prefilterTransitionFrame;
         private GPUEnvironmentData _prefilterSnapshotData;
         private bool _prefilterSnapshotUploadRequired;
-        private ulong _prefilterSnapshotLightingSignature;
-        private ulong _prefilterPublishedLightingSignature;
+        private uint _requestedSpecularEnvironmentGeneration;
+        private uint _buildingSpecularEnvironmentGeneration;
+        private uint _publishedSpecularEnvironmentGeneration;
         private uint _prefilterResourceGeneration;
         private bool _disposed;
         private readonly IProceduralSkyModel _proceduralSkyModel =
             new HosekWilkieSkyModel();
         private readonly ProceduralAtmosphereFrame _atmosphereFrame = new();
+        private readonly ProceduralAtmosphereFrame _requestedGiAtmosphereFrame = new();
         private readonly ProceduralAtmosphereFrame _giAtmosphereFrame = new();
+        private GiAtmosphereAdmissionController _giAdmissionController;
+        private ulong _requestedGiLightingSignature;
         private ulong _giLightingSignature;
         private uint _giLightingGeneration;
+        private bool _giUploadRequired = true;
         private LightHandle _derivedSunHandle;
         private Light _authoredSunRestore;
         private bool _derivedSunWasCreated;
@@ -133,6 +138,14 @@ namespace Njulf.Rendering.Resources
         public bool UsesAnalyticSky => _usesAnalyticSky;
         public ulong GiLightingSignature => _giLightingSignature;
         public uint GiLightingGeneration => _giLightingGeneration;
+        public ulong RequestedGiLightingSignature => _requestedGiLightingSignature;
+        public uint RequestedGiLightingGeneration => _giAdmissionController.RequestedGeneration;
+        public uint RequestedSpecularEnvironmentGeneration => _requestedSpecularEnvironmentGeneration;
+        public uint PublishedSpecularEnvironmentGeneration => _publishedSpecularEnvironmentGeneration;
+        public ulong GiCandidateRequestCount => _giAdmissionController.RequestedCount;
+        public ulong GiCandidateCoalescedCount => _giAdmissionController.CoalescedCount;
+        public ulong GiAdmissionCount => _giAdmissionController.AdmittedCount;
+        public bool HasPendingGiAtmosphere => _giAdmissionController.HasPendingCandidate;
         internal ProceduralAtmosphereFrame AtmosphereFrame => _atmosphereFrame;
         internal ProceduralAtmosphereFrame GiAtmosphereFrame => _giAtmosphereFrame;
 
@@ -218,7 +231,7 @@ namespace Njulf.Rendering.Resources
                 authoredSunRadiance,
                 _atmosphereFrame);
 
-            UpdateGiAtmosphereFrame(toSunDirection, authoredSunRadiance);
+            UpdateRequestedGiAtmosphereFrame(toSunDirection, authoredSunRadiance);
 
             // Preserve one common, low-frequency safety fallback for code paths
             // that cannot consume the environment buffer (for example an early
@@ -236,7 +249,7 @@ namespace Njulf.Rendering.Resources
                 fallback.Z);
         }
 
-        private void UpdateGiAtmosphereFrame(
+        private void UpdateRequestedGiAtmosphereFrame(
             Vector3 toSunDirection,
             Vector3? authoredSunRadiance)
         {
@@ -251,19 +264,84 @@ namespace Njulf.Rendering.Resources
                 settings,
                 steppedToSun,
                 steppedAuthoredRadiance);
-            if (_giLightingGeneration != 0u && signature == _giLightingSignature)
+            if (signature == _requestedGiLightingSignature)
                 return;
 
             _proceduralSkyModel.UpdateFrame(
                 settings,
                 steppedToSun,
                 steppedAuthoredRadiance,
-                _giAtmosphereFrame);
-            _giLightingSignature = signature;
-            _giLightingGeneration = _giLightingGeneration == uint.MaxValue
-                ? 1u
-                : _giLightingGeneration + 1u;
+                _requestedGiAtmosphereFrame);
+            _requestedGiLightingSignature = signature;
+            _requestedSpecularEnvironmentGeneration = AdvanceGeneration(_requestedSpecularEnvironmentGeneration);
+
+            // Construction and non-DDGI callers still receive a valid first snapshot. Subsequent
+            // changes cross the explicit renderer-owned admission boundary.
+            if (_giLightingGeneration == 0u)
+                ApplyGiAtmosphereAdmission(default);
         }
+
+        public GiAtmosphereAdmissionDecision ApplyGiAtmosphereAdmission(
+            in GiAtmosphereCohortFeedback cohort,
+            bool hardInvalidation = false)
+        {
+            if (_requestedGiLightingSignature == 0UL)
+                return default;
+
+            GiAtmosphereAdmissionDecision decision = _giAdmissionController.Update(
+                new GiAtmosphereAdmissionInput(_requestedGiLightingSignature, cohort, hardInvalidation));
+            if (decision.Action is not (GiAtmosphereAdmissionAction.AdmitPendingCandidate or
+                GiAtmosphereAdmissionAction.HardRestartWithCandidate) ||
+                (decision.Action != GiAtmosphereAdmissionAction.HardRestartWithCandidate &&
+                 decision.AdmittedSignature == _giLightingSignature))
+            {
+                return decision;
+            }
+
+            CopyAtmosphereFrame(_requestedGiAtmosphereFrame, _giAtmosphereFrame);
+            _giLightingSignature = decision.AdmittedSignature;
+            _giLightingGeneration = decision.AdmittedGeneration;
+            _giUploadRequired = true;
+            UpdateTransportFallbackRadiance();
+            return decision;
+        }
+
+        private void UpdateTransportFallbackRadiance()
+        {
+            Vector3 irradiance = HosekWilkieSkyModel.EvaluateDiffuseIrradianceSh(
+                Vector3.UnitY,
+                _giAtmosphereFrame.DiffuseIrradianceSh);
+            Vector3 fallback = Vector3.Max(irradiance / MathF.PI, Vector3.Zero);
+            _settings.Environment.TransportFallbackRadiance = new Njulf.Core.Math.Vector3(
+                fallback.X, fallback.Y, fallback.Z);
+        }
+
+        private static void CopyAtmosphereFrame(ProceduralAtmosphereFrame source, ProceduralAtmosphereFrame destination)
+        {
+            source.HosekParameters.AsSpan().CopyTo(destination.HosekParameters);
+            source.HosekRadiances.AsSpan().CopyTo(destination.HosekRadiances);
+            source.DiffuseIrradianceSh.AsSpan().CopyTo(destination.DiffuseIrradianceSh);
+            destination.ToSunDirection = source.ToSunDirection;
+            destination.SunRadiance = source.SunRadiance;
+            destination.ToMoonDirection = source.ToMoonDirection;
+            destination.MoonRadiance = source.MoonRadiance;
+            destination.GroundAlbedo = source.GroundAlbedo;
+            destination.GroundRadiance = source.GroundRadiance;
+            destination.SunAngularRadiusRadians = source.SunAngularRadiusRadians;
+            destination.MoonAngularRadiusRadians = source.MoonAngularRadiusRadians;
+            destination.SunElevationRadians = source.SunElevationRadians;
+            destination.Turbidity = source.Turbidity;
+            destination.AtmosphereIntensity = source.AtmosphereIntensity;
+            destination.DayBlend = source.DayBlend;
+            destination.TwilightBlend = source.TwilightBlend;
+            destination.NightBlend = source.NightBlend;
+            destination.StarIntensity = source.StarIntensity;
+            destination.AirglowIntensity = source.AirglowIntensity;
+            destination.Revision = source.Revision;
+        }
+
+        private static uint AdvanceGeneration(uint generation) =>
+            generation == uint.MaxValue ? 1u : generation + 1u;
 
         internal static Vector3 QuantizeGiSunDirection(
             Vector3 toSunDirection,
@@ -595,7 +673,7 @@ namespace Njulf.Rendering.Resources
                 !_prefilterBuildSnapshotCaptured)
             {
                 _prefilterSnapshotData = data;
-                _prefilterSnapshotLightingSignature = _giLightingSignature;
+                _buildingSpecularEnvironmentGeneration = _requestedSpecularEnvironmentGeneration;
                 _prefilterBuildSnapshotCaptured = true;
                 _prefilterSnapshotUploadRequired = true;
             }
@@ -628,20 +706,24 @@ namespace Njulf.Rendering.Resources
                         size: EnvironmentDataSize));
                 _prefilterSnapshotUploadRequired = false;
             }
-            GPUEnvironmentData giData = _usesAnalyticSky
-                ? CreateGpuData(_giAtmosphereFrame)
-                : data;
-            GpuBufferUploader.UploadValueToBuffer(
-                _context,
-                _bufferManager,
-                stagingRing,
-                commandBuffer,
-                _giEnvironmentBuffer,
-                giData,
-                barrierDescription: new UploadBarrierDescription(
-                    PipelineStageFlags2.ComputeShaderBit,
-                    AccessFlags2.ShaderStorageReadBit,
-                    size: EnvironmentDataSize));
+            if (_giUploadRequired || !_usesAnalyticSky)
+            {
+                GPUEnvironmentData giData = _usesAnalyticSky
+                    ? CreateGpuData(_giAtmosphereFrame)
+                    : data;
+                GpuBufferUploader.UploadValueToBuffer(
+                    _context,
+                    _bufferManager,
+                    stagingRing,
+                    commandBuffer,
+                    _giEnvironmentBuffer,
+                    giData,
+                    barrierDescription: new UploadBarrierDescription(
+                        PipelineStageFlags2.ComputeShaderBit,
+                        AccessFlags2.ShaderStorageReadBit,
+                        size: EnvironmentDataSize));
+                _giUploadRequired = false;
+            }
         }
 
         internal int PrefilterMipsPerFrame =>
@@ -711,8 +793,8 @@ namespace Njulf.Rendering.Resources
             {
                 _prefilterReadTexture = _prefilterBuildTexture;
                 _prefilterNextTexture = _prefilterReadTexture;
-                _prefilterPublishedLightingSignature =
-                    _prefilterSnapshotLightingSignature;
+                _publishedSpecularEnvironmentGeneration =
+                    _buildingSpecularEnvironmentGeneration;
                 _prefilterReady = true;
                 _prefilterBlend = 1.0f;
                 return;
@@ -743,8 +825,8 @@ namespace Njulf.Rendering.Resources
                 {
                     _prefilterReadTexture = _prefilterNextTexture;
                     _prefilterNextTexture = _prefilterReadTexture;
-                    _prefilterPublishedLightingSignature =
-                        _prefilterSnapshotLightingSignature;
+                    _publishedSpecularEnvironmentGeneration =
+                        _buildingSpecularEnvironmentGeneration;
                     _prefilterBlend = 1.0f;
                     _prefilterTransitionActive = false;
                 }
@@ -753,11 +835,10 @@ namespace Njulf.Rendering.Resources
             if (_prefilterBuildActive || _prefilterTransitionActive)
                 return;
 
-            // Rebuild only when the stepped lighting source has materially
-            // changed. Without this gate a static sky continuously ping-pongs
-            // and prefilters both cubemaps after every completed transition.
-            if (_giLightingGeneration == 0u ||
-                _giLightingSignature == _prefilterPublishedLightingSignature)
+            // Specular IBL tracks the latest visual atmosphere independently of a held DDGI
+            // cohort. A build pins its immutable snapshot until the whole mip chain completes.
+            if (_requestedSpecularEnvironmentGeneration == 0u ||
+                _requestedSpecularEnvironmentGeneration == _publishedSpecularEnvironmentGeneration)
             {
                 return;
             }
@@ -998,8 +1079,8 @@ namespace Njulf.Rendering.Resources
             _prefilterBuildActive = true;
             _prefilterBuildSnapshotCaptured = false;
             _prefilterSnapshotUploadRequired = false;
-            _prefilterSnapshotLightingSignature = 0UL;
-            _prefilterPublishedLightingSignature = 0UL;
+            _buildingSpecularEnvironmentGeneration = 0u;
+            _publishedSpecularEnvironmentGeneration = 0u;
             _prefilterTransitionActive = false;
             _prefilterTransitionFrame = 0;
             _prefilterResourceGeneration++;
@@ -1018,8 +1099,8 @@ namespace Njulf.Rendering.Resources
             _prefilterBuildActive = false;
             _prefilterBuildSnapshotCaptured = false;
             _prefilterSnapshotUploadRequired = false;
-            _prefilterSnapshotLightingSignature = 0UL;
-            _prefilterPublishedLightingSignature = 0UL;
+            _buildingSpecularEnvironmentGeneration = 0u;
+            _publishedSpecularEnvironmentGeneration = 0u;
             _prefilterTransitionActive = false;
             _prefilterTransitionFrame = 0;
         }

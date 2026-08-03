@@ -46,7 +46,9 @@ namespace Njulf.Rendering.Data
         PendingWarmup = 4,
         NoMeasuredBenefit = 5,
         Enabled = 6,
-        ValidationFallback = 7
+        ValidationFallback = 7,
+        Uncertified = 8,
+        QuarantinedAfterValidationError = 9
     }
 
     /// <summary>
