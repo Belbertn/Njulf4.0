@@ -20,6 +20,16 @@
 #endif
 
 const float SIMPLE_DDGI_PI = 3.14159265359;
+// Mirrors the resident scheduler outcome ABI. Producer shaders include this
+// file without the scheduler-stage shared header, so keep the stride local to
+// the common producer ABI as well.
+const uint SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS = 8u;
+// The scheduler arena keeps the accepted transaction/proposal record compact
+// at seven words.  The public queue has an explicit eighth padding word, so
+// producer shaders must not use the queue stride when indexing private arena
+// proposals.
+const uint SIMPLE_DDGI_SCHEDULER_UPDATE_RECORD_WORDS = 7u;
+const uint SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS = 15u;
 const uint SIMPLE_DDGI_FLAG_ENABLED = 1u << 0;
 const uint SIMPLE_DDGI_FLAG_FAR_FIELD_ENABLED = 1u << 1;
 const uint SIMPLE_DDGI_FLAG_FAR_FIELD_FORCE_ALL = 1u << 2;
@@ -166,8 +176,15 @@ const uint SIMPLE_DDGI_UPDATE_SOURCE_REFRESH = 1u << 13;
 const uint SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT = 8u;
 const uint SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK = 0xffffff00u;
 const uint SIMPLE_DDGI_SCHEDULER_INVALID_INDEX = 0xffffffffu;
-const uint SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_STRIDE_WORDS = 4u;
+// Ray-bucket commands and metadata are separate arena regions. The command
+// offset is used only by the host's vkCmdDispatchIndirect call; shaders read
+// queue metadata through the dedicated metadata offset.
+const uint SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_INDIRECT_WORDS = 4u;
+const uint SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_METADATA_WORDS = 4u;
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED_WORD = 2u;
+const uint SIMPLE_DDGI_SCHEDULER_COMPLETE_CANONICAL_PUBLISH = 1u << 5u;
+const uint SIMPLE_DDGI_SCHEDULER_COMPLETE_SAMPLED_PUBLISH = 1u << 6u;
+const uint SIMPLE_DDGI_SCHEDULER_FAILURE_PUBLICATION_GUARD = 1u << 3u;
 
 bool SimpleDdgiGpuSchedulerActive(uint arenaIndex)
 {
@@ -186,19 +203,63 @@ uint SimpleDdgiSchedulerAcceptedCount(uint arenaIndex, uint countersOffsetWords)
         countersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED_WORD);
 }
 
+// Publication is still a producer stage, but it is not allowed to start from
+// a partial transaction. The scheduler commit validates the same outcome
+// record again after publication; this first guard prevents a stale generation
+// or failed producer from copying private data into a receiver-visible atlas.
+bool SimpleDdgiSchedulerOutcomeAllowsPublication(
+    uint arenaIndex,
+    uint outcomesOffsetWords,
+    uint outcomeIndex,
+    bool sampledPublication,
+    uint frameOffsetWords)
+{
+    if (!SimpleDdgiGpuSchedulerActive(arenaIndex))
+        return true;
+    uint base = outcomesOffsetWords + outcomeIndex * SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS;
+    uint required = SimpleDdgiSchedulerRead(arenaIndex, base + 7u);
+    uint completed = SimpleDdgiSchedulerRead(arenaIndex, base + 8u);
+    uint failure = SimpleDdgiSchedulerRead(arenaIndex, base + 9u);
+    if (failure != 0u)
+        return false;
+
+    // Publication is a producer boundary, so it must reject a delayed queue
+    // record even when its completion bits happen to be present. Emit records
+    // the five transaction generations in words 0..4; compare them with the
+    // current frame header before any receiver-visible atlas write.
+    if (SimpleDdgiSchedulerRead(arenaIndex, base + 0u) !=
+            SimpleDdgiSchedulerRead(arenaIndex, frameOffsetWords + 16u) ||
+        SimpleDdgiSchedulerRead(arenaIndex, base + 1u) !=
+            SimpleDdgiSchedulerRead(arenaIndex, frameOffsetWords + 15u) ||
+        SimpleDdgiSchedulerRead(arenaIndex, base + 2u) !=
+            SimpleDdgiSchedulerRead(arenaIndex, frameOffsetWords + 14u) ||
+        SimpleDdgiSchedulerRead(arenaIndex, base + 3u) !=
+            SimpleDdgiSchedulerRead(arenaIndex, frameOffsetWords + 17u) ||
+        SimpleDdgiSchedulerRead(arenaIndex, base + 4u) !=
+            SimpleDdgiSchedulerRead(arenaIndex, frameOffsetWords + 18u))
+        return false;
+
+    uint prerequisite = required & ~(
+        SIMPLE_DDGI_SCHEDULER_COMPLETE_CANONICAL_PUBLISH |
+        SIMPLE_DDGI_SCHEDULER_COMPLETE_SAMPLED_PUBLISH);
+    if (sampledPublication)
+        prerequisite |= SIMPLE_DDGI_SCHEDULER_COMPLETE_CANONICAL_PUBLISH;
+    return (completed & prerequisite) == prerequisite;
+}
+
 void SimpleDdgiResolveSchedulerRayBucket(
     uint arenaIndex,
-    uint bucketCommandsOffsetWords,
+    uint bucketMetadataOffsetWords,
     uint bucketIndex,
     out uint queueOffset,
     out uint probeCount,
     out uint raysPerProbe)
 {
-    uint base = bucketCommandsOffsetWords +
-        bucketIndex * SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_STRIDE_WORDS;
-    queueOffset = SimpleDdgiSchedulerRead(arenaIndex, base + 1u);
-    probeCount = SimpleDdgiSchedulerRead(arenaIndex, base + 2u);
-    raysPerProbe = max(1u, SimpleDdgiSchedulerRead(arenaIndex, base + 3u));
+    uint base = bucketMetadataOffsetWords +
+        bucketIndex * SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_METADATA_WORDS;
+    queueOffset = SimpleDdgiSchedulerRead(arenaIndex, base + 0u);
+    probeCount = SimpleDdgiSchedulerRead(arenaIndex, base + 1u);
+    raysPerProbe = max(1u, SimpleDdgiSchedulerRead(arenaIndex, base + 2u));
 }
 
 // A one-sided shell seen from behind is neither a shadeable surface nor sky.
@@ -579,6 +640,7 @@ struct SimpleDdgiProbeUpdate
     // active ray count can be a smaller maintenance subset, but cache lookup must
     // select within this original sequence to reuse the exact traced directions.
     uint sourceRayCount;
+    uint outcomeIndex;
 };
 
 uint SimpleDdgiProbeStateBase(uint probeIndex)
@@ -621,7 +683,62 @@ SimpleDdgiProbeUpdate ReadSimpleDdgiProbeUpdate(uint bufferIndex, uint queueOffs
     update.flags = header.z;
     update.expectedGeneration = header.w;
     update.sourceRayCount = ReadStorageWordUniform(bufferIndex, baseWord + 4u);
+    update.outcomeIndex = ReadStorageWordUniform(bufferIndex, baseWord + 6u);
     return update;
+}
+
+// Every ray producer performs its output write, a buffer memory barrier, and
+// then this atomic completion protocol. Only the invocation that observes the
+// final expected ray count sets the producer bit.
+void SimpleDdgiSchedulerRayComplete(
+    uint arenaIndex,
+    uint outcomesOffsetWords,
+    uint outcomeIndex,
+    uint expectedInvocationCount,
+    uint completionBit)
+{
+    if (!SimpleDdgiGpuSchedulerActive(arenaIndex))
+        return;
+    memoryBarrierBuffer();
+    uint base = outcomesOffsetWords + outcomeIndex * SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS;
+    uint countWord = completionBit == (1u << 0u) ? 12u : 13u;
+    uint previous = atomicAdd(
+        BindlessStorageBuffers[nonuniformEXT(arenaIndex)].Words[base + countWord], 1u);
+    if (previous + 1u >= max(expectedInvocationCount, 1u))
+    {
+        atomicOr(
+            BindlessStorageBuffers[nonuniformEXT(arenaIndex)].Words[base + 8u],
+            completionBit);
+    }
+}
+
+void SimpleDdgiSchedulerFailOutcome(
+    uint arenaIndex,
+    uint outcomesOffsetWords,
+    uint outcomeIndex,
+    uint failureReason)
+{
+    if (!SimpleDdgiGpuSchedulerActive(arenaIndex))
+        return;
+    atomicOr(
+        BindlessStorageBuffers[nonuniformEXT(arenaIndex)].Words[
+            outcomesOffsetWords + outcomeIndex * SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS + 9u],
+        failureReason);
+}
+
+void SimpleDdgiSchedulerCompleteSingle(
+    uint arenaIndex,
+    uint outcomesOffsetWords,
+    uint outcomeIndex,
+    uint completionBit)
+{
+    if (!SimpleDdgiGpuSchedulerActive(arenaIndex))
+        return;
+    memoryBarrierBuffer();
+    atomicOr(
+        BindlessStorageBuffers[nonuniformEXT(arenaIndex)].Words[
+            outcomesOffsetWords + outcomeIndex * SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS + 8u],
+        completionBit);
 }
 
 uint SimpleDdgiProbeGeneration(SimpleDdgiProbeState state)
@@ -1129,6 +1246,35 @@ void WriteSimpleDdgiAtlasTexel(uint bufferIndex, uint probeIndex, uint texelInde
 {
     value = clamp(value, vec4(0.0), vec4(65504.0));
     uint word = SimpleDdgiAtlasWord(probeIndex, texelIndex, texelsPerProbe);
+    WriteStorageWordUniform(bufferIndex, word, packHalf2x16(value.xy));
+    WriteStorageWordUniform(bufferIndex, word + 1u, packHalf2x16(value.zw));
+}
+
+vec4 ReadSimpleDdgiAtlasTexelAtOffset(
+    uint bufferIndex,
+    uint baseOffsetWords,
+    uint probeIndex,
+    uint texelIndex,
+    uint texelsPerProbe)
+{
+    uint word = baseOffsetWords +
+        SimpleDdgiAtlasWord(probeIndex, texelIndex, texelsPerProbe);
+    vec2 xy = unpackHalf2x16(ReadStorageWordUniform(bufferIndex, word));
+    vec2 zw = unpackHalf2x16(ReadStorageWordUniform(bufferIndex, word + 1u));
+    return vec4(xy, zw);
+}
+
+void WriteSimpleDdgiAtlasTexelAtOffset(
+    uint bufferIndex,
+    uint baseOffsetWords,
+    uint probeIndex,
+    uint texelIndex,
+    uint texelsPerProbe,
+    vec4 value)
+{
+    value = clamp(value, vec4(0.0), vec4(65504.0));
+    uint word = baseOffsetWords +
+        SimpleDdgiAtlasWord(probeIndex, texelIndex, texelsPerProbe);
     WriteStorageWordUniform(bufferIndex, word, packHalf2x16(value.xy));
     WriteStorageWordUniform(bufferIndex, word + 1u, packHalf2x16(value.zw));
 }

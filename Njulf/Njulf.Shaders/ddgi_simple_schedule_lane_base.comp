@@ -15,7 +15,8 @@ void main()
     uint base = 0u;
     for (uint i = 0u; i < lane; i++)
         base += SchedulerArenaRead(pc.LaneCandidateCountsOffsetWords + i);
-    SchedulerArenaWrite(pc.LaneCursorsOffsetWords + lane, base);
+    // LanePrefixes is the compacted candidate base. LaneCursors is persistent
+    // rotating state and must survive a frame reset and this prefix pass.
     SchedulerArenaWrite(pc.LanePrefixesOffsetWords + lane, base);
     if (lane == 0u)
     {

@@ -368,6 +368,69 @@ public sealed class SimpleDdgiLayoutCompilerTests
         });
     }
 
+    [Test]
+    public void ResidentHighLayout_FallsBackToCanonicalAtlasesBeforeDroppingTheFarRing()
+    {
+        const int nearProbes = 10_976;
+        const int midProbes = 3_240;
+        const int farProbes = 1_152;
+        const int requestedProbes = nearProbes + midProbes + farProbes;
+        const int updates = 2_048;
+        const int rays = 128;
+        const ulong budgetBytes = 192UL * 1024UL * 1024UL;
+
+        SimpleDdgiLayoutVolumeRequest[] requests =
+        [
+            new("near", 10_000, false, SimpleDdgiVolumePurpose.ReceiverHero, 0, 1.0f, nearProbes),
+            new("mid", 10_001, false, SimpleDdgiVolumePurpose.TransitionSupport, 0, 3.0f, midProbes),
+            new("far", 10_002, false, SimpleDdgiVolumePurpose.TransitionSupport, 0, 9.0f, farProbes)
+        ];
+        var budget = new SimpleDdgiLayoutBudget(
+            DdgiQualityTier.DdgiHigh,
+            16_384,
+            budgetBytes,
+            GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount);
+
+        SimpleDdgiLayoutReport sampled = SimpleDdgiLayoutCompiler.Compile(
+            requests,
+            budget,
+            sampledAtlasRequested: true,
+            SimpleDdgiLayoutAdmissionMode.Reject,
+            transportV2Enabled: true,
+            transportRayCapacity: rays,
+            configuredProbeUpdatesPerFrame: updates,
+            lightingDirtyBoostEnabled: true,
+            readbackBufferCount: 0,
+            residentPrivateTargets: true);
+        SimpleDdgiLayoutReport canonicalOnly = SimpleDdgiLayoutCompiler.Compile(
+            requests,
+            budget,
+            sampledAtlasRequested: false,
+            SimpleDdgiLayoutAdmissionMode.Reject,
+            transportV2Enabled: true,
+            transportRayCapacity: rays,
+            configuredProbeUpdatesPerFrame: updates,
+            lightingDirtyBoostEnabled: true,
+            readbackBufferCount: 0,
+            residentPrivateTargets: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sampled.AcceptedProbeCount, Is.EqualTo(nearProbes + midProbes));
+            Assert.That(sampled.WasDegraded, Is.True);
+            Assert.That(canonicalOnly.AcceptedProbeCount, Is.EqualTo(requestedProbes));
+            Assert.That(canonicalOnly.WasDegraded, Is.False);
+            Assert.That(canonicalOnly.AcceptedMemoryPlan.LiveBytes, Is.LessThanOrEqualTo(budgetBytes));
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldUseCanonicalOnlyResidentLayout(
+                    residentPrivateTargets: true,
+                    sampledAtlasRequested: true,
+                    sampled,
+                    canonicalOnly),
+                Is.True);
+        });
+    }
+
     [TestCase(DdgiQualityTier.DdgiLow, 4_096)]
     [TestCase(DdgiQualityTier.DdgiMedium, 8_192)]
     [TestCase(DdgiQualityTier.DdgiHigh, 16_384)]

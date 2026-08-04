@@ -1939,7 +1939,7 @@ namespace Njulf.Rendering.Data
         }
 
         public bool UseDdgi { get; set; } = true;
-        public bool UseRayQueryBackend { get; set; }
+        public bool UseRayQueryBackend { get; set; } = true;
         public DdgiQualityTier DdgiQualityTier { get; set; } = DdgiQualityTier.DdgiHigh;
 
         /// <summary>
@@ -2099,12 +2099,12 @@ namespace Njulf.Rendering.Data
         /// </summary>
         public bool DdgiAlphaMaskedTransportEnabled { get; set; } = true;
         /// <summary>
-        /// Authority for Simple-DDGI scheduling.  CPU reference remains the
-        /// safe serialized default until a capture explicitly opts into GPU
-        /// mirror/resident qualification.
+        /// Authority for Simple-DDGI scheduling. GPU-resident scheduling is the
+        /// default production path; CpuReference remains available as the
+        /// explicit compatibility and fallback mode.
         /// </summary>
         public SimpleDdgiSchedulerMode SimpleDdgiSchedulerMode { get; set; } =
-            SimpleDdgiSchedulerMode.CpuReference;
+            SimpleDdgiSchedulerMode.GpuResident;
         public bool SimpleDdgiSharedMemoryBlendEnabled { get; set; } = true;
         public bool SimpleDdgiClassificationSchedulingEnabled { get; set; } = true;
         public bool SimpleDdgiClassificationReadbackEnabled { get; set; } = true;
@@ -4319,7 +4319,10 @@ namespace Njulf.Rendering.Data
             public float EnvironmentFallbackIntensity { get; init; } = 1.0f;
             // Keep partially specified settings files on the DDGI-focused default.
             public bool UseDdgi { get; init; } = true;
-            public bool UseRayQueryBackend { get; init; }
+            // Nullable preserves quality-preset defaults for legacy files that
+            // predate the explicit backend selector. A serialized false remains
+            // an explicit opt-out.
+            public bool? UseRayQueryBackend { get; init; }
             public DdgiQualityTier DdgiQualityTier { get; init; } = DdgiQualityTier.DdgiHigh;
             public bool GiMaterialTransportV2 { get; init; }
             public bool GiEmissiveMeshSampling { get; init; }
@@ -4331,8 +4334,9 @@ namespace Njulf.Rendering.Data
             public bool DdgiThinWallPolicyEnabled { get; init; } = true;
             public bool DdgiAsyncComputeEnabled { get; init; } = true;
             public bool DdgiAlphaMaskedTransportEnabled { get; init; } = true;
-            public SimpleDdgiSchedulerMode SimpleDdgiSchedulerMode { get; init; } =
-                SimpleDdgiSchedulerMode.CpuReference;
+            // Nullable preserves the authored default for older settings files
+            // while allowing an explicit CPU/mirror/resident value to round-trip.
+            public SimpleDdgiSchedulerMode? SimpleDdgiSchedulerMode { get; init; }
             public SimpleDdgiAuthoredVolumeFile[] SimpleDdgiAuthoredVolumes { get; init; } = Array.Empty<SimpleDdgiAuthoredVolumeFile>();
             public bool SimpleDdgiSharedMemoryBlendEnabled { get; init; } = true;
             public bool SimpleDdgiClassificationSchedulingEnabled { get; init; } = true;
@@ -4596,7 +4600,8 @@ namespace Njulf.Rendering.Data
                 settings.IndirectIntensity = IndirectIntensity;
                 settings.EnvironmentFallbackIntensity = EnvironmentFallbackIntensity;
                 settings.UseDdgi = UseDdgi;
-                settings.UseRayQueryBackend = UseRayQueryBackend;
+                if (UseRayQueryBackend.HasValue)
+                    settings.UseRayQueryBackend = UseRayQueryBackend.Value;
                 settings.DdgiQualityTier = DdgiQualityTier;
                 settings.GiMaterialTransportV2 = GiMaterialTransportV2;
                 settings.GiEmissiveMeshSampling = GiEmissiveMeshSampling;
@@ -4607,7 +4612,11 @@ namespace Njulf.Rendering.Data
                 settings.DdgiAdaptiveBudgetingEnabled = DdgiAdaptiveBudgetingEnabled;
                 settings.DdgiThinWallPolicyEnabled = DdgiThinWallPolicyEnabled;
                 settings.DdgiAlphaMaskedTransportEnabled = DdgiAlphaMaskedTransportEnabled;
-                settings.SimpleDdgiSchedulerMode = SimpleDdgiSchedulerMode.Sanitize();
+                if (SimpleDdgiSchedulerMode.HasValue)
+                {
+                    settings.SimpleDdgiSchedulerMode =
+                        SimpleDdgiSchedulerMode.Value.Sanitize();
+                }
                 settings.SimpleDdgiAuthoredVolumes.Clear();
                 foreach (SimpleDdgiAuthoredVolumeFile? authoredVolume in
                     (SimpleDdgiAuthoredVolumes ?? Array.Empty<SimpleDdgiAuthoredVolumeFile>())

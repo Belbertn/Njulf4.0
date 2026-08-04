@@ -25,18 +25,24 @@ void main()
     uint primaryBudget = SchedulerPrimaryRayBudget();
     uint sourceBudget = SchedulerSourceTargetRays();
     bool sourceBudgetLimited = sourceBudget != 0u;
-    uint maintenanceReservation = min(requestBudget,
-        max(activeVolumes, requestBudget / 16u));
-    uint urgentLimit = requestBudget - maintenanceReservation;
 
     uint quotas[16];
     uint volumeUsage[16];
+    uint pendingByClass[16 * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES];
+    uint classReservations[16 * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES];
+    uint classUsage[16 * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES];
     uint minimumTotal = 0u;
     uint quotaTotal = 0u;
     for (uint volume = 0u; volume < SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES; volume++)
     {
         quotas[volume] = 0u;
         volumeUsage[volume] = 0u;
+        for (uint workClass = 0u; workClass < SIMPLE_DDGI_SCHEDULER_WORK_CLASSES; workClass++)
+        {
+            pendingByClass[volume * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES + workClass] = 0u;
+            classReservations[volume * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES + workClass] = 0u;
+            classUsage[volume * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES + workClass] = 0u;
+        }
         if (volume >= activeVolumes)
             continue;
         uint capacity = SchedulerVolumeProbeCount(volume);
@@ -63,213 +69,389 @@ void main()
     else
     {
         uint remaining = requestBudget - minimumTotal;
-        // Distribute the remaining request budget by authored scheduling
-        // weights, then use the stable volume index as the final remainder
-        // tie-break.  The loop is bounded by the request capacity.
-        while (remaining > 0u)
+        // Match the CPU oracle's two weighted quota passes: preferred maxima
+        // are filled first, then unused budget is returned to volumes up to
+        // their physical capacities. Stable volume order is the remainder
+        // tie-break in both passes.
+        for (uint quotaPass = 0u; quotaPass < 2u && remaining > 0u; quotaPass++)
         {
-            uint weightTotal = 0u;
-            for (uint volume = 0u; volume < SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES; volume++)
+            while (remaining > 0u)
             {
-                if (volume >= activeVolumes)
-                    continue;
-                uint maximum = min(max(SchedulerVolumeWord(volume, 27u),
-                    SchedulerVolumeWord(volume, 26u)), SchedulerVolumeProbeCount(volume));
-                if (quotas[volume] < maximum)
-                    weightTotal += max(SchedulerVolumeWord(volume, 28u), 1u);
-            }
-            if (weightTotal == 0u)
-                break;
-
-            uint distributed = 0u;
-            uint bestVolume = SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES;
-            uint bestRemainder = 0u;
-            for (uint volume = 0u; volume < SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES; volume++)
-            {
-                if (volume >= activeVolumes)
-                    continue;
-                uint maximum = min(max(SchedulerVolumeWord(volume, 27u),
-                    SchedulerVolumeWord(volume, 26u)), SchedulerVolumeProbeCount(volume));
-                if (quotas[volume] >= maximum)
-                    continue;
-                uint weight = max(SchedulerVolumeWord(volume, 28u), 1u);
-                uint share = min(maximum - quotas[volume],
-                    (remaining / weightTotal) * weight);
-                if (share > 0u)
+                uint weightTotal = 0u;
+                for (uint volume = 0u; volume < SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES; volume++)
                 {
-                    quotas[volume] += share;
-                    distributed += share;
+                    if (volume >= activeVolumes)
+                        continue;
+                    uint preferred = min(max(SchedulerVolumeWord(volume, 27u),
+                        SchedulerVolumeWord(volume, 26u)), SchedulerVolumeProbeCount(volume));
+                    uint maximum = quotaPass == 0u
+                        ? preferred
+                        : SchedulerVolumeProbeCount(volume);
+                    if (quotas[volume] < maximum)
+                        weightTotal += max(SchedulerVolumeWord(volume, 28u), 1u);
                 }
-                uint remainder = (remaining % weightTotal) * weight;
-                if (bestVolume == SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES ||
-                    remainder > bestRemainder)
-                {
-                    bestVolume = volume;
-                    bestRemainder = remainder;
-                }
-            }
-            if (distributed > remaining)
-                distributed = remaining;
-            remaining -= distributed;
-            if (distributed == 0u)
-            {
-                if (bestVolume == SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES)
+                if (weightTotal == 0u)
                     break;
-                quotas[bestVolume]++;
-                remaining--;
+
+                uint distributed = 0u;
+                uint bestVolume = SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES;
+                uint bestRemainder = 0u;
+                for (uint volume = 0u; volume < SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES; volume++)
+                {
+                    if (volume >= activeVolumes)
+                        continue;
+                    uint preferred = min(max(SchedulerVolumeWord(volume, 27u),
+                        SchedulerVolumeWord(volume, 26u)), SchedulerVolumeProbeCount(volume));
+                    uint maximum = quotaPass == 0u
+                        ? preferred
+                        : SchedulerVolumeProbeCount(volume);
+                    if (quotas[volume] >= maximum)
+                        continue;
+                    uint weight = max(SchedulerVolumeWord(volume, 28u), 1u);
+                    uint share = min(maximum - quotas[volume],
+                        (remaining * weight) / weightTotal);
+                    if (share > 0u)
+                    {
+                        quotas[volume] += share;
+                        distributed += share;
+                    }
+                    uint remainder = (remaining * weight) % weightTotal;
+                    if (bestVolume == SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES ||
+                        remainder > bestRemainder)
+                    {
+                        bestVolume = volume;
+                        bestRemainder = remainder;
+                    }
+                }
+                if (distributed > remaining)
+                    distributed = remaining;
+                remaining -= distributed;
+                if (distributed == 0u)
+                {
+                    if (bestVolume == SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES)
+                        break;
+                    quotas[bestVolume]++;
+                    remaining--;
+                }
+            }
+        }
+    }
+
+    // Mirror the CPU oracle's per-volume class reservations. A single global
+    // maintenance reservation is insufficient: it lets a busy near volume
+    // consume the reservation belonging to an outer volume. The reservation
+    // is applied to every priority phase below; phase 10 returns unused
+    // reservations in deterministic policy order.
+    for (uint volume = 0u; volume < SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES; volume++)
+    {
+        if (volume >= activeVolumes || quotas[volume] == 0u)
+            continue;
+
+        for (uint workClass = 0u; workClass < SIMPLE_DDGI_SCHEDULER_WORK_CLASSES; workClass++)
+        {
+            for (uint transport = 0u; transport < SIMPLE_DDGI_SCHEDULER_TRANSPORT_CATEGORIES; transport++)
+            {
+                for (uint rayTier = 0u; rayTier < SIMPLE_DDGI_SCHEDULER_RAY_TIERS; rayTier++)
+                {
+                    uint lane = SchedulerLaneIndex(volume, workClass, transport, rayTier);
+                    pendingByClass[volume * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES + workClass] +=
+                        SchedulerArenaRead(pc.LaneCandidateCountsOffsetWords + lane);
+                }
+            }
+        }
+
+        uint zeroSupport = pendingByClass[volume * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES +
+            SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_ZERO_SUPPORT];
+        uint fresh = pendingByClass[volume * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES +
+            SIMPLE_DDGI_SCHEDULER_WORK_FRESH_EXPOSED_VISIBLE];
+        uint dirty = pendingByClass[volume * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES +
+            SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_DIRTY];
+        uint retry = pendingByClass[volume * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES +
+            SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_RETRY];
+        uint maintenanceClass = SIMPLE_DDGI_SCHEDULER_WORK_CLASSES;
+        for (uint workClass = SIMPLE_DDGI_SCHEDULER_WORK_NEAR_MAINTENANCE;
+             workClass < SIMPLE_DDGI_SCHEDULER_WORK_CLASSES;
+             workClass++)
+        {
+            if (pendingByClass[volume * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES + workClass] != 0u)
+            {
+                maintenanceClass = workClass;
+                break;
+            }
+        }
+        uint maintenance = maintenanceClass < SIMPLE_DDGI_SCHEDULER_WORK_CLASSES
+            ? pendingByClass[volume * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES + maintenanceClass]
+            : 0u;
+        uint maintenanceReservation = maintenance != 0u && quotas[volume] >= 4u
+            ? min(maintenance, max(1u, quotas[volume] / 16u))
+            : 0u;
+        uint retryReservation = retry != 0u && quotas[volume] >= 3u
+            ? min(retry, max(1u, quotas[volume] / 8u))
+            : 0u;
+        uint dirtyReservation = dirty != 0u && quotas[volume] >= 2u
+            ? min(dirty, max(1u, quotas[volume] / 4u))
+            : 0u;
+        uint lowerReservations = maintenanceReservation + retryReservation + dirtyReservation;
+        if (lowerReservations >= quotas[volume] &&
+            (zeroSupport != 0u || fresh != 0u || dirty != 0u || retry != 0u))
+        {
+            if (maintenanceReservation != 0u)
+                maintenanceReservation--;
+            else if (retryReservation != 0u)
+                retryReservation--;
+            else if (dirtyReservation != 0u)
+                dirtyReservation--;
+            lowerReservations--;
+        }
+
+        uint primaryClass = zeroSupport != 0u
+            ? SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_ZERO_SUPPORT
+            : (fresh != 0u
+                ? SIMPLE_DDGI_SCHEDULER_WORK_FRESH_EXPOSED_VISIBLE
+                : (dirty != 0u
+                    ? SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_DIRTY
+                    : (retry != 0u
+                        ? SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_RETRY
+                        : maintenanceClass)));
+        if (primaryClass < SIMPLE_DDGI_SCHEDULER_WORK_CLASSES)
+        {
+            uint primaryBase = volume * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES;
+            if (primaryClass == SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_ZERO_SUPPORT ||
+                primaryClass == SIMPLE_DDGI_SCHEDULER_WORK_FRESH_EXPOSED_VISIBLE)
+            {
+                classReservations[primaryBase + primaryClass] =
+                    max(0u, quotas[volume] - lowerReservations);
+                classReservations[primaryBase + SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_DIRTY] = dirtyReservation;
+                classReservations[primaryBase + SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_RETRY] = retryReservation;
+                if (maintenanceClass < SIMPLE_DDGI_SCHEDULER_WORK_CLASSES)
+                    classReservations[primaryBase + maintenanceClass] = maintenanceReservation;
+            }
+            else if (primaryClass == SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_DIRTY)
+            {
+                classReservations[primaryBase + primaryClass] =
+                    max(0u, quotas[volume] - maintenanceReservation - retryReservation);
+                classReservations[primaryBase + SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_RETRY] = retryReservation;
+                if (maintenanceClass < SIMPLE_DDGI_SCHEDULER_WORK_CLASSES)
+                    classReservations[primaryBase + maintenanceClass] = maintenanceReservation;
+            }
+            else if (primaryClass == SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_RETRY)
+            {
+                classReservations[primaryBase + primaryClass] =
+                    max(0u, quotas[volume] - maintenanceReservation);
+                if (maintenanceClass < SIMPLE_DDGI_SCHEDULER_WORK_CLASSES)
+                    classReservations[primaryBase + maintenanceClass] = maintenanceReservation;
+            }
+            else
+            {
+                classReservations[primaryBase + primaryClass] = min(maintenance, quotas[volume]);
             }
         }
     }
 
     uint accepted = 0u;
-    uint urgentAccepted = 0u;
     uint primaryUsed = 0u;
     uint sourceUsed = 0u;
-    for (uint phase = 0u; phase < 3u; phase++)
+    // 0..3 are the visible urgent classes, followed by the source cohort,
+    // routine source validation, cached solver, near/mid/far maintenance, and
+    // finally the deterministic return of every unused reservation.
+    for (uint phase = 0u; phase <= 10u; phase++)
     {
-        for (uint lane = 0u; lane < SIMPLE_DDGI_SCHEDULER_MAX_LANES; lane++)
+        for (uint workClass = 0u; workClass < SIMPLE_DDGI_SCHEDULER_WORK_CLASSES; workClass++)
         {
-            uint laneStart = SchedulerArenaRead(pc.LaneCursorsOffsetWords + lane);
-            uint laneCount = SchedulerArenaRead(pc.LaneCandidateCountsOffsetWords + lane);
-            uint laneVolume;
-            uint laneWorkClass;
-            uint laneTransport;
-            uint laneRayTier;
-            SchedulerDecodeLane(lane, laneVolume, laneWorkClass, laneTransport, laneRayTier);
-            bool maintenance = laneWorkClass >= SIMPLE_DDGI_SCHEDULER_WORK_NEAR_MAINTENANCE;
-            bool urgent = !maintenance;
-            if ((phase == 0u && !urgent) ||
-                (phase == 1u && !maintenance) ||
-                (phase == 2u && !urgent))
-                continue;
-
-            for (uint local = 0u; local < laneCount; local++)
+            for (uint transport = 0u; transport < SIMPLE_DDGI_SCHEDULER_TRANSPORT_CATEGORIES; transport++)
             {
-                uint candidateIndex = laneStart + local;
-                if (candidateIndex >= SchedulerCandidateCapacity())
-                    continue;
-                uint compactBase = pc.CandidateOutputOffsetWords +
-                    candidateIndex * SIMPLE_DDGI_SCHEDULER_COMPACT_OUTPUT_WORDS;
-                uint inputIndex = SchedulerArenaRead(compactBase);
-                if (inputIndex >= SchedulerCandidateCapacity())
+                for (uint rayTier = 0u; rayTier < SIMPLE_DDGI_SCHEDULER_RAY_TIERS; rayTier++)
                 {
-                    SchedulerArenaAtomicAdd(
-                        pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_OVERFLOW,
-                        1u);
-                    continue;
-                }
-                uint candidateBase = pc.CandidateInputOffsetWords +
-                    inputIndex * SIMPLE_DDGI_SCHEDULER_CANDIDATE_WORDS;
-                uint probeIndex;
-                uint volumeIndex;
-                uint expectedGeneration;
-                uint sequenceOrdinal;
-                uint workClassAndTransport;
-                uint rayTierAndReason;
-                uint activeRayCount;
-                uint sourceRayCount;
-                SchedulerReadCandidate(candidateBase, probeIndex, volumeIndex,
-                    expectedGeneration, sequenceOrdinal, workClassAndTransport,
-                    rayTierAndReason, activeRayCount, sourceRayCount);
-                if (probeIndex == SIMPLE_DDGI_SCHEDULER_INVALID_PROBE)
-                    continue;
+                    for (uint volumeIndex = 0u; volumeIndex < SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES; volumeIndex++)
+                    {
+                        bool phaseMatches = phase == 10u;
+                        if (phase <= 3u)
+                            phaseMatches = workClass == phase &&
+                                transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE;
+                        else if (phase == 4u)
+                            phaseMatches = transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE;
+                        else if (phase == 5u)
+                            phaseMatches = transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
+                        else if (phase == 6u)
+                            phaseMatches = transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_CACHED_SOLVER;
+                        else if (phase >= 7u && phase <= 9u)
+                            phaseMatches = workClass == SIMPLE_DDGI_SCHEDULER_WORK_NEAR_MAINTENANCE + phase - 7u;
+                        if (!phaseMatches)
+                            continue;
 
-                // An admitted candidate is marked consumed.  This also makes
-                // the third return pass idempotent without an extra scratch bit.
-                uint consumed = SchedulerCandidateWord(candidateBase, 0u);
-                if (consumed == SIMPLE_DDGI_SCHEDULER_INVALID_PROBE)
-                    continue;
-                uint candidateWorkClass = workClassAndTransport & 7u;
-                uint candidateTransport = (workClassAndTransport >> 3u) & 3u;
-                uint candidateRayTier = rayTierAndReason & 0xffu;
-                bool candidateMaintenance = candidateWorkClass >= SIMPLE_DDGI_SCHEDULER_WORK_NEAR_MAINTENANCE;
-                if (candidateMaintenance != maintenance)
-                    continue;
-                if (phase == 0u && urgentAccepted >= urgentLimit)
-                    continue;
-                if (accepted >= requestBudget || volumeIndex >= activeVolumes ||
-                    volumeUsage[volumeIndex] >= quotas[volumeIndex])
-                {
-                    continue;
-                }
+                        uint lane = SchedulerLaneIndex(volumeIndex, workClass, transport, rayTier);
+                        if (lane >= SIMPLE_DDGI_SCHEDULER_MAX_LANES)
+                            continue;
+                        uint laneCount = SchedulerArenaRead(pc.LaneCandidateCountsOffsetWords + lane);
+                        if (laneCount == 0u)
+                            continue;
 
-                bool sourceWork = candidateTransport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE ||
-                    candidateTransport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
-                sourceRayCount = sourceWork
-                    ? clamp(SchedulerVolumeFullRays(volumeIndex), 1u, SIMPLE_DDGI_SCHEDULER_MAX_RAYS)
-                    : 0u;
-                if (sourceWork && (primaryBudget == 0u ||
-                    activeRayCount > primaryBudget - min(primaryUsed, primaryBudget)))
-                {
-                    SchedulerArenaWrite(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE);
-                    SchedulerArenaWrite(pc.CountersOffsetWords +
-                        SIMPLE_DDGI_SCHEDULER_COUNTER_REJECTED,
-                        SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_REJECTED) + 1u);
-                    continue;
-                }
-                if (sourceWork && sourceBudgetLimited &&
-                    (sourceRayCount > sourceBudget - min(sourceUsed, sourceBudget)))
-                {
-                    SchedulerArenaWrite(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE);
-                    SchedulerArenaWrite(pc.CountersOffsetWords +
-                        SIMPLE_DDGI_SCHEDULER_COUNTER_REJECTED,
-                        SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_REJECTED) + 1u);
-                    continue;
-                }
+                        // LaneCursors is the persistent rotating start. The
+                        // compacted LanePrefixes base is never stored in it,
+                        // and admission does not advance it speculatively.
+                        uint laneStart = SchedulerArenaRead(
+                            pc.LaneCursorsOffsetWords + lane) % laneCount;
+                        uint laneBase = SchedulerArenaRead(pc.LanePrefixesOffsetWords + lane);
+                        for (uint local = 0u; local < laneCount; local++)
+                        {
+                            uint candidateIndex = laneBase + ((laneStart + local) % laneCount);
+                            if (candidateIndex >= SchedulerCandidateCapacity())
+                                continue;
+                            uint compactBase = pc.CandidateOutputOffsetWords +
+                                candidateIndex * SIMPLE_DDGI_SCHEDULER_COMPACT_OUTPUT_WORDS;
+                            uint inputIndex = SchedulerArenaRead(compactBase);
+                            if (inputIndex >= SchedulerCandidateCapacity())
+                            {
+                                SchedulerArenaAtomicAdd(
+                                    pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_OVERFLOW,
+                                    1u);
+                                continue;
+                            }
+                            uint candidateBase = pc.CandidateInputOffsetWords +
+                                inputIndex * SIMPLE_DDGI_SCHEDULER_CANDIDATE_WORDS;
+                            uint probeIndex;
+                            uint candidateVolumeIndex;
+                            uint expectedGeneration;
+                            uint sequenceOrdinal;
+                            uint workClassAndTransport;
+                            uint rayTierAndReason;
+                            uint activeRayCount;
+                            uint sourceRayCount;
+                            SchedulerReadCandidate(candidateBase, probeIndex, candidateVolumeIndex,
+                                expectedGeneration, sequenceOrdinal, workClassAndTransport,
+                                rayTierAndReason, activeRayCount, sourceRayCount);
+                            if (probeIndex == SIMPLE_DDGI_SCHEDULER_INVALID_PROBE)
+                                continue;
 
-                uint flags = activeRayCount << SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_SHIFT;
-                if (candidateRayTier == SIMPLE_DDGI_SCHEDULER_RAY_MAINTENANCE)
-                    flags |= SIMPLE_DDGI_SCHEDULER_UPDATE_MAINTENANCE;
-                if (sourceWork)
-                {
-                    flags |= SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH;
-                    if (candidateTransport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE)
-                        flags |= SIMPLE_DDGI_SCHEDULER_UPDATE_ROUTINE_SOURCE;
+                            uint consumed = SchedulerCandidateWord(candidateBase, 0u);
+                            if (consumed == SIMPLE_DDGI_SCHEDULER_INVALID_PROBE)
+                                continue;
+                            uint candidateWorkClass = workClassAndTransport & 7u;
+                            uint candidateTransport = (workClassAndTransport >> 3u) & 3u;
+                            uint candidateRayTier = rayTierAndReason & 0xffu;
+                            uint candidateReasons = rayTierAndReason >> 8u;
+                            if (candidateWorkClass != workClass ||
+                                candidateTransport != transport ||
+                                candidateRayTier != rayTier ||
+                                candidateVolumeIndex != volumeIndex)
+                                continue;
+                            if (accepted >= requestBudget || volumeIndex >= activeVolumes ||
+                                volumeUsage[volumeIndex] >= quotas[volumeIndex])
+                                continue;
+
+                            uint classBase = volumeIndex * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES;
+                            uint classLimit = phase == 10u
+                                ? quotas[volumeIndex]
+                                : classReservations[classBase + workClass];
+                            if (classUsage[classBase + workClass] >= classLimit)
+                                continue;
+
+                            bool sourceWork = candidateTransport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE ||
+                                candidateTransport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
+                            sourceRayCount = sourceWork
+                                ? clamp(SchedulerVolumeFullRays(volumeIndex), 1u, SIMPLE_DDGI_SCHEDULER_MAX_RAYS)
+                                : 0u;
+                            if (sourceWork && (primaryBudget == 0u ||
+                                activeRayCount > primaryBudget - min(primaryUsed, primaryBudget)))
+                            {
+                                SchedulerArenaWrite(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE);
+                                SchedulerArenaWrite(pc.CountersOffsetWords +
+                                    SIMPLE_DDGI_SCHEDULER_COUNTER_REJECTED,
+                                    SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_REJECTED) + 1u);
+                                continue;
+                            }
+                            if (sourceWork && sourceBudgetLimited &&
+                                (sourceRayCount > sourceBudget - min(sourceUsed, sourceBudget)))
+                            {
+                                SchedulerArenaWrite(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE);
+                                SchedulerArenaWrite(pc.CountersOffsetWords +
+                                    SIMPLE_DDGI_SCHEDULER_COUNTER_REJECTED,
+                                    SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_REJECTED) + 1u);
+                                continue;
+                            }
+
+                            uint flags = activeRayCount << SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_SHIFT;
+                            if ((candidateReasons & SIMPLE_DDGI_SCHEDULER_REASON_FRESH) != 0u)
+                                flags |= SIMPLE_DDGI_SCHEDULER_PROBE_FRESH;
+                            if ((candidateReasons & SIMPLE_DDGI_SCHEDULER_REASON_SCROLL) != 0u)
+                                flags |= SIMPLE_DDGI_SCHEDULER_PROBE_SCROLL;
+                            if (candidateRayTier == SIMPLE_DDGI_SCHEDULER_RAY_MAINTENANCE)
+                                flags |= SIMPLE_DDGI_SCHEDULER_UPDATE_MAINTENANCE;
+                            if ((candidateReasons & (
+                                    SIMPLE_DDGI_SCHEDULER_REASON_FRESH |
+                                    SIMPLE_DDGI_SCHEDULER_REASON_SCROLL |
+                                    SIMPLE_DDGI_SCHEDULER_REASON_REGIONAL_DIRTY |
+                                    SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY |
+                                    SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID |
+                                    SIMPLE_DDGI_SCHEDULER_REASON_RELOCATION_RETRY)) != 0u)
+                                flags |= SIMPLE_DDGI_SCHEDULER_UPDATE_INVALIDATE;
+                            if (sourceWork)
+                            {
+                                flags |= SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH;
+                                if (candidateTransport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE)
+                                    flags |= SIMPLE_DDGI_SCHEDULER_UPDATE_ROUTINE_SOURCE;
+                            }
+                            uint cascade = min(SchedulerVolumeWord(volumeIndex, 32u), 6u) + 1u;
+                            uint maxLights = min(SchedulerVolumeWord(volumeIndex, 33u), 62u) + 1u;
+                            flags |= cascade << 3u;
+                            flags |= maxLights << 6u;
+                            uint publicStateBase = probeIndex * SIMPLE_DDGI_PROBE_STATE_WORDS;
+                            uint schedulingAge = ReadStorageWordUniform(
+                                pc.ProbeStateBufferIndex,
+                                publicStateBase + 5u);
+                            SchedulerWriteUpdate(
+                                accepted,
+                                probeIndex,
+                                volumeIndex,
+                                flags,
+                                expectedGeneration,
+                                schedulingAge,
+                                sourceRayCount,
+                                sourceWork ? SchedulerSourceGeneration() : 0u,
+                                candidateReasons);
+                            SchedulerArenaWrite(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE);
+                            accepted++;
+                            volumeUsage[volumeIndex]++;
+                            classUsage[classBase + workClass]++;
+                            if (sourceWork)
+                            {
+                                primaryUsed += activeRayCount;
+                                sourceUsed += sourceRayCount;
+                            }
+                            SchedulerArenaWrite(pc.CountersOffsetWords +
+                                SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED, accepted);
+                            SchedulerArenaWrite(pc.CountersOffsetWords +
+                                SIMPLE_DDGI_SCHEDULER_COUNTER_PRIMARY_USED, primaryUsed);
+                            SchedulerArenaWrite(pc.CountersOffsetWords +
+                                SIMPLE_DDGI_SCHEDULER_COUNTER_SOURCE_USED, sourceUsed);
+                            SchedulerArenaWrite(pc.CountersOffsetWords +
+                                SIMPLE_DDGI_SCHEDULER_COUNTER_VOLUME_USAGE_BASE + volumeIndex,
+                                volumeUsage[volumeIndex]);
+                            SchedulerArenaWrite(pc.CountersOffsetWords +
+                                SIMPLE_DDGI_SCHEDULER_COUNTER_CLASS_USAGE_BASE + min(candidateWorkClass, 15u),
+                                SchedulerArenaRead(pc.CountersOffsetWords +
+                                    SIMPLE_DDGI_SCHEDULER_COUNTER_CLASS_USAGE_BASE + min(candidateWorkClass, 15u)) + 1u);
+                            SchedulerArenaWrite(pc.LaneAdmissionOffsetWords + lane,
+                                SchedulerArenaRead(pc.LaneAdmissionOffsetWords + lane) + 1u);
+                        }
+                    }
                 }
-                uint cascade = min(SchedulerVolumeWord(volumeIndex, 32u), 6u) + 1u;
-                uint maxLights = min(SchedulerVolumeWord(volumeIndex, 33u), 62u) + 1u;
-                flags |= cascade << 3u;
-                flags |= maxLights << 6u;
-                uint publicStateBase = probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
-                uint schedulingAge = ReadStorageWordUniform(
-                    pc.ProbeStateBufferIndex,
-                    publicStateBase + 5u);
-                SchedulerWriteUpdate(
-                    accepted,
-                    probeIndex,
-                    volumeIndex,
-                    flags,
-                    expectedGeneration,
-                    schedulingAge,
-                    sourceRayCount,
-                    sourceWork ? SchedulerSourceGeneration() : 0u);
-                SchedulerArenaWrite(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE);
-                accepted++;
-                volumeUsage[volumeIndex]++;
-                if (sourceWork)
-                {
-                    primaryUsed += activeRayCount;
-                    sourceUsed += sourceRayCount;
-                }
-                if (urgent)
-                    urgentAccepted++;
-                SchedulerArenaWrite(pc.CountersOffsetWords +
-                    SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED, accepted);
-                SchedulerArenaWrite(pc.CountersOffsetWords +
-                    SIMPLE_DDGI_SCHEDULER_COUNTER_PRIMARY_USED, primaryUsed);
-                SchedulerArenaWrite(pc.CountersOffsetWords +
-                    SIMPLE_DDGI_SCHEDULER_COUNTER_SOURCE_USED, sourceUsed);
-                SchedulerArenaWrite(pc.CountersOffsetWords +
-                    SIMPLE_DDGI_SCHEDULER_COUNTER_VOLUME_USAGE_BASE + volumeIndex,
-                    volumeUsage[volumeIndex]);
-                SchedulerArenaWrite(pc.CountersOffsetWords +
-                    SIMPLE_DDGI_SCHEDULER_COUNTER_CLASS_USAGE_BASE + min(candidateWorkClass, 15u),
-                    SchedulerArenaRead(pc.CountersOffsetWords +
-                        SIMPLE_DDGI_SCHEDULER_COUNTER_CLASS_USAGE_BASE + min(candidateWorkClass, 15u)) + 1u);
-                SchedulerArenaWrite(pc.LaneAdmissionOffsetWords + lane,
-                    SchedulerArenaRead(pc.LaneAdmissionOffsetWords + lane) + 1u);
             }
         }
+    }
+
+    // Advance persistent cursors only by candidates that were actually
+    // admitted. Empty lanes retain their previous cursor exactly.
+    for (uint lane = 0u; lane < SIMPLE_DDGI_SCHEDULER_MAX_LANES; lane++)
+    {
+        uint laneCount = SchedulerArenaRead(pc.LaneCandidateCountsOffsetWords + lane);
+        uint laneAccepted = SchedulerArenaRead(pc.LaneAdmissionOffsetWords + lane);
+        if (laneCount == 0u || laneAccepted == 0u)
+            continue;
+        uint oldCursor = SchedulerArenaRead(pc.LaneCursorsOffsetWords + lane) % laneCount;
+        SchedulerArenaWrite(
+            pc.LaneCursorsOffsetWords + lane,
+            (oldCursor + laneAccepted) % laneCount);
     }
 
     SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_EMIT, 1u, 1u, 1u);

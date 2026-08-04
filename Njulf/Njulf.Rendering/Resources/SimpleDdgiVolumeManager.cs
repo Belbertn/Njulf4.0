@@ -533,6 +533,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         // first completed blend, 2 = awaiting stable readback convergence.
         private byte[] _probeDirtyLatencyStates = Array.Empty<byte>();
         private uint[] _probeDirtyLatencyStartFrames = Array.Empty<uint>();
+        private readonly GPUSimpleDdgiSchedulerProbeState[] _gpuResidentBootstrapStateScratch =
+            new GPUSimpleDdgiSchedulerProbeState[GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount];
+        private readonly uint[] _gpuResidentBootstrapLaneCursorScratch =
+            new uint[SimpleDdgiSchedulerAbi.MaxLaneCount];
         private readonly uint[] _dirtyFirstUpdateLatencyBuckets = new uint[DirtyLatencyBucketCount];
         private readonly uint[] _dirtyConvergenceLatencyBuckets = new uint[DirtyLatencyBucketCount];
         private readonly uint[] _dirtyFirstScheduledLatencyBuckets = new uint[DirtyLatencyBucketCount];
@@ -824,6 +828,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private int _gpuSchedulerGenerationMismatchStreak;
         private string _gpuSchedulerFallbackReason = string.Empty;
         private bool _gpuSchedulerFrameExecutionAvailable = true;
+        private bool _sampledAtlasGpuPublicationAvailable;
 
         public SimpleDdgiVolumeManager(
             VulkanContext context,
@@ -904,6 +909,15 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         public ulong IrradianceAtlasBytes => _irradianceAtlasBytes;
         /// <summary>Private V2 Jacobi target; never sampled by receivers.</summary>
         public ulong TransportIrradianceAtlasBytes => _transportIrradianceAtlasBytes;
+        /// <summary>
+        /// Offset, in uint words, of the resident scheduler's private
+        /// visibility target packed after the private irradiance target.
+        /// </summary>
+        public uint GpuSchedulerPrivateVisibilityOffsetWords =>
+            _schedulerMode == SimpleDdgiSchedulerMode.GpuResident
+                ? checked((uint)((ulong)Math.Max(0, _probeCount) *
+                    SimpleDdgiMemoryPlan.IrradianceBytesPerProbe / sizeof(uint)))
+                : 0u;
         /// <summary>Persistent V2 direct/sky/emissive source cache allocation.</summary>
         public ulong TransportSourceCacheBytes => _transportSourceCacheBytes;
         public ulong VisibilityAtlasBytes => _visibilityAtlasBytes;
@@ -929,9 +943,20 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         public bool SampledAtlasActive => SampledAtlasRequested &&
             _registeredBindlessHeap != null &&
             _sampledAtlas?.IsReady == true;
+        public bool SampledAtlasGpuPublicationRequired =>
+            SampledAtlasActive && _sampledAtlasGpuPublicationAvailable;
         public string SampledAtlasFallbackReason => SampledAtlasActive
             ? string.Empty
             : _sampledAtlasFallbackReason;
+
+        /// <summary>
+        /// The publish pass supplies the device-dependent image-pipeline result.
+        /// The scheduler records sampled publication as required only when that
+        /// producer is actually available; otherwise the outcome uses the
+        /// explicit SampledPublishNotRequired bit.
+        /// </summary>
+        public void SetSampledAtlasGpuPublicationAvailable(bool available) =>
+            _sampledAtlasGpuPublicationAvailable = available;
         // These handles are intentionally exposed as allocation-level contracts for render-graph
         // queue ownership tracking. Bindless indices identify descriptors, not Vulkan resources,
         // and therefore cannot safely stand in for a queue-family transfer target.
@@ -943,6 +968,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         public BufferHandle RayResultScratchBuffer => _rayResultScratchBuffer;
         public BufferHandle ProbeStateBuffer => _probeStateBuffer;
         public BufferHandle ProbeUpdateQueueBuffer => _probeUpdateQueueBuffer;
+        public Silk.NET.Vulkan.Buffer GetProbeUpdateQueueVkBuffer() =>
+            _bufferManager.GetBuffer(_probeUpdateQueueBuffer);
         public BufferHandle RelocationClassificationBuffer => _relocationClassificationBuffer;
 
         public BufferHandle GetProbeStateReadbackBuffer(int frameIndex)
@@ -2098,7 +2125,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             bool structuredGatherAvailable,
             bool farFieldCoverageAvailable,
             IReadOnlyList<DdgiDirtyRegion>? dirtyRegions = null,
-            bool cohortLightingTransition = false)
+            bool cohortLightingTransition = false,
+            IReadOnlyList<GlobalIlluminationProbeVolume>? authoredSceneVolumes = null)
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
@@ -2143,7 +2171,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 // but no scheduler or indirect consumer may run against stale
                 // commands in that case.
                 _gpuSchedulerFrameExecutionAvailable =
-                    !_schedulerMode.IsGpuMode() || structuredGatherAvailable;
+                    !_schedulerMode.IsGpuMode() ||
+                    (structuredGatherAvailable &&
+                        (_schedulerMode != SimpleDdgiSchedulerMode.GpuResident ||
+                         _gpuResidentProbeStateBootstrapped));
                 _gpuScheduler.CollectRetired(_frameSerial);
                 bool enabled = gi.EffectiveUseDdgi;
                 layoutMicroseconds += ElapsedMicroseconds(phaseStart);
@@ -2160,20 +2191,32 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 int previousProbeCount = _probeCount;
                 int previousVolumeCount = _volumeCount;
                 CapturePreviousVolumes();
-                BuildVolumeTable(gi, sceneBounds, cameraPosition);
+                BuildVolumeTable(gi, sceneBounds, cameraPosition, authoredSceneVolumes);
                 layoutMicroseconds += ElapsedMicroseconds(phaseStart);
 
                 phaseStart = Stopwatch.GetTimestamp();
                 bool volumeTableRemapped = VolumeTableRemapped(previousProbeCount, previousVolumeCount);
+                bool incompatibleTopologyStateReset = false;
                 if (volumeTableRemapped)
                     AdvanceVolumeTableGenerationAndDropPendingReadbacks();
                 invalidationMicroseconds += ElapsedMicroseconds(phaseStart);
 
                 phaseStart = Stopwatch.GetTimestamp();
+                // A topology remap can be an ordinary cell-aligned toroidal
+                // scroll. Compatible cell-aligned movement keeps private
+                // scheduler state and persistent lane cursors. An incompatible
+                // topology is a bootstrap boundary for the affected records.
                 bool residentBootstrap = _schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
-                    (!_gpuResidentProbeStateBootstrapped || volumeTableRemapped);
-                if (_schedulerMode != SimpleDdgiSchedulerMode.GpuResident || residentBootstrap)
+                    !_gpuResidentProbeStateBootstrapped;
+                bool residentCpuStateCapacityRefresh =
+                    _schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+                    (residentBootstrap || volumeTableRemapped);
+                if (_schedulerMode != SimpleDdgiSchedulerMode.GpuResident ||
+                    residentCpuStateCapacityRefresh)
                     EnsureCpuProbeStateCapacity(_probeCount);
+                if (volumeTableRemapped)
+                    incompatibleTopologyStateReset =
+                        ResetIncompatibleTopologyProbeState(previousVolumeCount);
                 long cpuStateCapacityMicroseconds = ElapsedMicroseconds(phaseStart);
                 capacityMicroseconds += cpuStateCapacityMicroseconds;
                 _uploadCapacityCpuProbeStateMicroseconds += cpuStateCapacityMicroseconds;
@@ -2241,13 +2284,36 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     commandBuffer);
                 if (_schedulerMode.IsGpuMode() && _probeCount > 0)
                 {
-                    _gpuScheduler.EnsureCapacity(
+                    bool schedulerArenaReplaced = _gpuScheduler.EnsureCapacity(
                         _probeCount,
                         Math.Clamp(_schedulerConfiguredRequestBudget, 0, _probeCount),
                         _volumeCount,
                         SimpleDdgiGpuSchedulerLayout.MaxDirtyRegionCapacity,
                         _context.ValidationSettings.Mode != RendererValidationMode.Off,
                         _frameSerial);
+                    if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+                        schedulerArenaReplaced)
+                    {
+                        // A replacement arena contains undefined private
+                        // scheduler state even when the public probe buffer was
+                        // reused. Force the distinct bootstrap ABI before any
+                        // resident dispatch can become graph-visible.
+                        residentBootstrap = true;
+                        _gpuResidentProbeStateBootstrapped = false;
+                        _gpuSchedulerFrameExecutionAvailable = false;
+                        EnsureCpuProbeStateCapacity(_probeCount);
+                    }
+                }
+                if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+                    (incompatibleTopologyStateReset || _probeStateUploadRequired))
+                {
+                    // The public probe ABI must receive new non-zero physical
+                    // generations for incompatible slots before classification
+                    // can admit them. Compatible toroidal scrolls remain GPU
+                    // owned and do not enter this branch.
+                    residentBootstrap = true;
+                    _gpuResidentProbeStateBootstrapped = false;
+                    _gpuSchedulerFrameExecutionAvailable = false;
                 }
                 capacityMicroseconds += ElapsedMicroseconds(phaseStart);
 
@@ -2454,8 +2520,6 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 if (_schedulerMode != SimpleDdgiSchedulerMode.GpuResident || residentStateNeedsUpload)
                 {
                     UploadProbeState(stagingRing, commandBuffer);
-                    if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
-                        _gpuResidentProbeStateBootstrapped = true;
                 }
                 if (_schedulerMode != SimpleDdgiSchedulerMode.GpuResident)
                     UploadProbeUpdateQueue(stagingRing, commandBuffer);
@@ -3033,6 +3097,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             byte[] previousTransportGenerationCounts = _probeTransportGenerationCounts;
             byte[] previousAtmosphereCohortFlags = _probeAtmosphereCohortFlags;
             uint[] previousGenerations = _probeGenerations;
+            uint[] previousInvalidationMarkers = _probeInvalidationMarkers;
             Vector3[] previousRelocations = _probeRelocations;
             float[] previousActiveWeights = _probeActiveWeights;
             uint[] previousClassifications = _probeClassifications;
@@ -3086,6 +3151,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             Array.Copy(previousTransportGenerationCounts, _probeTransportGenerationCounts, Math.Min(copyCount, previousTransportGenerationCounts.Length));
             Array.Copy(previousAtmosphereCohortFlags, _probeAtmosphereCohortFlags, Math.Min(copyCount, previousAtmosphereCohortFlags.Length));
             Array.Copy(previousGenerations, _probeGenerations, Math.Min(copyCount, previousGenerations.Length));
+            Array.Copy(previousInvalidationMarkers, _probeInvalidationMarkers, Math.Min(copyCount, previousInvalidationMarkers.Length));
             Array.Copy(previousRelocations, _probeRelocations, Math.Min(copyCount, previousRelocations.Length));
             Array.Copy(previousActiveWeights, _probeActiveWeights, Math.Min(copyCount, previousActiveWeights.Length));
             Array.Copy(previousClassifications, _probeClassifications, Math.Min(copyCount, previousClassifications.Length));
@@ -4199,14 +4265,109 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 if (Kind(previous) != Kind(current) ||
                     SourceOrdinal(previous) != SourceOrdinal(current) ||
                     FirstProbe(previous) != FirstProbe(current) ||
+                    CountX(previous) != CountX(current) ||
+                    CountY(previous) != CountY(current) ||
+                    CountZ(previous) != CountZ(current) ||
                     VolumeProbeCount(previous) != VolumeProbeCount(current) ||
-                    !NearlyEqual(Spacing(previous), Spacing(current), 0.0001f))
+                    !NearlyEqual(Spacing(previous), Spacing(current), 0.0001f) ||
+                    !ApproximatelyEqual(Origin(previous), Origin(current)) ||
+                    PhysicalOffsetX(previous) != PhysicalOffsetX(current) ||
+                    PhysicalOffsetY(previous) != PhysicalOffsetY(current) ||
+                    PhysicalOffsetZ(previous) != PhysicalOffsetZ(current))
                 {
                     return true;
                 }
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// A changed volume table is not proof that an old physical-slot record
+        /// can be copied into the new topology. Preserve compatible toroidal
+        /// identities, but make every newly mapped/incompatible slot a fresh
+        /// transaction with a new non-zero generation. This is also the source
+        /// of the resident bootstrap records, so the private ABI cannot inherit
+        /// an index-aligned CPU record from an unrelated volume.
+        /// </summary>
+        private bool ResetIncompatibleTopologyProbeState(int previousVolumeCount)
+        {
+            bool resetAnyProbe = false;
+            for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
+            {
+                GPUSimpleDdgiVolume current = _volumeScratch[volumeIndex];
+                bool compatible = false;
+                for (int previousIndex = 0; previousIndex < previousVolumeCount; previousIndex++)
+                {
+                    GPUSimpleDdgiVolume previous = _previousVolumeScratch[previousIndex];
+                    if (!MatchesVolumeIdentity(previous, current))
+                        continue;
+
+                    // A cell-aligned origin move is the supported toroidal
+                    // remap. Any fractional movement changes the physical
+                    // sample topology and must not reuse lifecycle metadata.
+                    bool sameOrigin = ApproximatelyEqual(Origin(previous), Origin(current));
+                    bool cellAligned = TryResolveCellDelta(
+                        previous,
+                        current,
+                        out int deltaX,
+                        out int deltaY,
+                        out int deltaZ);
+                    compatible = sameOrigin || (cellAligned &&
+                        Math.Abs((long)deltaX) < CountX(current) &&
+                        Math.Abs((long)deltaY) < CountY(current) &&
+                        Math.Abs((long)deltaZ) < CountZ(current));
+                    if (compatible)
+                        break;
+                }
+
+                if (compatible)
+                    continue;
+
+                int firstProbe = FirstProbe(current);
+                int probeCount = VolumeProbeCount(current);
+                int end = Math.Min(_probeCount, checked(firstProbe + probeCount));
+                for (int probeIndex = Math.Max(0, firstProbe); probeIndex < end; probeIndex++)
+                {
+                    resetAnyProbe = true;
+                    _probeGenerations[probeIndex] = AdvanceProbeGeneration(
+                        _probeGenerations[probeIndex]);
+                    _probeFresh[probeIndex] = 1;
+                    _probeInactive[probeIndex] = 0;
+                    _probeRelocationPending[probeIndex] = 0;
+                    _probeSchedulingFlags[probeIndex] = 0;
+                    _probeInvalidationMarkers[probeIndex] = 0;
+                    _probeDirtyReasons[probeIndex] =
+                        (byte)SimpleDdgiSchedulerCandidateReason.Fresh;
+                    _probeRoutineMaintenancePending[probeIndex] = 0;
+                    _probeVisibilityImportance[probeIndex] = 0;
+                    _probeRelocations[probeIndex] = Vector3.Zero;
+                    _probeActiveWeights[probeIndex] = 1.0f;
+                    _probeClassifications[probeIndex] = 0u;
+                    _probeStableUpdateCounts[probeIndex] = 0;
+                    _probeLuminanceChangeEma[probeIndex] = 0.0f;
+                    _probeLastUpdatedFrames[probeIndex] = unchecked(_frameIndex - 1u);
+                    _probeSourceLightingGenerations[probeIndex] = 0u;
+                    _probeLastSourceRefreshFrames[probeIndex] = 0u;
+                    _probeSourceEpochs[probeIndex] = AdvanceSourceEpoch(
+                        _probeSourceEpochs[probeIndex]);
+                    _probeSourceRayCounts[probeIndex] = 0;
+                    _probeTransportGenerationCounts[probeIndex] = 0;
+                    _probeAtmosphereCohortFlags[probeIndex] = 0;
+                    _probeDirtyLatencyStates[probeIndex] = 1;
+                    _probeDirtyLatencyStartFrames[probeIndex] = _frameIndex;
+                    if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
+                        _probeStateDirtySlots.Add(probeIndex);
+                }
+            }
+
+            if (_schedulerMode != SimpleDdgiSchedulerMode.GpuResident)
+                _probeStateUploadRequired = true;
+            _schedulerRebuildRequired = true;
+            _schedulerVisibilityFullRefreshRequired = true;
+            RecomputeDirtyLatencyOutstandingCount();
+            RebuildAtmosphereCohortCounters();
+            return resetAnyProbe;
         }
 
         private void AdvanceVolumeTableGenerationAndDropPendingReadbacks()
@@ -7403,7 +7564,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 NearlyEqual(delta.Z, deltaZ, 0.001f);
         }
 
-        private void BuildVolumeTable(GlobalIlluminationSettings gi, BoundingBox sceneBounds, Vector3 cameraPosition)
+        private void BuildVolumeTable(
+            GlobalIlluminationSettings gi,
+            BoundingBox sceneBounds,
+            Vector3 cameraPosition,
+            IReadOnlyList<GlobalIlluminationProbeVolume>? authoredSceneVolumes)
         {
             _volumeCandidates.Clear();
             Array.Clear(_volumeScratch);
@@ -7426,6 +7591,27 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         continue;
                     anyAuthored = true;
                     _volumeCandidates.Add(candidate);
+                }
+                if (authoredSceneVolumes != null)
+                {
+                    for (int sceneOrdinal = 0;
+                         sceneOrdinal < authoredSceneVolumes.Count &&
+                         authoredOrdinal < GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount;
+                         sceneOrdinal++)
+                    {
+                        GlobalIlluminationProbeVolume? authored = authoredSceneVolumes[sceneOrdinal];
+                        authoredOrdinal++;
+                        if (authored == null || !authored.Enabled ||
+                            !TryCreateAuthoredVolume(
+                                authored,
+                                20_000 + sceneOrdinal,
+                                out VolumeCandidate candidate))
+                        {
+                            continue;
+                        }
+                        anyAuthored = true;
+                        _volumeCandidates.Add(candidate);
+                    }
                 }
             }
 
@@ -7485,6 +7671,14 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         ProbeCount: candidate.ProbeCount);
                 }
 
+                bool residentPrivateTargets =
+                    _schedulerMode == SimpleDdgiSchedulerMode.GpuResident;
+                int layoutReadbackBufferCount = !residentPrivateTargets &&
+                    RequiresProbeStateReadback(
+                        gi.SimpleDdgiClassificationReadbackEnabled,
+                        gi.SimpleDdgiTransportV2Enabled)
+                        ? RenderingConstants.FramesInFlight
+                        : 0;
                 _cachedLayoutReport = SimpleDdgiLayoutCompiler.Compile(
                     layoutRequests,
                     SimpleDdgiLayoutBudget.Resolve(gi),
@@ -7498,11 +7692,42 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         gi.SimpleDdgiProbeUpdatesPerFrame,
                     lightingDirtyBoostEnabled:
                         gi.SimpleDdgiLightingDirtyBoostEnabled,
-                    readbackBufferCount: RequiresProbeStateReadback(
-                        gi.SimpleDdgiClassificationReadbackEnabled,
-                        gi.SimpleDdgiTransportV2Enabled)
-                            ? RenderingConstants.FramesInFlight
-                            : 0);
+                    readbackBufferCount: layoutReadbackBufferCount,
+                    residentPrivateTargets: residentPrivateTargets);
+
+                // The sampled atlas is an optional image mirror. Resident mode
+                // keeps the canonical SSBO atlases authoritative and already
+                // falls back to them when this mirror cannot fit the hard DDGI
+                // budget. Apply the same policy during volume admission so a
+                // strict validation run does not reject an otherwise complete
+                // ring layout merely because the optional mirror is too large.
+                if (residentPrivateTargets &&
+                    gi.SimpleDdgiSampledAtlasEnabled &&
+                    _cachedLayoutReport.WasDegraded)
+                {
+                    SimpleDdgiLayoutReport canonicalOnlyReport =
+                        SimpleDdgiLayoutCompiler.Compile(
+                            layoutRequests,
+                            SimpleDdgiLayoutBudget.Resolve(gi),
+                            sampledAtlasRequested: false,
+                            gi.SimpleDdgiLayoutAdmissionMode,
+                            transportV2Enabled: true,
+                            transportRayCapacity: ResolveMaximumRingFullRays(gi),
+                            configuredProbeUpdatesPerFrame:
+                                gi.SimpleDdgiProbeUpdatesPerFrame,
+                            lightingDirtyBoostEnabled:
+                                gi.SimpleDdgiLightingDirtyBoostEnabled,
+                            readbackBufferCount: layoutReadbackBufferCount,
+                            residentPrivateTargets: true);
+                    if (ShouldUseCanonicalOnlyResidentLayout(
+                            residentPrivateTargets,
+                            gi.SimpleDdgiSampledAtlasEnabled,
+                            _cachedLayoutReport,
+                            canonicalOnlyReport))
+                    {
+                        _cachedLayoutReport = canonicalOnlyReport;
+                    }
+                }
                 _cachedAcceptedSourceOrdinals = _cachedLayoutReport.WasDegraded
                     ? new HashSet<int>(_cachedLayoutReport.AcceptedSourceOrdinals)
                     : null;
@@ -7582,6 +7807,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             hash = AddLayoutFingerprintValue(hash, settings.DdgiAtlasMemoryBudgetBytes, prime);
             hash = AddLayoutFingerprintValue(hash, settings.SimpleDdgiSampledAtlasEnabled ? 1UL : 0UL, prime);
             hash = AddLayoutFingerprintValue(hash, settings.SimpleDdgiTransportV2Enabled ? 1UL : 0UL, prime);
+            // Resident mode appends a private visibility target to the transport
+            // atlas allocation. Keep the mode in the immutable layout key so a
+            // CPU-to-resident transition cannot reuse a report sized for the
+            // compute-only allocation.
+            hash = AddLayoutFingerprintValue(hash, (ulong)settings.SimpleDdgiSchedulerMode.Sanitize(), prime);
             hash = AddLayoutFingerprintValue(
                 hash,
                 settings.SimpleDdgiThinSurfaceTransmissionEnabled ? 1UL : 0UL,
@@ -8142,18 +8372,23 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             UploadParams(stagingRing, commandBuffer);
             _controlHeaderInitialized = true;
             _wasSimpleDdgiEnabled = true;
-            bool uploadBootstrapState = residentBootstrap ||
-                volumeTableRemapped && _probeStateUploadRequired;
-            if (uploadBootstrapState || _probeStateUploadRequired)
+            // Resident execution keeps the public probe-state buffer GPU-owned
+            // after activation. A toroidal remap can resize CPU mirrors or mark
+            // affected slots fresh, but uploading those stale CPU mirrors would
+            // overwrite committed GPU lifecycle state. Only the distinct
+            // activation/arena bootstrap may seed public state from the CPU.
+            if ((_probeStateUploadRequired &&
+                    (_schedulerMode != SimpleDdgiSchedulerMode.GpuResident || residentBootstrap)) ||
+                (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+                    _probeStateDirtySlots.Count > 0))
             {
                 UploadProbeState(stagingRing, commandBuffer);
-                _gpuResidentProbeStateBootstrapped = true;
             }
-            else if (!_gpuResidentProbeStateBootstrapped)
+
+            if (residentBootstrap || !_gpuResidentProbeStateBootstrapped)
             {
-                // This is only reachable after an external owner restored an
-                // already resident buffer.  Keep the activation fail-closed.
-                _gpuResidentProbeStateBootstrapped = true;
+                _gpuResidentProbeStateBootstrapped =
+                    UploadGpuResidentSchedulerBootstrap(stagingRing, commandBuffer);
             }
 
             UploadGpuSchedulerFrame(
@@ -8166,6 +8401,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 cohortLightingTransition,
                 stagingRing,
                 commandBuffer);
+
+            // The render graph must not expose schedule/consumer passes until
+            // the private scheduler-state transfer has actually been recorded.
+            _gpuSchedulerFrameExecutionAvailable =
+                structuredGatherAvailable && _gpuResidentProbeStateBootstrapped;
 
             if (_atlasClearedThisFrame)
             {
@@ -8264,6 +8504,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 featureFlags |= SimpleDdgiSchedulerAbi.SchedulerFeatureDirtyOverflow;
             if (gi.SimpleDdgiClassificationSchedulingEnabled)
                 featureFlags |= SimpleDdgiSchedulerAbi.SchedulerFeatureClassification;
+            if (SampledAtlasGpuPublicationRequired)
+                featureFlags |= SimpleDdgiSchedulerAbi.SchedulerFeatureSampledPublication;
 
             Span<uint> rayBuckets = stackalloc uint[SimpleDdgiSchedulerAbi.MaxRayBucketCount];
             int rayBucketCount = 0;
@@ -8342,7 +8584,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 RayBucket3 = rayBuckets[3],
                 RayBucket4 = rayBuckets[4],
                 RayBucket5 = rayBuckets[5],
-                InvalidationMarkerGeneration = _currentProbeInvalidationMarkerSerial
+                InvalidationMarkerGeneration = _currentProbeInvalidationMarkerSerial,
+                Reserved0 = BitConverter.SingleToUInt32Bits(Math.Clamp(
+                    gi.SimpleDdgiTransportResidualThreshold,
+                    0.0f,
+                    1.0f))
             };
 
             BuildGpuVolumePolicies(_gpuVolumePolicyScratch, _gpuPreviousVolumePolicyScratch);
@@ -8493,7 +8739,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 CellDeltaX = deltaX,
                 CellDeltaY = deltaY,
                 CellDeltaZ = deltaZ,
-                DirtyGeneration = _currentProbeInvalidationMarkerSerial
+                DirtyGeneration = _currentProbeInvalidationMarkerSerial,
+                ProximityRadiusPadding = current.WorldMinAndEdgeFade.W
             };
         }
 
@@ -8519,6 +8766,99 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
 
         private static bool IsFinite(Vector3 value) =>
             float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
+
+        private bool UploadGpuResidentSchedulerBootstrap(
+            StagingRing stagingRing,
+            CommandBuffer commandBuffer)
+        {
+            if (_probeCount <= 0 || !_gpuScheduler.IsReady ||
+                _gpuScheduler.Layout == null)
+            {
+                return false;
+            }
+
+            EnsureCpuProbeStateCapacity(_probeCount);
+            SimpleDdgiGpuSchedulerLayout layout = _gpuScheduler.Layout;
+            int stateCount = Math.Min(_probeCount, layout.ActiveProbeCount);
+            for (int probeIndex = 0; probeIndex < stateCount; probeIndex++)
+                _gpuResidentBootstrapStateScratch[probeIndex] =
+                    BuildGpuResidentSchedulerProbeState(probeIndex);
+
+            // Cursors are persistent GPU state. Ordinary frames leave this
+            // region untouched; when an arena is replaced, seed it from the
+            // most recent fence-complete feedback so fairness survives the
+            // resource transition. A first activation has no feedback and
+            // therefore uses deterministic zero cursors.
+            if (!_gpuScheduler.TryCopyLastFeedbackLaneCursors(
+                    _gpuResidentBootstrapLaneCursorScratch))
+            {
+                Array.Clear(_gpuResidentBootstrapLaneCursorScratch);
+            }
+            return _gpuScheduler.UploadResidentBootstrap(
+                stagingRing,
+                commandBuffer,
+                new ReadOnlySpan<GPUSimpleDdgiSchedulerProbeState>(
+                    _gpuResidentBootstrapStateScratch,
+                    0,
+                    stateCount),
+                _gpuResidentBootstrapLaneCursorScratch);
+        }
+
+        private GPUSimpleDdgiSchedulerProbeState BuildGpuResidentSchedulerProbeState(
+            int probeIndex)
+        {
+            uint dirtyReasons = (uint)_probeDirtyReasons[probeIndex];
+            if (_probeFresh[probeIndex] != 0)
+                dirtyReasons |= SimpleDdgiSchedulerAbi.ReasonFresh;
+            if ((uint)probeIndex < (uint)_probeSchedulingFlags.Length)
+            {
+                byte schedulingFlags = _probeSchedulingFlags[probeIndex];
+                if ((schedulingFlags & ProbeSchedulingScrollExposedFlag) != 0)
+                    dirtyReasons |= SimpleDdgiSchedulerAbi.ReasonScrollExposed;
+                if ((schedulingFlags & ProbeSchedulingRegionalDirtyFlag) != 0)
+                    dirtyReasons |= SimpleDdgiSchedulerAbi.ReasonRegionalDirty;
+                if ((schedulingFlags & ProbeSchedulingVisibleFlag) != 0)
+                    dirtyReasons |= SimpleDdgiSchedulerAbi.ProbeMetadataVisible;
+            }
+
+            // A resident activation inherits the CPU-owned complete atlas. A
+            // fresh/scroll/relocation slot has no receiver-visible publication
+            // yet; all other slots may advertise their existing complete data.
+            if (!_atlasFresh && _probeFresh[probeIndex] == 0 &&
+                _probeRelocationPending[probeIndex] == 0)
+            {
+                dirtyReasons |= SimpleDdgiSchedulerAbi.ProbeMetadataPublished;
+            }
+
+            uint sourceRays = Math.Min(
+                (uint)_probeSourceRayCounts[probeIndex],
+                SimpleDdgiSchedulerAbi.SourceRayCountMask);
+            uint transportGeneration = _probeTransportGenerationCounts[probeIndex];
+            uint stableUpdates = _probeStableUpdateCounts[probeIndex];
+            uint routineState = _probeRoutineMaintenancePending[probeIndex] != 0
+                ? 1u
+                : 0u;
+
+            return new GPUSimpleDdgiSchedulerProbeState
+            {
+                LastCommittedUpdateFrame = _probeLastUpdatedFrames[probeIndex],
+                LastCommittedSourceRefreshFrame = _probeLastSourceRefreshFrames[probeIndex],
+                CommittedSourceLightingGeneration = _probeSourceLightingGenerations[probeIndex],
+                SourceEpoch = _probeSourceEpochs[probeIndex] == 0
+                    ? 1u
+                    : _probeSourceEpochs[probeIndex],
+                OwningVolumeTableGeneration = _volumeTableGeneration,
+                DirtyReasonFlags = dirtyReasons,
+                DirtyStartFrame = _probeDirtyLatencyStartFrames[probeIndex],
+                PackedTransportAndLifecycle = SimpleDdgiSchedulerAbi.PackSchedulerProbeLifecycle(
+                    sourceRays,
+                    transportGeneration,
+                    stableUpdates,
+                    routineState,
+                    0u),
+                AppliedInvalidationMarker = _probeInvalidationMarkers[probeIndex]
+            };
+        }
 
         private void UploadProbeState(StagingRing stagingRing, CommandBuffer commandBuffer)
         {
@@ -8685,10 +9025,12 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 // The immutable graph binds these in V1 as well as V2, but V1
                 // only requires graph-safe placeholder descriptors rather than
                 // probe-sized allocations it never reads.
-                concreteTransportBuffers: requiredKey.TransportV2Enabled,
+                concreteTransportBuffers: requiredKey.TransportV2Enabled ||
+                    _schedulerMode == SimpleDdgiSchedulerMode.GpuResident,
                 readbackBufferCount: readbackRequired
                     ? RenderingConstants.FramesInFlight
-                    : 0);
+                    : 0,
+                residentPrivateTargets: _schedulerMode == SimpleDdgiSchedulerMode.GpuResident);
             long sampledBudgetStart = Stopwatch.GetTimestamp();
             bool sampledAtlasAdmitted = sampledAtlasCandidate &&
                 (requiredKey.SampledAtlasBudgetBytes == 0UL ||
@@ -8700,10 +9042,12 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     Math.Clamp(probesToUpdate, 0, Math.Max(0, probeCount)),
                     raysPerProbe,
                     sampledAtlasRequested: false,
-                    concreteTransportBuffers: requiredKey.TransportV2Enabled,
+                    concreteTransportBuffers: requiredKey.TransportV2Enabled ||
+                        _schedulerMode == SimpleDdgiSchedulerMode.GpuResident,
                     readbackBufferCount: readbackRequired
                         ? RenderingConstants.FramesInFlight
-                        : 0);
+                        : 0,
+                    residentPrivateTargets: _schedulerMode == SimpleDdgiSchedulerMode.GpuResident);
             }
             _uploadCapacitySampledAtlasBudgetMicroseconds +=
                 ElapsedMicroseconds(sampledBudgetStart);
@@ -9206,6 +9550,49 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             // Descriptor writes are deliberately batched by EnsureCapacity once
             // every handle belongs to the same capacity generation.
             _uploadCapacityTransitionCount++;
+            return true;
+        }
+
+        private bool TryCreateAuthoredVolume(
+            GlobalIlluminationProbeVolume authored,
+            int ordinal,
+            out VolumeCandidate candidate)
+        {
+            Vector3 minimum = authored.Origin;
+            Vector3 maximum = authored.Origin + authored.Size;
+            Vector3 min = Min(minimum, maximum);
+            Vector3 max = Max(minimum, maximum);
+            Vector3 spacingVector = authored.ProbeSpacing;
+            float spacing = Math.Clamp(
+                MathF.Min(spacingVector.X, MathF.Min(spacingVector.Y, spacingVector.Z)),
+                0.25f,
+                8.0f);
+            Vector3 size = max - min;
+            if (size.X <= 0.001f || size.Y <= 0.001f || size.Z <= 0.001f)
+            {
+                candidate = default;
+                return false;
+            }
+
+            Vector3 origin = ResolveAuthoredLatticeOrigin(min, spacing, Vector3.Zero);
+            int countX = ResolveAuthoredLatticeAxisCount(max.X, origin.X, spacing, GlobalIlluminationSettings.MaxSimpleDdgiProbeCountX);
+            int countY = ResolveAuthoredLatticeAxisCount(max.Y, origin.Y, spacing, GlobalIlluminationSettings.MaxSimpleDdgiProbeCountY);
+            int countZ = ResolveAuthoredLatticeAxisCount(max.Z, origin.Z, spacing, GlobalIlluminationSettings.MaxSimpleDdgiProbeCountZ);
+            float edgeFadeDistance = Math.Max(spacing * 1.5f, 0.001f);
+            (Vector3 influenceMin, Vector3 influenceMax) = ResolveInfluenceBounds(min, max, edgeFadeDistance);
+            candidate = new VolumeCandidate(
+                VolumeKindAuthored,
+                ordinal,
+                authored.Priority,
+                SimpleDdgiVolumePurpose.ReceiverHero,
+                origin,
+                spacing,
+                countX,
+                countY,
+                countZ,
+                influenceMin,
+                influenceMax,
+                edgeFadeDistance);
             return true;
         }
 
@@ -10246,6 +10633,24 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             bool transportV2Active) =>
             classificationFeedbackEnabled || transportV2Active;
 
+        internal static bool ShouldUseCanonicalOnlyResidentLayout(
+            bool residentPrivateTargets,
+            bool sampledAtlasRequested,
+            SimpleDdgiLayoutReport requestedReport,
+            SimpleDdgiLayoutReport canonicalOnlyReport)
+        {
+            if (!residentPrivateTargets || !sampledAtlasRequested ||
+                requestedReport == null || canonicalOnlyReport == null)
+            {
+                return false;
+            }
+
+            return requestedReport.WasDegraded &&
+                !canonicalOnlyReport.WasDegraded &&
+                canonicalOnlyReport.AcceptedProbeCount ==
+                    requestedReport.RequestedProbeCount;
+        }
+
         internal static bool ShouldPreserveProbeStateReadbackEvidence(
             bool readbackRequired,
             bool readbackRecorded) =>
@@ -10856,6 +11261,17 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _gpuSchedulerFallbackLatched = false;
                 _gpuSchedulerFallbackReason = string.Empty;
             }
+            else if (!_context.RayQuerySupported || _context.KhrAccelerationStructure == null)
+            {
+                // GPU-resident scheduling cannot make progress without the
+                // ray-query producer used by trace and transport. Resolve the
+                // authored GPU default to the CPU path before allocating an
+                // arena, and keep the reason visible for diagnostics.
+                RequestGpuSchedulerFallback(
+                    "GPU scheduler unavailable: ray-query acceleration-structure support is missing",
+                    requiresFreshReset: _schedulerMode == SimpleDdgiSchedulerMode.GpuResident);
+                nextMode = SimpleDdgiSchedulerMode.CpuReference;
+            }
             else if (_gpuSchedulerFallbackLatched)
             {
                 nextMode = SimpleDdgiSchedulerMode.CpuReference;
@@ -10878,7 +11294,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
 
             _schedulerMode = nextMode;
             _gpuScheduler.SetMode(nextMode, _frameSerial);
-            _gpuSchedulerFrameExecutionAvailable = true;
+            // A GPU transition is fail-closed until the current frame records
+            // its public upload and, for resident mode, the distinct private
+            // scheduler bootstrap.  UploadGpuSchedulerFrame/UploadGpuResidentFrame
+            // raises this only after those writes are in the command stream.
+            _gpuSchedulerFrameExecutionAvailable = !nextMode.IsGpuMode();
             _gpuSchedulerFeedbackValid = false;
             _lastGpuSchedulerFeedback = default;
             _gpuSchedulerFeedbackFrameSerial = 0;

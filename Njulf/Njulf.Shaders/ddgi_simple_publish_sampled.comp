@@ -23,10 +23,13 @@ layout(push_constant) uniform SimpleDdgiPublishPushBlock
     uint ProbeStateBufferIndex;
     uint ProbeUpdateQueueBufferIndex;
     uint TransportIrradianceAtlasBufferIndex;
+    uint PrivateVisibilityAtlasOffsetWords;
     uint SampledAtlasGroupCount;
     uint SampledAtlasLayersPerTexture;
     uint SchedulerArenaBufferIndex;
+    uint SchedulerOutcomesOffsetWords;
     uint SchedulerCountersOffsetWords;
+    uint SchedulerFrameOffsetWords;
 } pc;
 
 void main()
@@ -34,6 +37,10 @@ void main()
     SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
     uint queueOffset = gl_WorkGroupID.x;
     bool gpuScheduler = SimpleDdgiGpuSchedulerActive(pc.SchedulerArenaBufferIndex);
+    bool residentTransaction = gpuScheduler &&
+        (ReadStorageWordUniform(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerFrameOffsetWords + 27u) & 1u) != 0u;
     uint requestCount = gpuScheduler
         ? SimpleDdgiSchedulerAcceptedCount(
             pc.SchedulerArenaBufferIndex,
@@ -45,18 +52,53 @@ void main()
 
     SimpleDdgiProbeUpdate update =
         ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, queueOffset);
-    if (update.probeIndex >= params.probeCount)
+    if (!SimpleDdgiSchedulerOutcomeAllowsPublication(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            true,
+            pc.SchedulerFrameOffsetWords))
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            SIMPLE_DDGI_SCHEDULER_FAILURE_PUBLICATION_GUARD);
         return;
+    }
+    if (update.probeIndex >= params.probeCount)
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 2u);
+        return;
+    }
 
     SimpleDdgiProbeState state =
         ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, update.probeIndex);
     if (!SimpleDdgiUpdateMatchesProbeGeneration(update, state))
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 0u);
         return;
+    }
 
     uint groupIndex = update.probeIndex / pc.SampledAtlasLayersPerTexture;
     uint layerIndex = update.probeIndex - groupIndex * pc.SampledAtlasLayersPerTexture;
     if (groupIndex >= min(pc.SampledAtlasGroupCount, SIMPLE_DDGI_PUBLISH_MAX_IMAGE_GROUPS))
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 2u);
         return;
+    }
 
     uint irradianceTexelCount = params.irradianceTexels * params.irradianceTexels;
     for (uint texel = gl_LocalInvocationID.x;
@@ -65,11 +107,17 @@ void main()
     {
         uint x = texel % params.irradianceTexels;
         uint y = texel / params.irradianceTexels;
-        vec4 value = ReadSimpleDdgiAtlasTexel(
-            pc.IrradianceAtlasBufferIndex,
-            update.probeIndex,
-            texel,
-            params.irradianceTexels);
+        vec4 value = residentTransaction
+            ? ReadSimpleDdgiAtlasTexel(
+                pc.TransportIrradianceAtlasBufferIndex,
+                update.probeIndex,
+                texel,
+                params.irradianceTexels)
+            : ReadSimpleDdgiAtlasTexel(
+                pc.IrradianceAtlasBufferIndex,
+                update.probeIndex,
+                texel,
+                params.irradianceTexels);
         imageStore(
             IrradianceImages[nonuniformEXT(groupIndex)],
             ivec3(int(x), int(y), int(layerIndex)),
@@ -83,14 +131,32 @@ void main()
     {
         uint x = texel % params.visibilityTexels;
         uint y = texel / params.visibilityTexels;
-        vec4 value = ReadSimpleDdgiAtlasTexel(
-            pc.VisibilityAtlasBufferIndex,
-            update.probeIndex,
-            texel,
-            params.visibilityTexels);
+        vec4 value = residentTransaction
+            ? ReadSimpleDdgiAtlasTexelAtOffset(
+                pc.TransportIrradianceAtlasBufferIndex,
+                pc.PrivateVisibilityAtlasOffsetWords,
+                update.probeIndex,
+                texel,
+                params.visibilityTexels)
+            : ReadSimpleDdgiAtlasTexel(
+                pc.VisibilityAtlasBufferIndex,
+                update.probeIndex,
+                texel,
+                params.visibilityTexels);
         imageStore(
             VisibilityImages[nonuniformEXT(groupIndex)],
             ivec3(int(x), int(y), int(layerIndex)),
             value);
     }
+
+    memoryBarrierImage();
+    barrier();
+    memoryBarrierBuffer();
+    barrier();
+    if (gl_LocalInvocationID.x == 0u)
+        SimpleDdgiSchedulerCompleteSingle(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 6u);
 }

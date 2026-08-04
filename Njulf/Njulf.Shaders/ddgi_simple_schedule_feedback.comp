@@ -41,7 +41,7 @@ void main()
     uint activeProbeCount = min(SchedulerActiveProbeCount(), 32768u);
     for (uint probeIndex = 0u; probeIndex < activeProbeCount; probeIndex++)
     {
-        uint publicBase = probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+        uint publicBase = probeIndex * SIMPLE_DDGI_PROBE_STATE_WORDS;
         uint flags = ReadStorageWordUniform(pc.ProbeStateBufferIndex, publicBase + 4u);
         uint age = ReadStorageWordUniform(pc.ProbeStateBufferIndex, publicBase + 5u);
         uint privateBase = pc.SchedulerProbeStateOffsetWords +
@@ -185,4 +185,11 @@ void main()
     SchedulerArenaWrite(base + 61u, 0u);
     SchedulerArenaWrite(base + 62u, 0u);
     SchedulerArenaWrite(base + 63u, 0u);
+    // Feedback reserves the words after the fixed 64-word summary for the
+    // persistent rotating lane cursors. They are copied only after the
+    // summary generation/serial has been validated by the host.
+    for (uint lane = 0u; lane < SIMPLE_DDGI_SCHEDULER_MAX_LANES; lane++)
+        SchedulerArenaWrite(
+            base + 64u + lane,
+            SchedulerArenaRead(pc.LaneCursorsOffsetWords + lane));
 }

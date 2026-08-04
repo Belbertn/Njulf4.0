@@ -184,7 +184,7 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRelocationData),
-                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
+                ReadWriteComputeIndirectBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
                 ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)),
             Pass("SimpleDdgiRelocateClassifyPass",
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
@@ -192,7 +192,7 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRelocationData),
-                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler)),
+                ReadWriteComputeIndirectBuffer(RenderGraphResourceId.SimpleDdgiScheduler)),
             Pass("SimpleDdgiTransportPass",
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
@@ -201,7 +201,7 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRayScratch),
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
-                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
+                ReadWriteComputeIndirectBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
                 ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)),
             Pass("SimpleDdgiBlendPass",
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
@@ -212,7 +212,7 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRelocationData),
-                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
+                ReadWriteComputeIndirectBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
                 ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)),
             Pass("SimpleDdgiPublishPass",
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
@@ -221,11 +221,14 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
-                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler)),
+                ReadWriteComputeIndirectBuffer(RenderGraphResourceId.SimpleDdgiScheduler)),
             Pass("SimpleDdgiSchedulerCommitPass",
-                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
+                ReadWriteComputeIndirectBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
-                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue)),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiTransportAtlas)),
             Pass("SkyboxPass",
             ReadDepth(RenderGraphResourceId.SceneDepth),
                 ReadFragmentSampled(RenderGraphResourceId.EnvironmentMaps),
@@ -631,6 +634,23 @@ internal sealed class ProductionRenderPipelineDeclaration
             RenderGraphResourceAccess.Read,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageReadBit,
+            ImageLayout.Undefined,
+            RenderGraphQueueIntent.Compute);
+    }
+
+    // Compute indirect dispatch parameters are consumed at DRAW_INDIRECT even
+    // though the dispatched pipeline is compute. Keep that stage/access in
+    // the graph so an async queue handoff cannot expose stale dimensions.
+    private static RenderGraphResourceUsage ReadWriteComputeIndirectBuffer(
+        RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.ReadWrite,
+            PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.DrawIndirectBit,
+            AccessFlags2.ShaderStorageReadBit |
+            AccessFlags2.ShaderStorageWriteBit |
+            AccessFlags2.IndirectCommandReadBit,
             ImageLayout.Undefined,
             RenderGraphQueueIntent.Compute);
     }

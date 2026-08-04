@@ -197,6 +197,64 @@ public sealed class SceneDocumentTests
         }
     }
 
+    [Test]
+    public void AuthoredGiVolumes_LoadAndSaveWithoutSchemaLoss()
+    {
+        Guid volumeId = Guid.Parse("20000000-0000-0000-0000-000000000001");
+        var source = new SceneDocument
+        {
+            Id = Guid.Parse("20000000-0000-0000-0000-000000000000"),
+            Name = "Authored GI scene",
+            GiProbeVolumes =
+            [
+                new SceneGlobalIlluminationProbeVolumeDocument
+                {
+                    Id = volumeId,
+                    Name = "Kitchen GI",
+                    Enabled = false,
+                    Origin = new SceneVector3(-3f, 1f, 7f),
+                    Size = new SceneVector3(18f, 9f, 22f),
+                    Interior = true,
+                    QualityClass = "High",
+                    Priority = 17,
+                    BlendDistance = 2.5f,
+                    StreamingCellId = 42,
+                    ProbeCountX = 10,
+                    ProbeCountY = 6,
+                    ProbeCountZ = 12,
+                    RaysPerProbe = 144,
+                    MaxProbeUpdatesPerFrame = 37,
+                    NormalBias = 0.17f,
+                    ViewBias = 0.43f,
+                    MaxRayDistance = 19f,
+                    Intensity = 1.3f,
+                    Hysteresis = 0.81f,
+                    SteadyHysteresis = 0.93f,
+                    DirtyHysteresis = 0.51f,
+                    UpdatePriority = 23,
+                    DirtyRaysPerProbe = 192
+                }
+            ]
+        };
+
+        Scene loaded = new SceneDocumentLoader(new ThrowingContentManager()).Load(source);
+        try
+        {
+            SceneDocument recaptured = new SceneDocumentWriter().CreateDocument(loaded);
+            Assert.Multiple(() =>
+            {
+                Assert.That(loaded.GlobalIlluminationProbeVolumes, Has.Count.EqualTo(1));
+                Assert.That(loaded.GlobalIlluminationProbeVolumes[0].Id, Is.EqualTo(volumeId));
+                Assert.That(SceneDocumentJson.Serialize(recaptured),
+                    Is.EqualTo(SceneDocumentJson.Serialize(source)));
+            });
+        }
+        finally
+        {
+            loaded.Dispose();
+        }
+    }
+
     private sealed class ThrowingContentManager : IContentManager
     {
         public T Load<T>(string path) => throw new FileNotFoundException($"Missing {path}");

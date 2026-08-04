@@ -57,7 +57,7 @@ public sealed class SceneDocumentLoader
                 document);
         ValidateDocument(document);
 
-        if (scene.RenderObjects.Count != 0 || scene.ReflectionProbes.Count != 0 ||
+        if (scene.RenderObjects.Count != 0 || scene.ReflectionProbes.Count != 0 || scene.GlobalIlluminationProbeVolumes.Count != 0 ||
             scene.StaticInstanceBatches.Count != 0 || scene.FoliagePatches.Count != 0 || scene.ParticleEffects.Count != 0)
         {
             throw new InvalidOperationException("SceneDocumentLoader.Populate requires an empty scene. Clear and dispose the destination before reloading.");
@@ -74,6 +74,8 @@ public sealed class SceneDocumentLoader
                 LoadObject(scene, record, modelInstances, materials);
             foreach (SceneReflectionProbeDocument record in document.ReflectionProbes)
                 scene.Add(ToReflectionProbe(record));
+            foreach (SceneGlobalIlluminationProbeVolumeDocument record in document.GiProbeVolumes)
+                scene.Add(ToGiProbeVolume(record));
 
             var prototypes = new Dictionary<Guid, FoliagePrototype>();
             foreach (SceneFoliagePrototypeDocument record in document.FoliagePrototypes)
@@ -409,6 +411,34 @@ public sealed class SceneDocumentLoader
         BoxProjection = record.BoxProjection
     };
 
+    private static GlobalIlluminationProbeVolume ToGiProbeVolume(SceneGlobalIlluminationProbeVolumeDocument record) => new()
+    {
+        Id = record.Id,
+        Name = record.Name,
+        Enabled = record.Enabled,
+        Origin = ToVector3(record.Origin),
+        Size = ToVector3(record.Size),
+        Interior = record.Interior,
+        QualityClass = ParseEnum<GlobalIlluminationProbeVolumeQualityClass>(record.QualityClass, record.Id, record.Name),
+        Priority = record.Priority,
+        BlendDistance = record.BlendDistance,
+        StreamingCellId = record.StreamingCellId,
+        ProbeCountX = record.ProbeCountX,
+        ProbeCountY = record.ProbeCountY,
+        ProbeCountZ = record.ProbeCountZ,
+        RaysPerProbe = record.RaysPerProbe,
+        MaxProbeUpdatesPerFrame = record.MaxProbeUpdatesPerFrame,
+        NormalBias = record.NormalBias,
+        ViewBias = record.ViewBias,
+        MaxRayDistance = record.MaxRayDistance,
+        Intensity = record.Intensity,
+        Hysteresis = record.Hysteresis,
+        SteadyHysteresis = record.SteadyHysteresis,
+        DirtyHysteresis = record.DirtyHysteresis,
+        UpdatePriority = record.UpdatePriority,
+        DirtyRaysPerProbe = record.DirtyRaysPerProbe
+    };
+
     private static void ValidateDocument(SceneDocument document)
     {
         if (document.SchemaVersion < 1 || document.SchemaVersion > SceneDocument.CurrentSchemaVersion)
@@ -419,6 +449,7 @@ public sealed class SceneDocumentLoader
         AddIds(document.Objects, static item => item.Id, "object");
         AddIds(document.Lights, static item => item.Id, "light");
         AddIds(document.ReflectionProbes, static item => item.Id, "reflection probe");
+        AddIds(document.GiProbeVolumes, static item => item.Id, "GI probe volume");
         AddIds(document.InstanceBatches, static item => item.Id, "instance batch");
         AddIds(document.FoliagePrototypes, static item => item.Id, "foliage prototype");
         AddIds(document.FoliagePatches, static item => item.Id, "foliage patch");

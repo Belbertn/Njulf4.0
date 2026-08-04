@@ -154,7 +154,8 @@ namespace Njulf.Rendering.Resources
             int rayCapacity,
             bool sampledAtlasRequested,
             bool concreteTransportBuffers,
-            int readbackBufferCount)
+            int readbackBufferCount,
+            bool residentPrivateTargets = false)
         {
             int probes = Math.Clamp(
                 probeCount,
@@ -185,7 +186,11 @@ namespace Njulf.Rendering.Resources
             ulong visibilityBytes = AtLeastOneAllocation(
                 checked(probeCount64 * VisibilityBytesPerProbe));
             ulong transportIrradianceBytes = concreteTransportBuffers
-                ? AtLeastOneAllocation(checked(probeCount64 * IrradianceBytesPerProbe))
+                ? AtLeastOneAllocation(checked(
+                    probeCount64 * IrradianceBytesPerProbe +
+                    (residentPrivateTargets
+                        ? probeCount64 * VisibilityBytesPerProbe
+                        : 0UL)))
                 : AtLeastOneAllocation(0UL);
             ulong transportSourceCacheBytes = concreteTransportBuffers
                 ? AtLeastOneAllocation(checked(
@@ -343,7 +348,8 @@ namespace Njulf.Rendering.Resources
             int transportRayCapacity = 0,
             int configuredProbeUpdatesPerFrame = 0,
             bool lightingDirtyBoostEnabled = false,
-            int readbackBufferCount = 0)
+            int readbackBufferCount = 0,
+            bool residentPrivateTargets = false)
         {
             int updates = SimpleDdgiMemoryPlan.ResolveUpdateRequestCapacity(
                 probeCount,
@@ -355,7 +361,8 @@ namespace Njulf.Rendering.Resources
                 transportRayCapacity,
                 sampledAtlasRequested,
                 transportV2Enabled,
-                readbackBufferCount).LiveBytes;
+                readbackBufferCount,
+                residentPrivateTargets).LiveBytes;
         }
 
         public static SimpleDdgiLayoutReport Compile(
@@ -367,7 +374,8 @@ namespace Njulf.Rendering.Resources
             int transportRayCapacity = 0,
             int configuredProbeUpdatesPerFrame = 0,
             bool lightingDirtyBoostEnabled = false,
-            int readbackBufferCount = 0)
+            int readbackBufferCount = 0,
+            bool residentPrivateTargets = false)
         {
             if (requests == null)
                 throw new ArgumentNullException(nameof(requests));
@@ -470,7 +478,8 @@ namespace Njulf.Rendering.Resources
                     transportRayCapacity,
                     sampledAtlasRequested,
                     transportV2Enabled,
-                    readbackBufferCount);
+                    readbackBufferCount,
+                    residentPrivateTargets);
             }
         }
     }

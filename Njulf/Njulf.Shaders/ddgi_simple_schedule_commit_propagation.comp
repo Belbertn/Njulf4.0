@@ -6,6 +6,10 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
+// Propagation is retained as a separate fixed dispatch slot for ABI and
+// feedback compatibility. Public lifecycle/visibility state is committed by
+// CommitLocal only; this pass may inspect outcomes but must never fabricate a
+// successful outcome or write a receiver-visible record.
 void main()
 {
     uint outcomeIndex = gl_GlobalInvocationID.x;
@@ -17,75 +21,10 @@ void main()
 
     uint outcomeBase = pc.OutcomesOffsetWords +
         outcomeIndex * SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS;
-    uint resourceGeneration = SchedulerArenaRead(outcomeBase + 1u);
-    uint probeIndex = SchedulerArenaRead(outcomeBase + 2u);
-    uint expectedGeneration = SchedulerArenaRead(outcomeBase + 3u);
-    uint volumeGeneration = SchedulerArenaRead(outcomeBase + 4u);
-    uint sourceRayCount = SchedulerArenaRead(outcomeBase + 9u);
-    uint updateFlags = SchedulerArenaRead(outcomeBase + 8u);
-    if (resourceGeneration != SchedulerResourceGeneration() ||
-        volumeGeneration != SchedulerVolumeGeneration() ||
-        probeIndex >= SchedulerActiveProbeCount() ||
-        expectedGeneration == 0u)
-    {
-        SchedulerArenaAtomicAdd(
-            pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_INVALID_GENERATION, 1u);
+    uint requiredMask = SchedulerArenaRead(outcomeBase + 7u);
+    uint completionMask = SchedulerArenaRead(outcomeBase + 8u);
+    uint failureReason = SchedulerArenaRead(outcomeBase + 9u);
+    if (failureReason != 0u || (completionMask & requiredMask) != requiredMask)
         return;
-    }
-
-    uint stateBase = pc.SchedulerProbeStateOffsetWords +
-        probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
-    SchedulerArenaWrite(stateBase + 0u, SchedulerFrameIndex());
-    bool sourceRefresh = (updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) != 0u;
-    // Cached solver and ordinary maintenance updates reuse the existing source
-    // cache. Only a source-refresh transaction replaces the source-generation,
-    // ray-cardinality, and routine-due metadata.
-    if (sourceRefresh)
-    {
-        SchedulerArenaWrite(stateBase + 1u, SchedulerFrameIndex());
-        SchedulerArenaWrite(stateBase + 2u, SchedulerArenaRead(outcomeBase + 5u));
-        SchedulerArenaWrite(stateBase + 7u, min(sourceRayCount, 0x1ffu));
-    }
-    else if (SchedulerTransportV2())
-    {
-        uint packedLifecycle = SchedulerArenaRead(stateBase + 7u);
-        uint sourceRays = packedLifecycle & SIMPLE_DDGI_SCHEDULER_SOURCE_RAY_MASK;
-        uint previousTransportGeneration =
-            (packedLifecycle & SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_MASK) >>
-            SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_SHIFT;
-        uint stableUpdates =
-            (packedLifecycle & SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_MASK) >>
-            SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_SHIFT;
-        if (sourceRays != 0u)
-        {
-            previousTransportGeneration = SchedulerTransportGeneration() & 0xffu;
-            stableUpdates = min(stableUpdates + 1u, 0xffu);
-        }
-        SchedulerArenaWrite(
-            stateBase + 7u,
-            sourceRays |
-            (previousTransportGeneration << SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_SHIFT) |
-            (stableUpdates << SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_SHIFT));
-    }
-    SchedulerArenaWrite(stateBase + 3u, SchedulerFrame(31u));
-    SchedulerArenaWrite(stateBase + 4u, SchedulerVolumeGeneration());
-    uint schedulerMetadata = SchedulerArenaRead(stateBase + 5u) &
-        SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBILITY_MASK;
-    if ((schedulerMetadata & SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBLE) != 0u)
-        schedulerMetadata |= SIMPLE_DDGI_SCHEDULER_PROBE_META_PUBLISHED;
-    SchedulerArenaWrite(stateBase + 5u, schedulerMetadata);
-    // Word 6 is the applied invalidation marker, not a completion timestamp.
-    // Keeping it intact is what makes a persistent dirty/source signal
-    // idempotent across frames.
-    uint publicStateBase = probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
-    uint publicFlags = ReadStorageWordUniform(pc.ProbeStateBufferIndex, publicStateBase + 4u);
-    publicFlags &= ~(SIMPLE_DDGI_SCHEDULER_PROBE_FRESH |
-        SIMPLE_DDGI_SCHEDULER_PROBE_SCROLL |
-        SIMPLE_DDGI_SCHEDULER_PROBE_RELOCATION |
-        SIMPLE_DDGI_SCHEDULER_PROBE_SOURCE_INVALID);
-    WriteStorageWordUniform(pc.ProbeStateBufferIndex, publicStateBase + 4u, publicFlags);
-    WriteStorageWordUniform(pc.ProbeStateBufferIndex, publicStateBase + 5u,
-        SchedulerFrameIndex());
-    SchedulerArenaAtomicAdd(
-        pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_COMMITTED, 1u);
+    memoryBarrierBuffer();
 }

@@ -56,7 +56,10 @@ public static class SimpleDdgiSchedulerAbi
     public const uint UpdateRayCountMask = 0xffff_0000u;
     public const uint UpdateMaintenanceFlag = 1u << 12;
     public const uint UpdateSourceRefreshFlag = 1u << 13;
+    public const uint UpdateInvalidateFlag = 1u << 14;
     public const uint UpdateRoutineSourceRefreshFlag = 1u << 15;
+    public const uint UpdateFreshFlag = 1u << 0;
+    public const uint UpdateScrollExposedFlag = 1u << 1;
     public const uint UpdateMaterialCascadeMask = 0x7u << 3;
     public const uint UpdateMaxLightsMask = 0x3fu << 6;
     public const uint SchedulerFeatureGpuResident = 1u << 0;
@@ -67,6 +70,16 @@ public static class SimpleDdgiSchedulerAbi
     public const uint SchedulerFeatureGlobalConvergence = 1u << 5;
     public const uint SchedulerFeatureDirtyOverflow = 1u << 6;
     public const uint SchedulerFeatureClassification = 1u << 7;
+    public const uint SchedulerFeatureSampledPublication = 1u << 8;
+    public const uint ReasonFresh = (uint)SimpleDdgiSchedulerCandidateReason.Fresh;
+    public const uint ReasonScrollExposed = (uint)SimpleDdgiSchedulerCandidateReason.ScrollExposed;
+    public const uint ReasonRegionalDirty = (uint)SimpleDdgiSchedulerCandidateReason.RegionalDirty;
+    public const uint ProbeMetadataVisible = 1u << 16;
+    public const uint ProbeMetadataPublished = 1u << 17;
+    // A rejected resident transaction leaves this private repair marker set so
+    // the next classifier pass re-admits a source refresh without mutating the
+    // public probe record.
+    public const uint ProbeMetadataRepair = 1u << 30;
 
     // GPUSimpleDdgiSchedulerProbeState.PackedTransportAndLifecycle:
     // source rays [0,8], transport generation [9,16], stable count [17,24],
@@ -211,6 +224,32 @@ public static class SimpleDdgiSchedulerAbi
         routineMaintenanceState = (packed & RoutineMaintenanceMask) >> RoutineMaintenanceShift;
         transactionStatus = (packed & TransactionStatusMask) >> TransactionStatusShift;
     }
+
+    /// <summary>
+    /// CPU-side mirror of CommitLocal's fail-closed outcome predicate. It is
+    /// intentionally pure so fault-injection and delayed-generation tests can
+    /// exercise the same acceptance contract without a Vulkan device.
+    /// </summary>
+    public static bool OutcomeCanCommit(
+        in GPUSimpleDdgiUpdateOutcome outcome,
+        uint queueTransactionGeneration,
+        uint schedulerResourceGeneration,
+        uint volumeTableGeneration,
+        uint sourceLightingGeneration,
+        uint transportGeneration,
+        uint currentPhysicalGeneration)
+    {
+        return outcome.QueueTransactionGeneration == queueTransactionGeneration &&
+            outcome.SchedulerResourceGeneration == schedulerResourceGeneration &&
+            outcome.VolumeTableGeneration == volumeTableGeneration &&
+            outcome.SourceLightingGeneration == sourceLightingGeneration &&
+            outcome.TransportGeneration == transportGeneration &&
+            outcome.ExpectedPhysicalGeneration != 0u &&
+            outcome.ExpectedPhysicalGeneration == currentPhysicalGeneration &&
+            outcome.FailureReason == 0u &&
+            (outcome.CompletionMask & outcome.RequiredCompletionMask) ==
+                outcome.RequiredCompletionMask;
+    }
 }
 
 public readonly record struct SimpleDdgiCpuVolumePolicy(
@@ -284,6 +323,42 @@ public static class SimpleDdgiIndirectDispatchMath
         requestCount == 0 ? 0u : (requestCount + RelocateLocalSize - 1u) / RelocateLocalSize;
 
     public static uint ProbeWorkgroupCount(uint requestCount) => requestCount;
+
+    public static GPUSimpleDdgiDispatchIndirectCommand BuildRayBucketCommand(
+        uint probeCount,
+        uint raysPerProbe) => new()
+    {
+        GroupCountX = RayGroupCount(probeCount, raysPerProbe),
+        GroupCountY = 1u,
+        GroupCountZ = 1u,
+        Reserved = 0u
+    };
+
+    public static GPUSimpleDdgiDispatchIndirectCommand BuildRequestCommand(
+        uint requestCount) => new()
+    {
+        GroupCountX = RequestThreadGroupCount(requestCount),
+        GroupCountY = 1u,
+        GroupCountZ = 1u,
+        Reserved = 0u
+    };
+
+    public static GPUSimpleDdgiDispatchIndirectCommand BuildProbeCommand(
+        uint requestCount) => new()
+    {
+        GroupCountX = ProbeWorkgroupCount(requestCount),
+        GroupCountY = 1u,
+        GroupCountZ = 1u,
+        Reserved = 0u
+    };
+
+    public static GPUSimpleDdgiDispatchIndirectCommand BuildFeedbackCommand() => new()
+    {
+        GroupCountX = 1u,
+        GroupCountY = 1u,
+        GroupCountZ = 1u,
+        Reserved = 0u
+    };
 
     public static int DeduplicateRayBuckets(
         ReadOnlySpan<uint> rayCounts,
@@ -388,27 +463,40 @@ public static class SimpleDdgiCpuScheduleModel
 
         Span<int> quotas = stackalloc int[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
         Span<int> volumeUsage = stackalloc int[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
-        Span<int> classCounts = stackalloc int[(int)SimpleDdgiSchedulerWorkClass.Count];
-        Span<int> classAccepted = stackalloc int[(int)SimpleDdgiSchedulerWorkClass.Count];
+        Span<int> pendingByVolumeClass = stackalloc int[
+            GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount *
+            (int)SimpleDdgiSchedulerWorkClass.Count];
+        Span<int> classReservations = stackalloc int[pendingByVolumeClass.Length];
+        Span<int> classUsage = stackalloc int[pendingByVolumeClass.Length];
         BuildVolumeQuotas(volumePolicies, requestBudget, quotas);
         for (int lane = 0; lane < SimpleDdgiSchedulerAbi.MaxLaneCount; lane++)
         {
-            SimpleDdgiSchedulerAbi.DecodeLaneIndex(lane, out _, out SimpleDdgiSchedulerWorkClass workClass, out _, out _);
-            classCounts[(int)workClass] += laneCandidateCounts[lane];
+            SimpleDdgiSchedulerAbi.DecodeLaneIndex(
+                lane,
+                out int volumeIndex,
+                out SimpleDdgiSchedulerWorkClass workClass,
+                out _,
+                out _);
+            int pendingIndex = volumeIndex * (int)SimpleDdgiSchedulerWorkClass.Count +
+                (int)workClass;
+            pendingByVolumeClass[pendingIndex] += laneCandidateCounts[lane];
         }
-
-        int activeVolumes = Math.Clamp(policy.ActiveVolumeCount, 0, volumePolicies.Length);
-        int maintenancePending = 0;
-        for (int workClass = (int)SimpleDdgiSchedulerWorkClass.NearMaintenance;
-             workClass <= (int)SimpleDdgiSchedulerWorkClass.FarMaintenance;
-             workClass++)
+        int activeVolumes = Math.Clamp(
+            policy.ActiveVolumeCount,
+            0,
+            Math.Min(volumePolicies.Length, GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount));
+        for (int volumeIndex = 0; volumeIndex < activeVolumes; volumeIndex++)
         {
-            maintenancePending += classCounts[workClass];
+            int pendingBase = volumeIndex * (int)SimpleDdgiSchedulerWorkClass.Count;
+            SimpleDdgiVolumeManager.AllocateSchedulerClassQuotas(
+                volumeIndex < quotas.Length ? quotas[volumeIndex] : 0,
+                pendingByVolumeClass.Slice(
+                    pendingBase,
+                    (int)SimpleDdgiSchedulerWorkClass.Count),
+                classReservations.Slice(
+                    pendingBase,
+                    (int)SimpleDdgiSchedulerWorkClass.Count));
         }
-        int maintenanceReservation = Math.Min(
-            maintenancePending,
-            Math.Min(requestBudget, Math.Max(activeVolumes, requestBudget / 16)));
-        int nonMaintenanceBudget = requestBudget - maintenanceReservation;
 
         int accepted = 0;
         ulong primaryRays = 0;
@@ -417,12 +505,13 @@ public static class SimpleDdgiCpuScheduleModel
         int primaryRejected = 0;
         int sourceRejected = 0;
 
-        // Urgent classes always get first admission. Holding a bounded
-        // maintenance reservation prevents continuous fresh/dirty traffic from
-        // starving outer rings; unused reservation is returned in phase three.
+        // Keep the same eleven phases as the production CPU queue builder:
+        // per-volume class reservations, visible urgent classes, source cohort,
+        // routine source validation, cached solver, ring maintenance, then a
+        // deterministic return of unused reservations.
         for (int workClass = 0; workClass <= (int)SimpleDdgiSchedulerWorkClass.VisibleRetry; workClass++)
         {
-            AdmitWorkClass(
+            AdmitCandidates(
                 candidates,
                 candidateLanes,
                 volumePolicies,
@@ -434,10 +523,12 @@ public static class SimpleDdgiCpuScheduleModel
                 admittedCandidates,
                 quotas,
                 volumeUsage,
-                (SimpleDdgiSchedulerWorkClass)workClass,
-                nonMaintenanceBudget,
-                requestBudget,
-                maintenanceReservation,
+                classReservations,
+                classUsage,
+                workClassFilter: (SimpleDdgiSchedulerWorkClass)workClass,
+                categoryFilter: SimpleDdgiSchedulerTransportCategory.HardSourceRepair,
+                reservedPass: true,
+                requestBudget: requestBudget,
                 ref accepted,
                 ref primaryRays,
                 ref sourceRays,
@@ -445,12 +536,45 @@ public static class SimpleDdgiCpuScheduleModel
                 ref primaryRejected,
                 ref sourceRejected);
         }
+
+        AdmitCandidates(
+            candidates, candidateLanes, volumePolicies, policy, outputQueue,
+            laneCandidateCounts, laneAcceptedCounts, laneCursors, admittedCandidates,
+            quotas, volumeUsage, classReservations, classUsage,
+            workClassFilter: null,
+            categoryFilter: SimpleDdgiSchedulerTransportCategory.HardSourceRepair,
+            reservedPass: true,
+            requestBudget: requestBudget,
+            ref accepted, ref primaryRays, ref sourceRays,
+            ref requestRejected, ref primaryRejected, ref sourceRejected);
+
+        AdmitCandidates(
+            candidates, candidateLanes, volumePolicies, policy, outputQueue,
+            laneCandidateCounts, laneAcceptedCounts, laneCursors, admittedCandidates,
+            quotas, volumeUsage, classReservations, classUsage,
+            workClassFilter: null,
+            categoryFilter: SimpleDdgiSchedulerTransportCategory.RoutineSourceValidation,
+            reservedPass: true,
+            requestBudget: requestBudget,
+            ref accepted, ref primaryRays, ref sourceRays,
+            ref requestRejected, ref primaryRejected, ref sourceRejected);
+
+        AdmitCandidates(
+            candidates, candidateLanes, volumePolicies, policy, outputQueue,
+            laneCandidateCounts, laneAcceptedCounts, laneCursors, admittedCandidates,
+            quotas, volumeUsage, classReservations, classUsage,
+            workClassFilter: null,
+            categoryFilter: SimpleDdgiSchedulerTransportCategory.CachedSolverPropagation,
+            reservedPass: true,
+            requestBudget: requestBudget,
+            ref accepted, ref primaryRays, ref sourceRays,
+            ref requestRejected, ref primaryRejected, ref sourceRejected);
 
         for (int workClass = (int)SimpleDdgiSchedulerWorkClass.NearMaintenance;
              workClass <= (int)SimpleDdgiSchedulerWorkClass.FarMaintenance;
              workClass++)
         {
-            AdmitWorkClass(
+            AdmitCandidates(
                 candidates,
                 candidateLanes,
                 volumePolicies,
@@ -462,10 +586,12 @@ public static class SimpleDdgiCpuScheduleModel
                 admittedCandidates,
                 quotas,
                 volumeUsage,
-                (SimpleDdgiSchedulerWorkClass)workClass,
-                requestBudget,
-                requestBudget,
-                maintenanceReservation,
+                classReservations,
+                classUsage,
+                workClassFilter: (SimpleDdgiSchedulerWorkClass)workClass,
+                categoryFilter: null,
+                reservedPass: true,
+                requestBudget: requestBudget,
                 ref accepted,
                 ref primaryRays,
                 ref sourceRays,
@@ -474,14 +600,10 @@ public static class SimpleDdgiCpuScheduleModel
                 ref sourceRejected);
         }
 
-        // Return unused maintenance reservation to the same deterministic
-        // priority order. This is important when a ring has no eligible work.
+        // Return unused reservations in the same deterministic policy order.
         for (int workClass = 0; workClass < (int)SimpleDdgiSchedulerWorkClass.Count; workClass++)
         {
-            if (workClass >= (int)SimpleDdgiSchedulerWorkClass.NearMaintenance &&
-                workClass <= (int)SimpleDdgiSchedulerWorkClass.FarMaintenance)
-                continue;
-            AdmitWorkClass(
+            AdmitCandidates(
                 candidates,
                 candidateLanes,
                 volumePolicies,
@@ -493,10 +615,12 @@ public static class SimpleDdgiCpuScheduleModel
                 admittedCandidates,
                 quotas,
                 volumeUsage,
-                (SimpleDdgiSchedulerWorkClass)workClass,
-                requestBudget,
-                requestBudget,
-                maintenanceReservation,
+                classReservations,
+                classUsage,
+                workClassFilter: (SimpleDdgiSchedulerWorkClass)workClass,
+                categoryFilter: null,
+                reservedPass: false,
+                requestBudget: requestBudget,
                 ref accepted,
                 ref primaryRays,
                 ref sourceRays,
@@ -519,7 +643,7 @@ public static class SimpleDdgiCpuScheduleModel
             false);
     }
 
-    private static void AdmitWorkClass(
+    private static void AdmitCandidates(
         ReadOnlySpan<GPUSimpleDdgiSchedulerCandidate> candidates,
         ReadOnlySpan<int> candidateLanes,
         ReadOnlySpan<SimpleDdgiCpuVolumePolicy> volumePolicies,
@@ -531,10 +655,12 @@ public static class SimpleDdgiCpuScheduleModel
         Span<byte> admittedCandidates,
         Span<int> quotas,
         Span<int> volumeUsage,
-        SimpleDdgiSchedulerWorkClass workClass,
-        int acceptanceLimit,
+        ReadOnlySpan<int> classReservations,
+        Span<int> classUsage,
+        SimpleDdgiSchedulerWorkClass? workClassFilter,
+        SimpleDdgiSchedulerTransportCategory? categoryFilter,
+        bool reservedPass,
         int requestBudget,
-        int maintenanceReservation,
         ref int acceptedCount,
         ref ulong acceptedPrimaryRays,
         ref ulong acceptedSourceRays,
@@ -542,166 +668,215 @@ public static class SimpleDdgiCpuScheduleModel
         ref int primaryBudgetRejected,
         ref int sourceBudgetRejected)
     {
-        if (acceptedCount >= acceptanceLimit)
+        if (acceptedCount >= requestBudget)
             return;
 
-        for (int category = 0; category < (int)SimpleDdgiSchedulerTransportCategory.Count; category++)
+        for (int workClass = 0; workClass < (int)SimpleDdgiSchedulerWorkClass.Count; workClass++)
         {
-            for (int rayTier = 0; rayTier < (int)SimpleDdgiSchedulerRayTier.Count; rayTier++)
+            if (workClassFilter.HasValue &&
+                (int)workClassFilter.Value != workClass)
             {
-                for (int volumeIndex = 0; volumeIndex < volumePolicies.Length; volumeIndex++)
+                continue;
+            }
+
+            for (int category = 0; category < (int)SimpleDdgiSchedulerTransportCategory.Count; category++)
+            {
+                if (categoryFilter.HasValue &&
+                    (int)categoryFilter.Value != category)
                 {
-                    if (volumeIndex >= GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount)
-                        break;
+                    continue;
+                }
 
-                    int laneIndex = SimpleDdgiSchedulerAbi.GetLaneIndex(
-                        volumeIndex,
-                        workClass,
-                        (SimpleDdgiSchedulerTransportCategory)category,
-                        (SimpleDdgiSchedulerRayTier)rayTier);
-                    int laneCount = laneCandidateCounts[laneIndex];
-                    if (laneCount == 0)
-                        continue;
-
-                    int start = (int)(laneCursors[laneIndex] % (uint)laneCount);
-                    int acceptedFromLane = 0;
-                    bool stop = false;
-                    for (int pass = 0; pass < 2 && !stop; pass++)
+                for (int rayTier = 0; rayTier < (int)SimpleDdgiSchedulerRayTier.Count; rayTier++)
+                {
+                    for (int volumeIndex = 0; volumeIndex < volumePolicies.Length; volumeIndex++)
                     {
-                        int rankStart = pass == 0 ? start : 0;
-                        int rankEnd = pass == 0 ? laneCount : start;
-                        if (rankStart >= rankEnd)
+                        if (volumeIndex >= GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount)
+                            break;
+
+                        int laneIndex = SimpleDdgiSchedulerAbi.GetLaneIndex(
+                            volumeIndex,
+                            (SimpleDdgiSchedulerWorkClass)workClass,
+                            (SimpleDdgiSchedulerTransportCategory)category,
+                            (SimpleDdgiSchedulerRayTier)rayTier);
+                        int laneCount = laneCandidateCounts[laneIndex];
+                        if (laneCount == 0)
                             continue;
 
-                        int rank = 0;
-                        for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
+                        int start = (int)(laneCursors[laneIndex] % (uint)laneCount);
+                        int acceptedFromLane = 0;
+                        bool stop = false;
+                        for (int pass = 0; pass < 2 && !stop; pass++)
                         {
-                            if (candidateLanes[candidateIndex] != laneIndex)
+                            int rankStart = pass == 0 ? start : 0;
+                            int rankEnd = pass == 0 ? laneCount : start;
+                            if (rankStart >= rankEnd)
                                 continue;
 
-                            if (rank < rankStart || rank >= rankEnd)
+                            int rank = 0;
+                            for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
                             {
+                                if (candidateLanes[candidateIndex] != laneIndex)
+                                    continue;
+
+                                if (rank < rankStart || rank >= rankEnd)
+                                {
+                                    rank++;
+                                    continue;
+                                }
                                 rank++;
-                                continue;
-                            }
-                            rank++;
 
-                            if (admittedCandidates[candidateIndex] != 0)
-                                continue;
-                            if (acceptedCount >= acceptanceLimit)
-                            {
-                                stop = true;
-                                break;
-                            }
-                            if (acceptedCount >= requestBudget || outputQueue.Length <= acceptedCount)
-                            {
-                                requestBudgetRejected++;
-                                stop = true;
-                                break;
-                            }
+                                if (admittedCandidates[candidateIndex] != 0)
+                                    continue;
+                                if (acceptedCount >= requestBudget || outputQueue.Length <= acceptedCount)
+                                {
+                                    requestBudgetRejected++;
+                                    stop = true;
+                                    break;
+                                }
 
-                            GPUSimpleDdgiSchedulerCandidate candidate = candidates[candidateIndex];
-                            int candidateVolume = (int)candidate.VolumeIndex;
-                            if ((uint)candidateVolume >= (uint)quotas.Length ||
-                                volumeUsage[candidateVolume] >= quotas[candidateVolume])
-                            {
-                                continue;
-                            }
+                                GPUSimpleDdgiSchedulerCandidate candidate = candidates[candidateIndex];
+                                int candidateVolume = (int)candidate.VolumeIndex;
+                                if ((uint)candidateVolume >= (uint)quotas.Length ||
+                                    volumeUsage[candidateVolume] >= quotas[candidateVolume])
+                                {
+                                    continue;
+                                }
 
-                            SimpleDdgiSchedulerAbi.UnpackCandidateWorkClassAndTransport(
-                                candidate.WorkClassAndTransport,
-                                out SimpleDdgiSchedulerWorkClass candidateClass,
-                                out SimpleDdgiSchedulerTransportCategory candidateCategory);
-                            SimpleDdgiSchedulerAbi.UnpackCandidateRayTierAndReasons(
-                                candidate.RayTierAndReasonFlags,
-                                out SimpleDdgiSchedulerRayTier candidateRayTier,
-                                out _);
-                            if (candidateClass != workClass ||
-                                (int)candidateCategory != category ||
-                                (int)candidateRayTier != rayTier)
-                            {
-                                continue;
-                            }
+                                SimpleDdgiSchedulerAbi.UnpackCandidateWorkClassAndTransport(
+                                    candidate.WorkClassAndTransport,
+                                    out SimpleDdgiSchedulerWorkClass candidateClass,
+                                    out SimpleDdgiSchedulerTransportCategory candidateCategory);
+                                SimpleDdgiSchedulerAbi.UnpackCandidateRayTierAndReasons(
+                                    candidate.RayTierAndReasonFlags,
+                                    out SimpleDdgiSchedulerRayTier candidateRayTier,
+                                    out SimpleDdgiSchedulerCandidateReason candidateReasons);
+                                if (candidateClass != (SimpleDdgiSchedulerWorkClass)workClass ||
+                                    (int)candidateCategory != category ||
+                                    (int)candidateRayTier != rayTier)
+                                {
+                                    continue;
+                                }
 
-                            bool maintenance = workClass >= SimpleDdgiSchedulerWorkClass.NearMaintenance;
-                            if (maintenance && acceptedCount < requestBudget - maintenanceReservation &&
-                                acceptanceLimit < requestBudget)
-                            {
-                                continue;
-                            }
+                                int classBase = candidateVolume * (int)SimpleDdgiSchedulerWorkClass.Count;
+                                int classLimit = reservedPass
+                                    ? classReservations[classBase + workClass]
+                                    : quotas[candidateVolume];
+                                if (classUsage[classBase + workClass] >= classLimit)
+                                    continue;
 
-                            uint activeRays = Math.Clamp(
-                                candidate.ActiveRayCount,
-                                1u,
-                                (uint)GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe);
-                            bool sourceWork = candidateCategory is
-                                SimpleDdgiSchedulerTransportCategory.HardSourceRepair or
-                                SimpleDdgiSchedulerTransportCategory.RoutineSourceValidation;
-                            uint sourceRays = candidate.SourceRayCount == 0 ? activeRays : candidate.SourceRayCount;
-                            ulong primaryCost = sourceWork ? activeRays : 0UL;
-                            ulong sourceCost = sourceWork ? sourceRays : 0UL;
-                            if (primaryCost > policy.PrimaryRayBudget ||
-                                acceptedPrimaryRays > policy.PrimaryRayBudget - primaryCost)
-                            {
-                                primaryBudgetRejected++;
-                                continue;
-                            }
+                                uint activeRays = Math.Clamp(
+                                    candidate.ActiveRayCount,
+                                    1u,
+                                    (uint)GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe);
+                                bool sourceWork = candidateCategory is
+                                    SimpleDdgiSchedulerTransportCategory.HardSourceRepair or
+                                    SimpleDdgiSchedulerTransportCategory.RoutineSourceValidation;
+                                // The resident candidate storage derives the
+                                // source cohort from the volume policy. The
+                                // CPU mirror receives that same cardinality in
+                                // the full candidate ABI; use it when present
+                                // and retain the active-ray fallback for small
+                                // hand-authored fixtures.
+                                uint sourceRays = sourceWork
+                                    ? Math.Clamp(
+                                        candidate.SourceRayCount == 0
+                                            ? activeRays
+                                            : candidate.SourceRayCount,
+                                        1u,
+                                        (uint)GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe)
+                                    : 0u;
+                                ulong primaryCost = sourceWork ? activeRays : 0UL;
+                                ulong sourceCost = sourceWork ? sourceRays : 0UL;
+                                if (primaryCost > policy.PrimaryRayBudget ||
+                                    acceptedPrimaryRays > policy.PrimaryRayBudget - primaryCost)
+                                {
+                                    primaryBudgetRejected++;
+                                    // A candidate rejected by a hard ray
+                                    // budget is consumed for this frame. The
+                                    // GPU admission pass invalidates the same
+                                    // compact candidate, preventing a second
+                                    // rejection during the return phase.
+                                    admittedCandidates[candidateIndex] = 1;
+                                    continue;
+                                }
 
-                            ulong sourceBudget = policy.SourceCohortRayBudget == 0
-                                ? ulong.MaxValue
-                                : policy.SourceCohortRayBudget;
-                            if (sourceCost > sourceBudget ||
-                                acceptedSourceRays > sourceBudget - sourceCost)
-                            {
-                                sourceBudgetRejected++;
-                                continue;
-                            }
+                                ulong sourceBudget = policy.SourceCohortRayBudget == 0
+                                    ? ulong.MaxValue
+                                    : policy.SourceCohortRayBudget;
+                                if (sourceCost > sourceBudget ||
+                                    acceptedSourceRays > sourceBudget - sourceCost)
+                                {
+                                    sourceBudgetRejected++;
+                                    admittedCandidates[candidateIndex] = 1;
+                                    continue;
+                                }
 
-                            uint flags = 0;
-                            if (candidateRayTier == SimpleDdgiSchedulerRayTier.Maintenance)
-                                flags |= SimpleDdgiSchedulerAbi.UpdateMaintenanceFlag;
-                            if (sourceWork)
-                            {
-                                flags |= SimpleDdgiSchedulerAbi.UpdateSourceRefreshFlag;
-                                if (candidateCategory == SimpleDdgiSchedulerTransportCategory.RoutineSourceValidation)
-                                    flags |= SimpleDdgiSchedulerAbi.UpdateRoutineSourceRefreshFlag;
-                            }
-                            flags |= activeRays << (int)SimpleDdgiSchedulerAbi.UpdateRayCountShift;
-                            outputQueue[acceptedCount] = new GPUSimpleDdgiProbeUpdate
-                            {
-                                ProbeIndex = candidate.ProbeIndex,
-                                VolumeIndex = candidate.VolumeIndex,
-                                Flags = flags,
-                                Reserved0 = SimpleDdgiSchedulerAbi.PackProbeUpdateMetadata(
-                                    candidate.ExpectedPhysicalGeneration,
-                                    candidate.SequenceOrdinal),
-                                SourceRayCount = sourceRays,
-                                SourceLightingGeneration = sourceWork
-                                    ? policy.SourceLightingGeneration
-                                    : 0u
-                            };
-                            admittedCandidates[candidateIndex] = 1;
-                            acceptedCount++;
-                            volumeUsage[candidateVolume]++;
-                            acceptedPrimaryRays = checked(acceptedPrimaryRays + primaryCost);
-                            acceptedSourceRays = checked(acceptedSourceRays + sourceCost);
-                            acceptedFromLane++;
+                                uint flags = 0;
+                                if ((candidateReasons & SimpleDdgiSchedulerCandidateReason.Fresh) != 0)
+                                    flags |= SimpleDdgiSchedulerAbi.UpdateFreshFlag;
+                                if ((candidateReasons & SimpleDdgiSchedulerCandidateReason.ScrollExposed) != 0)
+                                    flags |= SimpleDdgiSchedulerAbi.UpdateScrollExposedFlag;
+                                if (candidateRayTier == SimpleDdgiSchedulerRayTier.Maintenance)
+                                    flags |= SimpleDdgiSchedulerAbi.UpdateMaintenanceFlag;
+                                if ((candidateReasons & (
+                                        SimpleDdgiSchedulerCandidateReason.Fresh |
+                                        SimpleDdgiSchedulerCandidateReason.ScrollExposed |
+                                        SimpleDdgiSchedulerCandidateReason.RegionalDirty |
+                                        SimpleDdgiSchedulerCandidateReason.GlobalDirty |
+                                        SimpleDdgiSchedulerCandidateReason.SourceCacheInvalid |
+                                        SimpleDdgiSchedulerCandidateReason.RelocationRetry)) != 0)
+                                {
+                                    flags |= SimpleDdgiSchedulerAbi.UpdateInvalidateFlag;
+                                }
+                                if (sourceWork)
+                                {
+                                    flags |= SimpleDdgiSchedulerAbi.UpdateSourceRefreshFlag;
+                                    if (candidateCategory == SimpleDdgiSchedulerTransportCategory.RoutineSourceValidation)
+                                        flags |= SimpleDdgiSchedulerAbi.UpdateRoutineSourceRefreshFlag;
+                                }
+                                flags |= activeRays << (int)SimpleDdgiSchedulerAbi.UpdateRayCountShift;
+                                outputQueue[acceptedCount] = new GPUSimpleDdgiProbeUpdate
+                                {
+                                    ProbeIndex = candidate.ProbeIndex,
+                                    VolumeIndex = candidate.VolumeIndex,
+                                    Flags = flags,
+                                    Reserved0 = SimpleDdgiSchedulerAbi.PackProbeUpdateMetadata(
+                                        candidate.ExpectedPhysicalGeneration,
+                                        candidate.SequenceOrdinal),
+                                    SourceRayCount = sourceRays,
+                                    SourceLightingGeneration = sourceWork
+                                        ? policy.SourceLightingGeneration
+                                        : 0u,
+                                    OutcomeIndex = (uint)acceptedCount
+                                };
+                                admittedCandidates[candidateIndex] = 1;
+                                acceptedCount++;
+                                volumeUsage[candidateVolume]++;
+                                classUsage[classBase + workClass]++;
+                                acceptedPrimaryRays = checked(acceptedPrimaryRays + primaryCost);
+                                acceptedSourceRays = checked(acceptedSourceRays + sourceCost);
+                                acceptedFromLane++;
 
-                            if (acceptedCount >= acceptanceLimit)
-                            {
-                                stop = true;
-                                break;
+                                if (acceptedCount >= requestBudget)
+                                {
+                                    stop = true;
+                                    break;
+                                }
                             }
                         }
-                    }
 
-                    if (acceptedFromLane > 0)
-                    {
-                        laneCursors[laneIndex] = (uint)((start + acceptedFromLane) % laneCount);
-                        laneAcceptedCounts[laneIndex] += acceptedFromLane;
+                        if (acceptedFromLane > 0)
+                        {
+                            // A cursor is advanced only by successful
+                            // admissions. Empty or rejected lanes retain the
+                            // previous persistent position.
+                            laneCursors[laneIndex] = (uint)((start + acceptedFromLane) % laneCount);
+                            laneAcceptedCounts[laneIndex] += acceptedFromLane;
+                        }
+                        if (stop)
+                            return;
                     }
-                    if (stop)
-                        return;
                 }
             }
         }
@@ -776,47 +951,57 @@ public static class SimpleDdgiCpuScheduleModel
         }
 
         int remaining = requestBudget - minimumTotal;
-        while (remaining > 0)
+        for (int quotaPass = 0; quotaPass < 2 && remaining > 0; quotaPass++)
         {
-            int weightTotal = 0;
-            for (int i = 0; i < count; i++)
+            while (remaining > 0)
             {
-                if (volumes[i].Active && quotas[i] < volumes[i].PreferredMaximumQuota)
-                    weightTotal = checked(weightTotal + Math.Max(1, volumes[i].SchedulingWeight));
-            }
-            if (weightTotal == 0)
-                break;
-
-            int distributed = 0;
-            int bestIndex = -1;
-            long bestRemainder = long.MinValue;
-            for (int i = 0; i < count; i++)
-            {
-                if (!volumes[i].Active || quotas[i] >= volumes[i].PreferredMaximumQuota)
-                    continue;
-                int available = volumes[i].PreferredMaximumQuota - quotas[i];
-                int weight = Math.Max(1, volumes[i].SchedulingWeight);
-                int share = (int)Math.Min(available, ((long)remaining * weight) / weightTotal);
-                if (share > 0)
+                int weightTotal = 0;
+                for (int i = 0; i < count; i++)
                 {
-                    quotas[i] += share;
-                    distributed += share;
+                    int limit = quotaPass == 0
+                        ? volumes[i].PreferredMaximumQuota
+                        : volumes[i].ProbeCapacity;
+                    if (volumes[i].Active && quotas[i] < limit)
+                        weightTotal = checked(weightTotal + Math.Max(1, volumes[i].SchedulingWeight));
                 }
-                long remainder = ((long)remaining * weight) % weightTotal;
-                if (remainder > bestRemainder)
-                {
-                    bestRemainder = remainder;
-                    bestIndex = i;
-                }
-            }
+                if (weightTotal == 0)
+                    break;
 
-            remaining -= distributed;
-            if (remaining == 0)
-                break;
-            if (bestIndex < 0)
-                break;
-            quotas[bestIndex]++;
-            remaining--;
+                int distributed = 0;
+                int bestIndex = -1;
+                long bestRemainder = long.MinValue;
+                for (int i = 0; i < count; i++)
+                {
+                    int limit = quotaPass == 0
+                        ? volumes[i].PreferredMaximumQuota
+                        : volumes[i].ProbeCapacity;
+                    if (!volumes[i].Active || quotas[i] >= limit)
+                        continue;
+                    int available = limit - quotas[i];
+                    int weight = Math.Max(1, volumes[i].SchedulingWeight);
+                    int share = (int)Math.Min(available, ((long)remaining * weight) / weightTotal);
+                    if (share > 0)
+                    {
+                        quotas[i] += share;
+                        distributed += share;
+                    }
+                    long remainder = ((long)remaining * weight) % weightTotal;
+                    if (remainder > bestRemainder)
+                    {
+                        bestRemainder = remainder;
+                        bestIndex = i;
+                    }
+                }
+                remaining -= distributed;
+                if (remaining == 0)
+                    break;
+                if (bestIndex < 0)
+                {
+                    break;
+                }
+                quotas[bestIndex]++;
+                remaining--;
+            }
         }
     }
 }

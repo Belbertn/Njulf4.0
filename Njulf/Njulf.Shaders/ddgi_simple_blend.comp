@@ -55,6 +55,7 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint TransportSourceCacheBufferIndex;
     uint TransportReadIrradianceAtlasBufferIndex;
     uint TransportWriteIrradianceAtlasBufferIndex;
+    uint PrivateVisibilityAtlasOffsetWords;
     uint TransportGeneration;
     uint PrimaryDirectionalLightIndex;
     uint DispatchQueueOffset;
@@ -63,7 +64,10 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint SchedulerArenaBufferIndex;
     uint SchedulerRayBucketIndex;
     uint SchedulerRayBucketCommandsOffsetWords;
+    uint SchedulerRayBucketMetadataOffsetWords;
+    uint SchedulerOutcomesOffsetWords;
     uint SchedulerCountersOffsetWords;
+    uint SchedulerUpdateRecordsOffsetWords;
 } pc;
 
 // Atlas diagnostics can execute once per texel.  Preserve them for explicit
@@ -194,7 +198,8 @@ uint SimpleDdgiIrradianceReadBuffer(SimpleDdgiParams params)
 
 uint SimpleDdgiIrradianceWriteBuffer(SimpleDdgiParams params)
 {
-    return (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u
+    return SimpleDdgiGpuSchedulerActive(pc.SchedulerArenaBufferIndex) ||
+        (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u
         ? pc.TransportWriteIrradianceAtlasBufferIndex
         : pc.IrradianceAtlasBufferIndex;
 }
@@ -403,7 +408,19 @@ void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint
     }
     else if (previous.z > 0.5 && !freshUpdate)
     {
-            return;
+        // Resident publication copies the complete private visibility target
+        // at commit. Preserve an unchanged texel there as well; returning
+        // without a write would allow an aborted transaction's stale private
+        // value to leak into the next successful publication.
+        if (SimpleDdgiGpuSchedulerActive(pc.SchedulerArenaBufferIndex))
+            WriteSimpleDdgiAtlasTexelAtOffset(
+                pc.TransportWriteIrradianceAtlasBufferIndex,
+                pc.PrivateVisibilityAtlasOffsetWords,
+                probeIndex,
+                texel,
+                params.visibilityTexels,
+                previous);
+        return;
     }
     else
     {
@@ -414,7 +431,23 @@ void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint
     float texelHysteresis = SimpleDdgiAdaptiveVisibilityHysteresis(params, previous, moments, probeHysteresis, maintenanceUpdate, volume.spacing);
     vec4 blended = mix(vec4(moments, 1.0, 1.0), previous, texelHysteresis);
     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_ATLAS_WRITE_TEXEL_COUNTER, 1u);
-    WriteSimpleDdgiAtlasTexel(pc.VisibilityAtlasBufferIndex, probeIndex, texel, params.visibilityTexels, blended);
+    if (SimpleDdgiGpuSchedulerActive(pc.SchedulerArenaBufferIndex))
+    {
+        WriteSimpleDdgiAtlasTexelAtOffset(
+            pc.TransportWriteIrradianceAtlasBufferIndex,
+            pc.PrivateVisibilityAtlasOffsetWords,
+            probeIndex,
+            texel,
+            params.visibilityTexels,
+            blended);
+    }
+    else
+        WriteSimpleDdgiAtlasTexel(
+            pc.VisibilityAtlasBufferIndex,
+            probeIndex,
+            texel,
+            params.visibilityTexels,
+            blended);
 }
 
 void AccumulateSimpleShBasis(vec3 direction, vec3 radiance, float normalization)
@@ -553,15 +586,36 @@ void main()
     SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, localProbeOffset);
     uint probeIndex = update.probeIndex;
     if (probeIndex >= params.probeCount)
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 2u);
         return;
+    }
 
     SimpleDdgiVolume volume;
     uint localProbeIndex;
     if (!ResolveSimpleDdgiProbeVolume(probeIndex, params, volume, localProbeIndex))
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 2u);
         return;
+    }
     SimpleDdgiProbeState initialState = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
     if (!SimpleDdgiUpdateMatchesProbeGeneration(update, initialState))
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 0u);
         return;
+    }
     uint local = gl_LocalInvocationID.x;
     // Classification is a publication decision, not merely a gather hint.
     // Clear the private V2 target (or canonical V1 atlas) so a later publish can
@@ -588,13 +642,31 @@ void main()
         uint visibilityTexelCount = params.visibilityTexels * params.visibilityTexels;
         for (uint texel = local; texel < visibilityTexelCount; texel += gl_WorkGroupSize.x)
         {
-            WriteSimpleDdgiAtlasTexel(
-                pc.VisibilityAtlasBufferIndex,
-                probeIndex,
-                texel,
-                params.visibilityTexels,
-                vec4(0.0));
+            if (gpuScheduler)
+                WriteSimpleDdgiAtlasTexelAtOffset(
+                    pc.TransportWriteIrradianceAtlasBufferIndex,
+                    pc.PrivateVisibilityAtlasOffsetWords,
+                    probeIndex,
+                    texel,
+                    params.visibilityTexels,
+                    vec4(0.0));
+            else
+                WriteSimpleDdgiAtlasTexel(
+                    pc.VisibilityAtlasBufferIndex,
+                    probeIndex,
+                    texel,
+                    params.visibilityTexels,
+                    vec4(0.0));
         }
+        barrier();
+        memoryBarrierBuffer();
+        barrier();
+        if (local == 0u)
+            SimpleDdgiSchedulerCompleteSingle(
+                pc.SchedulerArenaBufferIndex,
+                pc.SchedulerOutcomesOffsetWords,
+                update.outcomeIndex,
+                1u << 4u);
         return;
     }
     // Relocation committed a position different from the origin used by this
@@ -608,7 +680,7 @@ void main()
         // canonical texels into that target before the CPU publishes this
         // probe range; otherwise an old target allocation could overwrite a
         // valid receiver-visible probe with unrelated data.
-        if ((params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u)
+        if (gpuScheduler || (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u)
         {
             uint readBuffer = SimpleDdgiIrradianceReadBuffer(params);
             uint writeBuffer = SimpleDdgiIrradianceWriteBuffer(params);
@@ -618,7 +690,32 @@ void main()
                 vec4 canonical = ReadSimpleDdgiAtlasTexel(readBuffer, probeIndex, texel, params.irradianceTexels);
                 WriteSimpleDdgiAtlasTexel(writeBuffer, probeIndex, texel, params.irradianceTexels, canonical);
             }
+            uint visibilityTexelCount = params.visibilityTexels * params.visibilityTexels;
+            for (uint texel = local; texel < visibilityTexelCount; texel += gl_WorkGroupSize.x)
+            {
+                vec4 canonical = ReadSimpleDdgiAtlasTexel(
+                    pc.VisibilityAtlasBufferIndex,
+                    probeIndex,
+                    texel,
+                    params.visibilityTexels);
+                WriteSimpleDdgiAtlasTexelAtOffset(
+                    writeBuffer,
+                    pc.PrivateVisibilityAtlasOffsetWords,
+                    probeIndex,
+                    texel,
+                    params.visibilityTexels,
+                    canonical);
+            }
         }
+        barrier();
+        memoryBarrierBuffer();
+        barrier();
+        if (local == 0u)
+            SimpleDdgiSchedulerCompleteSingle(
+                pc.SchedulerArenaBufferIndex,
+                pc.SchedulerOutcomesOffsetWords,
+                update.outcomeIndex,
+                1u << 4u);
         return;
     }
     uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
@@ -754,10 +851,34 @@ void main()
                     clamp(aggregateIrradianceDelta, 0.0, 8.0),
                     0.20);
             }
-            if (freshUpdate)
-                state.flags &= ~SIMPLE_DDGI_PROBE_FLAG_FRESH;
-            WriteSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex, state);
+            if (gpuScheduler)
+            {
+                WriteStorageFloatUniform(
+                    pc.SchedulerArenaBufferIndex,
+                    pc.SchedulerOutcomesOffsetWords + update.outcomeIndex * SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS + 14u,
+                    aggregateIrradianceDelta);
+            }
+            else
+            {
+                if (freshUpdate)
+                    state.flags &= ~SIMPLE_DDGI_PROBE_FLAG_FRESH;
+                WriteSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex, state);
+            }
         }
+        else if (gpuScheduler)
+        {
+            SimpleDdgiSchedulerFailOutcome(
+                pc.SchedulerArenaBufferIndex,
+                pc.SchedulerOutcomesOffsetWords,
+                update.outcomeIndex,
+                1u << 0u);
+        }
+        if (gpuScheduler && SimpleDdgiUpdateMatchesProbeGeneration(update, state))
+            SimpleDdgiSchedulerCompleteSingle(
+                pc.SchedulerArenaBufferIndex,
+                pc.SchedulerOutcomesOffsetWords,
+                update.outcomeIndex,
+                1u << 4u);
     }
 }
 

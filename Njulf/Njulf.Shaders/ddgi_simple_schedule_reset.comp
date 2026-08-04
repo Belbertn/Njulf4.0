@@ -25,6 +25,9 @@ void main()
         SchedulerArenaWrite(pc.LaneCandidateCountsOffsetWords + i, 0u);
         SchedulerArenaWrite(pc.LanePrefixesOffsetWords + i, 0u);
         SchedulerArenaWrite(pc.LaneTotalsOffsetWords + i, 0u);
+        // LaneCursors is persistent rotating state. It is initialized by the
+        // bootstrap upload and advanced only by successful admission; a
+        // frame reset must never turn it back into a compacted lane base.
         SchedulerArenaWrite(pc.LaneAdmissionOffsetWords + i, 0u);
     }
     for (uint i = localIndex; i < SIMPLE_DDGI_SCHEDULER_COUNTER_WORDS; i += 64u)
@@ -35,12 +38,18 @@ void main()
         SchedulerArenaWrite(pc.FeedbackOffsetWords + i, 0u);
     for (uint command = localIndex; command < 6u; command += 64u)
     {
-        uint base = pc.RayBucketCommandsOffsetWords +
-            command * SIMPLE_DDGI_SCHEDULER_INDIRECT_WORDS;
-        SchedulerArenaWrite(base + 0u, 0u);
-        SchedulerArenaWrite(base + 1u, 1u);
-        SchedulerArenaWrite(base + 2u, 1u);
-        SchedulerArenaWrite(base + 3u, 0u);
+        uint commandBase = pc.RayBucketCommandsOffsetWords +
+            command * SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_COMMAND_WORDS;
+        uint metadataBase = pc.RayBucketMetadataOffsetWords +
+            command * SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_METADATA_WORDS;
+        SchedulerArenaWrite(commandBase + 0u, 0u);
+        SchedulerArenaWrite(commandBase + 1u, 1u);
+        SchedulerArenaWrite(commandBase + 2u, 1u);
+        SchedulerArenaWrite(commandBase + 3u, 0u);
+        SchedulerArenaWrite(metadataBase + 0u, 0u);
+        SchedulerArenaWrite(metadataBase + 1u, 0u);
+        SchedulerArenaWrite(metadataBase + 2u, 0u);
+        SchedulerArenaWrite(metadataBase + 3u, 0u);
     }
     for (uint command = localIndex; command < 15u; command += 64u)
     {

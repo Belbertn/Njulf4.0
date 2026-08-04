@@ -13,23 +13,6 @@ uint SchedulerNextGeneration(uint generation)
     return next == 0u ? 1u : next;
 }
 
-void SchedulerInvalidateProbe(
-    uint probeIndex,
-    uint stateBase,
-    uint stateFlags,
-    uint generation,
-    uint reasons)
-{
-    uint nextGeneration = SchedulerNextGeneration(generation);
-    uint nextFlags = stateFlags & ~SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK;
-    nextFlags |= nextGeneration << SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT;
-    nextFlags |= SIMPLE_DDGI_PROBE_FLAG_FRESH;
-    if ((reasons & SIMPLE_DDGI_SCHEDULER_REASON_SCROLL) != 0u)
-        nextFlags |= SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED;
-    WriteStorageWordUniform(pc.ProbeStateBufferIndex, stateBase + 4u, nextFlags);
-    WriteStorageWordUniform(pc.ProbeStateBufferIndex, stateBase + 5u, 0u);
-}
-
 void main()
 {
     uint sequenceOrdinal = gl_GlobalInvocationID.x;
@@ -53,7 +36,7 @@ void main()
     }
 
     uint probeIndex = SchedulerSequenceProbeIndex(volumeIndex, localOrdinal);
-    uint stateBase = probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+    uint stateBase = probeIndex * SIMPLE_DDGI_PROBE_STATE_WORDS;
     uint stateFlags = ReadStorageWordUniform(pc.ProbeStateBufferIndex, stateBase + 4u);
     uint stateAge = ReadStorageWordUniform(pc.ProbeStateBufferIndex, stateBase + 5u);
     uint expectedGeneration = (stateFlags & SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK) >>
@@ -69,17 +52,16 @@ void main()
 
     uint schedulerStateBase = pc.SchedulerProbeStateOffsetWords +
         probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
-    // Word 6 is the last applied invalidation marker. It is deliberately
-    // retained through commit so a dirty generation cannot re-admit the same
-    // probe on every frame while the CPU keeps the dirty signal alive for its
-    // atmosphere/source cohort.
-    uint invalidationMarker = SchedulerArenaRead(schedulerStateBase + 6u);
+    // Word 8 is the last applied invalidation marker. Dirty-latency start
+    // remains in word 6 so the bootstrap ABI retains both pieces of state.
+    uint invalidationMarker = SchedulerArenaRead(schedulerStateBase + 8u);
+    uint schedulerMetadata = SchedulerArenaRead(schedulerStateBase + 5u);
     uint dirtyReasons;
     bool regionalDirtySignal = SchedulerDirtyIntersects(volumeIndex, localOrdinal, dirtyReasons);
-    bool sourceInvalid = (stateFlags & SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID) != 0u;
+    bool sourceInvalid =
+        (stateFlags & SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID) != 0u ||
+        (schedulerMetadata & SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR) != 0u;
     uint sourceGeneration = SchedulerArenaRead(schedulerStateBase + 2u);
-    uint schedulerMetadata = SchedulerArenaRead(schedulerStateBase + 5u) &
-        SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBILITY_MASK;
     bool globalDirtySignal = SchedulerDirtyReasonFlags() != 0u;
     bool globalDirty = globalDirtySignal && sourceGeneration != SchedulerSourceGeneration();
     bool regionalDirty = regionalDirtySignal &&
@@ -121,6 +103,8 @@ void main()
         invalidationReasons |= SIMPLE_DDGI_SCHEDULER_REASON_SCROLL;
     if (topologyInvalid || SchedulerAtlasFresh())
         invalidationReasons |= SIMPLE_DDGI_SCHEDULER_REASON_FRESH;
+    if (topologyInvalid)
+        invalidationReasons |= SIMPLE_DDGI_SCHEDULER_REASON_TOPOLOGY;
     if (sourceInvalid)
         invalidationReasons |= SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID;
 
@@ -133,24 +117,12 @@ void main()
         (marker == 0u || invalidationMarker != marker);
     if (invalidate)
     {
-        // Mirror mode is a diagnostic producer only.  It must not mutate the
-        // CPU-authoritative public state while the CPU queue is being rendered.
-        // Resident mode advances the public physical generation exactly once;
-        // mirror mode evaluates the same hypothetical generation locally and
-        // leaves the canonical state untouched.
-        if (SchedulerGpuResident())
-        {
-            SchedulerInvalidateProbe(probeIndex, stateBase, stateFlags,
-                expectedGeneration, invalidationReasons);
-            expectedGeneration = SchedulerNextGeneration(expectedGeneration);
-        }
+        // Classification is a private proposal stage in resident mode. The
+        // public probe record remains byte-identical until CommitLocal has
+        // validated every producer and publication generation.
         stateFlags |= SIMPLE_DDGI_PROBE_FLAG_FRESH;
         if ((invalidationReasons & SIMPLE_DDGI_SCHEDULER_REASON_SCROLL) != 0u)
             stateFlags |= SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED;
-        SchedulerArenaWrite(schedulerStateBase + 5u, invalidationReasons);
-        SchedulerArenaWrite(schedulerStateBase + 6u,
-            marker == 0u ? SchedulerQueueGeneration() : marker);
-        schedulerMetadata &= ~SIMPLE_DDGI_SCHEDULER_PROBE_META_PUBLISHED;
         fresh = true;
         scrollExposed = (invalidationReasons & SIMPLE_DDGI_SCHEDULER_REASON_SCROLL) != 0u;
     }
@@ -173,16 +145,90 @@ void main()
         uintBitsToFloat(SchedulerFrame(22u)));
     vec3 origin = SchedulerVolumeOrigin(volumeIndex);
     vec3 position = origin + vec3(logicalX, logicalY, logicalZ) * SchedulerVolumeSpacing(volumeIndex);
-    bool visible = distance(camera, position) <= max(
-        uintBitsToFloat(SchedulerFrame(23u)), SchedulerVolumeSpacing(volumeIndex) * 8.0);
+    float spacing = SchedulerVolumeSpacing(volumeIndex);
+    uint volumeKind = SchedulerVolumeWord(volumeIndex, 2u);
+    uint volumePurpose = SchedulerVolumeWord(volumeIndex, 5u);
+    int baseImportance;
+    if (volumeKind == 1u)
+    {
+        // Keep this table in lockstep with ResolveVolumeSchedulingBaseImportance
+        // in SimpleDdgiVolumeManager. Authored hero/dynamic volumes are visible
+        // independent of camera distance; interior/support volumes use the
+        // same proximity bonus as the CPU policy.
+        baseImportance = volumePurpose == 0u ? 6 :
+            (volumePurpose == 2u ? 5 :
+                (volumePurpose == 1u ? 2 : 1));
+    }
+    else
+    {
+        uint ringImportance = min(SchedulerVolumeRing(volumeIndex), 2u);
+        baseImportance = ringImportance == 0u ? 4 :
+            (ringImportance == 1u ? 1 : 0);
+    }
+    float authoredPadding = max(SchedulerVolumeProximityRadiusPadding(volumeIndex), 0.0);
+    float proximityRadius = volumeKind == 2u
+        ? spacing * 4.0
+        : max(spacing * 3.0, authoredPadding);
+    bool proximity = distance(camera, position) <= max(
+        uintBitsToFloat(SchedulerFrame(23u)), proximityRadius);
+    uint packedLifecycle = SchedulerArenaRead(schedulerStateBase + 7u);
+    uint stableUpdates = (packedLifecycle & SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_MASK) >>
+        SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_SHIFT;
+    bool visibilityRefreshRequired = globalDirtySignal || fresh || scrollExposed ||
+        regionalDirtySignal || inactive ||
+        stableUpdates < max(SchedulerFrame(30u), 1u);
+    int importance = baseImportance + (proximity ? 3 : 0) +
+        (scrollExposed ? 1 : 0);
+    bool visible = visibilityRefreshRequired && importance >= 4;
+    float activeWeight = ReadStorageFloatUniform(
+        pc.ProbeStateBufferIndex,
+        stateBase + 3u);
+    bool zeroSupport = fresh || relocationRetry || activeWeight <= 0.0001 ||
+        (SchedulerTransportV2() && sourceRays == 0u && !inactive);
+    bool visibleZeroSupport = visible && zeroSupport;
+    float residualEnvelope = ReadStorageFloatUniform(
+        pc.ProbeStateBufferIndex,
+        stateBase + 7u);
+    uint packedTransport = SchedulerArenaRead(schedulerStateBase + 7u);
+    uint completedTransportGeneration =
+        (packedTransport & SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_MASK) >>
+        SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_SHIFT;
+    bool solverConverged = SchedulerTransportV2() && sourceReady &&
+        completedTransportGeneration == (SchedulerTransportGeneration() & 0xffu) &&
+        stableUpdates >= max(SchedulerFrame(30u), 1u) &&
+        !isnan(residualEnvelope) && !isinf(residualEnvelope) &&
+        residualEnvelope >= 0.0 &&
+        residualEnvelope <= uintBitsToFloat(SchedulerFrame(39u));
+    if (solverConverged && !globalDirty && !regionalDirty && !fresh &&
+        !scrollExposed && !sourceInvalid && !relocationRetry && !inactiveRetry)
+    {
+        SchedulerWriteCandidate(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
+            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE, 0u, sequenceOrdinal, 0u, 0u, 0u, 0u);
+        return;
+    }
     if (visible)
         reasons |= SIMPLE_DDGI_SCHEDULER_REASON_VISIBLE;
-    if (visible)
-        schedulerMetadata |= SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBLE;
-    else
-        schedulerMetadata &= ~SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBILITY_MASK;
-    SchedulerArenaWrite(schedulerStateBase + 5u, schedulerMetadata);
-    if (fresh || scrollExposed || (invalidate && (invalidationReasons & SIMPLE_DDGI_SCHEDULER_REASON_FRESH) != 0u))
+    // The reason payload is the transaction-private classification proposal.
+    // Persistent visibility and invalidation metadata are applied by
+    // CommitLocal only after all producer completion bits have been validated.
+    reasons |= invalidationReasons & (
+        SIMPLE_DDGI_SCHEDULER_REASON_FRESH |
+        SIMPLE_DDGI_SCHEDULER_REASON_SCROLL |
+        SIMPLE_DDGI_SCHEDULER_REASON_REGIONAL_DIRTY |
+        SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY |
+        SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID |
+        SIMPLE_DDGI_SCHEDULER_REASON_TOPOLOGY);
+    if (visibleZeroSupport)
+    {
+        workClass = SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_ZERO_SUPPORT;
+        transport = SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE;
+        rayTier = SIMPLE_DDGI_SCHEDULER_RAY_FULL;
+        reasons |= SIMPLE_DDGI_SCHEDULER_REASON_VISIBLE;
+        reasons |= SIMPLE_DDGI_SCHEDULER_REASON_INACTIVE_RETRY;
+        reasons |= fresh ? SIMPLE_DDGI_SCHEDULER_REASON_FRESH : 0u;
+        reasons |= scrollExposed ? SIMPLE_DDGI_SCHEDULER_REASON_SCROLL : 0u;
+    }
+    else if (fresh || scrollExposed || (invalidate && (invalidationReasons & SIMPLE_DDGI_SCHEDULER_REASON_FRESH) != 0u))
     {
         workClass = SIMPLE_DDGI_SCHEDULER_WORK_FRESH_EXPOSED_VISIBLE;
         transport = SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE;

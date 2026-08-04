@@ -478,6 +478,35 @@ public sealed class SimpleDdgiVolumeManagerTests
     }
 
     [Test]
+    public void ResidentBootstrapSeedsPrivateStateAndPreservesFenceCompleteCursors()
+    {
+        string manager = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiVolumeManager.cs"));
+        string scheduler = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiGpuScheduler.cs"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(manager, Does.Contain("UploadGpuResidentSchedulerBootstrap"));
+            Assert.That(manager, Does.Contain("BuildGpuResidentSchedulerProbeState"));
+            Assert.That(manager, Does.Contain("TryCopyLastFeedbackLaneCursors"));
+            Assert.That(manager, Does.Contain("_gpuResidentProbeStateBootstrapped"));
+            Assert.That(manager, Does.Contain("_probeInvalidationMarkers"));
+            Assert.That(manager, Does.Contain("_probeStableUpdateCounts"));
+            Assert.That(manager, Does.Contain("_probeRoutineMaintenancePending"));
+            Assert.That(scheduler, Does.Contain("UploadResidentBootstrap"));
+            Assert.That(scheduler, Does.Contain("TransferBit"));
+            Assert.That(scheduler, Does.Contain("ShaderStorageReadBit"));
+            Assert.That(scheduler, Does.Contain("ShaderStorageWriteBit"));
+            Assert.That(scheduler, Does.Contain("_lastFeedbackLaneCursors"));
+        });
+    }
+
+    [Test]
     public void SchedulerHotPath_DoesNotAgeOrClassifyTheEntireProbePool()
     {
         string source = File.ReadAllText(FindSourceFile(

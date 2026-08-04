@@ -6,34 +6,240 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
+uint SchedulerNextPhysicalGeneration(uint generation)
+{
+    uint next = (generation + 1u) & 0x00ffffffu;
+    return next == 0u ? 1u : next;
+}
+
+void MarkPrivateRepair(uint probeIndex)
+{
+    if (probeIndex >= SchedulerActiveProbeCount())
+        return;
+
+    uint stateBase = pc.SchedulerProbeStateOffsetWords +
+        probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+    SchedulerArenaAtomicOr(stateBase + 5u, SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR);
+}
+
+void RejectOutcome(uint probeIndex)
+{
+    SchedulerArenaAtomicAdd(
+        pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_REJECTED,
+        1u);
+    MarkPrivateRepair(probeIndex);
+}
+
 void main()
 {
-    uint updateIndex = gl_GlobalInvocationID.x;
+    uint outcomeIndex = gl_GlobalInvocationID.x;
     uint accepted = min(
         SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
         SchedulerRequestCapacity());
-    if (updateIndex >= accepted)
+    if (outcomeIndex >= accepted)
         return;
 
-    uint updateBase = updateIndex * SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS;
-    uint probeIndex = ReadStorageWordUniform(pc.UpdateQueueBufferIndex, updateBase + 0u);
-    uint volumeIndex = ReadStorageWordUniform(pc.UpdateQueueBufferIndex, updateBase + 1u);
-    uint updateFlags = ReadStorageWordUniform(pc.UpdateQueueBufferIndex, updateBase + 2u);
-    uint metadata = ReadStorageWordUniform(pc.UpdateQueueBufferIndex, updateBase + 3u);
-    uint sourceRayCount = ReadStorageWordUniform(pc.UpdateQueueBufferIndex, updateBase + 4u);
-    uint expectedGeneration = metadata & 0x00ffffffu;
-    if (probeIndex == SIMPLE_DDGI_SCHEDULER_INVALID_PROBE || expectedGeneration == 0u)
+    uint outcomeBase = pc.OutcomesOffsetWords +
+        outcomeIndex * SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS;
+    uint queueGeneration = SchedulerArenaRead(outcomeBase + 0u);
+    uint resourceGeneration = SchedulerArenaRead(outcomeBase + 1u);
+    uint volumeGeneration = SchedulerArenaRead(outcomeBase + 2u);
+    uint sourceGeneration = SchedulerArenaRead(outcomeBase + 3u);
+    uint transportGeneration = SchedulerArenaRead(outcomeBase + 4u);
+    uint probeIndex = SchedulerArenaRead(outcomeBase + 5u);
+    uint expectedGeneration = SchedulerArenaRead(outcomeBase + 6u);
+    uint requiredMask = SchedulerArenaRead(outcomeBase + 7u);
+    uint completionMask = SchedulerArenaRead(outcomeBase + 8u);
+    uint failureReason = SchedulerArenaRead(outcomeBase + 9u);
+    uint updateFlags = SchedulerArenaRead(outcomeBase + 10u);
+
+    if (queueGeneration != SchedulerQueueGeneration() ||
+        resourceGeneration != SchedulerResourceGeneration() ||
+        volumeGeneration != SchedulerVolumeGeneration() ||
+        sourceGeneration != SchedulerSourceGeneration() ||
+        transportGeneration != SchedulerTransportGeneration() ||
+        (completionMask & requiredMask) != requiredMask ||
+        failureReason != 0u ||
+        probeIndex >= SchedulerActiveProbeCount() ||
+        expectedGeneration == 0u)
     {
-        SchedulerArenaAtomicAdd(
-            pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_INVALID_GENERATION, 1u);
+        RejectOutcome(probeIndex);
         return;
     }
-    SchedulerWriteOutcome(
-        updateIndex,
-        probeIndex,
-        volumeIndex,
-        expectedGeneration,
-        sourceRayCount,
-        1u,
-        updateFlags);
+
+    uint publicStateBase = probeIndex * SIMPLE_DDGI_PROBE_STATE_WORDS;
+    uint publicFlags = ReadStorageWordUniform(
+        pc.ProbeStateBufferIndex,
+        publicStateBase + 4u);
+    uint currentGeneration = (publicFlags & SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK) >>
+        SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT;
+    // The expected generation is the public physical slot generation observed
+    // by admission. A private proposal may request the next generation, but
+    // it is applied only after this compare succeeds.
+    if (currentGeneration == 0u || currentGeneration != expectedGeneration)
+    {
+        RejectOutcome(probeIndex);
+        return;
+    }
+
+    uint proposalBase = pc.UpdateRecordsOffsetWords +
+        outcomeIndex * SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS;
+    // RelocateClassify reuses the seven-word transaction record for its
+    // relocation proposal, so words 0..6 no longer contain the emitted queue
+    // header by commit time. Recover the owning volume from the accepted probe
+    // rather than interpreting relocation.y as a volume index.
+    uint volumeIndex;
+    if (!SchedulerFindVolume(probeIndex, volumeIndex))
+    {
+        RejectOutcome(probeIndex);
+        return;
+    }
+    uint candidateReasons = 0u;
+    if ((updateFlags & SIMPLE_DDGI_SCHEDULER_PROBE_FRESH) != 0u)
+        candidateReasons |= SIMPLE_DDGI_SCHEDULER_REASON_FRESH;
+    if ((updateFlags & SIMPLE_DDGI_SCHEDULER_PROBE_SCROLL) != 0u)
+        candidateReasons |= SIMPLE_DDGI_SCHEDULER_REASON_SCROLL;
+    if ((updateFlags & SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_VISIBLE) != 0u)
+        candidateReasons |= SIMPLE_DDGI_SCHEDULER_REASON_VISIBLE;
+    if ((updateFlags & SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_REGIONAL) != 0u)
+        candidateReasons |= SIMPLE_DDGI_SCHEDULER_REASON_REGIONAL_DIRTY;
+    if ((updateFlags & SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_GLOBAL) != 0u)
+        candidateReasons |= SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY;
+    if ((updateFlags & SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_SOURCE) != 0u)
+        candidateReasons |= SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID;
+    if ((updateFlags & SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_TOPOLOGY) != 0u)
+        candidateReasons |= SIMPLE_DDGI_SCHEDULER_REASON_TOPOLOGY;
+    uint proposedFlags = SchedulerArenaRead(proposalBase + 4u);
+    uint proposedClassification = SchedulerArenaRead(proposalBase + 5u);
+    float proposedActiveWeight = uintBitsToFloat(SchedulerArenaRead(proposalBase + 3u));
+    float proposedLuminance = uintBitsToFloat(
+        SchedulerArenaRead(proposalBase + 6u));
+    float residual = uintBitsToFloat(SchedulerArenaRead(outcomeBase + 14u));
+    proposedLuminance = max(proposedLuminance, residual);
+    if ((updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_INVALIDATE) != 0u)
+    {
+        proposedFlags &= ~SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK;
+        proposedFlags |= SchedulerNextPhysicalGeneration(currentGeneration) <<
+            SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT;
+    }
+    if ((updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) != 0u)
+        proposedFlags &= ~SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID;
+
+    // Resident publication is the final receiver-visible write of the
+    // transaction. The publish producer validates generations and marks its
+    // completion bit, but leaves both public atlases untouched until this
+    // predicate has accepted every producer outcome.
+    if (SchedulerGpuResident())
+    {
+        uint privateIrradianceBase = probeIndex *
+            SIMPLE_DDGI_SCHEDULER_IRRADIANCE_WORDS_PER_PROBE;
+        uint publicIrradianceBase = privateIrradianceBase;
+        for (uint word = 0u; word < SIMPLE_DDGI_SCHEDULER_IRRADIANCE_WORDS_PER_PROBE; word++)
+            WriteStorageWordUniform(
+                pc.IrradianceAtlasBufferIndex,
+                publicIrradianceBase + word,
+                ReadStorageWordUniform(
+                    pc.TransportIrradianceAtlasBufferIndex,
+                    privateIrradianceBase + word));
+
+        uint privateVisibilityBase = pc.PrivateVisibilityAtlasOffsetWords +
+            probeIndex * SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE;
+        uint publicVisibilityBase = probeIndex *
+            SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE;
+        for (uint word = 0u; word < SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE; word++)
+            WriteStorageWordUniform(
+                pc.VisibilityAtlasBufferIndex,
+                publicVisibilityBase + word,
+                ReadStorageWordUniform(
+                    pc.TransportIrradianceAtlasBufferIndex,
+                    privateVisibilityBase + word));
+    }
+
+    WriteStorageVec4Uniform(
+        pc.ProbeStateBufferIndex,
+        publicStateBase,
+        vec4(
+            uintBitsToFloat(SchedulerArenaRead(proposalBase + 0u)),
+            uintBitsToFloat(SchedulerArenaRead(proposalBase + 1u)),
+            uintBitsToFloat(SchedulerArenaRead(proposalBase + 2u)),
+            clamp(proposedActiveWeight, 0.0, 1.0)));
+    WriteStorageWordUniform(pc.ProbeStateBufferIndex, publicStateBase + 4u, proposedFlags);
+    WriteStorageWordUniform(pc.ProbeStateBufferIndex, publicStateBase + 5u, 0u);
+    WriteStorageWordUniform(pc.ProbeStateBufferIndex, publicStateBase + 6u, proposedClassification);
+    WriteStorageWordUniform(
+        pc.ProbeStateBufferIndex,
+        publicStateBase + 7u,
+        floatBitsToUint(max(proposedLuminance, 0.0)));
+
+    uint stateBase = pc.SchedulerProbeStateOffsetWords +
+        probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+    SchedulerArenaWrite(stateBase + 0u, SchedulerFrameIndex());
+    bool sourceRefresh = (updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) != 0u;
+    // For a source refresh the admitted active-ray count is also the source
+    // sequence cardinality. It is retained in the expected-ray-count word;
+    // the former sixteenth outcome word was a duplicate of this value.
+    uint sourceRayCount = (updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) != 0u
+        ? (SchedulerArenaRead(outcomeBase + 11u) & 0xffffu)
+        : 0u;
+    if (sourceRefresh)
+    {
+        SchedulerArenaWrite(stateBase + 1u, SchedulerFrameIndex());
+        SchedulerArenaWrite(stateBase + 2u, sourceGeneration);
+        SchedulerArenaWrite(stateBase + 7u, min(sourceRayCount, 0x1ffu));
+    }
+    else if (SchedulerTransportV2())
+    {
+        uint packedLifecycle = SchedulerArenaRead(stateBase + 7u);
+        uint sourceRays = packedLifecycle & SIMPLE_DDGI_SCHEDULER_SOURCE_RAY_MASK;
+        uint previousTransportGeneration =
+            (packedLifecycle & SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_MASK) >>
+            SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_SHIFT;
+        uint stableUpdates =
+            (packedLifecycle & SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_MASK) >>
+            SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_SHIFT;
+        if (sourceRays != 0u)
+        {
+            previousTransportGeneration = SchedulerTransportGeneration() & 0xffu;
+            stableUpdates = min(stableUpdates + 1u, 0xffu);
+        }
+        SchedulerArenaWrite(
+            stateBase + 7u,
+            sourceRays |
+            (previousTransportGeneration << SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_SHIFT) |
+            (stableUpdates << SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_SHIFT));
+    }
+    SchedulerArenaWrite(stateBase + 3u, SchedulerFrame(31u));
+    SchedulerArenaWrite(stateBase + 4u, SchedulerVolumeGeneration());
+    uint previousSchedulerMetadata = SchedulerArenaRead(stateBase + 5u);
+    uint schedulerMetadata = previousSchedulerMetadata &
+        SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBILITY_MASK;
+    if (!sourceRefresh)
+        schedulerMetadata |= previousSchedulerMetadata &
+            SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR;
+    if ((candidateReasons & SIMPLE_DDGI_SCHEDULER_REASON_VISIBLE) != 0u)
+        schedulerMetadata |= SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBLE |
+            SIMPLE_DDGI_SCHEDULER_PROBE_META_PUBLISHED;
+    if (sourceRefresh)
+        schedulerMetadata &= ~SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR;
+    SchedulerArenaWrite(stateBase + 5u, schedulerMetadata);
+
+    // Apply the invalidation marker only after the public record and private
+    // atlas publication have passed every generation/completion check. A
+    // failed or partial request therefore remains eligible on the next frame.
+    uint appliedMarker = SchedulerVolumeDirtyGeneration(volumeIndex);
+    if ((candidateReasons & (
+            SIMPLE_DDGI_SCHEDULER_REASON_TOPOLOGY |
+            SIMPLE_DDGI_SCHEDULER_REASON_SCROLL)) != 0u)
+        appliedMarker = SchedulerVolumeGeneration();
+    else if ((candidateReasons & (
+            SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY |
+            SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID)) != 0u)
+        appliedMarker = SchedulerSourceGeneration();
+    if (appliedMarker == 0u)
+        appliedMarker = SchedulerQueueGeneration();
+    SchedulerArenaWrite(stateBase + 8u, appliedMarker);
+
+    SchedulerArenaAtomicAdd(
+        pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_COMMITTED,
+        1u);
 }

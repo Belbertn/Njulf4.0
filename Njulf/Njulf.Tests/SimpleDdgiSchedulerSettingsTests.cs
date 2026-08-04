@@ -23,6 +23,24 @@ public sealed class SimpleDdgiSchedulerSettingsTests
     }
 
     [Test]
+    public void NewRenderSettingsEnableTheGpuResidentPlanByDefault()
+    {
+        RenderSettings settings = new();
+        GlobalIlluminationSettings gi = settings.GlobalIllumination;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gi.SimpleDdgiSchedulerMode, Is.EqualTo(SimpleDdgiSchedulerMode.GpuResident));
+            Assert.That(gi.UseRayQueryBackend, Is.True);
+            Assert.That(gi.SimpleDdgiTransportV2Enabled, Is.True);
+            Assert.That(gi.SimpleDdgiClassificationSchedulingEnabled, Is.True);
+            Assert.That(gi.SimpleDdgiStructuredGatherEnabled, Is.True);
+            Assert.That(gi.SimpleDdgiToroidalScrollingEnabled, Is.True);
+            Assert.That(gi.SimpleDdgiRegionalInvalidationEnabled, Is.True);
+        });
+    }
+
+    [Test]
     public void SchedulerModeRoundTripsThroughRenderSettingsFile()
     {
         string path = Path.Combine(

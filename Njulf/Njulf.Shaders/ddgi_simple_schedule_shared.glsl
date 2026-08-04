@@ -15,18 +15,54 @@ const uint SIMPLE_DDGI_SCHEDULER_MAX_RAYS = 256u;
 const uint SIMPLE_DDGI_SCHEDULER_INVALID_PROBE = 0xffffffffu;
 const uint SIMPLE_DDGI_SCHEDULER_WORKGROUP_SIZE = 64u;
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_WORDS = 1024u;
-const uint SIMPLE_DDGI_SCHEDULER_VOLUME_POLICY_WORDS = 40u;
+const uint SIMPLE_DDGI_SCHEDULER_VOLUME_POLICY_WORDS = 44u;
 // The public candidate record is eight words.  The source-ray count is
 // derivable from its volume/transport tuple, so the resident input pool stores
 // only the first seven words to keep the maximum arena within the memory plan.
 const uint SIMPLE_DDGI_SCHEDULER_CANDIDATE_WORDS = 7u;
 const uint SIMPLE_DDGI_SCHEDULER_COMPACT_OUTPUT_WORDS = 1u;
 const uint SIMPLE_DDGI_SCHEDULER_GROUP_LANE_VALUES_PER_WORD = 2u;
-const uint SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS = 8u;
-const uint SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS = 8u;
-const uint SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS = 16u;
+// Public probe state and private scheduler state are different ABIs. Keep the
+// public stride here because several scheduler shaders read the public buffer,
+// and use the ten-word private stride for the resident arena mirror.
+const uint SIMPLE_DDGI_PROBE_STATE_WORDS = 8u;
+const uint SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS = 10u;
+// The public queue remains an eight-word ABI; the internal scheduler record
+// is seven words and is expanded by SchedulerCopyUpdateToQueue. Classification
+// proposal bits use scheduler-private high flag bits until emit strips them.
+const uint SIMPLE_DDGI_PROBE_UPDATE_STRIDE_WORDS = 8u;
+const uint SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS = 7u;
+const uint SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS = 15u;
+// The transaction-private relocation proposal reuses the existing 48-byte
+// relocation/classification storage ABI. Commit is a scheduler-only shader,
+// so mirror that stride here rather than depending on the producer header.
+const uint SIMPLE_DDGI_RELOCATION_CLASSIFICATION_STRIDE_WORDS = 12u;
 const uint SIMPLE_DDGI_SCHEDULER_INDIRECT_WORDS = 4u;
+const uint SIMPLE_DDGI_SCHEDULER_IRRADIANCE_WORDS_PER_PROBE = 128u;
+const uint SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE = 512u;
+// Ray-bucket commands and queue metadata are separate regions. The command
+// region is passed directly to vkCmdDispatchIndirect; metadata is never part
+// of a VkDispatchIndirectCommand.
+const uint SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_METADATA_WORDS = 4u;
+const uint SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_COMMAND_WORDS = 4u;
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_WORDS = 64u;
+
+// Per-request producer completion. A request is committable only when every
+// required bit is set and no failure reason was recorded.
+const uint SIMPLE_DDGI_SCHEDULER_COMPLETE_TRACE = 1u << 0u;
+const uint SIMPLE_DDGI_SCHEDULER_COMPLETE_RELOCATE = 1u << 1u;
+const uint SIMPLE_DDGI_SCHEDULER_COMPLETE_TRANSPORT = 1u << 2u;
+const uint SIMPLE_DDGI_SCHEDULER_TRANSPORT_NOT_REQUIRED = 1u << 3u;
+const uint SIMPLE_DDGI_SCHEDULER_COMPLETE_BLEND = 1u << 4u;
+const uint SIMPLE_DDGI_SCHEDULER_COMPLETE_CANONICAL_PUBLISH = 1u << 5u;
+const uint SIMPLE_DDGI_SCHEDULER_COMPLETE_SAMPLED_PUBLISH = 1u << 6u;
+const uint SIMPLE_DDGI_SCHEDULER_SAMPLED_PUBLISH_NOT_REQUIRED = 1u << 7u;
+const uint SIMPLE_DDGI_SCHEDULER_FEATURE_SAMPLED_PUBLICATION = 1u << 8u;
+
+const uint SIMPLE_DDGI_SCHEDULER_FAILURE_INVALID_GENERATION = 1u << 0u;
+const uint SIMPLE_DDGI_SCHEDULER_FAILURE_PRODUCER = 1u << 1u;
+const uint SIMPLE_DDGI_SCHEDULER_FAILURE_PARTIAL = 1u << 2u;
+const uint SIMPLE_DDGI_SCHEDULER_FAILURE_PUBLIC_WRITE = 1u << 3u;
 
 const uint SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_ZERO_SUPPORT = 0u;
 const uint SIMPLE_DDGI_SCHEDULER_WORK_FRESH_EXPOSED_VISIBLE = 1u;
@@ -55,6 +91,7 @@ const uint SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID = 1u << 7u;
 const uint SIMPLE_DDGI_SCHEDULER_REASON_ROUTINE_DUE = 1u << 8u;
 const uint SIMPLE_DDGI_SCHEDULER_REASON_CONVERGENCE = 1u << 9u;
 const uint SIMPLE_DDGI_SCHEDULER_REASON_INACTIVE_RETRY = 1u << 10u;
+const uint SIMPLE_DDGI_SCHEDULER_REASON_TOPOLOGY = 1u << 11u;
 
 // Scheduler-private visibility/publication bits live in the high half of the
 // dirty-reason word. The low reason bits are transient; these two bits survive
@@ -62,6 +99,7 @@ const uint SIMPLE_DDGI_SCHEDULER_REASON_INACTIVE_RETRY = 1u << 10u;
 // without a CPU probe scan.
 const uint SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBLE = 1u << 16u;
 const uint SIMPLE_DDGI_SCHEDULER_PROBE_META_PUBLISHED = 1u << 17u;
+const uint SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR = 1u << 30u;
 const uint SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBILITY_MASK =
     SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBLE |
     SIMPLE_DDGI_SCHEDULER_PROBE_META_PUBLISHED;
@@ -83,7 +121,21 @@ const uint SIMPLE_DDGI_SCHEDULER_PROBE_GENERATION_MASK = 0xffffff00u;
 const uint SIMPLE_DDGI_SCHEDULER_UPDATE_MAINTENANCE = 1u << 12u;
 const uint SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH = 1u << 13u;
 const uint SIMPLE_DDGI_SCHEDULER_UPDATE_ROUTINE_SOURCE = 1u << 15u;
+const uint SIMPLE_DDGI_SCHEDULER_UPDATE_INVALIDATE = 1u << 14u;
 const uint SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_SHIFT = 16u;
+const uint SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_MASK = 0x1ffu <<
+    SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_SHIFT;
+const uint SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_VISIBLE = 1u << 25u;
+const uint SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_REGIONAL = 1u << 26u;
+const uint SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_GLOBAL = 1u << 27u;
+const uint SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_SOURCE = 1u << 28u;
+const uint SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_TOPOLOGY = 1u << 29u;
+const uint SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_MASK =
+    SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_VISIBLE |
+    SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_REGIONAL |
+    SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_GLOBAL |
+    SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_SOURCE |
+    SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_TOPOLOGY;
 const uint SIMPLE_DDGI_SCHEDULER_SOURCE_RAY_MASK = 0x1ffu;
 const uint SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_SHIFT = 9u;
 const uint SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_MASK = 0xffu <<
@@ -146,9 +198,14 @@ layout(push_constant) uniform SimpleDdgiScheduleBlock
     uint CountersOffsetWords;
     uint UpdateRecordsOffsetWords;
     uint RayBucketCommandsOffsetWords;
+    uint RayBucketMetadataOffsetWords;
     uint IndirectCommandsOffsetWords;
     uint OutcomesOffsetWords;
     uint FeedbackOffsetWords;
+    uint IrradianceAtlasBufferIndex;
+    uint VisibilityAtlasBufferIndex;
+    uint TransportIrradianceAtlasBufferIndex;
+    uint PrivateVisibilityAtlasOffsetWords;
     uint Stage;
     uint Reserved0;
 } pc;
@@ -166,6 +223,11 @@ void SchedulerArenaWrite(uint wordOffset, uint value)
 uint SchedulerArenaAtomicAdd(uint wordOffset, uint value)
 {
     return atomicAdd(BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[wordOffset], value);
+}
+
+uint SchedulerArenaAtomicOr(uint wordOffset, uint value)
+{
+    return atomicOr(BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[wordOffset], value);
 }
 
 uint SchedulerFrame(uint word)
@@ -198,6 +260,9 @@ bool SchedulerToroidal() { return (SchedulerFeatureFlags() & 8u) != 0u; }
 bool SchedulerAtlasFresh() { return (SchedulerFeatureFlags() & 16u) != 0u; }
 bool SchedulerDirtyOverflow() { return (SchedulerFeatureFlags() & 64u) != 0u; }
 bool SchedulerClassificationEnabled() { return (SchedulerFeatureFlags() & 128u) != 0u; }
+bool SchedulerSampledPublicationRequired() {
+    return (SchedulerFeatureFlags() & SIMPLE_DDGI_SCHEDULER_FEATURE_SAMPLED_PUBLICATION) != 0u;
+}
 
 uint SchedulerLaneIndex(
     uint volume,
@@ -298,6 +363,10 @@ uint SchedulerVolumePhysicalOffsetZ(uint volumeIndex) { return SchedulerVolumeWo
 uint SchedulerVolumeLayoutFlags(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 25u); }
 uint SchedulerVolumeSequenceStride(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 34u); }
 uint SchedulerVolumeDirtyGeneration(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 39u); }
+float SchedulerVolumeProximityRadiusPadding(uint volumeIndex)
+{
+    return uintBitsToFloat(SchedulerVolumeWord(volumeIndex, 40u));
+}
 
 vec3 SchedulerVolumeOrigin(uint volumeIndex)
 {
@@ -502,7 +571,8 @@ void SchedulerWriteUpdate(
     uint expectedGeneration,
     uint age,
     uint sourceRayCount,
-    uint sourceLightingGeneration)
+    uint sourceLightingGeneration,
+    uint candidateReasons)
 {
     uint base = pc.UpdateRecordsOffsetWords +
         updateIndex * SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS;
@@ -513,20 +583,45 @@ void SchedulerWriteUpdate(
         (expectedGeneration & 0x00ffffffu) | (min(age, 255u) << 24u));
     SchedulerArenaWrite(base + 4u, sourceRayCount);
     SchedulerArenaWrite(base + 5u, sourceLightingGeneration);
-    SchedulerArenaWrite(base + 6u, 0u);
-    SchedulerArenaWrite(base + 7u, 0u);
+    // The queue is compacted by ray bucket, so consumers use this stable
+    // accepted-order index to address the corresponding outcome record.
+    SchedulerArenaWrite(base + 6u, updateIndex);
+    // Candidate reasons are a transaction-private proposal. CommitLocal uses
+    // these high bits to apply visibility and invalidation metadata only after
+    // every producer has completed successfully. Emit strips them before the
+    // record reaches trace, transport, blend, or publication.
+    uint privateReasons = 0u;
+    if ((candidateReasons & SIMPLE_DDGI_SCHEDULER_REASON_VISIBLE) != 0u)
+        privateReasons |= SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_VISIBLE;
+    if ((candidateReasons & SIMPLE_DDGI_SCHEDULER_REASON_REGIONAL_DIRTY) != 0u)
+        privateReasons |= SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_REGIONAL;
+    if ((candidateReasons & SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY) != 0u)
+        privateReasons |= SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_GLOBAL;
+    if ((candidateReasons & SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID) != 0u)
+        privateReasons |= SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_SOURCE;
+    if ((candidateReasons & SIMPLE_DDGI_SCHEDULER_REASON_TOPOLOGY) != 0u)
+        privateReasons |= SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_TOPOLOGY;
+    SchedulerArenaWrite(base + 2u, flags | privateReasons);
 }
 
 void SchedulerCopyUpdateToQueue(uint updateIndex, uint queueIndex)
 {
     uint sourceBase = pc.UpdateRecordsOffsetWords +
         updateIndex * SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS;
-    uint destinationBase = queueIndex * SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS;
+    uint destinationBase = queueIndex * SIMPLE_DDGI_PROBE_UPDATE_STRIDE_WORDS;
     for (uint word = 0u; word < SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS; word++)
+    {
+        uint value = SchedulerArenaRead(sourceBase + word);
+        if (word == 2u)
+            value &= ~SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_MASK;
         WriteStorageWordUniform(
             pc.UpdateQueueBufferIndex,
             destinationBase + word,
-            SchedulerArenaRead(sourceBase + word));
+            value);
+    }
+    // The public queue has one padding word beyond the seven-word internal
+    // record. Keep that queue ABI fixed and explicit.
+    WriteStorageWordUniform(pc.UpdateQueueBufferIndex, destinationBase + 7u, 0u);
 }
 
 void SchedulerReadUpdate(
@@ -548,35 +643,63 @@ void SchedulerReadUpdate(
     sourceLightingGeneration = SchedulerArenaRead(base + 5u);
 }
 
+uint SchedulerRequiredCompletionMask(uint updateFlags);
+
 void SchedulerWriteOutcome(
     uint outcomeIndex,
     uint probeIndex,
     uint volumeIndex,
     uint expectedGeneration,
     uint sourceRayCount,
-    uint completionFlags,
+    uint rayInvocationCount,
     uint updateFlags)
 {
     uint base = pc.OutcomesOffsetWords + outcomeIndex * SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS;
     SchedulerArenaWrite(base + 0u, SchedulerQueueGeneration());
     SchedulerArenaWrite(base + 1u, SchedulerResourceGeneration());
-    SchedulerArenaWrite(base + 2u, probeIndex);
-    SchedulerArenaWrite(base + 3u, expectedGeneration);
-    SchedulerArenaWrite(base + 4u, SchedulerVolumeGeneration());
-    SchedulerArenaWrite(base + 5u, SchedulerSourceGeneration());
-    SchedulerArenaWrite(base + 6u, SchedulerTransportGeneration());
-    SchedulerArenaWrite(base + 7u, completionFlags);
-    // Word 8 carries the consumer update flags into the commit stage.  In
+    SchedulerArenaWrite(base + 2u, SchedulerVolumeGeneration());
+    SchedulerArenaWrite(base + 3u, SchedulerSourceGeneration());
+    SchedulerArenaWrite(base + 4u, SchedulerTransportGeneration());
+    SchedulerArenaWrite(base + 5u, probeIndex);
+    SchedulerArenaWrite(base + 6u, expectedGeneration);
+    SchedulerArenaWrite(base + 7u, SchedulerRequiredCompletionMask(updateFlags));
+    SchedulerArenaWrite(base + 8u, 0u);
+    SchedulerArenaWrite(base + 9u, 0u);
+    // Word 10 carries the consumer update flags into the commit stage. In
     // particular, a cached-solver update must not erase an already valid
     // source cache or advance its routine-source timestamp.
-    SchedulerArenaWrite(base + 8u, updateFlags);
-    SchedulerArenaWrite(base + 9u, sourceRayCount);
-    SchedulerArenaWrite(base + 10u, SchedulerTransportGeneration());
-    SchedulerArenaWrite(base + 11u, 0u);
+    SchedulerArenaWrite(base + 10u, updateFlags);
+    SchedulerArenaWrite(base + 11u, max(rayInvocationCount, 1u));
     SchedulerArenaWrite(base + 12u, 0u);
     SchedulerArenaWrite(base + 13u, 0u);
     SchedulerArenaWrite(base + 14u, 0u);
-    SchedulerArenaWrite(base + 15u, 0u);
+}
+
+uint SchedulerRequiredCompletionMask(uint updateFlags)
+{
+    uint required = SIMPLE_DDGI_SCHEDULER_COMPLETE_TRACE |
+        SIMPLE_DDGI_SCHEDULER_COMPLETE_RELOCATE |
+        SIMPLE_DDGI_SCHEDULER_COMPLETE_BLEND |
+        SIMPLE_DDGI_SCHEDULER_COMPLETE_CANONICAL_PUBLISH;
+    required |= SchedulerTransportV2()
+        ? SIMPLE_DDGI_SCHEDULER_COMPLETE_TRANSPORT
+        : SIMPLE_DDGI_SCHEDULER_TRANSPORT_NOT_REQUIRED;
+    required |= SchedulerSampledPublicationRequired()
+        ? SIMPLE_DDGI_SCHEDULER_COMPLETE_SAMPLED_PUBLISH
+        : SIMPLE_DDGI_SCHEDULER_SAMPLED_PUBLISH_NOT_REQUIRED;
+    return required;
+}
+
+void SchedulerMarkOutcomeFailure(uint outcomeIndex, uint reason)
+{
+    uint base = pc.OutcomesOffsetWords + outcomeIndex * SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS;
+    atomicOr(BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[base + 9u], reason);
+}
+
+void SchedulerMarkOutcomeComplete(uint outcomeIndex, uint completionBit)
+{
+    uint base = pc.OutcomesOffsetWords + outcomeIndex * SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS;
+    atomicOr(BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[base + 8u], completionBit);
 }
 
 #endif

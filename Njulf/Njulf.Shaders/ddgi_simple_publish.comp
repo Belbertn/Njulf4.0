@@ -16,10 +16,13 @@ layout(push_constant) uniform SimpleDdgiPublishPushBlock
     uint ProbeStateBufferIndex;
     uint ProbeUpdateQueueBufferIndex;
     uint TransportIrradianceAtlasBufferIndex;
+    uint PrivateVisibilityAtlasOffsetWords;
     uint SampledAtlasGroupCount;
     uint SampledAtlasLayersPerTexture;
     uint SchedulerArenaBufferIndex;
+    uint SchedulerOutcomesOffsetWords;
     uint SchedulerCountersOffsetWords;
+    uint SchedulerFrameOffsetWords;
 } pc;
 
 void main()
@@ -32,19 +35,68 @@ void main()
             pc.SchedulerArenaBufferIndex,
             pc.SchedulerCountersOffsetWords)
         : params.probesToUpdate;
-    if ((params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) == 0u ||
+    bool residentTransaction = gpuScheduler &&
+        (ReadStorageWordUniform(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerFrameOffsetWords + 27u) & 1u) != 0u;
+    if ((!residentTransaction && (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) == 0u) ||
         queueOffset >= requestCount || params.probeCount == 0u)
         return;
 
     SimpleDdgiProbeUpdate update =
         ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, queueOffset);
-    if (update.probeIndex >= params.probeCount)
+    if (!SimpleDdgiSchedulerOutcomeAllowsPublication(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            false,
+            pc.SchedulerFrameOffsetWords))
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            SIMPLE_DDGI_SCHEDULER_FAILURE_PUBLICATION_GUARD);
         return;
+    }
+    if (update.probeIndex >= params.probeCount)
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 2u);
+        return;
+    }
 
     SimpleDdgiProbeState state =
         ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, update.probeIndex);
     if (!SimpleDdgiUpdateMatchesProbeGeneration(update, state))
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 0u);
         return;
+    }
+
+    // Resident mode keeps receiver-visible atlases immutable during the
+    // producer phase. CommitLocal performs the final copy after all producer
+    // completion and generation checks have passed.
+    if (residentTransaction)
+    {
+        barrier();
+        memoryBarrierBuffer();
+        barrier();
+        if (gl_LocalInvocationID.x == 0u)
+            SimpleDdgiSchedulerCompleteSingle(
+                pc.SchedulerArenaBufferIndex,
+                pc.SchedulerOutcomesOffsetWords,
+                update.outcomeIndex,
+                1u << 5u);
+        return;
+    }
 
     uint texelCount = params.irradianceTexels * params.irradianceTexels;
     for (uint texel = gl_LocalInvocationID.x;
@@ -63,4 +115,36 @@ void main()
             params.irradianceTexels,
             value);
     }
+
+    if (residentTransaction)
+    {
+        uint visibilityTexelCount = params.visibilityTexels * params.visibilityTexels;
+        for (uint texel = gl_LocalInvocationID.x;
+             texel < visibilityTexelCount;
+             texel += gl_WorkGroupSize.x)
+        {
+            vec4 value = ReadSimpleDdgiAtlasTexelAtOffset(
+                pc.TransportIrradianceAtlasBufferIndex,
+                pc.PrivateVisibilityAtlasOffsetWords,
+                update.probeIndex,
+                texel,
+                params.visibilityTexels);
+            WriteSimpleDdgiAtlasTexel(
+                pc.VisibilityAtlasBufferIndex,
+                update.probeIndex,
+                texel,
+                params.visibilityTexels,
+                value);
+        }
+    }
+
+    barrier();
+    memoryBarrierBuffer();
+    barrier();
+    if (gl_LocalInvocationID.x == 0u)
+        SimpleDdgiSchedulerCompleteSingle(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 5u);
 }

@@ -23,6 +23,7 @@ public sealed class SceneDocumentWriter
             AmbientLight = ToSceneColor(scene.AmbientLight),
             Objects = scene.RenderObjects.Select(item => ToObject(item, dependencies, materials)).ToList(),
             ReflectionProbes = scene.ReflectionProbes.Select(ToReflectionProbe).ToList(),
+            GiProbeVolumes = scene.GlobalIlluminationProbeVolumes.Select(ToGiProbeVolume).ToList(),
             InstanceBatches = scene.StaticInstanceBatches.Select(item => ToInstanceBatch(item, dependencies)).ToList(),
             FoliagePrototypes = scene.FoliagePrototypes.Select(item => ToFoliagePrototype(item, dependencies)).ToList(),
             FoliagePatches = scene.FoliagePatches.Select(ToFoliagePatch).ToList(),
@@ -62,6 +63,16 @@ public sealed class SceneDocumentWriter
         Id = source.Id, Name = source.Name, Position = ToSceneVector(source.Position), Rotation = ToSceneQuaternion(source.Rotation),
         Shape = source.Shape.ToString(), BoxExtents = ToSceneVector(source.BoxExtents), Radius = source.Radius, BlendDistance = source.BlendDistance,
         Intensity = source.Intensity, Priority = source.Priority, CubemapPath = source.CubemapPath, BoxProjection = source.BoxProjection
+    };
+
+    private static SceneGlobalIlluminationProbeVolumeDocument ToGiProbeVolume(GlobalIlluminationProbeVolume source) => new()
+    {
+        Id = source.Id, Name = source.Name, Enabled = source.Enabled, Origin = ToSceneVector(source.Origin), Size = ToSceneVector(source.Size),
+        Interior = source.Interior, QualityClass = source.QualityClass.ToString(), Priority = source.Priority, BlendDistance = source.BlendDistance,
+        StreamingCellId = source.StreamingCellId, ProbeCountX = source.ProbeCountX, ProbeCountY = source.ProbeCountY, ProbeCountZ = source.ProbeCountZ,
+        RaysPerProbe = source.RaysPerProbe, MaxProbeUpdatesPerFrame = source.MaxProbeUpdatesPerFrame, NormalBias = source.NormalBias, ViewBias = source.ViewBias,
+        MaxRayDistance = source.MaxRayDistance, Intensity = source.Intensity, Hysteresis = source.Hysteresis, SteadyHysteresis = source.SteadyHysteresis,
+        DirtyHysteresis = source.DirtyHysteresis, UpdatePriority = source.UpdatePriority, DirtyRaysPerProbe = source.DirtyRaysPerProbe
     };
 
     private static SceneInstanceBatchDocument ToInstanceBatch(StaticInstanceBatch source, Dictionary<string, string?> dependencies) => new()

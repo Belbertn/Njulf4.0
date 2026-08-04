@@ -53,7 +53,7 @@ void main()
             localRank++;
     }
 
-    uint outputIndex = SchedulerArenaRead(pc.LaneCursorsOffsetWords + lane) +
+    uint outputIndex = SchedulerArenaRead(pc.LanePrefixesOffsetWords + lane) +
         SchedulerGroupLaneCount(group, lane) + localRank;
     if (outputIndex >= SchedulerCandidateCapacity())
     {

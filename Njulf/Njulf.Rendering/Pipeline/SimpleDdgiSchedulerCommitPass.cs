@@ -47,7 +47,8 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
 
     public override bool SupportsSecondaryCommandBuffer => true;
     public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
-    public override bool SupportsAsyncCompute => true;
+    public override bool SupportsAsyncCompute =>
+        AsyncComputePassCatalog.IsCorrectnessCertified(AsyncComputePath.SimpleDdgiUpdate);
     public override string AsyncComputeReason =>
         "Simple DDGI commit validates publication generations and exports fixed feedback.";
 
@@ -87,6 +88,8 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
         _ = scheduler.Layout ??
             throw new InvalidOperationException("Simple DDGI scheduler layout is not resident.");
         GPUSimpleDdgiSchedulePushConstants pushConstants = scheduler.BuildPushConstants();
+        pushConstants.PrivateVisibilityAtlasOffsetWords =
+            _volumeManager.GpuSchedulerPrivateVisibilityOffsetWords;
         bool resident = _volumeManager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident;
 
         // Mirror mode deliberately skips lifecycle mutation: the CPU queue and
@@ -104,10 +107,13 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
         _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipelines[2]);
         BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
         PushConstants(cmd, pushConstants);
-        _context.Api.CmdDispatchIndirect(
-            cmd,
-            scheduler.GetArenaVkBuffer(),
-            scheduler.GetIndirectCommandOffset(SimpleDdgiSchedulerDispatchSlot.Feedback));
+        // Feedback always consists of one bounded reduction workgroup.  It has
+        // no data-dependent extent, so using an arena-written indirect command
+        // provides no scheduling benefit and unnecessarily couples the final
+        // frame fence to an indirect-buffer read after all scheduler writes.
+        // Keep the genuinely variable commit stages indirect, but make this
+        // fixed dispatch explicit and robust across drivers.
+        _context.Api.CmdDispatch(cmd, 1, 1, 1);
         InsertStorageBarrier(cmd);
         _ = scheduler.RecordFeedbackReadback(cmd, frameIndex, _volumeManager.FrameSerial);
     }
@@ -148,6 +154,7 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
         _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipelines[checked((int)stage)]);
         BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
         PushConstants(cmd, pushConstants);
+        InsertIndirectCommandReadBarrier(cmd);
         _context.Api.CmdDispatchIndirect(cmd, _volumeManager.GpuScheduler.GetArenaVkBuffer(), offset);
         InsertStorageBarrier(cmd);
     }
@@ -258,6 +265,35 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
             SType = StructureType.DependencyInfo,
             MemoryBarrierCount = 1,
             PMemoryBarriers = &barrier
+        };
+        _context.Api.CmdPipelineBarrier2(cmd, &dependency);
+    }
+
+    private void InsertIndirectCommandReadBarrier(CommandBuffer cmd)
+    {
+        SimpleDdgiGpuScheduler scheduler = _volumeManager.GpuScheduler;
+        SimpleDdgiGpuSchedulerLayout? layout = scheduler.Layout;
+        BufferMemoryBarrier2 barrier = new()
+        {
+            SType = StructureType.BufferMemoryBarrier2,
+            SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
+            SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
+            DstStageMask = PipelineStageFlags2.ComputeShaderBit |
+                           PipelineStageFlags2.DrawIndirectBit,
+            DstAccessMask = AccessFlags2.IndirectCommandReadBit |
+                            AccessFlags2.ShaderStorageReadBit |
+                            AccessFlags2.ShaderStorageWriteBit,
+            SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+            DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+            Buffer = scheduler.GetArenaVkBuffer(),
+            Offset = 0,
+            Size = layout?.TotalBytes ?? 0UL
+        };
+        var dependency = new DependencyInfo
+        {
+            SType = StructureType.DependencyInfo,
+            BufferMemoryBarrierCount = 1,
+            PBufferMemoryBarriers = &barrier
         };
         _context.Api.CmdPipelineBarrier2(cmd, &dependency);
     }

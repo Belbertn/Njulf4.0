@@ -101,6 +101,12 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
     private void RenderRuntimeSummary(EditorController editor)
     {
         RendererDiagnostics? diagnostics = editor.RendererDiagnostics;
+        ImGui.Text($"Authored scene DDGI volumes: {editor.Scene.GlobalIlluminationProbeVolumes.Count}");
+        if (editor.Scene.GlobalIlluminationProbeVolumes.Count == 0)
+            ImGui.TextDisabled("Automatic Simple-DDGI rings remain available when no authored volume is present.");
+        if (ImGui.Button("Add scene DDGI volume"))
+            Run(editor.AddGlobalIlluminationProbeVolumeAtCamera);
+
         if (diagnostics != null)
         {
             int runtimeVolumeCount = diagnostics.DdgiVolumes.Count > 0

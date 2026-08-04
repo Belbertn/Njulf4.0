@@ -95,6 +95,11 @@ public sealed class EditorImGuiPanels
         ImGui.InputText("Filter", ref _filter, (nuint)256);
         RenderEntities(editor, "Objects", EditorSelectionKind.Object, editor.Scene.RenderObjects);
         RenderEntities(editor, "Reflection Probes", EditorSelectionKind.ReflectionProbe, editor.Scene.ReflectionProbes);
+        if (ImGui.Button("Add scene DDGI volume"))
+            Run(() => editor.AddGlobalIlluminationProbeVolumeAtCamera());
+        ImGui.SameLine();
+        ImGui.TextDisabled($"Authored volumes: {editor.Scene.GlobalIlluminationProbeVolumes.Count}");
+        RenderEntities(editor, "Scene DDGI Volumes", EditorSelectionKind.GiVolume, editor.Scene.GlobalIlluminationProbeVolumes);
         RenderEntities(editor, "Foliage Prototypes", EditorSelectionKind.FoliagePrototype, editor.Scene.FoliagePrototypes);
         RenderEntities(editor, "Foliage Patches", EditorSelectionKind.FoliagePatch, editor.Scene.FoliagePatches);
         RenderEntities(editor, "Particle Effects", EditorSelectionKind.ParticleEffect, editor.Scene.ParticleEffects);
@@ -143,6 +148,9 @@ public sealed class EditorImGuiPanels
         }
         else if (editor.Selection.Kind == EditorSelectionKind.Light && editor.TryGetSelectedLight(out Light light))
             RenderLightInspector(editor, light);
+        else if (editor.Selection.Kind == EditorSelectionKind.GiVolume &&
+                 editor.Scene.FindById(editor.Selection.Id) is GlobalIlluminationProbeVolume volume)
+            RenderGlobalIlluminationProbeVolumeInspector(editor, volume);
         else if (editor.Scene.FindById(editor.Selection.Id) is { } entity)
         {
             ImGui.Text(DisplayName(entity));
@@ -158,6 +166,104 @@ public sealed class EditorImGuiPanels
                 editor.DeleteSelection();
         }
         ImGui.End();
+    }
+
+    private static void RenderGlobalIlluminationProbeVolumeInspector(
+        EditorController editor,
+        GlobalIlluminationProbeVolume volume)
+    {
+        ImGui.TextDisabled(volume.Id.ToString());
+        string name = volume.Name;
+        bool enabled = volume.Enabled;
+        bool interior = volume.Interior;
+        NumericsVector3 origin = ToNumerics(volume.Origin);
+        NumericsVector3 size = ToNumerics(volume.Size);
+        GlobalIlluminationProbeVolumeQualityClass quality = volume.QualityClass;
+        int priority = volume.Priority;
+        float blendDistance = volume.BlendDistance;
+        int streamingCell = volume.StreamingCellId;
+        int countX = volume.ProbeCountX;
+        int countY = volume.ProbeCountY;
+        int countZ = volume.ProbeCountZ;
+        int rays = volume.RaysPerProbe;
+        int dirtyRays = volume.DirtyRaysPerProbe;
+        int maxUpdates = volume.MaxProbeUpdatesPerFrame;
+        int updatePriority = volume.UpdatePriority;
+        float normalBias = volume.NormalBias;
+        float viewBias = volume.ViewBias;
+        float maxDistance = volume.MaxRayDistance;
+        float intensity = volume.Intensity;
+        float hysteresis = volume.Hysteresis;
+        float steadyHysteresis = volume.SteadyHysteresis;
+        float dirtyHysteresis = volume.DirtyHysteresis;
+
+        bool changed = ImGui.InputText("Name", ref name, (nuint)256);
+        changed |= ImGui.Checkbox("Enabled", ref enabled);
+        ImGui.SameLine();
+        changed |= ImGui.Checkbox("Interior", ref interior);
+        changed |= ImGui.DragFloat3("Origin", ref origin, 0.05f);
+        changed |= ImGui.DragFloat3("Size", ref size, 0.05f);
+        if (ImGui.BeginCombo("Quality class", quality.ToString()))
+        {
+            foreach (GlobalIlluminationProbeVolumeQualityClass candidate in
+                     Enum.GetValues<GlobalIlluminationProbeVolumeQualityClass>())
+            {
+                if (ImGui.Selectable(candidate.ToString(), candidate == quality))
+                {
+                    quality = candidate;
+                    changed = true;
+                }
+            }
+            ImGui.EndCombo();
+        }
+
+        changed |= ImGui.DragInt("Priority", ref priority, 1f, -1024, 1024);
+        changed |= ImGui.DragFloat("Blend distance", ref blendDistance, 0.01f, 0f, 1000f);
+        changed |= ImGui.DragInt("Streaming cell", ref streamingCell, 1f, 0, int.MaxValue);
+        ImGui.SeparatorText("Probe lattice");
+        changed |= ImGui.DragInt("Probe count X", ref countX, 1f, GlobalIlluminationProbeVolume.MinProbeCountPerAxis, GlobalIlluminationProbeVolume.MaxProbeCountPerAxis);
+        changed |= ImGui.DragInt("Probe count Y", ref countY, 1f, GlobalIlluminationProbeVolume.MinProbeCountPerAxis, GlobalIlluminationProbeVolume.MaxProbeCountPerAxis);
+        changed |= ImGui.DragInt("Probe count Z", ref countZ, 1f, GlobalIlluminationProbeVolume.MinProbeCountPerAxis, GlobalIlluminationProbeVolume.MaxProbeCountPerAxis);
+        changed |= ImGui.DragInt("Rays per probe", ref rays, 1f, GlobalIlluminationProbeVolume.MinRaysPerProbe, GlobalIlluminationProbeVolume.MaxRaysPerProbe);
+        changed |= ImGui.DragInt("Dirty rays per probe", ref dirtyRays, 1f, GlobalIlluminationProbeVolume.MinRaysPerProbe, GlobalIlluminationProbeVolume.MaxRaysPerProbe);
+        changed |= ImGui.DragInt("Max probe updates/frame", ref maxUpdates, 1f, 0, 1_000_000);
+        changed |= ImGui.DragInt("Update priority", ref updatePriority, 1f, 0, 1_000_000);
+        ImGui.SeparatorText("Sampling and blending");
+        changed |= ImGui.DragFloat("Normal bias", ref normalBias, 0.005f, 0f, 10f);
+        changed |= ImGui.DragFloat("View bias", ref viewBias, 0.005f, 0f, 10f);
+        changed |= ImGui.DragFloat("Max ray distance", ref maxDistance, 0.05f, 0.1f, 1000f);
+        changed |= ImGui.DragFloat("Intensity", ref intensity, 0.01f, 0f, 16f);
+        changed |= ImGui.DragFloat("Hysteresis", ref hysteresis, 0.001f, 0f, 0.999f);
+        changed |= ImGui.DragFloat("Steady hysteresis", ref steadyHysteresis, 0.001f, 0f, 0.999f);
+        changed |= ImGui.DragFloat("Dirty hysteresis", ref dirtyHysteresis, 0.001f, 0f, 0.999f);
+        ImGui.TextDisabled($"Total probes: {volume.ProbeCount:N0}    Spacing: {volume.ProbeSpacing.X:0.###}, {volume.ProbeSpacing.Y:0.###}, {volume.ProbeSpacing.Z:0.###}");
+
+        if (!changed)
+            return;
+        volume.Name = name;
+        volume.Enabled = enabled;
+        volume.Interior = interior;
+        volume.Origin = ToCore(origin);
+        volume.Size = ToCore(size);
+        volume.QualityClass = quality;
+        volume.Priority = priority;
+        volume.BlendDistance = blendDistance;
+        volume.StreamingCellId = streamingCell;
+        volume.ProbeCountX = countX;
+        volume.ProbeCountY = countY;
+        volume.ProbeCountZ = countZ;
+        volume.RaysPerProbe = rays;
+        volume.DirtyRaysPerProbe = dirtyRays;
+        volume.MaxProbeUpdatesPerFrame = maxUpdates;
+        volume.UpdatePriority = updatePriority;
+        volume.NormalBias = normalBias;
+        volume.ViewBias = viewBias;
+        volume.MaxRayDistance = maxDistance;
+        volume.Intensity = intensity;
+        volume.Hysteresis = hysteresis;
+        volume.SteadyHysteresis = steadyHysteresis;
+        volume.DirtyHysteresis = dirtyHysteresis;
+        editor.MarkDirty(editor.Selection);
     }
 
     private void RenderObjectInspector(EditorController editor, RenderObject target)
@@ -508,6 +614,7 @@ public sealed class EditorImGuiPanels
     {
         RenderObject value => value.Name,
         ReflectionProbe value => value.Name,
+        GlobalIlluminationProbeVolume value => value.Name,
         ParticleEffectInstance value => value.Name,
         StaticInstanceBatch value => value.Name,
         Njulf.Core.Foliage.FoliagePrototype value => value.Name,

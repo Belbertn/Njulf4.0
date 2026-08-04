@@ -30,7 +30,13 @@ public readonly record struct QueueStageCapabilities(QueueFlags QueueFlags)
         {
             PipelineStageFlags2 stages = UniversalStages;
             if ((QueueFlags & QueueFlags.ComputeBit) != 0)
-                stages |= PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.AccelerationStructureBuildBitKhr;
+            {
+                // DRAW_INDIRECT also covers vkCmdDispatchIndirect and is valid
+                // on compute-only queues (VK_QUEUE_COMPUTE_BIT).
+                stages |= PipelineStageFlags2.DrawIndirectBit |
+                          PipelineStageFlags2.ComputeShaderBit |
+                          PipelineStageFlags2.AccelerationStructureBuildBitKhr;
+            }
             if ((QueueFlags & QueueFlags.GraphicsBit) != 0)
                 stages |= GraphicsStages | PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.AccelerationStructureBuildBitKhr;
             return stages;

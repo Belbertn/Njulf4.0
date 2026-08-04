@@ -35,6 +35,7 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint TransportSourceCacheBufferIndex;
     uint TransportReadIrradianceAtlasBufferIndex;
     uint TransportWriteIrradianceAtlasBufferIndex;
+    uint PrivateVisibilityAtlasOffsetWords;
     uint TransportGeneration;
     uint PrimaryDirectionalLightIndex;
     uint DispatchQueueOffset;
@@ -43,7 +44,10 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint SchedulerArenaBufferIndex;
     uint SchedulerRayBucketIndex;
     uint SchedulerRayBucketCommandsOffsetWords;
+    uint SchedulerRayBucketMetadataOffsetWords;
+    uint SchedulerOutcomesOffsetWords;
     uint SchedulerCountersOffsetWords;
+    uint SchedulerUpdateRecordsOffsetWords;
 } pc;
 
 const float PI = SIMPLE_DDGI_PI;
@@ -186,18 +190,31 @@ void main()
     {
         SimpleDdgiResolveSchedulerRayBucket(
             pc.SchedulerArenaBufferIndex,
-            pc.SchedulerRayBucketCommandsOffsetWords,
+            pc.SchedulerRayBucketMetadataOffsetWords,
             pc.SchedulerRayBucketIndex,
             schedulerQueueOffset,
             schedulerProbeCount,
             schedulerRaysPerProbe);
     }
-    uint dispatchProbeCount = pc.DispatchProbeCount > 0u
-        ? pc.DispatchProbeCount
-        : (gpuScheduler ? schedulerProbeCount : params.probesToUpdate);
-    uint dispatchRaysPerProbe = pc.DispatchRaysPerProbe > 0u
-        ? pc.DispatchRaysPerProbe
-        : (gpuScheduler ? schedulerRaysPerProbe : params.raysPerProbe);
+    uint dispatchProbeCount;
+    uint dispatchRaysPerProbe;
+    if (gpuScheduler)
+    {
+        // Resident dispatch dimensions and queue addressing are an ABI owned by
+        // the emitted metadata record. Push constants are intentionally ignored
+        // here so a stale per-pass batch cannot select another queue slice.
+        dispatchProbeCount = schedulerProbeCount;
+        dispatchRaysPerProbe = schedulerRaysPerProbe;
+    }
+    else
+    {
+        dispatchProbeCount = pc.DispatchProbeCount > 0u
+            ? pc.DispatchProbeCount
+            : params.probesToUpdate;
+        dispatchRaysPerProbe = pc.DispatchRaysPerProbe > 0u
+            ? pc.DispatchRaysPerProbe
+            : params.raysPerProbe;
+    }
     uint dispatchRayCount = dispatchProbeCount * dispatchRaysPerProbe;
     if (dispatchRay >= dispatchRayCount || params.probeCount == 0u)
         return;
@@ -216,19 +233,47 @@ void main()
     simpleDdgiCurrentReceiverPrimitiveIndex = 0xffffffffu;
     uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
     if (rayIndex >= activeRayCount)
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 2u);
         return;
+    }
 
     uint probeIndex = update.probeIndex;
     if (probeIndex >= params.probeCount)
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 2u);
         return;
+    }
 
     SimpleDdgiVolume volume;
     uint localProbeIndex;
     if (!ResolveSimpleDdgiProbeVolume(probeIndex, params, volume, localProbeIndex))
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 2u);
         return;
+    }
     SimpleDdgiProbeState probeState = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
     if (!SimpleDdgiUpdateMatchesProbeGeneration(update, probeState))
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 0u);
         return;
+    }
 
     uint volumeCascade = SimpleDdgiVolumeQualityCascade(volume);
     simpleDdgiCurrentVolumeCascade = volumeCascade;
@@ -266,7 +311,7 @@ void main()
     // A full source refresh is the authoritative repair boundary. Clear any
     // older recovery request before tracing its complete sequence; transport
     // will set it again if the just-written cache still cannot be consumed.
-    if (transportV2 && sourceRefresh && rayIndex == 0u)
+    if (transportV2 && sourceRefresh && rayIndex == 0u && !gpuScheduler)
         ClearSimpleDdgiProbeSourceCacheInvalid(pc.ProbeStateBufferIndex, probeIndex);
 
     // Cached V2 source data includes the original deterministic direction, hit
@@ -296,6 +341,12 @@ void main()
                 cachedSource.distance,
                 cachedSource.direction,
                 SimpleDdgiTransportRayCacheHitKind(cachedSource));
+            SimpleDdgiSchedulerRayComplete(
+                pc.SchedulerArenaBufferIndex,
+                pc.SchedulerOutcomesOffsetWords,
+                update.outcomeIndex,
+                activeRayCount,
+                1u << 0u);
             return;
         }
 
@@ -304,7 +355,16 @@ void main()
         // example after a live allocation transition), trace this ray now for
         // a safe frame and request a full source-cache repair through the
         // bounded probe-state readback path.
-        MarkSimpleDdgiProbeSourceCacheInvalid(pc.ProbeStateBufferIndex, probeIndex);
+        if (gpuScheduler)
+        {
+            SimpleDdgiSchedulerFailOutcome(
+                pc.SchedulerArenaBufferIndex,
+                pc.SchedulerOutcomesOffsetWords,
+                update.outcomeIndex,
+                1u << 1u);
+        }
+        else
+            MarkSimpleDdgiProbeSourceCacheInvalid(pc.ProbeStateBufferIndex, probeIndex);
     }
 
     // A valid probe owns its complete low-frequency field, including environment
@@ -695,6 +755,12 @@ void main()
         visibilityDistance,
         direction,
         visibilityHitKind);
+    SimpleDdgiSchedulerRayComplete(
+        pc.SchedulerArenaBufferIndex,
+        pc.SchedulerOutcomesOffsetWords,
+        update.outcomeIndex,
+        activeRayCount,
+        1u << 0u);
 }
 
 #undef AddRendererDiagnostic

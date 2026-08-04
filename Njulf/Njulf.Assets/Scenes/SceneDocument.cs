@@ -15,6 +15,7 @@ public sealed class SceneDocument
     public List<SceneObjectDocument> Objects { get; init; } = [];
     public List<SceneLightDocument> Lights { get; init; } = [];
     public List<SceneReflectionProbeDocument> ReflectionProbes { get; init; } = [];
+    public List<SceneGlobalIlluminationProbeVolumeDocument> GiProbeVolumes { get; init; } = [];
     public List<SceneInstanceBatchDocument> InstanceBatches { get; init; } = [];
     public List<SceneFoliagePrototypeDocument> FoliagePrototypes { get; init; } = [];
     public List<SceneFoliagePatchDocument> FoliagePatches { get; init; } = [];
@@ -127,6 +128,34 @@ public sealed class SceneReflectionProbeDocument
     public int Priority { get; init; }
     public string? CubemapPath { get; init; }
     public bool BoxProjection { get; init; } = true;
+}
+
+public sealed class SceneGlobalIlluminationProbeVolumeDocument
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+    public string Name { get; init; } = "GI Probe Volume";
+    public bool Enabled { get; init; } = true;
+    public SceneVector3 Origin { get; init; }
+    public SceneVector3 Size { get; init; } = new(24f, 12f, 24f);
+    public bool Interior { get; init; }
+    public string QualityClass { get; init; } = "Medium";
+    public int Priority { get; init; }
+    public float BlendDistance { get; init; }
+    public int StreamingCellId { get; init; }
+    public int ProbeCountX { get; init; } = 12;
+    public int ProbeCountY { get; init; } = 6;
+    public int ProbeCountZ { get; init; } = 12;
+    public int RaysPerProbe { get; init; } = 96;
+    public int MaxProbeUpdatesPerFrame { get; init; } = 256;
+    public float NormalBias { get; init; } = 0.2f;
+    public float ViewBias { get; init; } = 0.5f;
+    public float MaxRayDistance { get; init; } = 16f;
+    public float Intensity { get; init; } = 1f;
+    public float Hysteresis { get; init; } = 0.97f;
+    public float SteadyHysteresis { get; init; } = 0.97f;
+    public float DirtyHysteresis { get; init; } = 0.72f;
+    public int UpdatePriority { get; init; }
+    public int DirtyRaysPerProbe { get; init; } = 64;
 }
 
 public sealed class SceneInstanceBatchDocument

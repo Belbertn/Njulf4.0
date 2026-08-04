@@ -1386,7 +1386,7 @@ namespace Njulf.Tests
                 Assert.That(relocate, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING"));
                 Assert.That(relocate, Does.Not.Contain("targetSurfaceDistance - nearestDistance"));
                 Assert.That(relocate, Does.Contain("WriteRelocationClassification("));
-                Assert.That(relocate, Does.Contain("probeIndex,\n        blendedRelocation,"));
+                Assert.That(relocate, Does.Contain("WriteRelocationClassification(\n            probeIndex,\n            blendedRelocation,"));
                 Assert.That(shared, Does.Contain("const uint SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING = 1u << 3;"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u"));
                 Assert.That(simpleManager, Does.Contain("ProbeStateRelocationPendingFlag = 1u << 3"));

@@ -349,7 +349,8 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool SupportsSecondaryCommandBuffer => true;
         public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
-        public override bool SupportsAsyncCompute => true;
+        public override bool SupportsAsyncCompute =>
+            AsyncComputePassCatalog.IsCorrectnessCertified(AsyncComputePath.SimpleDdgiUpdate);
         public override string AsyncComputeReason =>
             "Simple DDGI publication consumes the GPU queue and writes canonical probe storage.";
 
@@ -361,6 +362,7 @@ namespace Njulf.Rendering.Pipeline
                 _context.ShaderStorageImageArrayNonUniformIndexingSupported &&
                 properties.Limits.MaxPerStageDescriptorStorageImages >=
                 2u * SimpleDdgiSampledAtlas.MaxGpuPublishTextureGroups;
+            _volumeManager.SetSampledAtlasGpuPublicationAvailable(_sampledPublicationSupported);
             CreateSampledAtlasSetLayout();
             CreateDescriptorSet();
             CreatePipelineCache();
@@ -415,6 +417,7 @@ namespace Njulf.Rendering.Pipeline
             PushConstants(cmd, pushConstants);
             if (gpuResident)
             {
+                InsertIndirectCommandReadBarrier(cmd);
                 _context.Api.CmdDispatchIndirect(
                     cmd,
                     _volumeManager.GpuScheduler.GetArenaVkBuffer(),
@@ -455,6 +458,7 @@ namespace Njulf.Rendering.Pipeline
                 PushConstants(cmd, pushConstants);
                 if (gpuResident)
                 {
+                    InsertIndirectCommandReadBarrier(cmd);
                     _context.Api.CmdDispatchIndirect(
                         cmd,
                         _volumeManager.GpuScheduler.GetArenaVkBuffer(),
@@ -517,13 +521,22 @@ namespace Njulf.Rendering.Pipeline
             ProbeStateBufferIndex = BindlessIndex.SimpleDdgiProbeStateBuffer,
             ProbeUpdateQueueBufferIndex = BindlessIndex.SimpleDdgiProbeUpdateQueueBuffer,
             TransportIrradianceAtlasBufferIndex = BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer,
+            PrivateVisibilityAtlasOffsetWords = _volumeManager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident
+                ? _volumeManager.GpuSchedulerPrivateVisibilityOffsetWords
+                : 0u,
             SampledAtlasGroupCount = checked((uint)Math.Max(0, _volumeManager.SampledAtlasGroupCount)),
             SampledAtlasLayersPerTexture = checked((uint)Math.Max(0, _volumeManager.SampledAtlasLayersPerTexture)),
             SchedulerArenaBufferIndex = _volumeManager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident
                 ? checked((uint)BindlessIndex.SimpleDdgiSchedulerArenaBuffer)
                 : uint.MaxValue,
+            SchedulerOutcomesOffsetWords = _volumeManager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident
+                ? _volumeManager.GpuScheduler.Layout!.Outcomes.OffsetWords
+                : 0u,
             SchedulerCountersOffsetWords = _volumeManager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident
                 ? _volumeManager.GpuScheduler.Layout!.Counters.OffsetWords
+                : 0u,
+            SchedulerFrameOffsetWords = _volumeManager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident
+                ? _volumeManager.GpuScheduler.Layout!.Frame.OffsetWords
                 : 0u
         };
 
@@ -713,6 +726,25 @@ namespace Njulf.Rendering.Pipeline
             };
             _context.Api.CmdPipelineBarrier2(cmd, &dependency);
         }
+
+        private void InsertIndirectCommandReadBarrier(CommandBuffer cmd)
+        {
+            var barrier = new MemoryBarrier2
+            {
+                SType = StructureType.MemoryBarrier2,
+                SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
+                SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
+                DstStageMask = PipelineStageFlags2.DrawIndirectBit,
+                DstAccessMask = AccessFlags2.IndirectCommandReadBit
+            };
+            var dependency = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                MemoryBarrierCount = 1,
+                PMemoryBarriers = &barrier
+            };
+            _context.Api.CmdPipelineBarrier2(cmd, &dependency);
+        }
     }
 
     public abstract unsafe class SimpleDdgiComputePass : RenderPassBase
@@ -772,7 +804,8 @@ namespace Njulf.Rendering.Pipeline
             SimpleDdgiSchedulerDispatchSlot.Blend;
         public override bool SupportsSecondaryCommandBuffer => true;
         public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
-        public override bool SupportsAsyncCompute => true;
+        public override bool SupportsAsyncCompute =>
+            AsyncComputePassCatalog.IsCorrectnessCertified(AsyncComputePath.SimpleDdgiUpdate);
         public override string AsyncComputeReason => "Simple DDGI update work is compute-only and writes probe buffers.";
 
         public override void Initialize()
@@ -869,6 +902,7 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 (uint)Marshal.SizeOf<GPUSimpleDdgiPushConstants>(),
                 &pushConstants);
+            InsertIndirectCommandReadBarrier(cmd);
             _context.Api.CmdDispatchIndirect(
                 cmd,
                 VolumeManager.GpuScheduler.GetArenaVkBuffer(),
@@ -887,6 +921,7 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 (uint)Marshal.SizeOf<GPUSimpleDdgiPushConstants>(),
                 &pushConstants);
+            InsertIndirectCommandReadBarrier(cmd);
             _context.Api.CmdDispatchIndirect(
                 cmd,
                 VolumeManager.GpuScheduler.GetArenaVkBuffer(),
@@ -984,8 +1019,12 @@ namespace Njulf.Rendering.Pipeline
                 TransportSourceCacheBufferIndex = BindlessIndex.SimpleDdgiTransportSourceCacheBuffer,
                 TransportReadIrradianceAtlasBufferIndex = BindlessIndex.SimpleDdgiIrradianceAtlasBuffer,
                 TransportWriteIrradianceAtlasBufferIndex = gi.SimpleDdgiTransportV2Enabled
+                    || IsGpuResidentMode
                     ? checked((uint)BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer)
                     : checked((uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),
+                PrivateVisibilityAtlasOffsetWords = IsGpuResidentMode
+                    ? VolumeManager.GpuSchedulerPrivateVisibilityOffsetWords
+                    : 0u,
                 TransportGeneration = VolumeManager.TransportGeneration,
                 PrimaryDirectionalLightIndex = sceneData.DdgiPrimaryDirectionalLightIndex < 0
                     ? uint.MaxValue
@@ -996,8 +1035,17 @@ namespace Njulf.Rendering.Pipeline
                 SchedulerRayBucketCommandsOffsetWords = IsGpuResidentMode
                     ? VolumeManager.GpuScheduler.Layout!.RayBucketCommands.OffsetWords
                     : 0u,
-                SchedulerCountersOffsetWords = IsGpuResidentMode
+                SchedulerRayBucketMetadataOffsetWords = IsGpuResidentMode
+                    ? VolumeManager.GpuScheduler.Layout!.RayBucketMetadata.OffsetWords
+                    : 0u,
+                SchedulerOutcomesOffsetWords = IsGpuResidentMode
+                    ? VolumeManager.GpuScheduler.Layout!.Outcomes.OffsetWords
+                    : 0u,
+            SchedulerCountersOffsetWords = IsGpuResidentMode
                     ? VolumeManager.GpuScheduler.Layout!.Counters.OffsetWords
+                    : 0u,
+                SchedulerUpdateRecordsOffsetWords = IsGpuResidentMode
+                    ? VolumeManager.GpuScheduler.Layout!.UpdateRecords.OffsetWords
                     : 0u
             };
         }
@@ -1173,6 +1221,25 @@ namespace Njulf.Rendering.Pipeline
                 DstStageMask = PipelineStageFlags2.ComputeShaderBit,
                 DstAccessMask = AccessFlags2.ShaderStorageReadBit |
                                 AccessFlags2.ShaderStorageWriteBit
+            };
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                MemoryBarrierCount = 1,
+                PMemoryBarriers = &memoryBarrier
+            };
+            _context.Api.CmdPipelineBarrier2(cmd, &dependencyInfo);
+        }
+
+        private void InsertIndirectCommandReadBarrier(CommandBuffer cmd)
+        {
+            var memoryBarrier = new MemoryBarrier2
+            {
+                SType = StructureType.MemoryBarrier2,
+                SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
+                SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
+                DstStageMask = PipelineStageFlags2.DrawIndirectBit,
+                DstAccessMask = AccessFlags2.IndirectCommandReadBit
             };
             var dependencyInfo = new DependencyInfo
             {

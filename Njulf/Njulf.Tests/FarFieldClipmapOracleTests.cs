@@ -122,7 +122,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiProbeState>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiProbeUpdate>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiRelocationClassification>(), Is.EqualTo(48));
-                Assert.That(Marshal.SizeOf<GPUSimpleDdgiPushConstants>(), Is.EqualTo(120));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiPushConstants>(), Is.EqualTo(136));
                 Assert.That(Marshal.SizeOf<GPUFarFieldClipmapParams>(), Is.EqualTo(160));
                 Assert.That(Marshal.SizeOf<GPUFarFieldPageTableEntry>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUFarFieldInstance>(), Is.EqualTo(96));

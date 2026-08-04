@@ -79,4 +79,112 @@ public sealed class SimpleDdgiGpuSchedulerPolicyTests
         Assert.That(packed & SimpleDdgiSchedulerAbi.PhysicalGenerationMask, Is.EqualTo(generation));
         Assert.That(packed >> 24, Is.EqualTo(255u));
     }
+
+    [Test]
+    public void CommitOutcomeRejectsPartialProducersFailuresAndGenerationMismatches()
+    {
+        const uint queueGeneration = 11u;
+        const uint schedulerGeneration = 12u;
+        const uint volumeGeneration = 13u;
+        const uint sourceGeneration = 14u;
+        const uint transportGeneration = 15u;
+        const uint physicalGeneration = 16u;
+        const uint requiredMask = 0xffu;
+
+        GPUSimpleDdgiUpdateOutcome valid = new()
+        {
+            QueueTransactionGeneration = queueGeneration,
+            SchedulerResourceGeneration = schedulerGeneration,
+            VolumeTableGeneration = volumeGeneration,
+            SourceLightingGeneration = sourceGeneration,
+            TransportGeneration = transportGeneration,
+            ExpectedPhysicalGeneration = physicalGeneration,
+            RequiredCompletionMask = requiredMask,
+            CompletionMask = requiredMask
+        };
+
+        Assert.That(
+            SimpleDdgiSchedulerAbi.OutcomeCanCommit(
+                valid,
+                queueGeneration,
+                schedulerGeneration,
+                volumeGeneration,
+                sourceGeneration,
+                transportGeneration,
+                physicalGeneration),
+            Is.True);
+
+        for (int bit = 0; bit < 8; bit++)
+        {
+            GPUSimpleDdgiUpdateOutcome partial = valid;
+            partial.CompletionMask = requiredMask & ~(1u << bit);
+            Assert.That(
+                SimpleDdgiSchedulerAbi.OutcomeCanCommit(
+                    partial,
+                    queueGeneration,
+                    schedulerGeneration,
+                    volumeGeneration,
+                    sourceGeneration,
+                    transportGeneration,
+                    physicalGeneration),
+                Is.False,
+                $"missing completion bit {bit}");
+        }
+
+        GPUSimpleDdgiUpdateOutcome failed = valid;
+        failed.FailureReason = 1u;
+        Assert.That(
+            SimpleDdgiSchedulerAbi.OutcomeCanCommit(
+                failed,
+                queueGeneration,
+                schedulerGeneration,
+                volumeGeneration,
+                sourceGeneration,
+                transportGeneration,
+                physicalGeneration),
+            Is.False);
+
+        uint[] currentGenerations =
+        [
+            queueGeneration + 1u,
+            schedulerGeneration + 1u,
+            volumeGeneration + 1u,
+            sourceGeneration + 1u,
+            transportGeneration + 1u,
+            physicalGeneration + 1u
+        ];
+        for (int mismatch = 0; mismatch < currentGenerations.Length; mismatch++)
+        {
+            uint queue = mismatch == 0 ? currentGenerations[mismatch] : queueGeneration;
+            uint scheduler = mismatch == 1 ? currentGenerations[mismatch] : schedulerGeneration;
+            uint volume = mismatch == 2 ? currentGenerations[mismatch] : volumeGeneration;
+            uint source = mismatch == 3 ? currentGenerations[mismatch] : sourceGeneration;
+            uint transport = mismatch == 4 ? currentGenerations[mismatch] : transportGeneration;
+            uint physical = mismatch == 5 ? currentGenerations[mismatch] : physicalGeneration;
+            Assert.That(
+                SimpleDdgiSchedulerAbi.OutcomeCanCommit(
+                    valid,
+                    queue,
+                    scheduler,
+                    volume,
+                    source,
+                    transport,
+                    physical),
+                Is.False,
+                $"generation mismatch {mismatch}");
+        }
+
+        GPUSimpleDdgiUpdateOutcome zeroPhysical = valid;
+        zeroPhysical.ExpectedPhysicalGeneration = 0u;
+        Assert.That(
+            SimpleDdgiSchedulerAbi.OutcomeCanCommit(
+                zeroPhysical,
+                queueGeneration,
+                schedulerGeneration,
+                volumeGeneration,
+                sourceGeneration,
+                transportGeneration,
+                physicalGeneration),
+            Is.False);
+    }
 }

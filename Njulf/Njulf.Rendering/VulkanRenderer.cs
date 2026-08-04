@@ -8596,7 +8596,8 @@ namespace Njulf.Rendering
                 structuredGatherAvailable,
                 farFieldCoverageAvailable,
                 dirtyRegions,
-                dirtySignature.CohortTransition);
+                dirtySignature.CohortTransition,
+                scene.GlobalIlluminationProbeVolumes);
 
             PopulateSimpleDdgiFrameData(sceneData, simpleDdgiRayUpdateActive);
             sceneData.CpuDdgiRecordMicroseconds = 0;

@@ -41,6 +41,9 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
     private uint _resourceGeneration = 1;
     private ulong _retiredBytes;
     private ulong _staleFeedbackCount;
+    private readonly uint[] _lastFeedbackLaneCursors =
+        new uint[SimpleDdgiSchedulerAbi.MaxLaneCount];
+    private bool _hasLastFeedbackLaneCursors;
     private ulong _currentPolicyHash;
     private ulong _previousPolicyHash;
     private bool _policiesInitialized;
@@ -237,6 +240,39 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
         }
     }
 
+    /// <summary>
+    /// Initializes the scheduler-owned probe mirror and persistent lane cursors
+    /// after a resident arena is first created or replaced. These records are a
+    /// different ABI from the public probe-state buffer; callers must not use a
+    /// public-state upload as proof that this bootstrap completed.
+    /// </summary>
+    public bool UploadResidentBootstrap(
+        StagingRing stagingRing,
+        CommandBuffer commandBuffer,
+        ReadOnlySpan<GPUSimpleDdgiSchedulerProbeState> probeStates,
+        ReadOnlySpan<uint> laneCursors)
+    {
+        if (stagingRing == null)
+            throw new ArgumentNullException(nameof(stagingRing));
+        if (commandBuffer.Handle == 0)
+            throw new ArgumentException("A valid command buffer is required.", nameof(commandBuffer));
+
+        lock (_lock)
+        {
+            ThrowIfDisposed();
+            if (!_mode.IsGpuMode() || !_arenaBuffer.IsValid || _layout == null)
+                return false;
+            if (probeStates.Length > _layout.ActiveProbeCount)
+                throw new ArgumentException("The scheduler bootstrap exceeds the resident probe-state region.", nameof(probeStates));
+            if (laneCursors.Length != SimpleDdgiSchedulerAbi.MaxLaneCount)
+                throw new ArgumentException("The scheduler bootstrap must contain one cursor per lane.", nameof(laneCursors));
+
+            UploadSpan(stagingRing, commandBuffer, probeStates, _layout.ProbeState.Offset);
+            UploadSpan(stagingRing, commandBuffer, laneCursors, _layout.LaneCursors.Offset);
+            return true;
+        }
+    }
+
     public GPUSimpleDdgiSchedulePushConstants BuildPushConstants()
     {
         lock (_lock)
@@ -268,9 +304,13 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 CountersOffsetWords = _layout.Counters.OffsetWords,
                 UpdateRecordsOffsetWords = _layout.UpdateRecords.OffsetWords,
                 RayBucketCommandsOffsetWords = _layout.RayBucketCommands.OffsetWords,
+                RayBucketMetadataOffsetWords = _layout.RayBucketMetadata.OffsetWords,
                 IndirectCommandsOffsetWords = _layout.IndirectCommands.OffsetWords,
                 OutcomesOffsetWords = _layout.Outcomes.OffsetWords,
-                FeedbackOffsetWords = _layout.FeedbackSummary.OffsetWords
+                FeedbackOffsetWords = _layout.FeedbackSummary.OffsetWords,
+                IrradianceAtlasBufferIndex = (uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer,
+                VisibilityAtlasBufferIndex = (uint)BindlessIndex.SimpleDdgiVisibilityAtlasBuffer,
+                TransportIrradianceAtlasBufferIndex = (uint)BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer
             };
         }
     }
@@ -296,16 +336,12 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
 
     public ulong GetRayBucketCommandOffset(int bucketIndex)
     {
-        if ((uint)bucketIndex >= SimpleDdgiGpuSchedulerLayout.MaxRayBucketCount)
-            throw new ArgumentOutOfRangeException(nameof(bucketIndex));
-
         lock (_lock)
         {
             ThrowIfDisposed();
             if (_layout == null)
                 return 0UL;
-            return checked(_layout.RayBucketCommands.Offset +
-                (ulong)bucketIndex * SimpleDdgiGpuSchedulerLayout.IndirectCommandStrideBytes);
+            return _layout.GetRayBucketIndirectCommand(bucketIndex).Offset;
         }
     }
 
@@ -393,7 +429,8 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 readback,
                 0,
                 SimpleDdgiGpuSchedulerLayout.ShippingFeedbackBytes);
-            feedback = *(GPUSimpleDdgiSchedulerFeedback*)_bufferManager.GetMappedPointer(readback);
+            uint* feedbackWords = (uint*)_bufferManager.GetMappedPointer(readback);
+            feedback = *(GPUSimpleDdgiSchedulerFeedback*)feedbackWords;
 
             uint expectedLow = checked((uint)_feedbackSubmittedFrameSerial[frameIndex]);
             uint expectedHigh = checked((uint)(_feedbackSubmittedFrameSerial[frameIndex] >> 32));
@@ -415,6 +452,35 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 return false;
             }
 
+            // The fixed feedback header remains the CPU control-plane ABI.
+            // The following 896 words carry the persistent lane cursors so an
+            // arena replacement can seed the new resource from the last
+            // fence-complete GPU state instead of silently restarting every
+            // lane at zero. They are accepted only with a matching summary.
+            for (int lane = 0; lane < SimpleDdgiSchedulerAbi.MaxLaneCount; lane++)
+                _lastFeedbackLaneCursors[lane] = feedbackWords[64 + lane];
+            _hasLastFeedbackLaneCursors = true;
+
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Copies the most recent fence-complete persistent lane cursors. The
+    /// values are deliberately advisory until a new arena bootstrap uploads
+    /// them; ordinary frames leave the GPU-owned cursor region untouched.
+    /// </summary>
+    public bool TryCopyLastFeedbackLaneCursors(Span<uint> destination)
+    {
+        if (destination.Length < SimpleDdgiSchedulerAbi.MaxLaneCount)
+            return false;
+
+        lock (_lock)
+        {
+            ThrowIfDisposed();
+            if (!_hasLastFeedbackLaneCursors)
+                return false;
+            _lastFeedbackLaneCursors.AsSpan().CopyTo(destination);
             return true;
         }
     }

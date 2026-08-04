@@ -133,4 +133,92 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
             Assert.That(SimpleDdgiIndirectDispatchMath.ProbeWorkgroupCount(65), Is.EqualTo(65));
         });
     }
+
+    [Test]
+    public void PersistentCursorRotatesLaneOrderAndAdvancesOnlyForAdmissions()
+    {
+        const int candidateCount = 4;
+        var candidates = new GPUSimpleDdgiSchedulerCandidate[candidateCount];
+        for (int i = 0; i < candidateCount; i++)
+        {
+            candidates[i] = new GPUSimpleDdgiSchedulerCandidate
+            {
+                ProbeIndex = (uint)i,
+                VolumeIndex = 0u,
+                ExpectedPhysicalGeneration = 1u,
+                SequenceOrdinal = (uint)i,
+                WorkClassAndTransport = SimpleDdgiSchedulerAbi.PackCandidateWorkClassAndTransport(
+                    SimpleDdgiSchedulerWorkClass.VisibleDirty,
+                    SimpleDdgiSchedulerTransportCategory.HardSourceRepair),
+                RayTierAndReasonFlags = SimpleDdgiSchedulerAbi.PackCandidateRayTierAndReasons(
+                    SimpleDdgiSchedulerRayTier.Full,
+                    SimpleDdgiSchedulerCandidateReason.Visible),
+                ActiveRayCount = 1u,
+                SourceRayCount = 1u
+            };
+        }
+
+        var policy = new SimpleDdgiCpuSchedulePolicy(
+            RequestBudget: 2,
+            PrimaryRayBudget: 16,
+            SourceCohortRayBudget: 16,
+            SourceLightingGeneration: 3u,
+            ActiveVolumeCount: 1,
+            DeterministicFixedBudget: true);
+        var volume = new[] { new SimpleDdgiCpuVolumePolicy(4, 0, 4, 1, true) };
+        var queue = new GPUSimpleDdgiProbeUpdate[4];
+        var counts = new int[SimpleDdgiSchedulerAbi.MaxLaneCount];
+        var accepted = new int[SimpleDdgiSchedulerAbi.MaxLaneCount];
+        var cursors = new uint[SimpleDdgiSchedulerAbi.MaxLaneCount];
+        int lane = SimpleDdgiSchedulerAbi.GetLaneIndex(
+            0,
+            SimpleDdgiSchedulerWorkClass.VisibleDirty,
+            SimpleDdgiSchedulerTransportCategory.HardSourceRepair,
+            SimpleDdgiSchedulerRayTier.Full);
+        cursors[lane] = 2u;
+
+        SimpleDdgiCpuScheduleResult first = SimpleDdgiCpuScheduleModel.Schedule(
+            candidates, volume, policy, queue, counts, accepted, cursors);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.AcceptedRequestCount, Is.EqualTo(2));
+            Assert.That(queue[0].ProbeIndex, Is.EqualTo(2u));
+            Assert.That(queue[1].ProbeIndex, Is.EqualTo(3u));
+            Assert.That(cursors[lane], Is.EqualTo(0u));
+            Assert.That(accepted[lane], Is.EqualTo(2));
+        });
+
+        Array.Clear(queue);
+        Array.Clear(counts);
+        Array.Clear(accepted);
+        SimpleDdgiCpuScheduleResult second = SimpleDdgiCpuScheduleModel.Schedule(
+            candidates, volume, policy, queue, counts, accepted, cursors);
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.AcceptedRequestCount, Is.EqualTo(2));
+            Assert.That(queue[0].ProbeIndex, Is.EqualTo(0u));
+            Assert.That(queue[1].ProbeIndex, Is.EqualTo(1u));
+            Assert.That(cursors[lane], Is.EqualTo(2u));
+        });
+
+        Array.Clear(queue);
+        Array.Clear(counts);
+        Array.Clear(accepted);
+        uint cursorBeforeRejection = cursors[lane];
+        SimpleDdgiCpuScheduleResult rejected = SimpleDdgiCpuScheduleModel.Schedule(
+            candidates,
+            volume,
+            policy with { PrimaryRayBudget = 0u },
+            queue,
+            counts,
+            accepted,
+            cursors);
+        Assert.Multiple(() =>
+        {
+            Assert.That(rejected.AcceptedRequestCount, Is.Zero);
+            Assert.That(cursors[lane], Is.EqualTo(cursorBeforeRejection));
+            Assert.That(accepted[lane], Is.Zero);
+        });
+    }
 }

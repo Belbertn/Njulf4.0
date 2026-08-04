@@ -57,7 +57,9 @@ public sealed class SimpleDdgiGpuSchedulerLayout
     public const int ShippingFeedbackBytes = 4 * 1024;
     public const int MaxDirtyRegionCapacity = 1024;
     public const int SchedulerWorkgroupSize = 64;
-    public const int ProbeStateStrideBytes = 32;
+    // Private scheduler state is distinct from the public 32-byte probe state.
+    // It carries both dirty-latency start and the applied invalidation marker.
+    public const int ProbeStateStrideBytes = 40;
     public const int CandidateStrideBytes = 32;
     // Source-ray cardinality is derived from (volume, transport category) at
     // admission: hard/routine source work always uses the policy's full-ray
@@ -69,11 +71,20 @@ public sealed class SimpleDdgiGpuSchedulerLayout
     // in CandidateInput, preserving the ABI while avoiding a second full-size
     // candidate pool.
     public const int CandidateCompactIndexStrideBytes = sizeof(uint);
-    public const int UpdateRecordStrideBytes = 32;
-    public const int OutcomeStrideBytes = 64;
+    // Internal update/proposal storage has seven words. The scheduler carries
+    // the small classification proposal in private flag bits until emit
+    // strips them from the public queue ABI; relocation then reuses all seven
+    // words for its transaction-private state proposal.
+    public const int UpdateRecordStrideBytes = 28;
+    public const int OutcomeStrideBytes = 60;
     public const int IndirectCommandStrideBytes = 16;
+    // Ray-bucket metadata and commands are separate ABI regions.  The command
+    // region is passed directly to vkCmdDispatchIndirect; metadata is read by
+    // the trace/transport shaders and can therefore never be interpreted as a
+    // dispatch dimension.
+    public const int RayBucketMetadataStrideBytes = 16;
     public const int FrameBytes = 160;
-    public const int VolumePolicyStrideBytes = 160;
+    public const int VolumePolicyStrideBytes = 176;
     public const int DirtyRegionStrideBytes = 48;
     public const int LaneScalarStrideBytes = sizeof(uint);
     public const int CounterBytes = 256;
@@ -116,7 +127,8 @@ public sealed class SimpleDdgiGpuSchedulerLayout
     public int ActiveLaneCount { get; }
     public int LaneCapacity => SimpleDdgiSchedulerAbi.MaxLaneCount;
     public int CandidateGroupCount => checked((int)GroupsFor(ActiveProbeCount));
-    public int CandidateGroupLaneCountWordCount => checked((CandidateGroupCount * LaneCapacity + 1) / 2);
+    public int CandidateGroupLaneCountWordCount => checked((int)(
+        ((ulong)CandidateGroupCount * (ulong)LaneCapacity + 1UL) / 2UL));
     public ulong TotalBytes { get; }
     public ulong ValidationReadbackBytes { get; }
     public IReadOnlyList<SimpleDdgiSchedulerArenaRegion> Regions { get; }
@@ -136,6 +148,7 @@ public sealed class SimpleDdgiGpuSchedulerLayout
     public SimpleDdgiSchedulerArenaRegion LaneCursors => GetRegion(nameof(LaneCursors));
     public SimpleDdgiSchedulerArenaRegion LaneAdmission => GetRegion(nameof(LaneAdmission));
     public SimpleDdgiSchedulerArenaRegion Counters => GetRegion(nameof(Counters));
+    public SimpleDdgiSchedulerArenaRegion RayBucketMetadata => GetRegion(nameof(RayBucketMetadata));
     public SimpleDdgiSchedulerArenaRegion RayBucketCommands => GetRegion(nameof(RayBucketCommands));
     public SimpleDdgiSchedulerArenaRegion IndirectCommands => GetRegion(nameof(IndirectCommands));
     public SimpleDdgiSchedulerArenaRegion Outcomes => GetRegion(nameof(Outcomes));
@@ -163,6 +176,41 @@ public sealed class SimpleDdgiGpuSchedulerLayout
             offset,
             IndirectCommandStrideBytes,
             IndirectCommandStrideBytes,
+            1);
+    }
+
+    /// <summary>
+    /// Gets the Vulkan indirect-dispatch portion of a ray-bucket record. Its
+    /// Y and Z dimensions are always one; queue offset/count/ray count live in
+    /// the separate metadata portion so they cannot be interpreted as work.
+    /// </summary>
+    public SimpleDdgiSchedulerArenaRegion GetRayBucketIndirectCommand(int bucketIndex)
+    {
+        ValidateRayBucketIndex(bucketIndex);
+        ulong offset = checked(RayBucketCommands.Offset +
+            (ulong)bucketIndex * (ulong)IndirectCommandStrideBytes);
+        return new SimpleDdgiSchedulerArenaRegion(
+            $"RayBucket.{bucketIndex}.Indirect",
+            offset,
+            IndirectCommandStrideBytes,
+            IndirectCommandStrideBytes,
+            1);
+    }
+
+    /// <summary>
+    /// Gets the scheduler-private ray-bucket metadata: queue offset, probe
+    /// count, rays per probe, and a reserved word.
+    /// </summary>
+    public SimpleDdgiSchedulerArenaRegion GetRayBucketMetadata(int bucketIndex)
+    {
+        ValidateRayBucketIndex(bucketIndex);
+        ulong offset = checked(RayBucketMetadata.Offset +
+            (ulong)bucketIndex * (ulong)RayBucketMetadataStrideBytes);
+        return new SimpleDdgiSchedulerArenaRegion(
+            $"RayBucket.{bucketIndex}.Metadata",
+            offset,
+            RayBucketMetadataStrideBytes,
+            RayBucketMetadataStrideBytes,
             1);
     }
 
@@ -219,8 +267,14 @@ public sealed class SimpleDdgiGpuSchedulerLayout
             CandidateInputStorageStrideBytes, checked((uint)activeProbeCount));
         ulong candidateGroupLaneEntryCount = checked((ulong)probeGroups *
             (ulong)SimpleDdgiSchedulerAbi.MaxLaneCount);
-        Add("CandidateGroupLaneCounts", checked(((candidateGroupLaneEntryCount + 1UL) / 2UL) * sizeof(ushort)),
-            sizeof(ushort), checked((uint)candidateGroupLaneEntryCount));
+        // Two 16-bit counters are packed into each 32-bit storage-buffer word.
+        // The shader indexes this region in words, so reserve four bytes per
+        // packed pair (not two bytes per logical counter). Under-allocation
+        // here lets the prefix stage overwrite later arena regions, including
+        // indirect command records.
+        ulong candidateGroupLaneWordCount = checked((candidateGroupLaneEntryCount + 1UL) / 2UL);
+        Add("CandidateGroupLaneCounts", checked(candidateGroupLaneWordCount * sizeof(uint)),
+            sizeof(uint), checked((uint)candidateGroupLaneWordCount));
         Add("CandidateOutput", checked((ulong)activeProbeCount * CandidateCompactIndexStrideBytes),
             CandidateCompactIndexStrideBytes, checked((uint)activeProbeCount));
         // GPU mirror output is kept inside the scheduler arena. Resident mode
@@ -239,6 +293,8 @@ public sealed class SimpleDdgiGpuSchedulerLayout
         Add("LaneAdmission", checked((ulong)SimpleDdgiSchedulerAbi.MaxLaneCount * LaneScalarStrideBytes),
             LaneScalarStrideBytes, (uint)SimpleDdgiSchedulerAbi.MaxLaneCount);
         Add("Counters", CounterBytes, 4, checked((uint)(CounterBytes / sizeof(uint))));
+        Add("RayBucketMetadata", checked((ulong)MaxRayBucketCount * RayBucketMetadataStrideBytes),
+            RayBucketMetadataStrideBytes, MaxRayBucketCount);
         Add("RayBucketCommands", checked((ulong)MaxRayBucketCount * IndirectCommandStrideBytes),
             IndirectCommandStrideBytes, MaxRayBucketCount);
         Add("IndirectCommands", checked((ulong)(int)SimpleDdgiSchedulerDispatchSlot.Count * IndirectCommandStrideBytes),
@@ -293,5 +349,11 @@ public sealed class SimpleDdgiGpuSchedulerLayout
         if (alignment == 0 || (alignment & (alignment - 1)) != 0)
             throw new ArgumentOutOfRangeException(nameof(alignment));
         return checked((value + alignment - 1) & ~(alignment - 1));
+    }
+
+    private static void ValidateRayBucketIndex(int bucketIndex)
+    {
+        if ((uint)bucketIndex >= MaxRayBucketCount)
+            throw new ArgumentOutOfRangeException(nameof(bucketIndex));
     }
 }

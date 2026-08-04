@@ -30,6 +30,7 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint TransportSourceCacheBufferIndex;
     uint TransportReadIrradianceAtlasBufferIndex;
     uint TransportWriteIrradianceAtlasBufferIndex;
+    uint PrivateVisibilityAtlasOffsetWords;
     uint TransportGeneration;
     uint PrimaryDirectionalLightIndex;
     uint DispatchQueueOffset;
@@ -38,7 +39,10 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint SchedulerArenaBufferIndex;
     uint SchedulerRayBucketIndex;
     uint SchedulerRayBucketCommandsOffsetWords;
+    uint SchedulerRayBucketMetadataOffsetWords;
+    uint SchedulerOutcomesOffsetWords;
     uint SchedulerCountersOffsetWords;
+    uint SchedulerUpdateRecordsOffsetWords;
 } pc;
 
 const float SIMPLE_DDGI_RELOCATION_TARGET_DISTANCE = 0.10;
@@ -95,16 +99,37 @@ void main()
     SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, queueOffset);
     uint probeIndex = update.probeIndex;
     if (probeIndex >= params.probeCount)
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 2u);
         return;
+    }
 
     SimpleDdgiVolume volume;
     uint localProbeIndex;
     if (!ResolveSimpleDdgiProbeVolume(probeIndex, params, volume, localProbeIndex))
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 2u);
         return;
+    }
 
     SimpleDdgiProbeState previous = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
     if (!SimpleDdgiUpdateMatchesProbeGeneration(update, previous))
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 0u);
         return;
+    }
 
     uint missCount = 0u;
     uint hitCount = 0u;
@@ -285,19 +310,54 @@ void main()
     state.age = 0u;
     state.classification = inactiveProbe ? SIMPLE_DDGI_CLASSIFICATION_INACTIVE : SIMPLE_DDGI_CLASSIFICATION_ACTIVE;
     state.luminanceChangeEma = previous.luminanceChangeEma;
-    WriteSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex, state);
+    if (gpuScheduler)
+    {
+        // Relocation/classification is a transaction-private proposal. Commit
+        // is the first stage allowed to touch the public probe record.
+        // Emit has already copied this accepted record to the public queue.
+        // Reuse its scheduler-arena words as transaction-private proposal
+        // storage; the public relocation-classification buffer remains a V1
+        // diagnostic output only.
+        uint proposalBase = pc.SchedulerUpdateRecordsOffsetWords +
+            update.outcomeIndex * SIMPLE_DDGI_SCHEDULER_UPDATE_RECORD_WORDS;
+        WriteStorageFloatUniform(pc.SchedulerArenaBufferIndex, proposalBase + 0u,
+            state.relocation.x);
+        WriteStorageFloatUniform(pc.SchedulerArenaBufferIndex, proposalBase + 1u,
+            state.relocation.y);
+        WriteStorageFloatUniform(pc.SchedulerArenaBufferIndex, proposalBase + 2u,
+            state.relocation.z);
+        WriteStorageFloatUniform(pc.SchedulerArenaBufferIndex, proposalBase + 3u,
+            state.activeWeight);
+        WriteStorageWordUniform(pc.SchedulerArenaBufferIndex, proposalBase + 4u,
+            state.flags);
+        WriteStorageWordUniform(pc.SchedulerArenaBufferIndex, proposalBase + 5u,
+            state.classification);
+        WriteStorageWordUniform(pc.SchedulerArenaBufferIndex, proposalBase + 6u,
+            floatBitsToUint(max(state.luminanceChangeEma, 0.0)));
+    }
+    else
+        WriteSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex, state);
 
     float nearestDistance = nearestHitDistance < 3.0e+38 ? nearestHitDistance : 0.0;
-    WriteRelocationClassification(
-        probeIndex,
-        blendedRelocation,
-        length(blendedRelocation),
-        state.activeWeight,
-        softInvalidProbeScore,
-        hardInvalidProbeScore,
-        closeRatio,
-        backfaceRatio,
-        nearestDistance,
-        missRatio,
-        hitRatio);
+    if (!gpuScheduler)
+    {
+        WriteRelocationClassification(
+            probeIndex,
+            blendedRelocation,
+            length(blendedRelocation),
+            state.activeWeight,
+            softInvalidProbeScore,
+            hardInvalidProbeScore,
+            closeRatio,
+            backfaceRatio,
+            nearestDistance,
+            missRatio,
+            hitRatio);
+    }
+    else
+        SimpleDdgiSchedulerCompleteSingle(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 1u);
 }

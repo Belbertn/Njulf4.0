@@ -53,7 +53,8 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
 
     public override bool SupportsSecondaryCommandBuffer => true;
     public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
-    public override bool SupportsAsyncCompute => true;
+    public override bool SupportsAsyncCompute =>
+        AsyncComputePassCatalog.IsCorrectnessCertified(AsyncComputePath.SimpleDdgiUpdate);
     public override string AsyncComputeReason =>
         "Simple DDGI scheduling is bounded compute and owns the resident admission arena.";
 
@@ -146,7 +147,13 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
             (uint)Marshal.SizeOf<GPUSimpleDdgiSchedulePushConstants>(),
             &pushConstants);
         _context.Api.CmdDispatch(cmd, groupCount, 1, 1);
-        InsertStorageBarrier(cmd);
+        // Emit publishes the indirect command records consumed by the rest of
+        // the resident transaction. Those reads occur at DRAW_INDIRECT, not
+        // COMPUTE_SHADER, including when the commands dispatch compute work.
+        if (stage == _pipelines.Length - 1)
+            InsertStorageAndIndirectBarrier(cmd);
+        else
+            InsertStorageBarrier(cmd);
     }
 
     private void CreatePipelineCache()
@@ -244,6 +251,48 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
             SType = StructureType.DependencyInfo,
             MemoryBarrierCount = 1,
             PMemoryBarriers = &barrier
+        };
+        _context.Api.CmdPipelineBarrier2(cmd, &dependency);
+    }
+
+    private void InsertStorageAndIndirectBarrier(CommandBuffer cmd)
+    {
+        BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[2];
+        barriers[0] = new()
+        {
+            SType = StructureType.BufferMemoryBarrier2,
+            SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
+            SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
+            DstStageMask = PipelineStageFlags2.ComputeShaderBit |
+                           PipelineStageFlags2.DrawIndirectBit,
+            DstAccessMask = AccessFlags2.ShaderStorageReadBit |
+                            AccessFlags2.ShaderStorageWriteBit |
+                            AccessFlags2.IndirectCommandReadBit,
+            SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+            DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+            Buffer = _volumeManager.GpuScheduler.GetArenaVkBuffer(),
+            Offset = 0,
+            Size = _volumeManager.GpuScheduler.Layout?.TotalBytes ?? 0UL
+        };
+        barriers[1] = new()
+        {
+            SType = StructureType.BufferMemoryBarrier2,
+            SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
+            SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
+            DstStageMask = PipelineStageFlags2.ComputeShaderBit,
+            DstAccessMask = AccessFlags2.ShaderStorageReadBit |
+                            AccessFlags2.ShaderStorageWriteBit,
+            SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+            DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+            Buffer = _volumeManager.GetProbeUpdateQueueVkBuffer(),
+            Offset = 0,
+            Size = _volumeManager.ProbeUpdateQueueBytes
+        };
+        var dependency = new DependencyInfo
+        {
+            SType = StructureType.DependencyInfo,
+            BufferMemoryBarrierCount = 2,
+            PBufferMemoryBarriers = barriers
         };
         _context.Api.CmdPipelineBarrier2(cmd, &dependency);
     }

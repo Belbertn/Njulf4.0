@@ -144,8 +144,7 @@ public sealed class GlobalIlluminationDefaultsTests
                   "GlobalIllumination": {
                     "Enabled": true,
                     "Mode": "Ddgi",
-                    "UseDdgi": true,
-                    "UseRayQueryBackend": true
+                    "UseDdgi": true
                   }
                 }
                 """);
@@ -155,6 +154,10 @@ public sealed class GlobalIlluminationDefaultsTests
             Assert.Multiple(() =>
             {
                 Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
+                Assert.That(settings.GlobalIllumination.UseRayQueryBackend, Is.True);
+                Assert.That(
+                    settings.GlobalIllumination.SimpleDdgiSchedulerMode,
+                    Is.EqualTo(SimpleDdgiSchedulerMode.GpuResident));
             });
         }
         finally

@@ -1325,7 +1325,7 @@ namespace Njulf.Rendering.Data
         // CPU completion metadata for the lighting generation that produced the
         // source cache. Shaders intentionally do not depend on this value.
         public uint SourceLightingGeneration;
-        public uint Reserved3;
+        public uint OutcomeIndex;
         public uint Reserved4;
     }
 
@@ -1433,6 +1433,7 @@ namespace Njulf.Rendering.Data
         public uint TransportSourceCacheBufferIndex;
         public uint TransportReadIrradianceAtlasBufferIndex;
         public uint TransportWriteIrradianceAtlasBufferIndex;
+        public uint PrivateVisibilityAtlasOffsetWords;
         public uint TransportGeneration;
         public uint PrimaryDirectionalLightIndex;
         public uint DispatchQueueOffset;
@@ -1441,7 +1442,10 @@ namespace Njulf.Rendering.Data
         public uint SchedulerArenaBufferIndex;
         public uint SchedulerRayBucketIndex;
         public uint SchedulerRayBucketCommandsOffsetWords;
+        public uint SchedulerRayBucketMetadataOffsetWords;
+        public uint SchedulerOutcomesOffsetWords;
         public uint SchedulerCountersOffsetWords;
+        public uint SchedulerUpdateRecordsOffsetWords;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1453,10 +1457,13 @@ namespace Njulf.Rendering.Data
         public uint ProbeStateBufferIndex;
         public uint ProbeUpdateQueueBufferIndex;
         public uint TransportIrradianceAtlasBufferIndex;
+        public uint PrivateVisibilityAtlasOffsetWords;
         public uint SampledAtlasGroupCount;
         public uint SampledAtlasLayersPerTexture;
         public uint SchedulerArenaBufferIndex;
+        public uint SchedulerOutcomesOffsetWords;
         public uint SchedulerCountersOffsetWords;
+        public uint SchedulerFrameOffsetWords;
     }
 
     // 160 bytes.  This is the only CPU-authored scheduler record that changes
@@ -1505,7 +1512,7 @@ namespace Njulf.Rendering.Data
         public uint Reserved0;
     }
 
-    // 160 bytes.  Volume policy is uploaded only when topology, quality, or
+    // 176 bytes.  Volume policy is uploaded only when topology, quality, or
     // scheduler policy changes.  Current/previous origins and toroidal offsets
     // are explicit so a shader can fail closed on incompatible remaps.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1545,6 +1552,12 @@ namespace Njulf.Rendering.Data
         public int CellDeltaY;
         public int CellDeltaZ;
         public uint DirtyGeneration;
+        // Mirrors the CPU visibility-candidate radius for authored volumes.
+        // Ring volumes use their fixed ring radius and ignore this padding.
+        public float ProximityRadiusPadding;
+        public uint Reserved0;
+        public uint Reserved1;
+        public uint Reserved2;
     }
 
     // 48 bytes.  Dirty-region records are bounded and coalesced by the CPU;
@@ -1561,9 +1574,10 @@ namespace Njulf.Rendering.Data
         public uint Reserved1;
     }
 
-    // 32 bytes.  The packed word has documented, unit-tested bounds in
-    // SimpleDdgiSchedulerProbeStatePacking.  It contains only bounded counters
-    // and flags; generation/frame ownership stays in dedicated uint fields.
+    // 40 bytes / ten uint words.  The packed word has documented,
+    // unit-tested bounds in SimpleDdgiSchedulerProbeStatePacking.  The private
+    // scheduler ABI keeps dirty-latency start and the applied invalidation
+    // marker in separate words; neither is allowed to alias the other.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiSchedulerProbeState
     {
@@ -1575,6 +1589,8 @@ namespace Njulf.Rendering.Data
         public uint DirtyReasonFlags;
         public uint DirtyStartFrame;
         public uint PackedTransportAndLifecycle;
+        public uint AppliedInvalidationMarker;
+        public uint Reserved0;
     }
 
     // 32 bytes.  Invalid candidates use ProbeIndex == uint.MaxValue.  The
@@ -1594,27 +1610,26 @@ namespace Njulf.Rendering.Data
         public bool IsValid => ProbeIndex != uint.MaxValue;
     }
 
-    // 64 bytes.  Update producers write transaction-private outcomes; commit
+    // 60 bytes / fifteen uint words.  Update producers write transaction-private outcomes; commit
     // is the first stage allowed to mutate receiver-visible lifecycle state.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiUpdateOutcome
     {
         public uint QueueTransactionGeneration;
         public uint SchedulerResourceGeneration;
-        public uint ProbeIndex;
-        public uint ExpectedPhysicalGeneration;
         public uint VolumeTableGeneration;
         public uint SourceLightingGeneration;
         public uint TransportGeneration;
-        public uint CompletionFlags;
-        public uint TraceFlags;
-        public uint SourceRayCountCompleted;
-        public uint TransportGenerationCompleted;
+        public uint ProbeIndex;
+        public uint ExpectedPhysicalGeneration;
+        public uint RequiredCompletionMask;
+        public uint CompletionMask;
+        public uint FailureReason;
+        public uint UpdateFlags;
+        public uint ExpectedRayInvocationCount;
+        public uint TraceInvocationCount;
+        public uint TransportInvocationCount;
         public uint ResidualBits;
-        public uint ProposedStateFlags;
-        public uint ProposedClassification;
-        public uint FailClosedReason;
-        public uint Reserved0;
     }
 
     // A Vulkan dispatch command occupies 12 bytes.  Arena slots are 16 bytes
@@ -1697,7 +1712,10 @@ namespace Njulf.Rendering.Data
         public uint Reserved0;
         public uint Reserved1;
         public uint Reserved2;
-        public uint Reserved3;
+        // Accepted-order index into the scheduler outcome array. The public
+        // queue ABI keeps this word even in CPU/V1 mode so all consumers share
+        // one 32-byte record layout.
+        public uint OutcomeIndex;
         public uint Reserved4;
     }
 
@@ -1730,9 +1748,14 @@ namespace Njulf.Rendering.Data
         public uint CountersOffsetWords;
         public uint UpdateRecordsOffsetWords;
         public uint RayBucketCommandsOffsetWords;
+        public uint RayBucketMetadataOffsetWords;
         public uint IndirectCommandsOffsetWords;
         public uint OutcomesOffsetWords;
         public uint FeedbackOffsetWords;
+        public uint IrradianceAtlasBufferIndex;
+        public uint VisibilityAtlasBufferIndex;
+        public uint TransportIrradianceAtlasBufferIndex;
+        public uint PrivateVisibilityAtlasOffsetWords;
         public uint Stage;
         public uint Reserved0;
     }
