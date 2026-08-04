@@ -731,7 +731,8 @@ void main()
             cacheTransmission,
             cacheMaterialOcclusion,
             hitKind,
-            SimpleDdgiProbeGeneration(probeState));
+            SimpleDdgiProbeGeneration(probeState),
+            sourceRayCount);
     }
     float visibilityDistance = hitDistance;
     float visibilityHitKind = hitKind;

@@ -88,6 +88,10 @@ public sealed class SimpleDdgiGpuSchedulerLayout
     public const int DirtyRegionStrideBytes = 48;
     public const int LaneScalarStrideBytes = sizeof(uint);
     public const int CounterBytes = 256;
+    // One 1 KiB epoch-stamped reduction record keeps the audit summary below
+    // the plan's readback budget while leaving room for future counters.
+    public const int AuditSummaryBytes = 1024;
+    public const int AuditSummaryWordCount = AuditSummaryBytes / sizeof(uint);
     public const int MaxRayBucketCount = SimpleDdgiSchedulerAbi.MaxRayBucketCount;
 
     private readonly Dictionary<string, SimpleDdgiSchedulerArenaRegion> _regions;
@@ -153,6 +157,7 @@ public sealed class SimpleDdgiGpuSchedulerLayout
     public SimpleDdgiSchedulerArenaRegion IndirectCommands => GetRegion(nameof(IndirectCommands));
     public SimpleDdgiSchedulerArenaRegion Outcomes => GetRegion(nameof(Outcomes));
     public SimpleDdgiSchedulerArenaRegion FeedbackSummary => GetRegion(nameof(FeedbackSummary));
+    public SimpleDdgiSchedulerArenaRegion AuditSummary => GetRegion(nameof(AuditSummary));
 
     public SimpleDdgiSchedulerArenaRegion GetRegion(string name)
     {
@@ -252,7 +257,7 @@ public sealed class SimpleDdgiGpuSchedulerLayout
                 "The configured Simple-DDGI scheduler capacity exceeds the device compute dispatch limit.");
         }
 
-        var regions = new List<SimpleDdgiSchedulerArenaRegion>(21);
+        var regions = new List<SimpleDdgiSchedulerArenaRegion>(22);
         ulong cursor = 0;
         Add("Frame", FrameBytes, 1, FrameBytes);
         Add("VolumePolicies", checked((ulong)GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount * VolumePolicyStrideBytes),
@@ -302,6 +307,7 @@ public sealed class SimpleDdgiGpuSchedulerLayout
         Add("Outcomes", checked((ulong)requestCapacity * OutcomeStrideBytes),
             OutcomeStrideBytes, checked((uint)requestCapacity));
         Add("FeedbackSummary", ShippingFeedbackBytes, 4, checked((uint)(ShippingFeedbackBytes / sizeof(uint))));
+        Add("AuditSummary", AuditSummaryBytes, sizeof(uint), AuditSummaryWordCount);
 
         ulong validationReadbackBytes = validationEnabled
             ? Align(ShippingFeedbackBytes, ArenaAlignmentBytes)

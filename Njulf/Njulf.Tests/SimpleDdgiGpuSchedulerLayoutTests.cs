@@ -303,6 +303,10 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiUpdateOutcome>(), Is.EqualTo(60));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiSchedulerProbeState>(), Is.EqualTo(40));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiProbeUpdate>(), Is.EqualTo(32));
+            Assert.That(Marshal.SizeOf<GPUSimpleDdgiParams>(), Is.EqualTo(208));
+            Assert.That(Marshal.SizeOf<GPUSimpleDdgiPushConstants>(), Is.EqualTo(136));
+            Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportAuditPushConstants>(), Is.EqualTo(220));
+            Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportAuditSummary>(), Is.EqualTo(60));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiSchedulePushConstants>(), Is.EqualTo(124));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiPublishPushConstants>(), Is.EqualTo(52));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiSchedulerFeedback>(), Is.EqualTo(256));
@@ -350,6 +354,21 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
                 nameof(GPUSimpleDdgiUpdateOutcome.TraceInvocationCount),
                 nameof(GPUSimpleDdgiUpdateOutcome.TransportInvocationCount),
                 nameof(GPUSimpleDdgiUpdateOutcome.ResidualBits));
+            Assert.That(Marshal.OffsetOf<GPUSimpleDdgiTransportAuditPushConstants>(
+                nameof(GPUSimpleDdgiTransportAuditPushConstants.AuditSummaryBufferIndex)).ToInt32(),
+                Is.EqualTo(136));
+            Assert.That(Marshal.OffsetOf<GPUSimpleDdgiTransportAuditPushConstants>(
+                nameof(GPUSimpleDdgiTransportAuditPushConstants.AuditSchedulerFrameOffsetWords)).ToInt32(),
+                Is.EqualTo(168));
+            Assert.That(Marshal.OffsetOf<GPUSimpleDdgiTransportAuditPushConstants>(
+                nameof(GPUSimpleDdgiTransportAuditPushConstants.AuditSchedulerResourceGeneration)).ToInt32(),
+                Is.EqualTo(208));
+            Assert.That(Marshal.OffsetOf<GPUSimpleDdgiTransportAuditPushConstants>(
+                nameof(GPUSimpleDdgiTransportAuditPushConstants.AuditSchedulerProbeStateOffsetWords)).ToInt32(),
+                Is.EqualTo(212));
+            Assert.That(Marshal.OffsetOf<GPUSimpleDdgiTransportAuditPushConstants>(
+                nameof(GPUSimpleDdgiTransportAuditPushConstants.AuditSolveEpoch)).ToInt32(),
+                Is.EqualTo(216));
             Assert.That(Marshal.OffsetOf<GPUSimpleDdgiSchedulerFrame>(
                 nameof(GPUSimpleDdgiSchedulerFrame.CameraPositionAndNearProximity)).ToInt32(),
                 Is.EqualTo(80));

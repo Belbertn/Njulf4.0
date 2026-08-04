@@ -1,0 +1,474 @@
+using Njulf.Core.Math;
+using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
+using NUnit.Framework;
+
+namespace Njulf.Tests;
+
+[TestFixture]
+public sealed class SimpleDdgiTransportTailTests
+{
+    private static SimpleDdgiTransportGenerations Generations => new(
+        VolumeTable: 1u,
+        PhysicalOwnership: 2u,
+        SourceLighting: 3u,
+        SourceEpoch: 4u,
+        TransportOperator: 5u,
+        CanonicalField: 6u,
+        Solve: 7u,
+        Audit: 8u,
+        Queue: 9u,
+        SchedulerResources: 10u);
+
+    [Test]
+    public void EvaluateTail_UsesInfinityNormAndAbsoluteFloor()
+    {
+        Vector3[] candidate =
+        [
+            new(1.0f, 0.0f, 0.0f),
+            new(0.0f, 0.0f, 0.003f)
+        ];
+        Vector3[] canonical =
+        [
+            new(0.99f, 0.0f, 0.0f),
+            new(0.0f, 0.0f, 0.0f)
+        ];
+
+        SimpleDdgiTransportTailEstimator.TailEstimate estimate =
+            SimpleDdgiTransportTailEstimator.EvaluateTail(
+                candidate,
+                canonical,
+                configuredContractionBound: 0.9f,
+                relativeTolerance: 0.025f);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(estimate.FixedPointDefect, Is.EqualTo(0.01f).Within(1e-6f));
+            Assert.That(estimate.FieldMagnitude, Is.EqualTo(0.99f).Within(1e-6f));
+            Assert.That(estimate.AbsoluteTailBound, Is.EqualTo(0.1f).Within(1e-5f));
+            Assert.That(estimate.Tolerance, Is.EqualTo(0.02475f).Within(1e-6f));
+            Assert.That(estimate.IsWithinTolerance, Is.False);
+            Assert.That(estimate.CanCertify, Is.False);
+        });
+    }
+
+    [Test]
+    public void EvaluateTail_RejectsNonFiniteAndInvalidContraction()
+    {
+        SimpleDdgiTransportTailEstimator.TailEstimate nonFinite =
+            SimpleDdgiTransportTailEstimator.EvaluateTail(
+                [new(float.NaN, 0.0f, 0.0f)],
+                [Vector3.Zero],
+                0.9f,
+                0.025f);
+        SimpleDdgiTransportTailEstimator.TailEstimate invalidQ =
+            SimpleDdgiTransportTailEstimator.EvaluateTail(
+                [Vector3.Zero],
+                [Vector3.Zero],
+                1.0f,
+                0.025f);
+
+        Assert.That(nonFinite.IsFinite, Is.False);
+        Assert.That(invalidQ.HasValidContractionBound, Is.False);
+        Assert.That(invalidQ.CanCertify, Is.False);
+
+        SimpleDdgiTransportTailEstimator.TailEstimate tooLooseQ =
+            SimpleDdgiTransportTailEstimator.EvaluateTail(
+                [Vector3.Zero],
+                [Vector3.Zero],
+                configuredContractionBound: 0.995f,
+                relativeTolerance: 0.025f);
+        Assert.That(tooLooseQ.HasValidContractionBound, Is.False);
+    }
+
+    [Test]
+    public void EvaluateTail_QuantizationFloorRemainsPending()
+    {
+        SimpleDdgiTransportTailEstimator.TailEstimate estimate =
+            SimpleDdgiTransportTailEstimator.EvaluateTail(
+                [new(1.0f, 1.0f, 1.0f)],
+                [new(1.0f, 1.0f, 1.0f)],
+                configuredContractionBound: 0.5f,
+                relativeTolerance: 0.10f,
+                canonicalQuantizationFloor: 0.5f);
+
+        Assert.That(estimate.QuantizationLimited, Is.True);
+        Assert.That(estimate.IsWithinTolerance, Is.True);
+        Assert.That(estimate.CanCertify, Is.False);
+
+        SimpleDdgiTransportTailEstimator.TailEstimate exactBlack =
+            SimpleDdgiTransportTailEstimator.EvaluateTail(
+                [Vector3.Zero],
+                [Vector3.Zero],
+                configuredContractionBound: 0.5f,
+                relativeTolerance: 0.10f,
+                canonicalQuantizationFloor: 0.00005f);
+        Assert.That(exactBlack.QuantizationLimited, Is.False);
+        Assert.That(exactBlack.CanCertify, Is.True);
+    }
+
+    [Test]
+    public void NormalizeThroughput_ScalesCombinedLobesWithoutChangingRatio()
+    {
+        bool success = SimpleDdgiTransportTailEstimator.TryNormalizeRecursiveThroughput(
+            reflected: new(0.8f, 0.4f, 0.0f),
+            transmitted: new(0.8f, 0.0f, 0.0f),
+            contractionCeiling: 0.99f,
+            transmissionEnabled: true,
+            out SimpleDdgiTransportTailEstimator.ThroughputNormalization result);
+
+        Assert.That(success, Is.True);
+        Assert.That(result.WasRenormalized, Is.True);
+        Assert.That(result.Reflected.X / result.Transmitted.X, Is.EqualTo(1.0f).Within(1e-6f));
+        Assert.That(result.Reflected.Y / result.Reflected.X, Is.EqualTo(0.5f).Within(1e-6f));
+        Assert.That(
+            SimpleDdgiTransportTailEstimator.MaxComponent(result.Reflected + result.Transmitted),
+            Is.EqualTo(0.99f).Within(1e-6f));
+    }
+
+    [Test]
+    public void NormalizeThroughput_RejectsContractionAboveCertifiedCeiling()
+    {
+        bool success = SimpleDdgiTransportTailEstimator.TryNormalizeRecursiveThroughput(
+            reflected: new(0.2f, 0.2f, 0.2f),
+            transmitted: Vector3.Zero,
+            contractionCeiling: 0.995f,
+            transmissionEnabled: false,
+            out _);
+
+        Assert.That(success, Is.False);
+    }
+
+    [Test]
+    public void PositiveEstimator_NormalizesCosineMass()
+    {
+        bool success = SimpleDdgiTransportTailEstimator.TryEvaluatePositiveIrradiance(
+            [new SimpleDdgiTransportTailEstimator.DirectionalSample(
+                Vector3.UnitY,
+                new(2.0f, 3.0f, 4.0f))],
+            Vector3.UnitY,
+            out Vector3 irradiance);
+
+        Assert.That(success, Is.True);
+        Assert.That(irradiance.X, Is.EqualTo(2.0f * MathF.PI).Within(1e-5f));
+        Assert.That(irradiance.Y, Is.EqualTo(3.0f * MathF.PI).Within(1e-5f));
+        Assert.That(irradiance.Z, Is.EqualTo(4.0f * MathF.PI).Within(1e-5f));
+    }
+
+    [Test]
+    public void Controller_RequiresCompleteFrozenAuditBeforeCertification()
+    {
+        var controller = new SimpleDdgiTransportSolveController();
+        Assert.That(controller.BeginSolveEpoch(Generations, 2), Is.True);
+        SimpleDdgiTransportGenerations solveGenerations = controller.FrozenGenerations;
+        Assert.That(controller.MarkParticipantVisited(0, solveGenerations), Is.True);
+        Assert.That(controller.TryBeginAudit(solveGenerations), Is.False);
+        Assert.That(controller.MarkParticipantVisited(1, solveGenerations), Is.True);
+        Assert.That(controller.IsSolveEpochComplete, Is.True);
+        Assert.That(controller.TryBeginAudit(solveGenerations), Is.True);
+        Assert.That(controller.FrozenGenerations.Audit, Is.EqualTo(controller.AuditEpoch));
+        Assert.That(controller.LastSummary.Generations, Is.EqualTo(controller.FrozenGenerations));
+
+        SimpleDdgiTransportTailSummary summary = new()
+        {
+            AuditEpoch = controller.AuditEpoch,
+            Generations = controller.FrozenGenerations,
+            ExpectedParticipantCount = 2,
+            AuditedParticipantCount = 2,
+            ExpectedTexelCount = 4,
+            AuditedTexelCount = 4,
+            FixedPointDefect = 0.00001f,
+            FieldMagnitude = 1.0f,
+            ConfiguredContractionBound = 0.9f,
+            ObservedContractionBound = 0.9f,
+            CertifiedContractionBound = 0.9f,
+            AbsoluteTailBound = 0.0001f,
+            RelativeTailBound = 0.0001f,
+            Tolerance = 0.025f,
+            IsComplete = true,
+            Reason = SimpleDdgiTransportCertificationReason.Certified
+        };
+
+        Assert.That(controller.TryAcceptAudit(summary, controller.FrozenGenerations), Is.True);
+        Assert.That(controller.IsCertified, Is.True);
+        Assert.That(controller.Phase, Is.EqualTo(SimpleDdgiTransportPhase.Certified));
+    }
+
+    [Test]
+    public void Controller_GpuEpochWitnessRequiresExactParticipantCoverage()
+    {
+        var controller = new SimpleDdgiTransportSolveController();
+        Assert.That(controller.BeginSolveEpoch(Generations, 2), Is.True);
+        SimpleDdgiTransportGenerations frozen = controller.FrozenGenerations;
+
+        Assert.That(
+            controller.MarkGpuEpochComplete(
+                controller.SolveEpoch,
+                participantCount: 1,
+                generations: frozen),
+            Is.False);
+        Assert.That(controller.IsSolveEpochComplete, Is.False);
+
+        Assert.That(
+            controller.MarkGpuEpochComplete(
+                controller.SolveEpoch,
+                participantCount: 2,
+                generations: frozen),
+            Is.True);
+        Assert.That(controller.IsSolveEpochComplete, Is.True);
+        Assert.That(
+            controller.MarkGpuEpochComplete(
+                controller.SolveEpoch,
+                participantCount: 2,
+                generations: frozen with { CanonicalField = 99u }),
+            Is.False);
+        Assert.That(
+            controller.LastReason,
+            Is.EqualTo(SimpleDdgiTransportCertificationReason.GenerationsChanged));
+    }
+
+    [Test]
+    public void Controller_CancelsAuditWhenGenerationsChange()
+    {
+        var controller = new SimpleDdgiTransportSolveController();
+        Assert.That(controller.BeginSolveEpoch(Generations, 1), Is.True);
+        SimpleDdgiTransportGenerations solveGenerations = controller.FrozenGenerations;
+        Assert.That(controller.MarkParticipantVisited(0, solveGenerations), Is.True);
+        Assert.That(controller.TryBeginAudit(solveGenerations), Is.True);
+
+        SimpleDdgiTransportGenerations changed = Generations with { CanonicalField = 99u };
+        Assert.That(controller.TryAcceptAudit(
+            new SimpleDdgiTransportTailSummary
+            {
+                AuditEpoch = controller.AuditEpoch,
+                Generations = controller.FrozenGenerations,
+                ExpectedParticipantCount = 1,
+                AuditedParticipantCount = 1,
+                ExpectedTexelCount = 1,
+                AuditedTexelCount = 1,
+                IsComplete = true,
+                Reason = SimpleDdgiTransportCertificationReason.Certified
+            },
+            changed), Is.False);
+        Assert.That(controller.IsCertified, Is.False);
+        Assert.That(controller.LastReason, Is.EqualTo(SimpleDdgiTransportCertificationReason.GenerationsChanged));
+    }
+
+    [Test]
+    public void Controller_AllowsExplicitEmptyFieldCertificate()
+    {
+        var controller = new SimpleDdgiTransportSolveController();
+        Assert.That(controller.BeginSolveEpoch(Generations, expectedParticipantCount: 0), Is.True);
+        SimpleDdgiTransportGenerations solveGenerations = controller.FrozenGenerations;
+
+        Assert.That(controller.TryBeginAudit(solveGenerations), Is.True);
+
+        SimpleDdgiTransportTailSummary summary = new()
+        {
+            AuditEpoch = controller.AuditEpoch,
+            Generations = controller.FrozenGenerations,
+            ExpectedParticipantCount = 0u,
+            AuditedParticipantCount = 0u,
+            ExpectedTexelCount = 0u,
+            AuditedTexelCount = 0u,
+            FixedPointDefect = 0.0f,
+            FieldMagnitude = 0.0f,
+            ConfiguredContractionBound = 0.5f,
+            ObservedContractionBound = 0.0f,
+            CertifiedContractionBound = 0.0f,
+            AbsoluteTailBound = 0.0f,
+            RelativeTailBound = 0.0f,
+            Tolerance = 0.0001f,
+            CanonicalQuantizationFloor = 0.0f,
+            IsComplete = true,
+            Reason = SimpleDdgiTransportCertificationReason.Certified
+        };
+
+        Assert.That(controller.TryAcceptAudit(summary, controller.FrozenGenerations), Is.True);
+        Assert.That(controller.IsCertified, Is.True);
+    }
+
+    [Test]
+    public void AuditAccumulator_RequiresOrderedCompleteChunksAndRecomputesTail()
+    {
+        var accumulator = new SimpleDdgiTransportAuditAccumulator(
+            auditEpoch: 3u,
+            generations: Generations,
+            expectedParticipantCount: 2u,
+            expectedTexelCount: 8u,
+            configuredContractionBound: 0.9f,
+            relativeTolerance: 0.025f,
+            canonicalQuantizationFloor: 0.0f,
+            firstFrameSerial: 100u,
+            expectedChunkCount: 2u);
+
+        SimpleDdgiTransportAuditChunk secondChunk = new()
+        {
+            AuditEpoch = 3u,
+            Generations = Generations,
+            ChunkIndex = 1u,
+            ExpectedChunkCount = 2u,
+            ExpectedParticipantCount = 2u,
+            ExpectedTexelCount = 8u
+        };
+        Assert.That(accumulator.TryAddChunk(secondChunk), Is.False);
+
+        Assert.That(accumulator.TryAddChunk(new SimpleDdgiTransportAuditChunk
+        {
+            AuditEpoch = 3u,
+            Generations = Generations,
+            ChunkIndex = 0u,
+            ExpectedChunkCount = 2u,
+            ExpectedParticipantCount = 2u,
+            ExpectedTexelCount = 8u,
+            AuditedParticipantCount = 1u,
+            AuditedTexelCount = 4u,
+            FixedPointDefect = 0.00001f,
+            FieldMagnitude = 1.0f,
+            ObservedContractionBound = 0.9f,
+            AuditMilliseconds = 1u,
+            FinalFrameSerial = 100u
+        }), Is.True);
+        Assert.That(accumulator.TryAddChunk(new SimpleDdgiTransportAuditChunk
+        {
+            AuditEpoch = 3u,
+            Generations = Generations,
+            ChunkIndex = 1u,
+            ExpectedChunkCount = 2u,
+            ExpectedParticipantCount = 2u,
+            ExpectedTexelCount = 8u,
+            AuditedParticipantCount = 1u,
+            AuditedTexelCount = 4u,
+            FixedPointDefect = 0.00002f,
+            FieldMagnitude = 1.0f,
+            ObservedContractionBound = 0.9f,
+            AuditMilliseconds = 2u,
+            FinalFrameSerial = 101u
+        }), Is.True);
+
+        Assert.That(accumulator.TryFinalize(out SimpleDdgiTransportTailSummary summary), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(summary.Reason, Is.EqualTo(SimpleDdgiTransportCertificationReason.Certified));
+            Assert.That(summary.FixedPointDefect, Is.EqualTo(0.00002f).Within(1e-8f));
+            Assert.That(summary.AbsoluteTailBound, Is.EqualTo(0.0002f).Within(1e-7f));
+            Assert.That(summary.AuditMicroseconds, Is.EqualTo(3000u));
+            Assert.That(summary.ChunkCount, Is.EqualTo(2u));
+        });
+    }
+
+    [Test]
+    public void AuditAccumulator_RejectsStaleChunkAndInvalidCoverage()
+    {
+        var accumulator = new SimpleDdgiTransportAuditAccumulator(
+            auditEpoch: 1u,
+            generations: Generations,
+            expectedParticipantCount: 1u,
+            expectedTexelCount: 4u,
+            configuredContractionBound: 0.5f,
+            relativeTolerance: 0.025f,
+            canonicalQuantizationFloor: 0.0f,
+            firstFrameSerial: 1u,
+            expectedChunkCount: 1u);
+
+        Assert.That(accumulator.TryAddChunk(new SimpleDdgiTransportAuditChunk
+        {
+            AuditEpoch = 2u,
+            Generations = Generations,
+            ChunkIndex = 0u,
+            ExpectedChunkCount = 1u,
+            ExpectedParticipantCount = 1u,
+            ExpectedTexelCount = 4u
+        }), Is.False);
+
+        Assert.That(accumulator.TryAddChunk(new SimpleDdgiTransportAuditChunk
+        {
+            AuditEpoch = 1u,
+            Generations = Generations,
+            ChunkIndex = 0u,
+            ExpectedChunkCount = 1u,
+            ExpectedParticipantCount = 1u,
+            ExpectedTexelCount = 4u,
+            AuditedParticipantCount = 0u,
+            AuditedTexelCount = 3u,
+            FixedPointDefect = 0.0f,
+            FieldMagnitude = 0.0f,
+            ObservedContractionBound = 0.5f
+        }), Is.True);
+
+        Assert.That(accumulator.TryFinalize(out SimpleDdgiTransportTailSummary summary), Is.False);
+        Assert.That(summary.Reason, Is.EqualTo(SimpleDdgiTransportCertificationReason.ParticipantCoverageIncomplete));
+    }
+
+    [Test]
+    public void AuditAccumulator_FailsClosedOnCounterOverflow()
+    {
+        var accumulator = new SimpleDdgiTransportAuditAccumulator(
+            auditEpoch: 1u,
+            generations: Generations,
+            expectedParticipantCount: uint.MaxValue,
+            expectedTexelCount: 0u,
+            configuredContractionBound: 0.5f,
+            relativeTolerance: 0.025f,
+            canonicalQuantizationFloor: 0.0f,
+            firstFrameSerial: 1u,
+            expectedChunkCount: 2u);
+
+        SimpleDdgiTransportAuditChunk chunk = new()
+        {
+            AuditEpoch = 1u,
+            Generations = Generations,
+            ChunkIndex = 0u,
+            ExpectedChunkCount = 2u,
+            ExpectedParticipantCount = uint.MaxValue,
+            ExpectedTexelCount = 0u,
+            AuditedParticipantCount = uint.MaxValue,
+            FixedPointDefect = 0.0f,
+            FieldMagnitude = 0.0f,
+            ObservedContractionBound = 0.5f
+        };
+
+        Assert.That(accumulator.TryAddChunk(chunk), Is.True);
+        Assert.That(accumulator.TryAddChunk(chunk with
+        {
+            ChunkIndex = 1u,
+            AuditedParticipantCount = 1u
+        }), Is.False);
+        Assert.That(accumulator.TryFinalize(out SimpleDdgiTransportTailSummary summary), Is.False);
+        Assert.That(summary.CounterOverflowCount, Is.EqualTo(1u));
+        Assert.That(summary.Reason, Is.EqualTo(SimpleDdgiTransportCertificationReason.CounterOverflow));
+    }
+
+    [Test]
+    public void LogicalParity_UsesToroidalCoordinate()
+    {
+        int physicalParity = (0 + 0 + 0) & 1;
+        int logicalParity = SimpleDdgiTransportSolveController.ResolveLogicalParity(
+            localProbeIndex: 0,
+            gridCountX: 4,
+            gridCountY: 4,
+            gridCountZ: 4,
+            physicalOffsetX: 1,
+            physicalOffsetY: 0,
+            physicalOffsetZ: 0);
+
+        Assert.That(physicalParity, Is.EqualTo(0));
+        Assert.That(logicalParity, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void VolumeOrder_IsCoarseFirstWithStableTieBreakers()
+    {
+        SimpleDdgiTransportVolumeOrderKey[] keys =
+        [
+            new(VolumeIndex: 2, Spacing: 1.0f, FallbackPriority: 1),
+            new(VolumeIndex: 0, Spacing: 3.0f, FallbackPriority: 2),
+            new(VolumeIndex: 1, Spacing: 3.0f, FallbackPriority: 0)
+        ];
+        int[] ordered = new int[keys.Length];
+
+        SimpleDdgiTransportSolveController.OrderVolumes(keys, ordered);
+
+        Assert.That(ordered, Is.EqualTo(new[] { 1, 0, 2 }));
+    }
+}

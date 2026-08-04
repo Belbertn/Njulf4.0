@@ -9,6 +9,7 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 const uint SIMPLE_DDGI_BLEND_FLAG_SHARED_RAY_CACHE = 1u << 3;
 const uint SIMPLE_DDGI_BLEND_FLAG_REDUCED_COMPLEXITY = 1u << 5;
+const uint SIMPLE_DDGI_BLEND_SWEEP_INDEX_SHIFT = 28u;
 const float SIMPLE_DDGI_BOOTSTRAP_VISIBILITY_MEAN_SPACING = 1.0;
 const float SIMPLE_DDGI_BOOTSTRAP_VISIBILITY_STDDEV_SPACING = 0.5;
 // A broad lobe keeps each hit/miss distance field smooth at production ray
@@ -116,7 +117,7 @@ float SimpleDdgiTransportConvergenceResidual(
     // mixed scale accepts a tiny absolute error near black or the authored
     // relative error at normal signal levels without subtracting either one
     // from real low-energy bounce.
-    float relativeThreshold = max(params.transportResidualThreshold, 0.001);
+    float relativeThreshold = max(params.transportTailRelativeTolerance, 0.0);
     float absoluteScale =
         SIMPLE_DDGI_TRANSPORT_ABSOLUTE_RESIDUAL_TOLERANCE / relativeThreshold;
     vec3 difference = abs(current - previous);
@@ -249,15 +250,6 @@ vec2 ReadCachedSimpleRayVisibilityHit(SimpleDdgiParams params, uint localProbeOf
     return ReadSimpleRayVisibilityHit(rayResultIndex);
 }
 
-vec3 ClampSimpleRadiance(vec3 v)
-{
-    if (any(isnan(v)) || any(isinf(v)))
-        return vec3(0.0);
-    float luma = dot(max(v, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
-    float clampScale = luma > 64.0 ? 64.0 / luma : 1.0;
-    return clamp(v * clampScale, vec3(0.0), vec3(65504.0));
-}
-
 float BlendIrradianceTexel(SimpleDdgiParams params, uint volumeIndex, uint probeIndex, uint localProbeOffset, uint texel, float probeHysteresis, bool sharedRayCacheEnabled, uint activeRayCount, bool maintenanceUpdate, bool freshUpdate)
 {
     uint x = texel % params.irradianceTexels;
@@ -279,8 +271,10 @@ float BlendIrradianceTexel(SimpleDdgiParams params, uint volumeIndex, uint probe
             sharedRayCacheEnabled);
         if (SimpleDdgiRayHitKindIsOneSidedBackFace(visibilityHit.y))
             continue;
-        float weight = max(dot(texelDirection, normalize(directionHit.xyz)), 0.0);
-        accumulated += ClampSimpleRadiance(radianceDistance.rgb) * weight;
+        float weight = SimpleDdgiPositiveCosineWeight(
+            texelDirection,
+            directionHit.xyz);
+        accumulated += SimpleDdgiClampTransportRadiance(radianceDistance.rgb) * weight;
         weightSum += weight;
     }
 
@@ -305,9 +299,9 @@ float BlendIrradianceTexel(SimpleDdgiParams params, uint volumeIndex, uint probe
         }
     }
 
-    vec3 irradiance = weightSum > 0.000001
-        ? accumulated * (SIMPLE_DDGI_PI / weightSum)
-        : vec3(0.0);
+    vec3 irradiance = SimpleDdgiEvaluatePositiveIrradiance(
+        accumulated,
+        weightSum);
     RecordSimpleDdgiBlendEnergyDiagnostics(
         params,
         pc.CurrentFrameIndex,
@@ -501,7 +495,10 @@ void BuildReducedSimpleDdgiIrradiance(SimpleDdgiParams params, uint localProbeOf
         vec4 directionHit = ReadCachedSimpleRayDirectionHit(params, localProbeOffset, ray, true);
         vec4 radianceDistance = ReadCachedSimpleRayRadianceDistance(params, localProbeOffset, ray, true);
         vec3 direction = normalize(directionHit.xyz);
-        AccumulateSimpleShBasis(direction, ClampSimpleRadiance(radianceDistance.rgb), shNormalization);
+        AccumulateSimpleShBasis(
+            direction,
+            SimpleDdgiClampTransportRadiance(radianceDistance.rgb),
+            shNormalization);
     }
 }
 
@@ -606,6 +603,11 @@ void main()
             1u << 2u);
         return;
     }
+    if (!SimpleDdgiSolveVolumeMatches(
+            pc.Flags,
+            update.volumeIndex,
+            pc.PrimaryDirectionalLightIndex))
+        return;
     SimpleDdgiProbeState initialState = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
     if (!SimpleDdgiUpdateMatchesProbeGeneration(update, initialState))
     {
@@ -616,6 +618,8 @@ void main()
             1u << 0u);
         return;
     }
+    if (!SimpleDdgiSolveColorMatches(pc.Flags, volume, localProbeIndex))
+        return;
     uint local = gl_LocalInvocationID.x;
     // Classification is a publication decision, not merely a gather hint.
     // Clear the private V2 target (or canonical V1 atlas) so a later publish can
@@ -661,7 +665,7 @@ void main()
         barrier();
         memoryBarrierBuffer();
         barrier();
-        if (local == 0u)
+        if (local == 0u && SimpleDdgiSolveIsFinalColor(pc.Flags))
             SimpleDdgiSchedulerCompleteSingle(
                 pc.SchedulerArenaBufferIndex,
                 pc.SchedulerOutcomesOffsetWords,
@@ -710,7 +714,7 @@ void main()
         barrier();
         memoryBarrierBuffer();
         barrier();
-        if (local == 0u)
+        if (local == 0u && SimpleDdgiSolveIsFinalColor(pc.Flags))
             SimpleDdgiSchedulerCompleteSingle(
                 pc.SchedulerArenaBufferIndex,
                 pc.SchedulerOutcomesOffsetWords,
@@ -720,12 +724,22 @@ void main()
     }
     uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
     bool maintenanceUpdate = SimpleDdgiUpdateIsMaintenance(update);
-    bool freshUpdate = (update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u ||
-        (initialState.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u;
+    uint sweepIndex = pc.Flags >> SIMPLE_DDGI_BLEND_SWEEP_INDEX_SHIFT;
+    bool firstSolveColor = SimpleDdgiSolveIsFirstColor(pc.Flags);
+    bool freshUpdate = sweepIndex == 0u && firstSolveColor &&
+        ((update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u ||
+         (initialState.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u);
     float probeHysteresis = freshUpdate
         ? 0.0
         : SimpleDdgiCadenceAdjustedHysteresis(params, update);
-    bool reducedComplexityEnabled = (pc.Flags & SIMPLE_DDGI_BLEND_FLAG_REDUCED_COMPLEXITY) != 0u;
+    // The reduced SH projection is intentionally a V1-only estimator.  Its
+    // signed reconstruction is useful as a bandwidth fallback, but it is not
+    // the positive operator that the V2 tail audit certifies.  Keep the
+    // quality-tier flag for V1 and force every certified V2 update through the
+    // exact cosine-weighted estimator below.
+    bool reducedComplexityEnabled =
+        (pc.Flags & SIMPLE_DDGI_BLEND_FLAG_REDUCED_COMPLEXITY) != 0u &&
+        (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) == 0u;
     bool sharedRayCacheEnabled = (pc.Flags & SIMPLE_DDGI_BLEND_FLAG_SHARED_RAY_CACHE) != 0u || reducedComplexityEnabled;
     if (sharedRayCacheEnabled)
         LoadSimpleRayCache(params, localProbeOffset, activeRayCount);
@@ -745,7 +759,7 @@ void main()
     // frontface distances would erase the two-sided shell occlusion recorded
     // by the most recent source refresh.
     bool refreshVisibility = !transportV2Active ||
-        SimpleDdgiUpdateRequiresSourceRefresh(update) ||
+        (firstSolveColor && SimpleDdgiUpdateRequiresSourceRefresh(update)) ||
         freshUpdate;
     if (reducedComplexityEnabled)
     {
@@ -873,7 +887,9 @@ void main()
                 update.outcomeIndex,
                 1u << 0u);
         }
-        if (gpuScheduler && SimpleDdgiUpdateMatchesProbeGeneration(update, state))
+        if (gpuScheduler &&
+            SimpleDdgiSolveIsFinalColor(pc.Flags) &&
+            SimpleDdgiUpdateMatchesProbeGeneration(update, state))
             SimpleDdgiSchedulerCompleteSingle(
                 pc.SchedulerArenaBufferIndex,
                 pc.SchedulerOutcomesOffsetWords,

@@ -71,6 +71,11 @@ public static class SimpleDdgiSchedulerAbi
     public const uint SchedulerFeatureDirtyOverflow = 1u << 6;
     public const uint SchedulerFeatureClassification = 1u << 7;
     public const uint SchedulerFeatureSampledPublication = 1u << 8;
+    // Tail certification makes cached-solver admission deliberately ignore
+    // the retired local residual/stable-generation heuristic. The GPU still
+    // tracks those values for diagnostics, but fairness and the frozen audit
+    // own V2 retirement.
+    public const uint SchedulerFeatureTransportTailCertification = 1u << 9;
     public const uint ReasonFresh = (uint)SimpleDdgiSchedulerCandidateReason.Fresh;
     public const uint ReasonScrollExposed = (uint)SimpleDdgiSchedulerCandidateReason.ScrollExposed;
     public const uint ReasonRegionalDirty = (uint)SimpleDdgiSchedulerCandidateReason.RegionalDirty;

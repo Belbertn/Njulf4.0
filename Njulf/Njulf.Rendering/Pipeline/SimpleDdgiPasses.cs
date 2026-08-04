@@ -120,6 +120,17 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
+            if (VolumeManager.TransportTailAuditPending)
+                return false;
+
+            if (VolumeManager.TransportAccelerationSolveActive)
+            {
+                // The accelerated pass records transport and blend as one
+                // ordered cached-sweep transaction.  The legacy blend pass must
+                // not consume or publish a partially completed sweep.
+                return false;
+            }
+
             if (IsGpuResidentMode)
                 return base.ShouldExecute(frameIndex, sceneData);
 
@@ -221,6 +232,18 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
+            if (VolumeManager.TransportTailAuditPending)
+                return false;
+
+            if (VolumeManager.TransportAccelerationSolveActive)
+            {
+                // V2 acceleration owns the complete cached-source transaction,
+                // including every intermediate blend.  Leaving this pass
+                // schedulable would execute a second transport producer against
+                // the same private target.
+                return false;
+            }
+
             // V1 has no standalone transport pass. Do not abort its valid
             // trace/relocate/blend transaction when the compatibility path is
             // intentionally selected.
@@ -314,6 +337,326 @@ namespace Njulf.Rendering.Pipeline
     }
 
     /// <summary>
+    /// Audits a frozen canonical V2 field using cached source rays only. One
+    /// dispatch covers a bounded contiguous probe chunk; the compact reduction
+    /// remains in the resident scheduler arena until the final chunk is copied
+    /// to a delayed host-visible readback slot.
+    /// </summary>
+    public sealed unsafe class SimpleDdgiTransportAuditPass : RenderPassBase
+    {
+        private readonly RenderSettings _settings;
+        private readonly SimpleDdgiVolumeManager _volumeManager;
+        private readonly nint _entryPointName;
+        private DescriptorSetLayout[] _setLayouts = Array.Empty<DescriptorSetLayout>();
+        private PipelineLayout _pipelineLayout;
+        private PipelineCache _pipelineCache;
+        private VkPipeline _pipeline;
+
+        public SimpleDdgiTransportAuditPass(
+            VulkanContext context,
+            SwapchainManager swapchain,
+            BindlessHeap bindlessHeap,
+            RenderSettings settings,
+            SimpleDdgiVolumeManager volumeManager)
+            : base("SimpleDdgiTransportAuditPass", context, swapchain, bindlessHeap)
+        {
+            _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _volumeManager = volumeManager ?? throw new ArgumentNullException(nameof(volumeManager));
+            _entryPointName = SilkMarshal.StringToPtr("main");
+        }
+
+        public override bool SupportsSecondaryCommandBuffer => true;
+        public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
+        public override bool SupportsAsyncCompute =>
+            AsyncComputePassCatalog.IsCorrectnessCertified(AsyncComputePath.SimpleDdgiUpdate);
+        public override string AsyncComputeReason =>
+            "Frozen Simple DDGI transport audit reads cached source/canonical storage and writes a bounded summary.";
+
+        public override void Initialize()
+        {
+            CreatePipelineCache();
+            CreatePipelineLayout();
+            _pipeline = CreatePipeline();
+        }
+
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
+        {
+            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+            if (_pipeline.Handle == 0 ||
+                !_volumeManager.TransportV2Active ||
+                !_volumeManager.TailCertificationEnabled ||
+                _volumeManager.SchedulerMode != SimpleDdgiSchedulerMode.GpuResident ||
+                !gi.EffectiveUseDdgi ||
+                !gi.SimpleDdgiStructuredGatherEnabled ||
+                !gi.EffectiveUseRayQueryBackend ||
+                !_volumeManager.GpuSchedulerFrameExecutionAvailable ||
+                !_volumeManager.GpuScheduler.IsReady ||
+                _volumeManager.ProbeCount <= 0)
+            {
+                return false;
+            }
+
+            if (!_volumeManager.TransportTailAuditPending &&
+                !_volumeManager.TryBeginTransportTailAudit())
+            {
+                return false;
+            }
+
+            return _volumeManager.TryGetTransportTailAuditChunk(out _);
+        }
+
+        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        {
+            if (!_volumeManager.TryGetTransportTailAuditChunk(
+                    out SimpleDdgiTransportAuditChunkDispatch dispatch))
+            {
+                return;
+            }
+
+            SimpleDdgiGpuScheduler scheduler = _volumeManager.GpuScheduler;
+            SimpleDdgiGpuSchedulerLayout layout = scheduler.Layout ??
+                throw new InvalidOperationException("Simple DDGI audit requires a resident scheduler layout.");
+            if (dispatch.ChunkIndex == 0u && dispatch.ProbeOffset == 0)
+                scheduler.ResetTransportAuditSummary(cmd);
+
+            GPUSimpleDdgiTransportAuditPushConstants pushConstants =
+                CreatePushConstants(sceneData, dispatch, layout);
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
+            BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
+            _context.Api.CmdPushConstants(
+                cmd,
+                _pipelineLayout,
+                ShaderStageFlags.ComputeBit,
+                0,
+                (uint)Marshal.SizeOf<GPUSimpleDdgiTransportAuditPushConstants>(),
+                &pushConstants);
+            _context.Api.CmdDispatch(cmd, checked((uint)dispatch.ProbeCount), 1, 1);
+            InsertStorageBarrier(cmd);
+
+            if (!_volumeManager.MarkTransportTailAuditChunkSubmitted(dispatch))
+            {
+                _volumeManager.CancelTransportTailAudit(
+                    SimpleDdgiTransportCertificationReason.GenerationsChanged);
+                return;
+            }
+
+            if (dispatch.IsFinal)
+            {
+                scheduler.RecordTransportAuditReadback(
+                    cmd,
+                    frameIndex,
+                    _volumeManager.FrameSerial,
+                    dispatch.AuditEpoch);
+            }
+        }
+
+        public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
+        {
+            yield break;
+        }
+
+        public override void Cleanup()
+        {
+            if (_pipeline.Handle != 0)
+                _context.Api.DestroyPipeline(_context.Device, _pipeline, null);
+            if (_pipelineLayout.Handle != 0)
+                _context.Api.DestroyPipelineLayout(_context.Device, _pipelineLayout, null);
+            if (_pipelineCache.Handle != 0)
+                _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
+            if (_entryPointName != 0)
+                SilkMarshal.Free(_entryPointName);
+            _pipeline = default;
+            _pipelineLayout = default;
+            _pipelineCache = default;
+        }
+
+        private GPUSimpleDdgiTransportAuditPushConstants CreatePushConstants(
+            SceneRenderingData sceneData,
+            SimpleDdgiTransportAuditChunkDispatch dispatch,
+            SimpleDdgiGpuSchedulerLayout layout)
+        {
+            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+            SimpleDdgiTransportGenerations generations =
+                _volumeManager.GetFrozenTransportTailGenerations();
+            uint flags = 1u;
+            if (_volumeManager.GpuScheduler.IsReady)
+                flags |= 1u << 1;
+
+            return new GPUSimpleDdgiTransportAuditPushConstants
+            {
+                ParamsBufferIndex = BindlessIndex.SimpleDdgiParamsBuffer,
+                IrradianceAtlasBufferIndex = BindlessIndex.SimpleDdgiIrradianceAtlasBuffer,
+                VisibilityAtlasBufferIndex = BindlessIndex.SimpleDdgiVisibilityAtlasBuffer,
+                RayResultScratchBufferIndex = BindlessIndex.SimpleDdgiRayResultScratchBuffer,
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                LightCount = checked((uint)Math.Max(0, sceneData.LightCount)),
+                DirectionalLightCount = checked((uint)Math.Max(0, sceneData.DirectionalLightCount)),
+                LocalLightCount = checked((uint)Math.Max(0, sceneData.LocalLightCount)),
+                MaxShadedLights = checked((uint)Math.Clamp(
+                    sceneData.DdgiEffectiveMaxShadedLights > 0
+                        ? sceneData.DdgiEffectiveMaxShadedLights
+                        : gi.DdgiMaxShadedLights,
+                    0,
+                    64)),
+                EmissiveSourceCount = checked((uint)Math.Max(0, sceneData.DdgiEmissiveSourceCount)),
+                FarFieldParamsBufferIndex = BindlessIndex.FarFieldClipmapParamsBuffer,
+                FarFieldVoxelBufferIndex = BindlessIndex.FarFieldClipmapVoxelBuffer,
+                FarFieldInstanceBufferIndex = BindlessIndex.FarFieldClipmapInstanceBuffer,
+                Flags = flags,
+                MaterialTextureMaxCascade = gi.DdgiMaterialTextureMaxCascade < 0
+                    ? GlobalIlluminationSettings.MaxSimpleDdgiMaterialTextureCascade
+                    : checked((uint)Math.Clamp(
+                        gi.DdgiMaterialTextureMaxCascade,
+                        0,
+                        GlobalIlluminationSettings.MaxSimpleDdgiMaterialTextureCascade - 1)),
+                ProbeStateBufferIndex = BindlessIndex.SimpleDdgiProbeStateBuffer,
+                ProbeUpdateQueueBufferIndex = BindlessIndex.SimpleDdgiProbeUpdateQueueBuffer,
+                RelocationClassificationBufferIndex = BindlessIndex.SimpleDdgiRelocationClassificationBuffer,
+                TransportSourceCacheBufferIndex = BindlessIndex.SimpleDdgiTransportSourceCacheBuffer,
+                TransportReadIrradianceAtlasBufferIndex = BindlessIndex.SimpleDdgiIrradianceAtlasBuffer,
+                TransportWriteIrradianceAtlasBufferIndex = BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer,
+                TransportGeneration = _volumeManager.TransportGeneration,
+                PrimaryDirectionalLightIndex = sceneData.DdgiPrimaryDirectionalLightIndex < 0
+                    ? uint.MaxValue
+                    : checked((uint)sceneData.DdgiPrimaryDirectionalLightIndex),
+                SchedulerArenaBufferIndex = BindlessIndex.SimpleDdgiSchedulerArenaBuffer,
+                SchedulerRayBucketCommandsOffsetWords = layout.RayBucketCommands.OffsetWords,
+                SchedulerRayBucketMetadataOffsetWords = layout.RayBucketMetadata.OffsetWords,
+                SchedulerOutcomesOffsetWords = layout.Outcomes.OffsetWords,
+                SchedulerCountersOffsetWords = layout.Counters.OffsetWords,
+                SchedulerUpdateRecordsOffsetWords = layout.UpdateRecords.OffsetWords,
+                AuditSummaryBufferIndex = BindlessIndex.SimpleDdgiSchedulerArenaBuffer,
+                AuditSummaryBaseWord = layout.AuditSummary.OffsetWords,
+                AuditProbeOffset = checked((uint)dispatch.ProbeOffset),
+                AuditProbeCount = checked((uint)_volumeManager.ProbeCount),
+                AuditExpectedParticipantCount = checked((uint)dispatch.ExpectedParticipantCount),
+                AuditExpectedTexelCount = checked((uint)dispatch.ExpectedTexelCount),
+                AuditChunkIndex = dispatch.ChunkIndex,
+                AuditFlags = dispatch.IsFinal ? 1u : 0u,
+                AuditSchedulerFrameOffsetWords = layout.Frame.OffsetWords,
+                AuditVolumeTableGeneration = generations.VolumeTable,
+                AuditPhysicalOwnershipGeneration = generations.PhysicalOwnership,
+                AuditSourceLightingGeneration = generations.SourceLighting,
+                AuditSourceEpochGeneration = generations.SourceEpoch,
+                AuditTransportOperatorGeneration = generations.TransportOperator,
+                AuditCanonicalFieldGeneration = generations.CanonicalField,
+                AuditSolveGeneration = generations.Solve,
+                AuditEpochGeneration = generations.Audit,
+                AuditQueueGeneration = generations.Queue,
+                AuditSchedulerResourceGeneration = generations.SchedulerResources,
+                AuditSchedulerProbeStateOffsetWords = layout.ProbeState.OffsetWords,
+                AuditSolveEpoch = _volumeManager.TransportTailSolveEpoch
+            };
+        }
+
+        private void InsertStorageBarrier(CommandBuffer cmd)
+        {
+            var memoryBarrier = new MemoryBarrier2
+            {
+                SType = StructureType.MemoryBarrier2,
+                SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
+                SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
+                DstStageMask = PipelineStageFlags2.ComputeShaderBit |
+                               PipelineStageFlags2.TransferBit,
+                DstAccessMask = AccessFlags2.ShaderStorageReadBit |
+                                AccessFlags2.TransferReadBit
+            };
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                MemoryBarrierCount = 1,
+                PMemoryBarriers = &memoryBarrier
+            };
+            _context.Api.CmdPipelineBarrier2(cmd, &dependencyInfo);
+        }
+
+        private void CreatePipelineCache()
+        {
+            var cacheInfo = new PipelineCacheCreateInfo { SType = StructureType.PipelineCacheCreateInfo };
+            Result result = _context.Api.CreatePipelineCache(
+                _context.Device,
+                &cacheInfo,
+                null,
+                out _pipelineCache);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create Simple DDGI transport audit pipeline cache", result);
+        }
+
+        private void CreatePipelineLayout()
+        {
+            _setLayouts =
+            [
+                _bindlessHeap.StorageBufferSetLayout,
+                _bindlessHeap.TextureSamplerSetLayout
+            ];
+            fixed (DescriptorSetLayout* layouts = _setLayouts)
+            {
+                var pushRange = new PushConstantRange
+                {
+                    StageFlags = ShaderStageFlags.ComputeBit,
+                    Offset = 0,
+                    Size = (uint)Marshal.SizeOf<GPUSimpleDdgiTransportAuditPushConstants>()
+                };
+                var layoutInfo = new PipelineLayoutCreateInfo
+                {
+                    SType = StructureType.PipelineLayoutCreateInfo,
+                    SetLayoutCount = (uint)_setLayouts.Length,
+                    PSetLayouts = layouts,
+                    PushConstantRangeCount = 1,
+                    PPushConstantRanges = &pushRange
+                };
+                Result result = _context.Api.CreatePipelineLayout(
+                    _context.Device,
+                    &layoutInfo,
+                    null,
+                    out _pipelineLayout);
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to create Simple DDGI transport audit pipeline layout", result);
+            }
+        }
+
+        private VkPipeline CreatePipeline()
+        {
+            ShaderModule shaderModule = default;
+            try
+            {
+                shaderModule = ShaderModuleLoader.Load(
+                    _context,
+                    "ddgi_simple_transport_audit.comp.spv");
+                var stage = new PipelineShaderStageCreateInfo
+                {
+                    SType = StructureType.PipelineShaderStageCreateInfo,
+                    Stage = ShaderStageFlags.ComputeBit,
+                    Module = shaderModule,
+                    PName = (byte*)_entryPointName
+                };
+                var pipelineInfo = new ComputePipelineCreateInfo
+                {
+                    SType = StructureType.ComputePipelineCreateInfo,
+                    Stage = stage,
+                    Layout = _pipelineLayout,
+                    BasePipelineIndex = -1
+                };
+                Result result = _context.Api.CreateComputePipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1,
+                    &pipelineInfo,
+                    null,
+                    out VkPipeline pipeline);
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to create Simple DDGI transport audit pipeline", result);
+                return pipeline;
+            }
+            finally
+            {
+                if (shaderModule.Handle != 0)
+                    _context.Api.DestroyShaderModule(_context.Device, shaderModule, null);
+            }
+        }
+    }
+
+    /// <summary>
     /// Publishes the completed private Jacobi target directly from the GPU-visible
     /// update queue. The optional filtered image mirror is dual-written by a
     /// second compute dispatch; neither path needs CPU sorting or copy regions.
@@ -375,6 +718,8 @@ namespace Njulf.Rendering.Pipeline
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+            if (_volumeManager.TransportTailAuditPending)
+                return false;
             if (_volumeManager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident)
             {
                 return _canonicalPipeline.Handle != 0 &&
@@ -828,6 +1173,8 @@ namespace Njulf.Rendering.Pipeline
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             if (_pipeline.Handle == 0)
+                return false;
+            if (VolumeManager.TransportTailAuditPending)
                 return false;
             if (IsGpuResidentMode && !VolumeManager.GpuSchedulerFrameExecutionAvailable)
                 return false;

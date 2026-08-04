@@ -186,6 +186,7 @@ void main()
         SchedulerArenaWrite(stateBase + 1u, SchedulerFrameIndex());
         SchedulerArenaWrite(stateBase + 2u, sourceGeneration);
         SchedulerArenaWrite(stateBase + 7u, min(sourceRayCount, 0x1ffu));
+        SchedulerArenaWrite(stateBase + 9u, 0u);
     }
     else if (SchedulerTransportV2())
     {
@@ -207,6 +208,8 @@ void main()
             sourceRays |
             (previousTransportGeneration << SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_SHIFT) |
             (stableUpdates << SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_SHIFT));
+        if (SchedulerTailCertification() && SchedulerSolveEpoch() != 0u)
+            SchedulerArenaWrite(stateBase + 9u, SchedulerSolveEpoch());
     }
     SchedulerArenaWrite(stateBase + 3u, SchedulerFrame(31u));
     SchedulerArenaWrite(stateBase + 4u, SchedulerVolumeGeneration());
@@ -242,4 +245,10 @@ void main()
     SchedulerArenaAtomicAdd(
         pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_COMMITTED,
         1u);
+    if (SchedulerGpuResident())
+    {
+        SchedulerArenaAtomicAdd(
+            pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_PUBLISHED,
+            1u);
+    }
 }

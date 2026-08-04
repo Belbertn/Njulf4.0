@@ -58,6 +58,7 @@ const uint SIMPLE_DDGI_SCHEDULER_COMPLETE_CANONICAL_PUBLISH = 1u << 5u;
 const uint SIMPLE_DDGI_SCHEDULER_COMPLETE_SAMPLED_PUBLISH = 1u << 6u;
 const uint SIMPLE_DDGI_SCHEDULER_SAMPLED_PUBLISH_NOT_REQUIRED = 1u << 7u;
 const uint SIMPLE_DDGI_SCHEDULER_FEATURE_SAMPLED_PUBLICATION = 1u << 8u;
+const uint SIMPLE_DDGI_SCHEDULER_FEATURE_TAIL_CERTIFICATION = 1u << 9u;
 
 const uint SIMPLE_DDGI_SCHEDULER_FAILURE_INVALID_GENERATION = 1u << 0u;
 const uint SIMPLE_DDGI_SCHEDULER_FAILURE_PRODUCER = 1u << 1u;
@@ -153,6 +154,10 @@ const uint SIMPLE_DDGI_SCHEDULER_COUNTER_REJECTED = 4u;
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_INVALID_GENERATION = 5u;
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_OVERFLOW = 6u;
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_COMPACTED = 8u;
+// A committed resident transaction has copied the private transport atlas to
+// the receiver-visible canonical atlas. This witness is distinct from the
+// generic commit count, which also includes source-only lifecycle commits.
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_PUBLISHED = 7u;
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_PRIMARY_USED = 9u;
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_SOURCE_USED = 10u;
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_BUCKET_BASE = 20u;
@@ -263,6 +268,10 @@ bool SchedulerClassificationEnabled() { return (SchedulerFeatureFlags() & 128u) 
 bool SchedulerSampledPublicationRequired() {
     return (SchedulerFeatureFlags() & SIMPLE_DDGI_SCHEDULER_FEATURE_SAMPLED_PUBLICATION) != 0u;
 }
+bool SchedulerTailCertification() {
+    return (SchedulerFeatureFlags() & SIMPLE_DDGI_SCHEDULER_FEATURE_TAIL_CERTIFICATION) != 0u;
+}
+uint SchedulerSolveEpoch() { return SchedulerFrame(19u); }
 
 uint SchedulerLaneIndex(
     uint volume,

@@ -1,0 +1,108 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "ddgi_simple_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform SimpleDdgiPushBlock
+{
+    uint ParamsBufferIndex;
+    uint IrradianceAtlasBufferIndex;
+    uint VisibilityAtlasBufferIndex;
+    uint RayResultScratchBufferIndex;
+    uint CurrentFrameIndex;
+    uint LightCount;
+    uint DirectionalLightCount;
+    uint LocalLightCount;
+    uint MaxShadedLights;
+    uint EmissiveSourceCount;
+    uint FarFieldParamsBufferIndex;
+    uint FarFieldVoxelBufferIndex;
+    uint FarFieldInstanceBufferIndex;
+    uint Flags;
+    uint MaterialTextureMaxCascade;
+    uint ProbeStateBufferIndex;
+    uint ProbeUpdateQueueBufferIndex;
+    uint RelocationClassificationBufferIndex;
+    uint TransportSourceCacheBufferIndex;
+    uint TransportReadIrradianceAtlasBufferIndex;
+    uint TransportWriteIrradianceAtlasBufferIndex;
+    uint PrivateVisibilityAtlasOffsetWords;
+    uint TransportGeneration;
+    uint PrimaryDirectionalLightIndex;
+    uint DispatchQueueOffset;
+    uint DispatchProbeCount;
+    uint DispatchRaysPerProbe;
+    uint SchedulerArenaBufferIndex;
+    uint SchedulerRayBucketIndex;
+    uint SchedulerRayBucketCommandsOffsetWords;
+    uint SchedulerRayBucketMetadataOffsetWords;
+    uint SchedulerOutcomesOffsetWords;
+    uint SchedulerCountersOffsetWords;
+    uint SchedulerUpdateRecordsOffsetWords;
+} pc;
+
+void main()
+{
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    bool gpuScheduler = SimpleDdgiGpuSchedulerActive(pc.SchedulerArenaBufferIndex);
+    uint requestCount = gpuScheduler
+        ? SimpleDdgiSchedulerAcceptedCount(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerCountersOffsetWords)
+        : params.probesToUpdate;
+    uint queueOffset = gl_WorkGroupID.x;
+    if (queueOffset >= requestCount || params.probeCount == 0u)
+        return;
+
+    SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(
+        pc.ProbeUpdateQueueBufferIndex,
+        queueOffset);
+    if (update.probeIndex >= params.probeCount)
+        return;
+
+    SimpleDdgiProbeState state = ReadSimpleDdgiProbeState(
+        pc.ProbeStateBufferIndex,
+        update.probeIndex);
+    if (!SimpleDdgiUpdateMatchesProbeGeneration(update, state))
+        return;
+
+    SimpleDdgiVolume volume;
+    uint localProbeIndex;
+    if (!ResolveSimpleDdgiProbeVolume(
+            update.probeIndex,
+            params,
+            volume,
+            localProbeIndex) ||
+        !SimpleDdgiSolveVolumeMatches(
+            pc.Flags,
+            update.volumeIndex,
+            pc.PrimaryDirectionalLightIndex) ||
+        !SimpleDdgiSolveColorMatches(pc.Flags, volume, localProbeIndex))
+    {
+        return;
+    }
+
+    uint texelCount = min(
+        params.irradianceTexels * params.irradianceTexels,
+        64u);
+    for (uint texel = gl_LocalInvocationID.x;
+         texel < texelCount;
+         texel += gl_WorkGroupSize.x)
+    {
+        vec4 value = ReadSimpleDdgiAtlasTexel(
+            pc.TransportWriteIrradianceAtlasBufferIndex,
+            update.probeIndex,
+            texel,
+            params.irradianceTexels);
+        WriteSimpleDdgiAtlasTexel(
+            pc.IrradianceAtlasBufferIndex,
+            update.probeIndex,
+            texel,
+            params.irradianceTexels,
+            value);
+    }
+}

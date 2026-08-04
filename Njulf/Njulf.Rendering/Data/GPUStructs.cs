@@ -1259,8 +1259,8 @@ namespace Njulf.Rendering.Data
         // X/Y/Z/W = published irradiance atlas, private transport target,
         // persistent source-cache bindless indices, transport generation.
         public Vector4 TransportAndAtlasIndices;
-        // X = Jacobi relaxation, Y = diffuse-albedo clamp, Z = convergence
-        // residual threshold, W = maximum solver generations per source sample.
+        // X = solver relaxation, Y = diffuse-albedo clamp, Z = tail-relative
+        // tolerance, W = bounded cached accelerated sweep count.
         public Vector4 TransportControls;
     }
 
@@ -1286,9 +1286,12 @@ namespace Njulf.Rendering.Data
         public Vector4 DirectionHitFlags;
     }
 
-    // 36 bytes. Persistent source transport cache.  A cache entry represents one
+    // 36 bytes. Persistent source transport cache. A cache entry represents one
     // physical probe slot and one deterministic ray direction, so direct/sky/
     // emissive source tracing can be reused across multiple bounce iterations.
+    // The high byte of PackedTransmission stores the complete source sequence
+    // cardinality; zero encodes the supported maximum of 256 and its RGB bytes
+    // remain the packed transmission lobe.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiTransportRayCache
     {
@@ -1446,6 +1449,104 @@ namespace Njulf.Rendering.Data
         public uint SchedulerOutcomesOffsetWords;
         public uint SchedulerCountersOffsetWords;
         public uint SchedulerUpdateRecordsOffsetWords;
+    }
+
+    /// <summary>
+    /// Audit-only push constants. The first 136 bytes intentionally mirror
+    /// <see cref="GPUSimpleDdgiPushConstants"/>; the trailing fields select a
+    /// chunk of the frozen participant list and the compact atomic summary.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiTransportAuditPushConstants
+    {
+        public uint ParamsBufferIndex;
+        public uint IrradianceAtlasBufferIndex;
+        public uint VisibilityAtlasBufferIndex;
+        public uint RayResultScratchBufferIndex;
+        public uint CurrentFrameIndex;
+        public uint LightCount;
+        public uint DirectionalLightCount;
+        public uint LocalLightCount;
+        public uint MaxShadedLights;
+        public uint EmissiveSourceCount;
+        public uint FarFieldParamsBufferIndex;
+        public uint FarFieldVoxelBufferIndex;
+        public uint FarFieldInstanceBufferIndex;
+        public uint Flags;
+        public uint MaterialTextureMaxCascade;
+        public uint ProbeStateBufferIndex;
+        public uint ProbeUpdateQueueBufferIndex;
+        public uint RelocationClassificationBufferIndex;
+        public uint TransportSourceCacheBufferIndex;
+        public uint TransportReadIrradianceAtlasBufferIndex;
+        public uint TransportWriteIrradianceAtlasBufferIndex;
+        public uint PrivateVisibilityAtlasOffsetWords;
+        public uint TransportGeneration;
+        public uint PrimaryDirectionalLightIndex;
+        public uint DispatchQueueOffset;
+        public uint DispatchProbeCount;
+        public uint DispatchRaysPerProbe;
+        public uint SchedulerArenaBufferIndex;
+        public uint SchedulerRayBucketIndex;
+        public uint SchedulerRayBucketCommandsOffsetWords;
+        public uint SchedulerRayBucketMetadataOffsetWords;
+        public uint SchedulerOutcomesOffsetWords;
+        public uint SchedulerCountersOffsetWords;
+        public uint SchedulerUpdateRecordsOffsetWords;
+        public uint AuditSummaryBufferIndex;
+        public uint AuditSummaryBaseWord;
+        public uint AuditProbeOffset;
+        public uint AuditProbeCount;
+        public uint AuditExpectedParticipantCount;
+        public uint AuditExpectedTexelCount;
+        public uint AuditChunkIndex;
+        public uint AuditFlags;
+        public uint AuditSchedulerFrameOffsetWords;
+        public uint AuditVolumeTableGeneration;
+        public uint AuditPhysicalOwnershipGeneration;
+        public uint AuditSourceLightingGeneration;
+        public uint AuditSourceEpochGeneration;
+        public uint AuditTransportOperatorGeneration;
+        public uint AuditCanonicalFieldGeneration;
+        public uint AuditSolveGeneration;
+        public uint AuditEpochGeneration;
+        public uint AuditQueueGeneration;
+        public uint AuditSchedulerResourceGeneration;
+        public uint AuditSchedulerProbeStateOffsetWords;
+        public uint AuditSolveEpoch;
+    }
+
+    /// <summary>
+    /// The first words of the GPU-resident audit reduction. Float values are
+    /// stored as uint bit patterns because the shader uses atomicMax on the
+    /// non-negative FP32 domain. The scheduler arena reserves 1 KiB around
+    /// this header for future checked counters without changing this ABI.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiTransportAuditSummary
+    {
+        public uint FixedPointDefectBits;
+        public uint FieldMagnitudeBits;
+        public uint ExpectedParticipantCount;
+        public uint AuditedParticipantCount;
+        public uint ExpectedTexelCount;
+        public uint AuditedTexelCount;
+        public uint NonFiniteCount;
+        public uint InvalidCacheCount;
+        public uint LastChunkIndex;
+        public uint ObservedContractionBits;
+        // Maximum half-storage rounding interval observed in the frozen
+        // canonical field. The audit keeps this separate from D so the host
+        // can report a quantization-limited certificate instead of silently
+        // loosening the authored tail tolerance.
+        public uint CanonicalQuantizationFloorBits;
+        public uint ExcludedInactiveCount;
+        public uint ExcludedNotVisibleCount;
+        public uint ExcludedStaleSourceCount;
+        // Set when any checked audit counter would have wrapped. The host
+        // rejects the summary even if the wrapped value happens to match the
+        // expected population.
+        public uint CounterOverflow;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1709,14 +1810,19 @@ namespace Njulf.Rendering.Data
         public uint VisiblePriorityParticipatingProbeCount;
         public uint VisiblePrioritySourceReadyProbeCount;
         public uint VisiblePriorityPublishedProbeCount;
-        public uint Reserved0;
-        public uint Reserved1;
-        public uint Reserved2;
+        // GPU-resident tail-certification witness. These occupy the existing
+        // feedback words so the fixed 256-byte header and all V1/V2 offsets
+        // remain unchanged.
+        public uint SolveEpochParticipantCount;
+        public uint SolveEpochVisitedCount;
+        public uint SolveEpoch;
         // Accepted-order index into the scheduler outcome array. The public
         // queue ABI keeps this word even in CPU/V1 mode so all consumers share
         // one 32-byte record layout.
         public uint OutcomeIndex;
-        public uint Reserved4;
+        // Number of resident transactions that copied the private transport
+        // atlas to the receiver-visible canonical atlas this frame.
+        public uint PublishedCount;
     }
 
     // Kept below the common 128-byte Vulkan minimum push-constant range. The

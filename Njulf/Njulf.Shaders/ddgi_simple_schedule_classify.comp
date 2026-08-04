@@ -194,6 +194,7 @@ void main()
         (packedTransport & SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_MASK) >>
         SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_SHIFT;
     bool solverConverged = SchedulerTransportV2() && sourceReady &&
+        !SchedulerTailCertification() &&
         completedTransportGeneration == (SchedulerTransportGeneration() & 0xffu) &&
         stableUpdates >= max(SchedulerFrame(30u), 1u) &&
         !isnan(residualEnvelope) && !isinf(residualEnvelope) &&

@@ -828,6 +828,12 @@ namespace Njulf.Rendering.Data
         public ulong SimpleDdgiTransportSourceCacheBytes { get; set; }
         public float SimpleDdgiTransportSolverRelaxation { get; set; }
         public float SimpleDdgiTransportAlbedoClamp { get; set; }
+        public float SimpleDdgiTransportTailRelativeTolerance { get; set; }
+        public int SimpleDdgiTransportAcceleratedSweepCount { get; set; }
+        public bool SimpleDdgiTransportAccelerationEnabled { get; set; }
+        public bool SimpleDdgiTransportTailCertificationEnabled { get; set; }
+        // Legacy diagnostic aliases. They are populated from the new settings
+        // for capture compatibility, but do not control V2 convergence.
         public float SimpleDdgiTransportResidualThreshold { get; set; }
         public int SimpleDdgiTransportMaximumSolverGenerations { get; set; }
         public int SimpleDdgiTransportSourceRefreshFrames { get; set; }
@@ -1057,7 +1063,9 @@ namespace Njulf.Rendering.Data
         public long GpuSimpleDdgiTraceMicroseconds { get; set; }
         public long GpuSimpleDdgiScheduleMicroseconds { get; set; }
         public long GpuSimpleDdgiTransportMicroseconds { get; set; }
+        public long GpuSimpleDdgiAcceleratedSolveMicroseconds { get; set; }
         public long GpuSimpleDdgiBlendMicroseconds { get; set; }
+        public long GpuSimpleDdgiTransportAuditMicroseconds { get; set; }
         public long GpuSimpleDdgiCommitMicroseconds { get; set; }
         public long GpuFarFieldUpdateMicroseconds { get; set; }
         public int GpuFarFieldUpdateTimingValid { get; set; }
@@ -1976,6 +1984,10 @@ namespace Njulf.Rendering.Data
             SimpleDdgiTransportSourceCacheBytes = 0;
             SimpleDdgiTransportSolverRelaxation = 0;
             SimpleDdgiTransportAlbedoClamp = 0;
+            SimpleDdgiTransportTailRelativeTolerance = 0;
+            SimpleDdgiTransportAcceleratedSweepCount = 0;
+            SimpleDdgiTransportAccelerationEnabled = false;
+            SimpleDdgiTransportTailCertificationEnabled = false;
             SimpleDdgiTransportResidualThreshold = 0;
             SimpleDdgiTransportMaximumSolverGenerations = 0;
             SimpleDdgiTransportSourceRefreshFrames = 0;
@@ -2199,7 +2211,9 @@ namespace Njulf.Rendering.Data
             GpuSimpleDdgiTraceMicroseconds = 0;
             GpuSimpleDdgiScheduleMicroseconds = 0;
             GpuSimpleDdgiTransportMicroseconds = 0;
+            GpuSimpleDdgiAcceleratedSolveMicroseconds = 0;
             GpuSimpleDdgiBlendMicroseconds = 0;
+            GpuSimpleDdgiTransportAuditMicroseconds = 0;
             GpuSimpleDdgiCommitMicroseconds = 0;
             GpuFarFieldUpdateMicroseconds = 0;
             GpuFarFieldUpdateTimingValid = 0;

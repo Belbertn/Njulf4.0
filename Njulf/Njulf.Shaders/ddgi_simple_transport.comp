@@ -11,6 +11,7 @@
 // octahedral samples; ddgi_simple_shared.glsl retains the canonical SSBO path at
 // seams and whenever the optional mirror is unavailable.
 #include "ddgi_simple_shared.glsl"
+#include "ddgi_simple_transport_operator.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -144,6 +145,11 @@ void main()
             1u << 2u);
         return;
     }
+    if (!SimpleDdgiSolveVolumeMatches(
+            pc.Flags,
+            update.volumeIndex,
+            pc.PrimaryDirectionalLightIndex))
+        return;
     SimpleDdgiProbeState probeState = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, update.probeIndex);
     if (!SimpleDdgiUpdateMatchesProbeGeneration(update, probeState))
     {
@@ -154,6 +160,8 @@ void main()
             1u << 0u);
         return;
     }
+    if (!SimpleDdgiSolveColorMatches(pc.Flags, volume, localProbeIndex))
+        return;
 
     uint sourceRayCount = SimpleDdgiUpdateSourceRayCount(update, params);
     uint sourceRayOrdinal = min(
@@ -210,89 +218,46 @@ void main()
             sourceVisibilityHit.x,
             sourceDirectionHit.xyz,
             sourceVisibilityHit.y);
-        SimpleDdgiSchedulerRayComplete(
-            pc.SchedulerArenaBufferIndex,
-            pc.SchedulerOutcomesOffsetWords,
-            update.outcomeIndex,
-            activeRayCount,
-            1u << 2u);
+        if (SimpleDdgiSolveIsFinalColor(pc.Flags))
+            SimpleDdgiSchedulerRayComplete(
+                pc.SchedulerArenaBufferIndex,
+                pc.SchedulerOutcomesOffsetWords,
+                update.outcomeIndex,
+                activeRayCount,
+                1u << 2u);
         return;
     }
 
-    float hitKind = SimpleDdgiTransportRayCacheHitKind(source);
+    vec3 reflectedBounceRadiance;
+    vec3 transmittedBounceRadiance;
+    uint solverGatherCount;
+    float solverOwnershipSum;
+    float solverFallbackWeightSum;
+    bool malformedOperatorInput;
+    float enforcedThroughput;
+    vec3 bounceRadiance = EvaluateSimpleDdgiCachedRecursiveBounce(
+        params,
+        volume,
+        localProbeIndex,
+        probeState,
+        source,
+        reflectedBounceRadiance,
+        transmittedBounceRadiance,
+        solverGatherCount,
+        solverOwnershipSum,
+        solverFallbackWeightSum,
+        malformedOperatorInput,
+        enforcedThroughput);
     vec3 totalRadiance = source.sourceRadiance;
-    vec3 bounceRadiance = vec3(0.0);
-    vec3 reflectedBounceRadiance = vec3(0.0);
-    vec3 transmittedBounceRadiance = vec3(0.0);
-    uint solverGatherCount = 0u;
-    float solverOwnershipSum = 0.0;
-    float solverFallbackWeightSum = 0.0;
-    bool bounceableSurface = hitKind >= 0.5 &&
-        !SimpleDdgiRayHitKindIsOneSidedBackFace(hitKind);
-    if (bounceableSurface)
+    totalRadiance += bounceRadiance;
+    if (malformedOperatorInput)
     {
-        vec3 probePosition = SimpleDdgiProbeLogicalPosition(volume, localProbeIndex) + probeState.relocation;
-        vec3 canonicalNormal = length(source.normal) > 0.00001 ? normalize(source.normal) : vec3(0.0, 1.0, 0.0);
-        vec3 normal = hitKind > 1.5 ? -canonicalNormal : canonicalNormal;
-        vec3 diffuseReflectance = clamp(
-            source.diffuseReflectance,
-            vec3(0.0),
-            vec3(params.transportAlbedoClamp));
-        float reflectedReflectanceMaximum = max(
-            diffuseReflectance.r,
-            max(diffuseReflectance.g, diffuseReflectance.b));
-        vec3 hitPosition = probePosition + source.direction * source.distance;
-        // A mathematically black lobe cannot return recursive energy. Avoid a
-        // complete structured gather in that case; this is an exact zero rather
-        // than an albedo threshold, so dark-but-nonzero materials retain their
-        // full transport contribution.
-        if (reflectedReflectanceMaximum > 0.0)
-        {
-            float reflectedSolverOwnership;
-            float reflectedFallbackWeight;
-            vec3 bouncedIrradiance = SampleSimpleDdgiSolverBounceIrradiance(
-                params,
-                hitPosition + normal * max(0.03, volume.spacing * 0.02),
-                normal,
-                -source.direction,
-                reflectedSolverOwnership,
-                reflectedFallbackWeight);
-            solverGatherCount++;
-            solverOwnershipSum += reflectedSolverOwnership;
-            solverFallbackWeightSum += reflectedFallbackWeight;
-            // Material AO is a receiver-side approximation. Geometry visibility is
-            // already present in the traced field, so applying baked AO at every
-            // recursive surface double-counts occlusion and compounds energy loss.
-            reflectedBounceRadiance = EvaluateGiDiffuseFromIrradiance(
-                bouncedIrradiance,
-                diffuseReflectance);
-        }
-        vec3 transmittedReflectance = clamp(
-            source.transmittedDiffuseReflectance,
-            vec3(0.0),
-            vec3(params.transportAlbedoClamp));
-        if ((params.flags & SIMPLE_DDGI_FLAG_THIN_SURFACE_TRANSMISSION) == 0u)
-            transmittedReflectance = vec3(0.0);
-        if (max(transmittedReflectance.r, max(transmittedReflectance.g, transmittedReflectance.b)) > 0.0)
-        {
-            float transmittedSolverOwnership;
-            float transmittedFallbackWeight;
-            vec3 transmittedIrradiance = SampleSimpleDdgiSolverBounceIrradiance(
-                params,
-                hitPosition - normal * max(0.03, volume.spacing * 0.02),
-                -normal,
-                source.direction,
-                transmittedSolverOwnership,
-                transmittedFallbackWeight);
-            solverGatherCount++;
-            solverOwnershipSum += transmittedSolverOwnership;
-            solverFallbackWeightSum += transmittedFallbackWeight;
-            transmittedBounceRadiance = EvaluateGiDiffuseFromIrradiance(
-                transmittedIrradiance,
-                transmittedReflectance);
-        }
-        bounceRadiance = reflectedBounceRadiance + transmittedBounceRadiance;
-        totalRadiance += bounceRadiance;
+        // A malformed operator input is a source-cache repair condition.  Do
+        // not let a zeroed recursive term become a seemingly valid certificate
+        // while the cache metadata still claims that this probe is current.
+        MarkSimpleDdgiProbeSourceCacheInvalid(pc.ProbeStateBufferIndex, update.probeIndex);
+        bounceRadiance = vec3(0.0);
+        totalRadiance = source.sourceRadiance;
     }
 
     if ((params.flags & SIMPLE_DDGI_FLAG_DETAILED_DIAGNOSTICS_ENABLED) != 0u &&
@@ -340,10 +305,11 @@ void main()
         visibilityHit.x,
         source.direction,
         visibilityHit.y);
-    SimpleDdgiSchedulerRayComplete(
-        pc.SchedulerArenaBufferIndex,
-        pc.SchedulerOutcomesOffsetWords,
-        update.outcomeIndex,
-        activeRayCount,
-        1u << 2u);
+    if (SimpleDdgiSolveIsFinalColor(pc.Flags))
+        SimpleDdgiSchedulerRayComplete(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            activeRayCount,
+            1u << 2u);
 }

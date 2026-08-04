@@ -1851,7 +1851,10 @@ namespace Njulf.Rendering.Data
         private float _simpleDdgiStableMaintenanceEmaThreshold = 0.03f;
         private float _simpleDdgiTransportSolverRelaxation = 0.70f;
         private float _simpleDdgiTransportAlbedoClamp = 0.95f;
-        private float _simpleDdgiTransportResidualThreshold = 0.025f;
+        private float _simpleDdgiTransportTailRelativeTolerance = 0.025f;
+        private int _simpleDdgiTransportAcceleratedSweepCount = 2;
+        private bool _simpleDdgiTransportAccelerationEnabled = true;
+        private bool _simpleDdgiTransportTailCertificationEnabled = true;
         private int _simpleDdgiTransportMaximumSolverGenerations = 8;
         // A routine source refresh starts a bounded transport propagation wave.
         // Keep the default comfortably above the worst-case eight-generation
@@ -2546,13 +2549,54 @@ namespace Njulf.Rendering.Data
         }
 
         /// <summary>
-        /// Relative luminance residual below which a cached probe can wait for a
-        /// periodic source refresh instead of continuously consuming solver work.
+        /// Relative complete-field tail tolerance for the certified V2
+        /// transport operator. The absolute floor is fixed at 0.0001.
         /// </summary>
+        public float SimpleDdgiTransportTailRelativeTolerance
+        {
+            get => _simpleDdgiTransportTailRelativeTolerance;
+            set => _simpleDdgiTransportTailRelativeTolerance = float.IsFinite(value)
+                ? Clamp(value, 0.0f, 1.0f)
+                : 0.025f;
+        }
+
+        /// <summary>
+        /// Number of deterministic cached-source sweeps in a production solve
+        /// epoch. Source rays are never retraced for these sweeps.
+        /// </summary>
+        public int SimpleDdgiTransportAcceleratedSweepCount
+        {
+            get => _simpleDdgiTransportAcceleratedSweepCount;
+            set => _simpleDdgiTransportAcceleratedSweepCount = Clamp(value, 1, 4);
+        }
+
+        /// <summary>Enables red-black accelerated cached-source transport sweeps.</summary>
+        public bool SimpleDdgiTransportAccelerationEnabled
+        {
+            get => _simpleDdgiTransportAccelerationEnabled;
+            set => _simpleDdgiTransportAccelerationEnabled = value;
+        }
+
+        /// <summary>
+        /// Requires a generation-frozen complete-field audit before V2 reports
+        /// convergence. Disabling it is an explicit diagnostics/rollback mode.
+        /// </summary>
+        public bool SimpleDdgiTransportTailCertificationEnabled
+        {
+            get => _simpleDdgiTransportTailCertificationEnabled;
+            set => _simpleDdgiTransportTailCertificationEnabled = value;
+        }
+
+        /// <summary>
+        /// Legacy alias retained for source compatibility and migration. It is
+        /// no longer a local residual gate; it maps directly to the complete
+        /// field tail tolerance.
+        /// </summary>
+        [Obsolete("Use SimpleDdgiTransportTailRelativeTolerance. This alias is not a convergence gate.")]
         public float SimpleDdgiTransportResidualThreshold
         {
-            get => _simpleDdgiTransportResidualThreshold;
-            set => _simpleDdgiTransportResidualThreshold = Clamp(value, 0.001f, 1.0f);
+            get => SimpleDdgiTransportTailRelativeTolerance;
+            set => SimpleDdgiTransportTailRelativeTolerance = value;
         }
 
         /// <summary>
@@ -2842,7 +2886,10 @@ namespace Njulf.Rendering.Data
             SimpleDdgiAutomaticProbeDensityEnabled = true;
             SimpleDdgiTransportSolverRelaxation = 0.70f;
             SimpleDdgiTransportAlbedoClamp = 0.95f;
-            SimpleDdgiTransportResidualThreshold = 0.025f;
+            SimpleDdgiTransportTailRelativeTolerance = 0.025f;
+            SimpleDdgiTransportAcceleratedSweepCount = 2;
+            SimpleDdgiTransportAccelerationEnabled = true;
+            SimpleDdgiTransportTailCertificationEnabled = true;
             SimpleDdgiTransportMaximumSolverGenerations = 8;
             SimpleDdgiVerticalRingPolicy = SimpleDdgiVerticalRingPolicy.CameraRelativeWithHysteresis;
             SimpleDdgiVerticalRecenterHysteresisFraction = 0.25f;
@@ -4402,8 +4449,13 @@ namespace Njulf.Rendering.Data
             public float SimpleDdgiStableMaintenanceEmaThreshold { get; init; } = 0.03f;
             public float SimpleDdgiTransportSolverRelaxation { get; init; } = 0.70f;
             public float SimpleDdgiTransportAlbedoClamp { get; init; } = 0.95f;
-            public float SimpleDdgiTransportResidualThreshold { get; init; } = 0.025f;
-            public int SimpleDdgiTransportMaximumSolverGenerations { get; init; } = 8;
+            public float? SimpleDdgiTransportTailRelativeTolerance { get; init; }
+            public int? SimpleDdgiTransportAcceleratedSweepCount { get; init; }
+            public bool? SimpleDdgiTransportAccelerationEnabled { get; init; }
+            public bool? SimpleDdgiTransportTailCertificationEnabled { get; init; }
+            // These two names are deliberately ignored on write. Unknown legacy
+            // fields are retained in ExtensionData and read by ApplyTo below so
+            // old files migrate without keeping obsolete authority in new files.
             public int SimpleDdgiTransportSourceRefreshFrames { get; init; } = 600;
             public float SimpleDdgiAutomaticProbeDensityScale { get; init; } = 0.70f;
             // These are spacing-relative authoring controls used by the shared
@@ -4450,6 +4502,9 @@ namespace Njulf.Rendering.Data
             public float NormalRejectionThreshold { get; init; } = 0.85f;
             public float DepthRejectionThreshold { get; init; } = 0.08f;
             public float LeakClampStrength { get; init; } = 0.75f;
+
+            [JsonExtensionData]
+            public Dictionary<string, JsonElement>? ExtensionData { get; init; }
 
             public static GlobalIlluminationFile FromSettings(GlobalIlluminationSettings settings)
             {
@@ -4542,8 +4597,10 @@ namespace Njulf.Rendering.Data
                     SimpleDdgiStableMaintenanceEmaThreshold = settings.SimpleDdgiStableMaintenanceEmaThreshold,
                     SimpleDdgiTransportSolverRelaxation = settings.SimpleDdgiTransportSolverRelaxation,
                     SimpleDdgiTransportAlbedoClamp = settings.SimpleDdgiTransportAlbedoClamp,
-                    SimpleDdgiTransportResidualThreshold = settings.SimpleDdgiTransportResidualThreshold,
-                    SimpleDdgiTransportMaximumSolverGenerations = settings.SimpleDdgiTransportMaximumSolverGenerations,
+                    SimpleDdgiTransportTailRelativeTolerance = settings.SimpleDdgiTransportTailRelativeTolerance,
+                    SimpleDdgiTransportAcceleratedSweepCount = settings.SimpleDdgiTransportAcceleratedSweepCount,
+                    SimpleDdgiTransportAccelerationEnabled = settings.SimpleDdgiTransportAccelerationEnabled,
+                    SimpleDdgiTransportTailCertificationEnabled = settings.SimpleDdgiTransportTailCertificationEnabled,
                     SimpleDdgiTransportSourceRefreshFrames = settings.SimpleDdgiTransportSourceRefreshFrames,
                     SimpleDdgiAutomaticProbeDensityScale = settings.SimpleDdgiAutomaticProbeDensityScale,
                     SimpleDdgiNormalBias = settings.SimpleDdgiNormalBias,
@@ -4689,8 +4746,27 @@ namespace Njulf.Rendering.Data
                 settings.SimpleDdgiStableMaintenanceEmaThreshold = SimpleDdgiStableMaintenanceEmaThreshold;
                 settings.SimpleDdgiTransportSolverRelaxation = SimpleDdgiTransportSolverRelaxation;
                 settings.SimpleDdgiTransportAlbedoClamp = SimpleDdgiTransportAlbedoClamp;
-                settings.SimpleDdgiTransportResidualThreshold = SimpleDdgiTransportResidualThreshold;
-                settings.SimpleDdgiTransportMaximumSolverGenerations = SimpleDdgiTransportMaximumSolverGenerations;
+                if (SimpleDdgiTransportTailRelativeTolerance.HasValue)
+                {
+                    settings.SimpleDdgiTransportTailRelativeTolerance =
+                        SimpleDdgiTransportTailRelativeTolerance.Value;
+                }
+                else if (TryGetLegacyFloat("SimpleDdgiTransportResidualThreshold", out float legacyTailTolerance))
+                {
+                    settings.SimpleDdgiTransportTailRelativeTolerance = legacyTailTolerance;
+                }
+
+                if (SimpleDdgiTransportAcceleratedSweepCount.HasValue)
+                    settings.SimpleDdgiTransportAcceleratedSweepCount = SimpleDdgiTransportAcceleratedSweepCount.Value;
+                if (SimpleDdgiTransportAccelerationEnabled.HasValue)
+                    settings.SimpleDdgiTransportAccelerationEnabled = SimpleDdgiTransportAccelerationEnabled.Value;
+                if (SimpleDdgiTransportTailCertificationEnabled.HasValue)
+                    settings.SimpleDdgiTransportTailCertificationEnabled = SimpleDdgiTransportTailCertificationEnabled.Value;
+
+                // The old generation count is still loaded for tooling and
+                // diagnostics, but it no longer controls V2 retirement.
+                if (TryGetLegacyInt("SimpleDdgiTransportMaximumSolverGenerations", out int legacyMaximumGenerations))
+                    settings.SimpleDdgiTransportMaximumSolverGenerations = legacyMaximumGenerations;
                 settings.SimpleDdgiTransportSourceRefreshFrames = SimpleDdgiTransportSourceRefreshFrames;
                 settings.SimpleDdgiAutomaticProbeDensityScale = SimpleDdgiAutomaticProbeDensityScale;
                 settings.SimpleDdgiNormalBias = SimpleDdgiNormalBias;
@@ -4735,6 +4811,49 @@ namespace Njulf.Rendering.Data
                 settings.NormalRejectionThreshold = NormalRejectionThreshold;
                 settings.DepthRejectionThreshold = DepthRejectionThreshold;
                 settings.LeakClampStrength = LeakClampStrength;
+            }
+
+            private bool TryGetLegacyFloat(string name, out float value)
+            {
+                value = default;
+                if (ExtensionData == null)
+                    return false;
+
+                foreach (KeyValuePair<string, JsonElement> entry in ExtensionData)
+                {
+                    if (!string.Equals(entry.Key, name, StringComparison.OrdinalIgnoreCase) ||
+                        !entry.Value.TryGetSingle(out float parsed) ||
+                        !float.IsFinite(parsed))
+                    {
+                        continue;
+                    }
+
+                    value = parsed;
+                    return true;
+                }
+
+                return false;
+            }
+
+            private bool TryGetLegacyInt(string name, out int value)
+            {
+                value = default;
+                if (ExtensionData == null)
+                    return false;
+
+                foreach (KeyValuePair<string, JsonElement> entry in ExtensionData)
+                {
+                    if (!string.Equals(entry.Key, name, StringComparison.OrdinalIgnoreCase) ||
+                        !entry.Value.TryGetInt32(out int parsed))
+                    {
+                        continue;
+                    }
+
+                    value = parsed;
+                    return true;
+                }
+
+                return false;
             }
         }
 

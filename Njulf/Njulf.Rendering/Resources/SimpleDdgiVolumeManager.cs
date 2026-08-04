@@ -332,6 +332,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private readonly GPUSimpleDdgiVolume[] _previousVolumeScratch = new GPUSimpleDdgiVolume[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
         private readonly SimpleDdgiVolumePurpose[] _volumePurposes = new SimpleDdgiVolumePurpose[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
         private readonly int[] _volumePriorities = new int[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
+        private readonly SimpleDdgiTransportVolumeOrderKey[] _transportVolumeOrderKeys =
+            new SimpleDdgiTransportVolumeOrderKey[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
+        private readonly int[] _transportVolumeOrder =
+            new int[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
         private readonly GPUSimpleDdgiSchedulerVolumePolicy[] _gpuVolumePolicyScratch =
             new GPUSimpleDdgiSchedulerVolumePolicy[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
         private readonly GPUSimpleDdgiSchedulerVolumePolicy[] _gpuPreviousVolumePolicyScratch =
@@ -457,6 +461,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private SchedulerGlobalStateSnapshot _schedulerGlobalState;
         private int _schedulerParticipatingProbeCount;
         private int _schedulerSourceRepairProbeCount;
+        // GPU-resident feedback is delayed and cannot safely overwrite the
+        // CPU scheduler mirrors. These counts are the resident authority used
+        // only for the tail solve/audit control plane.
+        private int _transportResidentParticipantCount;
+        private int _transportResidentSourceRepairProbeCount;
         private int _schedulerRoutineSourceRepairProbeCount;
         private int _schedulerRoutineMaintenancePendingProbeCount;
         private int _schedulerPendingConvergenceProbeCount;
@@ -657,6 +666,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private int _probeStateReadbackValid;
         private int _probeConvergenceReadbackValid;
         private uint _volumeTableGeneration;
+        // The volume table and the physical-slot ownership map usually change
+        // together, but they are separate certificate dimensions. A compatible
+        // table edit must not accidentally make an old slot-ownership witness
+        // look current, and both values must remain non-zero across wrap.
+        private uint _physicalOwnershipGeneration = 1u;
         private int _inactiveProbeSkipCount;
         private ulong _inactiveProbeSavedPrimaryRayCount;
         private int _lightingDirtyFrames;
@@ -738,6 +752,19 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private bool _transportGlobalWatchdogRefreshWaveStarted;
         private ulong _transportCalibrationChangeCount;
         private bool _transportV2WasActive;
+        // V2 retirement authority. The legacy per-probe EMA fields below are
+        // retained for V1 compatibility and diagnostics, but cannot authorize a
+        // certified V2 publication when tail certification is enabled.
+        private readonly SimpleDdgiTransportSolveController _transportSolveController =
+            new(GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount);
+        private SimpleDdgiTransportTailSummary _transportTailSummary =
+            SimpleDdgiTransportTailSummary.Empty;
+        private int _transportAuditProbeCursor;
+        private uint _transportAuditChunkCount;
+        private ulong _transportAuditFirstFrameSerial;
+        private SimpleDdgiTransportGenerations _transportAuditGenerations;
+        private int _transportAuditExpectedParticipantCount;
+        private int _transportAuditExpectedTexelCount;
         private int _effectiveMaxShadedLights;
         private ulong _adaptiveRaySavedPrimaryRayCount;
         private int _rayBudgetRejectedProbeCount;
@@ -1018,7 +1045,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     _settings.GlobalIllumination.SimpleDdgiTransportSourceRefreshFrames,
                     _probeCount,
                     _settings.GlobalIllumination.SimpleDdgiProbeUpdatesPerFrame,
-                    _settings.GlobalIllumination.SimpleDdgiTransportMaximumSolverGenerations,
+                    _settings.GlobalIllumination.SimpleDdgiTransportAcceleratedSweepCount,
                     _settings.GlobalIllumination.SimpleDdgiStableMaintenanceUpdateCount);
         public int SourceRefreshTargetProbeCount => _sourceRefreshTargetProbeCount;
         public int SourceRefreshCapacityShortfall => _sourceRefreshCapacityShortfall;
@@ -1068,6 +1095,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         public uint TransportGeneration => _transportGeneration;
         public uint PublishedPropagationGeneration => _publishedPropagationGeneration;
         public uint VolumeTableGeneration => _volumeTableGeneration;
+        public uint PhysicalOwnershipGeneration => _physicalOwnershipGeneration;
         public ulong StaleReadbackRejectionCount => _staleReadbackRejectionCount;
         public ulong ResourceGenerationRejectionCount => _resourceGenerationRejectionCount;
 
@@ -1160,15 +1188,21 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 return false;
             }
 
+            bool transportGenerationMatches =
+                feedback.TransportGeneration == _transportGeneration ||
+                AdvanceSourceLightingGeneration(feedback.TransportGeneration) ==
+                    _transportGeneration;
             if (feedback.VolumeTableGeneration != _volumeTableGeneration ||
                 feedback.SourceLightingGeneration != _sourceLightingGeneration ||
-                feedback.TransportGeneration != _transportGeneration)
+                !transportGenerationMatches)
             {
                 _gpuSchedulerFeedbackGenerationRejectionCount =
                     SaturatingAdd(_gpuSchedulerFeedbackGenerationRejectionCount, 1UL);
                 _gpuSchedulerGenerationMismatchStreak =
                     Math.Min(int.MaxValue, _gpuSchedulerGenerationMismatchStreak + 1);
                 _gpuSchedulerFeedbackValid = false;
+                _transportResidentParticipantCount = 0;
+                _transportResidentSourceRepairProbeCount = 0;
                 if (_gpuSchedulerGenerationMismatchStreak >= 3)
                 {
                     RequestGpuSchedulerFallback(
@@ -1181,6 +1215,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             if (feedback.StatusFlags != 0u)
             {
                 _gpuSchedulerFeedbackValid = false;
+                _transportResidentParticipantCount = 0;
+                _transportResidentSourceRepairProbeCount = 0;
                 RequestGpuSchedulerFallback(
                     (feedback.StatusFlags & 1u) != 0u
                         ? "resident scheduler overflow"
@@ -1192,6 +1228,63 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _gpuSchedulerFeedbackFrameSerial =
                 ((ulong)feedback.FrameSerialHigh << 32) | feedback.FrameSerialLow;
             _gpuSchedulerFeedbackValid = true;
+
+            if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+                TransportV2Active &&
+                feedback.PublishedCount != 0u &&
+                feedback.TransportGeneration == _transportGeneration)
+            {
+                // The resident publish stage is GPU-owned, so advance the
+                // canonical-field generation when its delayed commit witness
+                // arrives. The next frame uploads this generation into both
+                // params and scheduler frame word 18 before any audit can run.
+                _transportGeneration = AdvanceSourceLightingGeneration(
+                    _transportGeneration);
+            }
+
+            if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
+            {
+                _transportResidentParticipantCount = checked((int)Math.Min(
+                    int.MaxValue,
+                    feedback.SolveEpochParticipantCount));
+                _transportResidentSourceRepairProbeCount = checked((int)Math.Min(
+                    int.MaxValue,
+                    feedback.PendingSourceCount));
+
+                // A delayed resident summary is the only host-visible witness
+                // for a complete GPU solve epoch. A source repair observed
+                // while an audit is frozen invalidates that audit immediately;
+                // otherwise prepare the controller from the exact resident
+                // counts and accept completion only when the epoch/stamp
+                // reduction agrees with the frozen generations.
+                if (TailCertificationEnabled &&
+                    feedback.PendingSourceCount != 0u &&
+                    _transportSolveController.Phase ==
+                        SimpleDdgiTransportPhase.AuditFrozen)
+                {
+                    CancelTransportTailAudit(
+                        SimpleDdgiTransportCertificationReason.SourceRepairRequired);
+                }
+
+                PrepareTailSolveController();
+                SimpleDdgiTransportGenerations generations =
+                    CreateTransportTailGenerations();
+                if (TailCertificationEnabled &&
+                    _transportSolveController.Phase ==
+                        SimpleDdgiTransportPhase.AcceleratedSolve &&
+                    feedback.SolveEpoch != 0u &&
+                    feedback.SolveEpoch == _transportSolveController.SolveEpoch &&
+                    feedback.SolveEpochVisitedCount ==
+                        feedback.SolveEpochParticipantCount &&
+                    feedback.PendingSourceCount == 0u &&
+                    _transportSolveController.MarkGpuEpochComplete(
+                        feedback.SolveEpoch,
+                        _transportResidentParticipantCount,
+                        generations))
+                {
+                    TryBeginTransportTailAudit();
+                }
+            }
 
             // These are delayed observations only. They are useful to the
             // control plane and diagnostics, but never rebuild the resident
@@ -1331,7 +1424,331 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         /// warmup from an unexpectedly dim, already-converged field in captures.
         /// </summary>
         public bool TransportGlobalConvergencePending =>
-            TransportV2Active && _transportGlobalConvergencePending;
+            TransportV2Active &&
+            (_transportGlobalConvergencePending ||
+             (TailCertificationEnabled && !_transportSolveController.IsCertified));
+        public bool TailCertificationEnabled =>
+            _settings.GlobalIllumination.SimpleDdgiTransportTailCertificationEnabled &&
+            _schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+            _gpuScheduler.IsReady &&
+            _gpuSchedulerFrameExecutionAvailable;
+        public bool TransportAccelerationEnabled =>
+            _settings.GlobalIllumination.SimpleDdgiTransportAccelerationEnabled;
+        private bool _transportAccelerationRuntimeAvailable;
+        public bool TransportAccelerationRuntimeAvailable =>
+            _transportAccelerationRuntimeAvailable;
+        public bool TransportAccelerationSolveActive =>
+            TransportV2Active &&
+            TailCertificationEnabled &&
+            TransportAccelerationEnabled &&
+            _transportAccelerationRuntimeAvailable &&
+            _transportSolveController.Phase ==
+                SimpleDdgiTransportPhase.AcceleratedSolve &&
+            !_transportSolveController.IsCertified &&
+            GpuSchedulerFrameExecutionAvailable;
+        public int TransportAcceleratedSweepCount =>
+            _settings.GlobalIllumination.SimpleDdgiTransportAccelerationEnabled
+                ? _settings.GlobalIllumination.SimpleDdgiTransportAcceleratedSweepCount
+                : 1;
+        public ReadOnlySpan<int> TransportSolveVolumeOrder =>
+            _transportVolumeOrder.AsSpan(0, _volumeCount);
+
+        public bool HasTransportWorkForVolume(int volumeIndex)
+        {
+            if ((uint)volumeIndex >= (uint)_volumeCount)
+                return false;
+            if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
+                return _gpuScheduler.IsReady && _probeCount > 0;
+            return _probesToUpdate > 0 &&
+                _volumeScheduledTransportProbeCounts[volumeIndex] > 0;
+        }
+        internal void SetTransportAccelerationRuntimeAvailable(bool available) =>
+            _transportAccelerationRuntimeAvailable = available;
+        public SimpleDdgiTransportPhase TransportTailPhase =>
+            _transportSolveController.Phase;
+        public SimpleDdgiTransportCertificationReason TransportTailCertificationReason =>
+            _transportSolveController.LastReason;
+        public SimpleDdgiTransportTailSummary TransportTailSummary => _transportTailSummary;
+        public uint TransportTailAuditEpoch => _transportSolveController.AuditEpoch;
+        public uint TransportTailSolveEpoch => _transportSolveController.SolveEpoch;
+        public bool TransportTailSolveEpochComplete =>
+            _transportSolveController.IsSolveEpochComplete;
+        public bool TransportTailAuditPending =>
+            TransportV2Active &&
+            TailCertificationEnabled &&
+            _transportSolveController.Phase == SimpleDdgiTransportPhase.AuditFrozen;
+
+        /// <summary>
+        /// Returns the current generation snapshot used by the tail audit. The
+        /// snapshot intentionally excludes per-dispatch publication counters;
+        /// a solve may publish several red/black batches before it is audited.
+        /// </summary>
+        public SimpleDdgiTransportGenerations GetTransportTailGenerations() =>
+            CreateTransportTailGenerations();
+
+        public SimpleDdgiTransportGenerations GetFrozenTransportTailGenerations() =>
+            _transportAuditGenerations.IsInitialized
+                ? _transportAuditGenerations
+                : CreateTransportTailGenerations();
+
+        /// <summary>
+        /// Starts the frozen audit once the complete solve epoch has visited all
+        /// participants. Render-graph code calls this immediately before the
+        /// audit dispatch; a false result means the field is still incomplete.
+        /// </summary>
+        public bool TryBeginTransportTailAudit()
+        {
+            if (!TransportV2Active || !TailCertificationEnabled)
+                return false;
+
+            if (_transportSolveController.Phase == SimpleDdgiTransportPhase.AuditFrozen)
+                return true;
+
+            SimpleDdgiTransportGenerations generations = CreateTransportTailGenerations();
+            if (!_transportSolveController.TryBeginAudit(generations))
+                return false;
+
+            // TryBeginAudit advances the audit epoch and updates the frozen
+            // tuple. Retain that post-increment tuple for every chunk and for
+            // delayed readback acceptance; keeping the pre-increment tuple
+            // would make a valid audit reject its own summary.
+            _transportAuditGenerations = _transportSolveController.FrozenGenerations;
+            _transportAuditProbeCursor = 0;
+            _transportAuditChunkCount = checked((uint)Math.Max(
+                1,
+                (Math.Max(0, _probeCount) + TransportAuditProbeChunkSize - 1) /
+                TransportAuditProbeChunkSize));
+            _transportAuditFirstFrameSerial = _frameSerial;
+            _transportAuditExpectedParticipantCount = Math.Max(
+                0,
+                _schedulerMode == SimpleDdgiSchedulerMode.GpuResident
+                    ? _transportResidentParticipantCount
+                    : _schedulerParticipatingProbeCount);
+            _transportAuditExpectedTexelCount = checked(
+                _transportAuditExpectedParticipantCount * IrradianceTexelsPerProbe * IrradianceTexelsPerProbe);
+            _transportTailSummary = _transportSolveController.LastSummary with
+            {
+                AuditEpoch = _transportSolveController.AuditEpoch,
+                Generations = _transportAuditGenerations,
+                ExpectedParticipantCount = checked((uint)_transportAuditExpectedParticipantCount),
+                ExpectedTexelCount = checked((uint)_transportAuditExpectedTexelCount),
+                Reason = SimpleDdgiTransportCertificationReason.AuditInProgress
+            };
+            return true;
+        }
+
+        public const int TransportAuditProbeChunkSize = 256;
+
+        public bool TryGetTransportTailAuditChunk(
+            out SimpleDdgiTransportAuditChunkDispatch dispatch)
+        {
+            dispatch = default;
+            if (!TransportTailAuditPending ||
+                _transportAuditProbeCursor >= _probeCount ||
+                _transportAuditChunkCount == 0u)
+            {
+                return false;
+            }
+
+            int probeCount = Math.Min(
+                TransportAuditProbeChunkSize,
+                _probeCount - _transportAuditProbeCursor);
+            uint chunkIndex = checked((uint)(
+                _transportAuditProbeCursor / TransportAuditProbeChunkSize));
+            dispatch = new SimpleDdgiTransportAuditChunkDispatch(
+                _transportSolveController.AuditEpoch,
+                chunkIndex,
+                _transportAuditChunkCount,
+                _transportAuditProbeCursor,
+                probeCount,
+                _transportAuditExpectedParticipantCount,
+                _transportAuditExpectedTexelCount,
+                chunkIndex + 1u == _transportAuditChunkCount);
+            return true;
+        }
+
+        public bool MarkTransportTailAuditChunkSubmitted(
+            SimpleDdgiTransportAuditChunkDispatch dispatch)
+        {
+            if (!TransportTailAuditPending ||
+                dispatch.AuditEpoch != _transportSolveController.AuditEpoch ||
+                dispatch.ProbeOffset != _transportAuditProbeCursor ||
+                dispatch.ChunkCount != _transportAuditChunkCount)
+            {
+                return false;
+            }
+
+            _transportAuditProbeCursor = checked(
+                _transportAuditProbeCursor + dispatch.ProbeCount);
+            return true;
+        }
+
+        /// <summary>
+        /// Converts the compact GPU reduction into a generation-frozen summary.
+        /// The shader supplies only maxima/counters; all policy math and the
+        /// completion decision remain on the CPU.
+        /// </summary>
+        public bool TryConsumeGpuTransportAudit(
+            int frameIndex,
+            ulong completedFrameSerial)
+        {
+            if (!TransportV2Active ||
+                !TailCertificationEnabled ||
+                _transportSolveController.Phase != SimpleDdgiTransportPhase.AuditFrozen ||
+                !_gpuScheduler.TryReadCompletedTransportAudit(
+                    frameIndex,
+                    completedFrameSerial,
+                    out SimpleDdgiTransportAuditReadback readback))
+            {
+                return false;
+            }
+
+            GPUSimpleDdgiTransportAuditSummary gpu = readback.Summary;
+            float defect = BitConverter.UInt32BitsToSingle(gpu.FixedPointDefectBits);
+            float fieldMagnitude = BitConverter.UInt32BitsToSingle(gpu.FieldMagnitudeBits);
+            float observedContraction = BitConverter.UInt32BitsToSingle(
+                gpu.ObservedContractionBits);
+            float canonicalQuantizationFloor = BitConverter.UInt32BitsToSingle(
+                gpu.CanonicalQuantizationFloorBits);
+            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+            float q = gi.SimpleDdgiTransportAlbedoClamp;
+            bool countersFinite =
+                float.IsFinite(defect) && defect >= 0.0f &&
+                float.IsFinite(fieldMagnitude) && fieldMagnitude >= 0.0f &&
+                float.IsFinite(observedContraction) && observedContraction >= 0.0f &&
+                observedContraction <= q &&
+                float.IsFinite(canonicalQuantizationFloor) &&
+                canonicalQuantizationFloor >= 0.0f;
+            // The shader reduction is FP32. Move the observed maximum upward
+            // by one representable value before using it as evidence, then
+            // retain the configured ceiling as the fail-closed upper bound.
+            float roundedObservedContraction = countersFinite
+                ? MathF.Min(q, MathF.BitIncrement(observedContraction))
+                : float.NaN;
+            float certifiedQ = countersFinite
+                ? MathF.Min(q, roundedObservedContraction)
+                : float.NaN;
+            float tail = countersFinite && certifiedQ < 1.0f
+                ? defect / MathF.Max(1.0f - certifiedQ, 1e-6f)
+                : float.NaN;
+            float tolerance = countersFinite
+                ? MathF.Max(
+                    SimpleDdgiTransportTailEstimator.AbsoluteTolerance,
+                    gi.SimpleDdgiTransportTailRelativeTolerance * fieldMagnitude)
+                : float.NaN;
+            bool completeChunk =
+                _transportAuditChunkCount > 0u &&
+                gpu.LastChunkIndex == _transportAuditChunkCount - 1u;
+            uint expectedParticipants = checked((uint)Math.Max(
+                0,
+                _transportAuditExpectedParticipantCount));
+            uint expectedTexels = checked((uint)Math.Max(
+                0,
+                _transportAuditExpectedTexelCount));
+            bool coverageCountersMatch =
+                gpu.ExpectedParticipantCount == expectedParticipants &&
+                gpu.ExpectedTexelCount == expectedTexels &&
+                gpu.AuditedParticipantCount == expectedParticipants &&
+                gpu.AuditedTexelCount == expectedTexels &&
+                gpu.ExcludedStaleSourceCount == 0u;
+            bool finiteEvidence = countersFinite &&
+                float.IsFinite(q) &&
+                q >= 0.0f &&
+                q <= SimpleDdgiTransportTailEstimator.MaximumCertifiedContraction &&
+                float.IsFinite(roundedObservedContraction) &&
+                roundedObservedContraction >= 0.0f &&
+                roundedObservedContraction <= q &&
+                float.IsFinite(tail) &&
+                float.IsFinite(tolerance);
+            bool quantizationLimited = finiteEvidence &&
+                canonicalQuantizationFloor > tolerance;
+            SimpleDdgiTransportCertificationReason reason =
+                !completeChunk
+                    ? SimpleDdgiTransportCertificationReason.ParticipantCoverageIncomplete
+                    : gpu.CounterOverflow != 0u
+                        ? SimpleDdgiTransportCertificationReason.CounterOverflow
+                        : !coverageCountersMatch
+                            ? SimpleDdgiTransportCertificationReason.ParticipantCoverageIncomplete
+                        : !finiteEvidence || gpu.NonFiniteCount > 0u
+                        ? SimpleDdgiTransportCertificationReason.NonFiniteEvidence
+                        : gpu.InvalidCacheCount > 0u
+                            ? SimpleDdgiTransportCertificationReason.ParticipantCoverageIncomplete
+                            : quantizationLimited
+                                ? SimpleDdgiTransportCertificationReason.QuantizationLimited
+                                : tail <= tolerance
+                                ? SimpleDdgiTransportCertificationReason.Certified
+                                : SimpleDdgiTransportCertificationReason.TailAboveTolerance;
+
+            SimpleDdgiTransportTailSummary summary = new()
+            {
+                AuditEpoch = readback.AuditEpoch,
+                Generations = _transportAuditGenerations,
+                ExpectedParticipantCount = expectedParticipants,
+                AuditedParticipantCount = gpu.AuditedParticipantCount,
+                ExpectedTexelCount = expectedTexels,
+                AuditedTexelCount = gpu.AuditedTexelCount,
+                ExcludedInactiveCount = gpu.ExcludedInactiveCount,
+                ExcludedNotVisibleCount = gpu.ExcludedNotVisibleCount,
+                ExcludedStaleSourceCount = gpu.ExcludedStaleSourceCount,
+                NonFiniteCount = gpu.NonFiniteCount,
+                ExcludedInvalidCacheCount = gpu.InvalidCacheCount,
+                FixedPointDefect = defect,
+                FieldMagnitude = fieldMagnitude,
+                ConfiguredContractionBound = q,
+                ObservedContractionBound = roundedObservedContraction,
+                CertifiedContractionBound = certifiedQ,
+                AbsoluteTailBound = tail,
+                RelativeTailBound = countersFinite
+                    ? tail / MathF.Max(fieldMagnitude, SimpleDdgiTransportTailEstimator.AbsoluteTolerance)
+                    : float.NaN,
+                Tolerance = tolerance,
+                CanonicalQuantizationFloor = canonicalQuantizationFloor,
+                AuditMicroseconds = 0,
+                FirstFrameSerial = _transportAuditFirstFrameSerial,
+                FinalFrameSerial = readback.FrameSerial,
+                ChunkCount = _transportAuditChunkCount,
+                IsComplete = completeChunk,
+                CounterOverflowCount = gpu.CounterOverflow,
+                Reason = reason
+            };
+            return TryAcceptTransportTailSummary(summary);
+        }
+
+        /// <summary>
+        /// Consumes a chunk-aggregated GPU audit summary. A summary from a stale
+        /// field, incomplete participant set, invalid cache, or non-finite
+        /// candidate is rejected and leaves V2 pending.
+        /// </summary>
+        public bool TryAcceptTransportTailSummary(SimpleDdgiTransportTailSummary summary)
+        {
+            if (!TransportV2Active || !TailCertificationEnabled)
+                return false;
+
+            SimpleDdgiTransportGenerations generations = CreateTransportTailGenerations();
+            bool accepted = _transportSolveController.TryAcceptAudit(summary, generations);
+            _transportTailSummary = _transportSolveController.LastSummary;
+            if (accepted)
+            {
+                _transportGlobalConvergencePending = false;
+                _transportGlobalSourceRepairPhasePending = false;
+                _publishedPropagationGeneration = _transportGeneration;
+                RequirePersistentSchedulerRebuild();
+            }
+            else
+            {
+                _transportGlobalConvergencePending = true;
+                RequirePersistentSchedulerRebuild();
+            }
+            return accepted;
+        }
+
+        public void CancelTransportTailAudit(SimpleDdgiTransportCertificationReason reason)
+        {
+            _transportSolveController.CancelAudit(reason);
+            _transportTailSummary = _transportSolveController.LastSummary;
+            _transportGlobalConvergencePending = true;
+            RequirePersistentSchedulerRebuild();
+        }
         /// <summary>
         /// Number of internal DDGI frames spent in the current field-wide
         /// source/transport warmup. Zero means the local residual policy is
@@ -1560,9 +1977,53 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _transportDispatchLaneCount,
                 _transportUsefulDispatchLaneCount,
                 _transportNoOpDispatchLaneCount,
-                _settings.GlobalIllumination.SimpleDdgiTransportResidualThreshold,
+                _settings.GlobalIllumination.SimpleDdgiTransportTailRelativeTolerance,
                 Array.AsReadOnly(rings))
             {
+                TailPhase = _transportSolveController.Phase,
+                TailReason = _transportSolveController.LastReason,
+                TailGenerations = _transportTailSummary.Generations,
+                TailSolveEpoch = _transportSolveController.SolveEpoch,
+                TailAuditEpoch = _transportSolveController.AuditEpoch,
+                TailExpectedParticipantCount =
+                    _transportTailSummary.ExpectedParticipantCount,
+                TailAuditedParticipantCount =
+                    _transportTailSummary.AuditedParticipantCount,
+                TailExcludedInactiveCount =
+                    _transportTailSummary.ExcludedInactiveCount,
+                TailExcludedNotVisibleCount =
+                    _transportTailSummary.ExcludedNotVisibleCount,
+                TailExcludedStaleSourceCount =
+                    _transportTailSummary.ExcludedStaleSourceCount,
+                TailExcludedInvalidCacheCount =
+                    _transportTailSummary.ExcludedInvalidCacheCount,
+                TailNonFiniteCount =
+                    _transportTailSummary.NonFiniteCount,
+                TailCounterOverflowCount =
+                    _transportTailSummary.CounterOverflowCount,
+                TailExpectedTexelCount = _transportTailSummary.ExpectedTexelCount,
+                TailAuditedTexelCount = _transportTailSummary.AuditedTexelCount,
+                TailFixedPointDefect = _transportTailSummary.FixedPointDefect,
+                TailFieldMagnitude = _transportTailSummary.FieldMagnitude,
+                TailConfiguredContractionBound =
+                    _transportTailSummary.ConfiguredContractionBound,
+                TailObservedContractionBound =
+                    _transportTailSummary.ObservedContractionBound,
+                TailCertifiedContractionBound =
+                    _transportTailSummary.CertifiedContractionBound,
+                TailAbsoluteBound = _transportTailSummary.AbsoluteTailBound,
+                TailRelativeBound = _transportTailSummary.RelativeTailBound,
+                TailTolerance = _transportTailSummary.Tolerance,
+                TailCanonicalQuantizationFloor =
+                    _transportTailSummary.CanonicalQuantizationFloor,
+                TailAuditMicroseconds = _transportTailSummary.AuditMicroseconds,
+                TailAuditFirstFrameSerial =
+                    _transportTailSummary.FirstFrameSerial,
+                TailAuditFinalFrameSerial = _transportTailSummary.FinalFrameSerial,
+                TailAuditChunkCount = _transportTailSummary.ChunkCount,
+                TailAuditComplete = _transportTailSummary.IsComplete,
+                TailCertificateCurrent = _transportSolveController.IsCertified &&
+                    _transportTailSummary.IsCurrent(CreateTransportTailGenerations()),
                 ResidualQualifiedNotConvergedProbeCount =
                     totalResidualQualifiedPending,
                 RoutineSourceRepairProbeCount =
@@ -2301,6 +2762,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         residentBootstrap = true;
                         _gpuResidentProbeStateBootstrapped = false;
                         _gpuSchedulerFrameExecutionAvailable = false;
+                        _gpuSchedulerFeedbackValid = false;
+                        _transportResidentParticipantCount = 0;
+                        _transportResidentSourceRepairProbeCount = 0;
                         EnsureCpuProbeStateCapacity(_probeCount);
                     }
                 }
@@ -2314,6 +2778,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     residentBootstrap = true;
                     _gpuResidentProbeStateBootstrapped = false;
                     _gpuSchedulerFrameExecutionAvailable = false;
+                    _gpuSchedulerFeedbackValid = false;
+                    _transportResidentParticipantCount = 0;
+                    _transportResidentSourceRepairProbeCount = 0;
                 }
                 capacityMicroseconds += ElapsedMicroseconds(phaseStart);
 
@@ -2490,8 +2957,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     TransportControls = new Vector4(
                         gi.SimpleDdgiTransportSolverRelaxation,
                         gi.SimpleDdgiTransportAlbedoClamp,
-                        gi.SimpleDdgiTransportResidualThreshold,
-                        gi.SimpleDdgiTransportMaximumSolverGenerations)
+                        gi.SimpleDdgiTransportTailRelativeTolerance,
+                        gi.SimpleDdgiTransportAcceleratedSweepCount)
                 };
 
                 if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
@@ -2698,6 +3165,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             Array.Clear(_probeSchedulerTrackedLastUpdatedFrames);
             Array.Clear(_probeSchedulerTrackedSourceRefreshFrames);
             _schedulerParticipatingProbeCount = 0;
+            _transportResidentParticipantCount = 0;
+            _transportResidentSourceRepairProbeCount = 0;
             _schedulerAtmosphereVisibleParticipatingProbeCount = 0;
             _schedulerAtmosphereVisibleSourceReadyProbeCount = 0;
             _schedulerAtmosphereVisiblePublishedProbeCount = 0;
@@ -3302,8 +3771,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 gi.SimpleDdgiClassificationSchedulingEnabled,
                 _probeConvergenceReadbackValid != 0,
                 gi.SimpleDdgiStableMaintenanceUpdateCount,
-                gi.SimpleDdgiTransportMaximumSolverGenerations,
-                BitConverter.SingleToInt32Bits(gi.SimpleDdgiTransportResidualThreshold));
+                gi.SimpleDdgiTransportAcceleratedSweepCount,
+                BitConverter.SingleToInt32Bits(gi.SimpleDdgiTransportTailRelativeTolerance));
         }
 
         private void RefreshPersistentSchedulerState()
@@ -3396,6 +3865,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             Array.Clear(_pendingWorkClassCounts);
             Array.Clear(_probeAtmosphereCohortFlags);
             _schedulerParticipatingProbeCount = 0;
+            _transportResidentParticipantCount = 0;
+            _transportResidentSourceRepairProbeCount = 0;
             _schedulerAtmosphereVisibleParticipatingProbeCount = 0;
             _schedulerAtmosphereVisibleSourceReadyProbeCount = 0;
             _schedulerAtmosphereVisiblePublishedProbeCount = 0;
@@ -3844,12 +4315,12 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     : 0;
             if (generation < Math.Max(
                     1,
-                    gi.SimpleDdgiTransportMaximumSolverGenerations))
+                    gi.SimpleDdgiTransportAcceleratedSweepCount))
             {
                 return SimpleDdgiTransportProbeStateReason.
                     MinimumSolverGenerationIncomplete;
             }
-            if (residual > gi.SimpleDdgiTransportResidualThreshold)
+            if (residual > gi.SimpleDdgiTransportTailRelativeTolerance)
                 return SimpleDdgiTransportProbeStateReason.ResidualAboveThreshold;
 
             int stableCount = (uint)probeIndex < (uint)_probeStableUpdateCounts.Length
@@ -3868,7 +4339,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             if (!float.IsFinite(residual) || residual < 0.0f)
                 return 7;
             float threshold = Math.Max(
-                _settings.GlobalIllumination.SimpleDdgiTransportResidualThreshold,
+                _settings.GlobalIllumination.SimpleDdgiTransportTailRelativeTolerance,
                 0.000001f);
             if (residual <= threshold * 0.25f)
                 return 0;
@@ -3935,7 +4406,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _probeTransportGenerationCounts[probeIndex] < Math.Max(
                     1,
                     _settings.GlobalIllumination.
-                        SimpleDdgiTransportMaximumSolverGenerations) ||
+                        SimpleDdgiTransportAcceleratedSweepCount) ||
                 _probeTransportSolverCompletionRecordedSourceGenerations[probeIndex] ==
                     sourceGeneration)
             {
@@ -4372,7 +4843,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
 
         private void AdvanceVolumeTableGenerationAndDropPendingReadbacks()
         {
-            _volumeTableGeneration++;
+            _volumeTableGeneration = AdvanceSourceLightingGeneration(_volumeTableGeneration);
+            _physicalOwnershipGeneration = AdvanceSourceLightingGeneration(
+                _physicalOwnershipGeneration);
             BeginTransportGlobalConvergence(forceFieldEvidenceReset: true);
             for (int i = 0; i < _probeStateReadbackRecorded.Length; i++)
             {
@@ -4595,6 +5068,12 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _transportFieldConvergenceEvidenceResetPending = true;
             }
             _transportGlobalConvergenceSourceGeneration = _sourceLightingGeneration;
+            if (TailCertificationEnabled)
+            {
+                _transportSolveController.BeginSourceRepair(
+                    CreateTransportTailGenerations());
+                _transportTailSummary = _transportSolveController.LastSummary;
+            }
             if (resetFieldEvidence)
             {
                 _probeConvergenceReadbackValid = 0;
@@ -4643,6 +5122,36 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         {
             if (!TransportV2Active)
                 return;
+
+            if (TailCertificationEnabled)
+            {
+                // V2 retirement is exclusively certificate-driven. The legacy
+                // 95%/generation/EMA policy below remains available to V1 and
+                // diagnostics, but it is never consulted for this path.
+                PrepareTailSolveController();
+                if (!_transportSolveController.IsCertified)
+                {
+                    // Freeze before pass predicates are evaluated so the
+                    // publication/commit passes cannot mutate the canonical
+                    // field in the same frame that the audit begins. This
+                    // branch is resident-only: CPU/mirror fallback modes
+                    // disable the resident certificate and use the explicit
+                    // legacy convergence policy below.
+                    if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+                        _transportSolveController.IsSolveEpochComplete)
+                    {
+                        TryBeginTransportTailAudit();
+                    }
+                    _transportGlobalConvergencePending = true;
+                    return;
+                }
+
+                _transportGlobalConvergencePending = false;
+                _transportGlobalSourceRepairPhasePending = false;
+                _publishedPropagationGeneration = _transportGeneration;
+                RequirePersistentSchedulerRebuild();
+                return;
+            }
 
             if (!_transportGlobalConvergencePending || _probeCount <= 0)
                 return;
@@ -4704,6 +5213,106 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _transportPeriodicSourceRefreshWavePending = false;
             _publishedPropagationGeneration = _transportGeneration;
             RequirePersistentSchedulerRebuild();
+        }
+
+        private SimpleDdgiTransportGenerations CreateTransportTailGenerations()
+        {
+            uint volume = NonZeroGeneration(_volumeTableGeneration);
+            uint ownership = NonZeroGeneration(_physicalOwnershipGeneration);
+            uint source = NonZeroGeneration(_sourceLightingGeneration);
+            uint operatorGeneration = NonZeroGeneration(
+                unchecked((uint)(_lastTransportSolverCalibrationSignature ^
+                    (_lastTransportSolverCalibrationSignature >> 32))));
+            uint canonical = NonZeroGeneration(_transportGeneration);
+            uint solve = NonZeroGeneration(_transportSolveController.SolveEpoch);
+            uint audit = NonZeroGeneration(_transportSolveController.AuditEpoch);
+            // GPU-resident uploads are frame transactions, not transport
+            // queue-generation changes. The resident scheduler owns the queue
+            // and remains frozen while the audit is in flight; using the
+            // per-frame serial here would cancel every audit on the next
+            // upload before its delayed readback could be consumed.
+            uint queue = _schedulerMode == SimpleDdgiSchedulerMode.GpuResident
+                ? NonZeroGeneration(_gpuScheduler.ResourceGeneration)
+                : NonZeroGeneration(_updateTransactionSerial);
+            uint scheduler = NonZeroGeneration(_gpuScheduler.ResourceGeneration);
+            return new SimpleDdgiTransportGenerations(
+                volume,
+                ownership,
+                source,
+                source,
+                operatorGeneration,
+                canonical,
+                solve,
+                audit,
+                queue,
+                scheduler);
+        }
+
+        private static uint NonZeroGeneration(uint value) => value == 0u ? 1u : value;
+
+        private void PrepareTailSolveController()
+        {
+            if (!TransportV2Active || !TailCertificationEnabled)
+                return;
+
+            SimpleDdgiTransportGenerations generations = CreateTransportTailGenerations();
+            if (_transportSolveController.Phase == SimpleDdgiTransportPhase.AuditFrozen)
+            {
+                if (_transportSolveController.FrozenGenerations != generations)
+                    CancelTransportTailAudit(SimpleDdgiTransportCertificationReason.GenerationsChanged);
+                return;
+            }
+
+            if (_transportSolveController.Phase == SimpleDdgiTransportPhase.Certified &&
+                !_transportSolveController.LastSummary.IsCurrent(generations))
+            {
+                _transportSolveController.Invalidate(
+                    generations,
+                    SimpleDdgiTransportCertificationReason.GenerationsChanged,
+                    requireSourceRepair: true);
+                _transportTailSummary = _transportSolveController.LastSummary;
+            }
+
+            if (_transportSolveController.Phase ==
+                    SimpleDdgiTransportPhase.AcceleratedSolve &&
+                !_transportSolveController.TryRefreshSolveGenerations(generations))
+            {
+                _transportSolveController.Invalidate(
+                    generations,
+                    SimpleDdgiTransportCertificationReason.GenerationsChanged,
+                    requireSourceRepair: true);
+                _transportTailSummary = _transportSolveController.LastSummary;
+                return;
+            }
+
+            // The old phase bit is intentionally not authoritative for V2; it
+            // is also kept latched for legacy atmosphere diagnostics. Source
+            // readiness is the concrete participant gate here.
+            int participantCount = _schedulerMode == SimpleDdgiSchedulerMode.GpuResident
+                ? _transportResidentParticipantCount
+                : _schedulerParticipatingProbeCount;
+            int sourceRepairCount = _schedulerMode == SimpleDdgiSchedulerMode.GpuResident
+                ? _transportResidentSourceRepairProbeCount
+                : _schedulerSourceRepairProbeCount;
+            bool sourceRepairPending = sourceRepairCount > 0;
+            if (sourceRepairPending)
+            {
+                if (_transportSolveController.Phase != SimpleDdgiTransportPhase.SourceRepair)
+                {
+                    _transportSolveController.BeginSourceRepair(generations);
+                    _transportTailSummary = _transportSolveController.LastSummary;
+                }
+                return;
+            }
+
+            if (_transportSolveController.Phase == SimpleDdgiTransportPhase.SourceRepair ||
+                _transportSolveController.Phase == SimpleDdgiTransportPhase.Tracking)
+            {
+                _transportSolveController.BeginSolveEpoch(
+                    generations,
+                    Math.Max(0, participantCount));
+                _transportTailSummary = _transportSolveController.LastSummary;
+            }
         }
 
         private void ApplyPendingTransportFieldConvergenceEvidenceReset()
@@ -5956,8 +6565,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             bool cachedSolverOnly = false)
         {
             int classIndex = (int)workClass;
-            for (int volumeIndex = 0; volumeIndex < _volumeCount && count < capacity; volumeIndex++)
+            for (int orderIndex = 0;
+                 orderIndex < _volumeCount && count < capacity;
+                 orderIndex++)
             {
+                int volumeIndex = _transportVolumeOrder[orderIndex];
                 int quota = volumeIndex < volumeQuotas.Length ? volumeQuotas[volumeIndex] : 0;
                 if (quota <= 0 || volumeUsage[volumeIndex] >= quota)
                     continue;
@@ -6075,7 +6687,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             bool reservedPass)
         {
             if (!TransportV2Active ||
-                TransportGlobalConvergencePending ||
+                (TransportGlobalConvergencePending &&
+                 (!TailCertificationEnabled ||
+                  _transportSolveController.Phase != SimpleDdgiTransportPhase.AcceleratedSolve)) ||
                 !HasPendingPriorityWork(
                     _volumeCachedSolverPendingScratch,
                     _volumeCachedSolverUsageScratch))
@@ -6303,9 +6917,17 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 (uint)probeIndex < (uint)_probeTransportGenerationCounts.Length
                     ? _probeTransportGenerationCounts[probeIndex]
                     : 0;
+            if (TailCertificationEnabled)
+            {
+                // Source-age watchdogs remain active independently of solver
+                // completion. A periodic source refresh is a genuine operator
+                // boundary and will invalidate the current certificate.
+                return elapsed >= (uint)Math.Max(1, periodicRefreshFrames);
+            }
+
             int minimumSolverGenerations = Math.Max(
                 1,
-                _settings.GlobalIllumination.SimpleDdgiTransportMaximumSolverGenerations);
+                _settings.GlobalIllumination.SimpleDdgiTransportAcceleratedSweepCount);
             return ShouldRefreshTransportSource(
                 false,
                 TransportGlobalConvergencePending,
@@ -6337,6 +6959,16 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
 
         private bool IsTransportConverged(int probeIndex)
         {
+            if (TailCertificationEnabled)
+            {
+                // A complete-field certificate is the only V2 convergence
+                // authority. Local EMA/generation data is deliberately ignored.
+                return _transportSolveController.IsCertified &&
+                    !NeedsSourceRefresh(probeIndex) &&
+                    (uint)probeIndex < (uint)_probeInactive.Length &&
+                    _probeInactive[probeIndex] == 0;
+            }
+
             return !TransportGlobalConvergencePending &&
                 HasLocalTransportConvergenceEvidence(probeIndex);
         }
@@ -6353,11 +6985,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             return MeetsTransportConvergenceCriteria(
                 _probeTransportGenerationCounts[probeIndex],
-                gi.SimpleDdgiTransportMaximumSolverGenerations,
+                gi.SimpleDdgiTransportAcceleratedSweepCount,
                 _probeStableUpdateCounts[probeIndex],
                 gi.SimpleDdgiStableMaintenanceUpdateCount,
                 _probeLuminanceChangeEma[probeIndex],
-                gi.SimpleDdgiTransportResidualThreshold);
+                gi.SimpleDdgiTransportTailRelativeTolerance);
         }
 
         internal static bool MeetsTransportConvergenceCriteria(
@@ -7146,6 +7778,18 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     1);
             }
             _probeQueued[probeIndex] = 1;
+            if (TailCertificationEnabled &&
+                !sourceRefresh &&
+                _transportSolveController.Phase == SimpleDdgiTransportPhase.AcceleratedSolve &&
+                (uint)probeIndex < (uint)_probeSourceLightingGenerations.Length &&
+                (uint)probeIndex < (uint)_probeSourceRayCounts.Length &&
+                _probeSourceLightingGenerations[probeIndex] == _sourceLightingGeneration &&
+                _probeSourceRayCounts[probeIndex] > 0)
+            {
+                _transportSolveController.MarkParticipantVisited(
+                    probeIndex,
+                    CreateTransportTailGenerations());
+            }
             RecordDirtyFirstScheduledUpdate(probeIndex, _frameIndex);
             return true;
         }
@@ -7777,6 +8421,25 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _volumePriorities[i] = candidate.Priority;
             }
 
+            for (int i = 0; i < _volumeCount; i++)
+            {
+                GPUSimpleDdgiVolume volume = _volumeScratch[i];
+                int outerPriority = Kind(volume) == VolumeKindRing
+                    ? -Math.Max(0, ResolveVolumeQuality(i).RingIndex)
+                    : 0;
+                int fallbackPriority = Kind(volume) == VolumeKindAuthored
+                    ? Math.Max(0, _volumePriorities[i])
+                    : 0;
+                _transportVolumeOrderKeys[i] = new SimpleDdgiTransportVolumeOrderKey(
+                    i,
+                    Math.Max(0.001f, Spacing(volume)),
+                    fallbackPriority,
+                    outerPriority);
+            }
+            SimpleDdgiTransportSolveController.OrderVolumes(
+                _transportVolumeOrderKeys.AsSpan(0, _volumeCount),
+                _transportVolumeOrder.AsSpan(0, _volumeCount));
+
             _probeCount = firstProbe;
             if (_volumeCount > 0)
             {
@@ -7932,11 +8595,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 prime);
             hash = AddLayoutFingerprintValue(
                 hash,
-                unchecked((uint)BitConverter.SingleToInt32Bits(settings.SimpleDdgiTransportResidualThreshold)),
+                unchecked((uint)BitConverter.SingleToInt32Bits(settings.SimpleDdgiTransportTailRelativeTolerance)),
                 prime);
             hash = AddLayoutFingerprintValue(
                 hash,
-                (ulong)(uint)settings.SimpleDdgiTransportMaximumSolverGenerations,
+                (ulong)(uint)settings.SimpleDdgiTransportAcceleratedSweepCount,
                 prime);
             hash = AddLayoutFingerprintValue(
                 hash,
@@ -8278,6 +8941,20 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _schedulerPressureReason = SimpleDdgiSchedulerPressureReason.None;
             ResolveGpuResidentSourceThroughputTarget();
 
+            if (TailCertificationEnabled && TransportV2Active)
+            {
+                if (!_gpuSchedulerFeedbackValid)
+                {
+                    // Before the first delayed feedback packet arrives, use a
+                    // conservative bootstrap witness. It may keep the solve
+                    // in SourceRepair for an extra frame, but it can never
+                    // certify an incomplete resident field.
+                    _transportResidentParticipantCount = Math.Max(0, _probeCount);
+                    _transportResidentSourceRepairProbeCount = Math.Max(0, _probeCount);
+                }
+                PrepareTailSolveController();
+            }
+
             BeginUpdateTransaction(hasWork: false);
             _updateStartProbe = 0;
             _probesToUpdate = 0;
@@ -8359,8 +9036,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 TransportControls = new Vector4(
                     gi.SimpleDdgiTransportSolverRelaxation,
                     gi.SimpleDdgiTransportAlbedoClamp,
-                    gi.SimpleDdgiTransportResidualThreshold,
-                    gi.SimpleDdgiTransportMaximumSolverGenerations)
+                    gi.SimpleDdgiTransportTailRelativeTolerance,
+                    gi.SimpleDdgiTransportAcceleratedSweepCount)
             };
             for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
             {
@@ -8506,6 +9183,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 featureFlags |= SimpleDdgiSchedulerAbi.SchedulerFeatureClassification;
             if (SampledAtlasGpuPublicationRequired)
                 featureFlags |= SimpleDdgiSchedulerAbi.SchedulerFeatureSampledPublication;
+            if (TransportV2Active && TailCertificationEnabled)
+                featureFlags |= SimpleDdgiSchedulerAbi.SchedulerFeatureTransportTailCertification;
 
             Span<uint> rayBuckets = stackalloc uint[SimpleDdgiSchedulerAbi.MaxRayBucketCount];
             int rayBucketCount = 0;
@@ -8561,10 +9240,24 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 FrameSerialHigh = ClampToUint(_frameSerial >> 32),
                 VolumeTableGeneration = _volumeTableGeneration,
                 SchedulerResourceGeneration = _gpuScheduler.ResourceGeneration,
-                QueueTransactionGeneration = _updateTransactionSerial,
+                // A resident frame has no CPU-authored queue transaction. The
+                // scheduler arena/resource generation is its queue epoch and
+                // stays stable while a frozen audit spans multiple frames;
+                // using the per-frame CPU serial here would make the audit's
+                // immutable queue witness change even though no queue work is
+                // allowed during AuditFrozen.
+                QueueTransactionGeneration = _schedulerMode ==
+                    SimpleDdgiSchedulerMode.GpuResident
+                    ? _gpuScheduler.ResourceGeneration
+                    : _updateTransactionSerial,
                 SourceLightingGeneration = _sourceLightingGeneration,
                 TransportGeneration = _transportGeneration,
-                GlobalConvergenceGeneration = _transportGlobalConvergenceSourceGeneration,
+                // Word 19 is the resident solve-epoch witness. Source/operator
+                // generations remain in their dedicated words above; the GPU
+                // scheduler stamps cached commits with this epoch so the audit
+                // can prove complete participant visitation without a full
+                // CPU probe walk.
+                GlobalConvergenceGeneration = _transportSolveController.SolveEpoch,
                 CameraPositionAndNearProximity = new Vector4(
                     cameraPosition.X,
                     cameraPosition.Y,
@@ -8586,7 +9279,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 RayBucket5 = rayBuckets[5],
                 InvalidationMarkerGeneration = _currentProbeInvalidationMarkerSerial,
                 Reserved0 = BitConverter.SingleToUInt32Bits(Math.Clamp(
-                    gi.SimpleDdgiTransportResidualThreshold,
+                    gi.SimpleDdgiTransportTailRelativeTolerance,
                     0.0f,
                     1.0f))
             };
@@ -8810,6 +9503,15 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             uint dirtyReasons = (uint)_probeDirtyReasons[probeIndex];
             if (_probeFresh[probeIndex] != 0)
                 dirtyReasons |= SimpleDdgiSchedulerAbi.ReasonFresh;
+            if (_probeInactive[probeIndex] == 0)
+            {
+                // The activation bootstrap has no completed GPU visibility
+                // reduction yet. Treat every active slot as a conservative
+                // receiver-visible participant; later classification may
+                // exclude confidently inactive slots, never silently omit a
+                // live slot from the certification denominator.
+                dirtyReasons |= SimpleDdgiSchedulerAbi.ProbeMetadataVisible;
+            }
             if ((uint)probeIndex < (uint)_probeSchedulingFlags.Length)
             {
                 byte schedulingFlags = _probeSchedulingFlags[probeIndex];
@@ -10319,8 +11021,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 TransportControls = new Vector4(
                     settings.SimpleDdgiTransportSolverRelaxation,
                     settings.SimpleDdgiTransportAlbedoClamp,
-                    settings.SimpleDdgiTransportResidualThreshold,
-                    settings.SimpleDdgiTransportMaximumSolverGenerations)
+                    settings.SimpleDdgiTransportTailRelativeTolerance,
+                    settings.SimpleDdgiTransportAcceleratedSweepCount)
             };
         }
 
@@ -10953,7 +11655,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 GlobalIlluminationSettings gi = _settings.GlobalIllumination;
                 float stableResidualThreshold = Math.Min(
                     gi.SimpleDdgiStableMaintenanceEmaThreshold,
-                    gi.SimpleDdgiTransportResidualThreshold);
+                    gi.SimpleDdgiTransportTailRelativeTolerance);
                 bool sourceReady =
                     (uint)probeIndex < (uint)_probeSourceLightingGenerations.Length &&
                     (uint)probeIndex < (uint)_probeSourceRayCounts.Length &&
@@ -10962,7 +11664,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 bool minimumSolverWorkComplete =
                     (uint)probeIndex < (uint)expectedTransportGenerations.Length &&
                     expectedTransportGenerations[probeIndex] >=
-                        Math.Max(1, gi.SimpleDdgiTransportMaximumSolverGenerations);
+                        Math.Max(1, gi.SimpleDdgiTransportAcceleratedSweepCount);
                 bool disqualifyingState =
                     (classificationFeedbackEnabled && inactive) ||
                     reactivated ||
@@ -11300,6 +12002,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             // raises this only after those writes are in the command stream.
             _gpuSchedulerFrameExecutionAvailable = !nextMode.IsGpuMode();
             _gpuSchedulerFeedbackValid = false;
+            _transportResidentParticipantCount = 0;
+            _transportResidentSourceRepairProbeCount = 0;
             _lastGpuSchedulerFeedback = default;
             _gpuSchedulerFeedbackFrameSerial = 0;
         }
@@ -11386,8 +12090,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             bool ClassificationSchedulingEnabled,
             bool ConvergenceReadbackValid,
             int StableMaintenanceUpdateCount,
-            int MaximumSolverGenerations,
-            int ResidualThresholdBits);
+            int AcceleratedSweepCount,
+            int TailToleranceBits);
 
         private readonly record struct RetiredBufferResource(
             BufferHandle Buffer,

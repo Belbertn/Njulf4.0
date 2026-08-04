@@ -72,6 +72,8 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
     public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
     {
         GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+        if (_volumeManager.TransportTailAuditPending)
+            return false;
         return _volumeManager.SchedulerMode.IsGpuMode() &&
             gi.EffectiveUseDdgi &&
             gi.SimpleDdgiStructuredGatherEnabled &&

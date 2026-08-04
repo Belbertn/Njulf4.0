@@ -54,6 +54,21 @@ const uint SIMPLE_DDGI_FLAG_TRANSPORT_V2 = 1u << 11;
 // Bits 12..19 contain the packed second-volume ownership threshold.
 const uint SIMPLE_DDGI_FLAG_THIN_SURFACE_TRANSMISSION = 1u << 20;
 const uint SIMPLE_DDGI_FLAG_FORCE_LEGACY_FAR_FIELD_FALLBACK = 1u << 21;
+// Bit 23 is reserved for the CPU-recorded coarse-to-fine solve phase. The
+// selected volume index is carried in the existing primary-light push field
+// for transport/blend/intermediate-publish shaders, which do not otherwise use
+// that field.
+const uint SIMPLE_DDGI_SOLVE_VOLUME_FILTER = 1u << 23;
+// These bits live only in compute-pass push constants, not in the persistent
+// params header.  They describe one ordered red/black cached solve phase:
+// filter by logical color, identify the first color for first-sweep-only
+// lifecycle work, and delay scheduler completion until the final color.
+const uint SIMPLE_DDGI_SOLVE_COLOR_FILTER = 1u << 24;
+const uint SIMPLE_DDGI_SOLVE_FIRST_COLOR = 1u << 25;
+const uint SIMPLE_DDGI_SOLVE_FINAL_COLOR = 1u << 26;
+const uint SIMPLE_DDGI_SOLVE_COLOR_SHIFT = 27u;
+const uint SIMPLE_DDGI_SOLVE_COLOR_MASK = 1u << SIMPLE_DDGI_SOLVE_COLOR_SHIFT;
+const uint SIMPLE_DDGI_SOLVE_SWEEP_INDEX_SHIFT = 28u;
 // A normalized [0, 1] second-volume early-out threshold is packed into the
 // otherwise-unused high flag bits. This preserves the fixed params header ABI.
 const uint SIMPLE_DDGI_SECOND_VOLUME_OWNERSHIP_THRESHOLD_SHIFT = 12u;
@@ -345,8 +360,8 @@ struct SimpleDdgiParams
     uint transportGeneration;
     float transportSolverRelaxation;
     float transportAlbedoClamp;
-    float transportResidualThreshold;
-    uint transportMaximumSolverGenerations;
+    float transportTailRelativeTolerance;
+    uint transportAcceleratedSweepCount;
 };
 
 bool SimpleDdgiDetailedDiagnosticsEnabled(SimpleDdgiParams params)
@@ -870,8 +885,8 @@ SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
     p.transportGeneration = floatBitsToUint(transportIndices.w);
     p.transportSolverRelaxation = clamp(transportControls.x, 0.05, 1.0);
     p.transportAlbedoClamp = clamp(transportControls.y, 0.50, 0.99);
-    p.transportResidualThreshold = clamp(transportControls.z, 0.001, 1.0);
-    p.transportMaximumSolverGenerations = clamp(uint(max(transportControls.w, 1.0)), 1u, 64u);
+    p.transportTailRelativeTolerance = clamp(transportControls.z, 0.0, 1.0);
+    p.transportAcceleratedSweepCount = clamp(uint(max(transportControls.w, 1.0)), 1u, 4u);
     return p;
 }
 
@@ -985,6 +1000,46 @@ uvec3 SimpleDdgiProbeCoord(uint localProbeIndex, SimpleDdgiVolume volume)
     return (physical + volume.gridCount - (volume.physicalOffset % volume.gridCount)) % volume.gridCount;
 }
 
+uint SimpleDdgiSolveTargetColor(uint flags)
+{
+    return (flags & SIMPLE_DDGI_SOLVE_COLOR_MASK) >>
+        SIMPLE_DDGI_SOLVE_COLOR_SHIFT;
+}
+
+bool SimpleDdgiSolveColorMatches(
+    uint flags,
+    SimpleDdgiVolume volume,
+    uint localProbeIndex)
+{
+    if ((flags & SIMPLE_DDGI_SOLVE_COLOR_FILTER) == 0u)
+        return true;
+
+    uvec3 logical = SimpleDdgiProbeCoord(localProbeIndex, volume);
+    uint logicalColor = (logical.x + logical.y + logical.z) & 1u;
+    return logicalColor == SimpleDdgiSolveTargetColor(flags);
+}
+
+bool SimpleDdgiSolveVolumeMatches(
+    uint flags,
+    uint volumeIndex,
+    uint filteredVolumeIndex)
+{
+    return (flags & SIMPLE_DDGI_SOLVE_VOLUME_FILTER) == 0u ||
+        volumeIndex == filteredVolumeIndex;
+}
+
+bool SimpleDdgiSolveIsFirstColor(uint flags)
+{
+    return (flags & SIMPLE_DDGI_SOLVE_COLOR_FILTER) == 0u ||
+        (flags & SIMPLE_DDGI_SOLVE_FIRST_COLOR) != 0u;
+}
+
+bool SimpleDdgiSolveIsFinalColor(uint flags)
+{
+    return (flags & SIMPLE_DDGI_SOLVE_COLOR_FILTER) == 0u ||
+        (flags & SIMPLE_DDGI_SOLVE_FINAL_COLOR) != 0u;
+}
+
 vec3 SimpleDdgiProbeWorldPosition(uint globalProbeIndex, SimpleDdgiParams p, out uint volumeIndexOut)
 {
     for (uint volumeIndex = 0u; volumeIndex < p.volumeCount; volumeIndex++)
@@ -1029,6 +1084,46 @@ vec3 SimpleDdgiOctDecode(vec2 e)
     float t = clamp(-n.z, 0.0, 1.0);
     n.xy += vec2(n.x >= 0.0 ? -t : t, n.y >= 0.0 ? -t : t);
     return normalize(n);
+}
+
+// V2's certified estimator is shared by the regular cached-source blend and
+// the frozen audit. It is deliberately positive and normalized by sampled
+// cosine mass rather than using the signed reduced-SH reconstruction.
+float SimpleDdgiPositiveCosineWeight(vec3 texelDirection, vec3 sampleDirection)
+{
+    float directionLengthSquared = dot(sampleDirection, sampleDirection);
+    if (isnan(directionLengthSquared) || isinf(directionLengthSquared) ||
+        directionLengthSquared <= 0.0000001)
+    {
+        return 0.0;
+    }
+    return max(
+        dot(texelDirection, sampleDirection * inversesqrt(directionLengthSquared)),
+        0.0);
+}
+
+vec3 SimpleDdgiEvaluatePositiveIrradiance(vec3 accumulated, float weightSum)
+{
+    if (any(isnan(accumulated)) || any(isinf(accumulated)) ||
+        any(lessThan(accumulated, vec3(0.0))) ||
+        isnan(weightSum) || isinf(weightSum) || weightSum <= 0.000001)
+    {
+        return vec3(0.0);
+    }
+    return accumulated * (SIMPLE_DDGI_PI / weightSum);
+}
+
+// The cached transport and the frozen audit must project the same bounded
+// radiance. This radial luminance clamp is non-expansive on the nonnegative
+// field and prevents an FP32 recursive spike from diverging from the value
+// that the transport scratch/irradiance blend actually consumes.
+vec3 SimpleDdgiClampTransportRadiance(vec3 value)
+{
+    if (any(isnan(value)) || any(isinf(value)))
+        return vec3(0.0);
+    float luminance = dot(max(value, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+    float scale = luminance > 64.0 ? 64.0 / luminance : 1.0;
+    return clamp(value * scale, vec3(0.0), vec3(65504.0));
 }
 
 vec3 SimpleDdgiRotateByQuaternion(vec3 v, vec4 q)
@@ -1113,6 +1208,11 @@ struct SimpleDdgiTransportRayCache
     vec3 diffuseReflectance;
     vec3 transmittedDiffuseReflectance;
     float materialOcclusion;
+    // The high byte of the packed transmission word carries the complete
+    // source sequence cardinality.  The RGB transmission payload remains
+    // unchanged; retaining this per-probe value in every cache entry lets the
+    // frozen audit evaluate mixed-ring fields without a second metadata SSBO.
+    uint sourceRayCount;
     uint generationAndFlags;
 };
 
@@ -1147,7 +1247,8 @@ void WriteSimpleDdgiTransportRayCache(
     vec3 transmittedDiffuseReflectance,
     float materialOcclusion,
     float hitKind,
-    uint probeGeneration)
+    uint probeGeneration,
+    uint sourceRayCount)
 {
     uint baseWord = SimpleDdgiTransportRayCacheBase(probeIndex, directionRayIndex, p);
     WriteStorageVec4Uniform(
@@ -1162,12 +1263,19 @@ void WriteSimpleDdgiTransportRayCache(
         packUnorm4x8(vec4(
             clamp(diffuseReflectance, vec3(0.0), vec3(1.0)),
             clamp(materialOcclusion, 0.0, 1.0))));
-    WriteStorageWordUniform(
-        bufferIndex,
-        baseWord + 7u,
-        packUnorm4x8(vec4(
-            clamp(transmittedDiffuseReflectance, vec3(0.0), vec3(1.0)),
-            0.0)));
+    uint packedTransmission = packUnorm4x8(vec4(
+        clamp(transmittedDiffuseReflectance, vec3(0.0), vec3(1.0)),
+        0.0));
+    // The high byte has one useful spare encoding: zero represents the
+    // supported maximum cardinality of 256, while 1..255 represent their
+    // literal count. This keeps the cache ABI lossless at the configured ray
+    // maximum without allocating another metadata word.
+    uint encodedSourceRayCount = sourceRayCount >= 256u
+        ? 0u
+        : clamp(sourceRayCount, 1u, 255u);
+    packedTransmission = (packedTransmission & 0x00ffffffu) |
+        (encodedSourceRayCount << 24u);
+    WriteStorageWordUniform(bufferIndex, baseWord + 7u, packedTransmission);
     uint flags = SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG |
         (hitKind >= 0.5 ? SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG : 0u) |
         (hitKind > 1.5 ? SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG : 0u);
@@ -1192,6 +1300,7 @@ bool ReadSimpleDdgiTransportRayCache(
     cache.diffuseReflectance = vec3(0.0);
     cache.transmittedDiffuseReflectance = vec3(0.0);
     cache.materialOcclusion = 1.0;
+    cache.sourceRayCount = 0u;
     cache.generationAndFlags = 0u;
     if (bufferIndex == 0u || directionRayIndex >= p.raysPerProbe)
         return false;
@@ -1206,8 +1315,19 @@ bool ReadSimpleDdgiTransportRayCache(
     }
 
     vec4 sourceRadianceDistance = ReadStorageVec4Uniform(bufferIndex, baseWord);
-    cache.sourceRadiance = max(sourceRadianceDistance.rgb, vec3(0.0));
-    cache.distance = max(sourceRadianceDistance.w, 0.0);
+    // The source trace normally clamps these values before writing the cache,
+    // but the audit must not turn corrupted storage into a valid black sample.
+    // Reject the raw payload before any max/clamp operation can hide a NaN,
+    // infinity, or negative radiance component.
+    if (any(isnan(sourceRadianceDistance)) ||
+        any(isinf(sourceRadianceDistance)) ||
+        any(lessThan(sourceRadianceDistance.rgb, vec3(0.0))) ||
+        sourceRadianceDistance.w < 0.0)
+    {
+        return false;
+    }
+    cache.sourceRadiance = sourceRadianceDistance.rgb;
+    cache.distance = sourceRadianceDistance.w;
     uvec4 surface = ReadStorageUVec4Uniform(bufferIndex, baseWord + 4u);
     cache.direction = UnpackSimpleDdgiTransportOctDirection(surface.x);
     cache.normal = UnpackSimpleDdgiTransportOctDirection(surface.y);
@@ -1216,6 +1336,10 @@ bool ReadSimpleDdgiTransportRayCache(
     cache.transmittedDiffuseReflectance =
         unpackUnorm4x8(surface.w).rgb;
     cache.materialOcclusion = packedSurface.a;
+    uint encodedSourceRayCount = surface.w >> 24u;
+    cache.sourceRayCount = encodedSourceRayCount == 0u
+        ? 256u
+        : encodedSourceRayCount;
     cache.generationAndFlags = generationAndFlags;
     return true;
 }

@@ -181,9 +181,11 @@ namespace Njulf.Rendering
         private SimpleDdgiTracePass? _simpleDdgiTracePass;
         private SimpleDdgiSchedulePass? _simpleDdgiSchedulePass;
         private SimpleDdgiRelocateClassifyPass? _simpleDdgiRelocateClassifyPass;
+        private SimpleDdgiAcceleratedSolvePass? _simpleDdgiAcceleratedSolvePass;
         private SimpleDdgiTransportPass? _simpleDdgiTransportPass;
         private SimpleDdgiBlendPass? _simpleDdgiBlendPass;
         private SimpleDdgiPublishPass? _simpleDdgiPublishPass;
+        private SimpleDdgiTransportAuditPass? _simpleDdgiTransportAuditPass;
         private SimpleDdgiSchedulerCommitPass? _simpleDdgiSchedulerCommitPass;
         private SkinningPass _skinningPass = null!;
         private GpuParticleResetPass _gpuParticleResetPass = null!;
@@ -919,6 +921,15 @@ namespace Njulf.Rendering
             _simpleDdgiRelocateClassifyPass = simpleDdgiRelocateClassifyPass;
             AddPassInstance(simpleDdgiRelocateClassifyPass);
 
+            var simpleDdgiAcceleratedSolvePass = new SimpleDdgiAcceleratedSolvePass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                Settings,
+                _simpleDdgiVolumeManager!);
+            _simpleDdgiAcceleratedSolvePass = simpleDdgiAcceleratedSolvePass;
+            AddPassInstance(simpleDdgiAcceleratedSolvePass);
+
             var simpleDdgiTransportPass = new SimpleDdgiTransportPass(
                 _context,
                 _swapchain,
@@ -947,6 +958,15 @@ namespace Njulf.Rendering
                 _simpleDdgiVolumeManager!);
             _simpleDdgiPublishPass = simpleDdgiPublishPass;
             AddPassInstance(simpleDdgiPublishPass);
+
+            var simpleDdgiTransportAuditPass = new SimpleDdgiTransportAuditPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                Settings,
+                _simpleDdgiVolumeManager!);
+            _simpleDdgiTransportAuditPass = simpleDdgiTransportAuditPass;
+            AddPassInstance(simpleDdgiTransportAuditPass);
 
             var simpleDdgiSchedulerCommitPass = new SimpleDdgiSchedulerCommitPass(
                 _context,
@@ -1171,6 +1191,9 @@ namespace Njulf.Rendering
                 // fence-complete result frame-late even when the CPU reaches
                 // BeginFrame immediately after submission.
                 _simpleDdgiVolumeManager.TryConsumeGpuSchedulerFeedback(
+                    _currentFrame,
+                    _ddgiFrameSerial + 1UL);
+                _simpleDdgiVolumeManager.TryConsumeGpuTransportAudit(
                     _currentFrame,
                     _ddgiFrameSerial + 1UL);
             }
@@ -4018,7 +4041,8 @@ namespace Njulf.Rendering
                 SimpleDdgiTransportConvergence = giUsesSimpleDdgi
                     ? AttributeSimpleDdgiTransportRingTimings(
                         sceneData.SimpleDdgiTransportConvergence,
-                        sceneData.GpuSimpleDdgiTransportMicroseconds,
+                        sceneData.GpuSimpleDdgiTransportMicroseconds +
+                        sceneData.GpuSimpleDdgiAcceleratedSolveMicroseconds,
                         sceneData.GpuSimpleDdgiBlendMicroseconds)
                     : SimpleDdgiTransportConvergenceTelemetry.Empty,
                 SimpleDdgiTransportCalibrationChangeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportCalibrationChangeCount : 0UL,
@@ -4026,7 +4050,11 @@ namespace Njulf.Rendering
                 SimpleDdgiTransportSourceCacheBytes = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceCacheBytes : 0UL,
                 SimpleDdgiTransportSolverRelaxation = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSolverRelaxation : 0.0f,
                 SimpleDdgiTransportAlbedoClamp = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportAlbedoClamp : 0.0f,
-                SimpleDdgiTransportResidualThreshold = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportResidualThreshold : 0.0f,
+                SimpleDdgiTransportTailRelativeTolerance = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportTailRelativeTolerance : 0.0f,
+                SimpleDdgiTransportAcceleratedSweepCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportAcceleratedSweepCount : 0,
+                SimpleDdgiTransportAccelerationEnabled = giUsesSimpleDdgi && sceneData.SimpleDdgiTransportAccelerationEnabled,
+                SimpleDdgiTransportTailCertificationEnabled = giUsesSimpleDdgi && sceneData.SimpleDdgiTransportTailCertificationEnabled,
+                SimpleDdgiTransportResidualThreshold = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportTailRelativeTolerance : 0.0f,
                 SimpleDdgiTransportMaximumSolverGenerations = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportMaximumSolverGenerations : 0,
                 SimpleDdgiTransportSourceRefreshFrames = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceRefreshFrames : 0,
                 SimpleDdgiTransportConfiguredSourceRefreshFrames = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportConfiguredSourceRefreshFrames : 0,
@@ -7777,7 +7805,7 @@ namespace Njulf.Rendering
 
         private static AsyncComputePath? GetAsyncComputePath(string passName) => passName switch
         {
-            "SimpleDdgiSchedulePass" or "SimpleDdgiTracePass" or "SimpleDdgiRelocateClassifyPass" or "SimpleDdgiTransportPass" or "SimpleDdgiBlendPass" or "SimpleDdgiPublishPass" or "SimpleDdgiSchedulerCommitPass" => AsyncComputePath.SimpleDdgiUpdate,
+            "SimpleDdgiSchedulePass" or "SimpleDdgiTracePass" or "SimpleDdgiRelocateClassifyPass" or "SimpleDdgiAcceleratedSolvePass" or "SimpleDdgiTransportPass" or "SimpleDdgiBlendPass" or "SimpleDdgiPublishPass" or "SimpleDdgiTransportAuditPass" or "SimpleDdgiSchedulerCommitPass" => AsyncComputePath.SimpleDdgiUpdate,
             "FarFieldClipmapBakePass" => AsyncComputePath.FarFieldClipmapBake,
             "AmbientOcclusionBlurPass" => AsyncComputePath.AmbientOcclusionBlur,
             "HiZBuildPass" => AsyncComputePath.HiZBuild,
@@ -8196,9 +8224,11 @@ namespace Njulf.Rendering
         {
             return HasCompletedGpuTiming(timings, "SimpleDdgiSchedulePass") ||
                 HasCompletedGpuTiming(timings, "SimpleDdgiTracePass") ||
+                HasCompletedGpuTiming(timings, "SimpleDdgiAcceleratedSolvePass") ||
                 HasCompletedGpuTiming(timings, "SimpleDdgiTransportPass") ||
                 HasCompletedGpuTiming(timings, "SimpleDdgiBlendPass") ||
                 HasCompletedGpuTiming(timings, "SimpleDdgiPublishPass") ||
+                HasCompletedGpuTiming(timings, "SimpleDdgiTransportAuditPass") ||
                 HasCompletedGpuTiming(timings, "SimpleDdgiRelocateClassifyPass") ||
                 HasCompletedGpuTiming(timings, "SimpleDdgiSchedulerCommitPass");
         }
@@ -8227,8 +8257,12 @@ namespace Njulf.Rendering
             sceneData.GpuAccelerationStructureTlasMicroseconds = timings.GetGpuMicrosecondsOrZero("AccelerationStructureTlasPass");
             sceneData.GpuSimpleDdgiScheduleMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiSchedulePass");
             sceneData.GpuSimpleDdgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiTracePass");
+            sceneData.GpuSimpleDdgiAcceleratedSolveMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("SimpleDdgiAcceleratedSolvePass");
             sceneData.GpuSimpleDdgiTransportMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiTransportPass");
             sceneData.GpuSimpleDdgiBlendMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiBlendPass");
+            sceneData.GpuSimpleDdgiTransportAuditMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("SimpleDdgiTransportAuditPass");
             long gpuSimpleDdgiPublishMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiPublishPass");
             sceneData.GpuSimpleDdgiCommitMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiSchedulerCommitPass");
             sceneData.GpuFarFieldUpdateMicroseconds = timings.GetGpuMicrosecondsOrZero("FarFieldClipmapBakePass");
@@ -8237,8 +8271,10 @@ namespace Njulf.Rendering
             sceneData.GpuDdgiUpdateMicroseconds =
                 sceneData.GpuSimpleDdgiScheduleMicroseconds +
                 sceneData.GpuSimpleDdgiTraceMicroseconds +
+                sceneData.GpuSimpleDdgiAcceleratedSolveMicroseconds +
                 sceneData.GpuSimpleDdgiTransportMicroseconds +
                 sceneData.GpuSimpleDdgiBlendMicroseconds +
+                sceneData.GpuSimpleDdgiTransportAuditMicroseconds +
                 gpuSimpleDdgiRelocateClassifyMicroseconds +
                 gpuSimpleDdgiPublishMicroseconds +
                 sceneData.GpuSimpleDdgiCommitMicroseconds;
@@ -8770,7 +8806,11 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiTransportSourceCacheBytes = _simpleDdgiVolumeManager.TransportSourceCacheBytes;
             sceneData.SimpleDdgiTransportSolverRelaxation = Settings.GlobalIllumination.SimpleDdgiTransportSolverRelaxation;
             sceneData.SimpleDdgiTransportAlbedoClamp = Settings.GlobalIllumination.SimpleDdgiTransportAlbedoClamp;
-            sceneData.SimpleDdgiTransportResidualThreshold = Settings.GlobalIllumination.SimpleDdgiTransportResidualThreshold;
+            sceneData.SimpleDdgiTransportTailRelativeTolerance = Settings.GlobalIllumination.SimpleDdgiTransportTailRelativeTolerance;
+            sceneData.SimpleDdgiTransportAcceleratedSweepCount = Settings.GlobalIllumination.SimpleDdgiTransportAcceleratedSweepCount;
+            sceneData.SimpleDdgiTransportAccelerationEnabled = Settings.GlobalIllumination.SimpleDdgiTransportAccelerationEnabled;
+            sceneData.SimpleDdgiTransportTailCertificationEnabled = Settings.GlobalIllumination.SimpleDdgiTransportTailCertificationEnabled;
+            sceneData.SimpleDdgiTransportResidualThreshold = sceneData.SimpleDdgiTransportTailRelativeTolerance;
             sceneData.SimpleDdgiTransportMaximumSolverGenerations = Settings.GlobalIllumination.SimpleDdgiTransportMaximumSolverGenerations;
             sceneData.SimpleDdgiTransportSourceRefreshFrames =
                 _simpleDdgiVolumeManager.EffectiveTransportSourceRefreshFrames;

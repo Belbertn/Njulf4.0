@@ -152,6 +152,86 @@ public sealed class RenderSettingsFileIoTests
     }
 
     [Test]
+    public void SaveLoad_PreservesCertifiedTransportControlsAndOmitsLegacyGateNames()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "transport-controls.json");
+        try
+        {
+            var settings = new RenderSettings();
+            settings.GlobalIllumination.SimpleDdgiTransportTailRelativeTolerance = 0.0625f;
+            settings.GlobalIllumination.SimpleDdgiTransportAcceleratedSweepCount = 4;
+            settings.GlobalIllumination.SimpleDdgiTransportAccelerationEnabled = false;
+            settings.GlobalIllumination.SimpleDdgiTransportTailCertificationEnabled = false;
+
+            settings.Save(path);
+            string json = File.ReadAllText(path);
+            RenderSettings loaded = RenderSettings.Load(path);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(loaded.GlobalIllumination.SimpleDdgiTransportTailRelativeTolerance,
+                    Is.EqualTo(0.0625f));
+                Assert.That(loaded.GlobalIllumination.SimpleDdgiTransportAcceleratedSweepCount,
+                    Is.EqualTo(4));
+                Assert.That(loaded.GlobalIllumination.SimpleDdgiTransportAccelerationEnabled,
+                    Is.False);
+                Assert.That(loaded.GlobalIllumination.SimpleDdgiTransportTailCertificationEnabled,
+                    Is.False);
+                Assert.That(json, Does.Contain("SimpleDdgiTransportTailRelativeTolerance"));
+                Assert.That(json, Does.Contain("SimpleDdgiTransportAcceleratedSweepCount"));
+                Assert.That(json, Does.Not.Contain("SimpleDdgiTransportResidualThreshold"));
+                Assert.That(json, Does.Not.Contain("SimpleDdgiTransportMaximumSolverGenerations"));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Load_MigratesLegacyTransportNamesAndSaveWritesOnlyCurrentNames()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "legacy-transport-controls.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Version": 8,
+                  "GlobalIllumination": {
+                    "SimpleDdgiTransportResidualThreshold": 0.07,
+                    "SimpleDdgiTransportMaximumSolverGenerations": 3
+                  }
+                }
+                """);
+
+            RenderSettings loaded = RenderSettings.Load(path);
+            Assert.Multiple(() =>
+            {
+                Assert.That(loaded.GlobalIllumination.SimpleDdgiTransportTailRelativeTolerance,
+                    Is.EqualTo(0.07f));
+                Assert.That(loaded.GlobalIllumination.SimpleDdgiTransportMaximumSolverGenerations,
+                    Is.EqualTo(3));
+            });
+
+            loaded.Save(path);
+            string migratedJson = File.ReadAllText(path);
+            Assert.Multiple(() =>
+            {
+                Assert.That(migratedJson, Does.Contain("SimpleDdgiTransportTailRelativeTolerance"));
+                Assert.That(migratedJson, Does.Not.Contain("SimpleDdgiTransportResidualThreshold"));
+                Assert.That(migratedJson, Does.Not.Contain("SimpleDdgiTransportMaximumSolverGenerations"));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
     public void QualityPresets_EnableLayeredDdgiOnlyWhenDdgiIsAvailable()
     {
         var settings = new RenderSettings();

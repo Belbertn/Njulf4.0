@@ -6,6 +6,11 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
+// Keep the feedback participant definition identical to the transport audit.
+// schedule_shared intentionally does not include the larger DDGI shared ABI,
+// so mirror the stable public classification value locally.
+const uint SIMPLE_DDGI_CLASSIFICATION_INACTIVE = 1u;
+
 void main()
 {
     if (gl_GlobalInvocationID.x != 0u)
@@ -17,6 +22,8 @@ void main()
         SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
         SchedulerRequestCapacity());
     uint committed = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_COMMITTED);
+    uint published = SchedulerArenaRead(
+        pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_PUBLISHED);
     uint rejected = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_REJECTED);
     uint primaryUsed = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_PRIMARY_USED);
     uint sourceUsed = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_SOURCE_USED);
@@ -38,12 +45,15 @@ void main()
     uint visibleParticipants = 0u;
     uint visibleSourceReady = 0u;
     uint visiblePublished = 0u;
+    uint participatingCount = 0u;
+    uint solveEpochVisitedCount = 0u;
     uint activeProbeCount = min(SchedulerActiveProbeCount(), 32768u);
     for (uint probeIndex = 0u; probeIndex < activeProbeCount; probeIndex++)
     {
         uint publicBase = probeIndex * SIMPLE_DDGI_PROBE_STATE_WORDS;
         uint flags = ReadStorageWordUniform(pc.ProbeStateBufferIndex, publicBase + 4u);
         uint age = ReadStorageWordUniform(pc.ProbeStateBufferIndex, publicBase + 5u);
+        uint classification = ReadStorageWordUniform(pc.ProbeStateBufferIndex, publicBase + 6u);
         uint privateBase = pc.SchedulerProbeStateOffsetWords +
             probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
         uint metadata = SchedulerArenaRead(privateBase + 5u);
@@ -58,15 +68,31 @@ void main()
         uint sourceGeneration = SchedulerArenaRead(privateBase + 2u);
         bool visible = (metadata & SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBLE) != 0u;
         bool published = (metadata & SIMPLE_DDGI_SCHEDULER_PROBE_META_PUBLISHED) != 0u;
-        bool inactive = (flags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u ||
+        bool inactive = classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE ||
+            (flags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u ||
             uintBitsToFloat(ReadStorageWordUniform(pc.ProbeStateBufferIndex, publicBase + 3u)) <= 0.001;
-        bool participating = !inactive;
+        // Tail certification scopes the field-wide witness to receiver-visible
+        // active probes. Invisible slots remain schedulable maintenance work,
+        // but they cannot silently inflate the certification denominator.
+        bool participating = !inactive &&
+            (!SchedulerTailCertification() || visible);
+        participatingCount += participating ? 1u : 0u;
+        uint lastSolveEpoch = SchedulerArenaRead(privateBase + 9u);
+        bool solveEpochVisited = participating &&
+            SchedulerTailCertification() &&
+            SchedulerSolveEpoch() != 0u &&
+            lastSolveEpoch == SchedulerSolveEpoch();
+        solveEpochVisitedCount += solveEpochVisited ? 1u : 0u;
         bool sourceReady = SchedulerTransportV2() && sourceRays != 0u &&
             sourceGeneration == SchedulerSourceGeneration() &&
             (flags & SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID) == 0u;
-        bool solverReady = sourceReady &&
-            completedTransportGeneration == (SchedulerTransportGeneration() & 0xffu) &&
-            stableUpdates >= max(SchedulerFrame(30u), 1u);
+        bool solverReady = SchedulerTailCertification()
+            ? sourceReady &&
+                lastSolveEpoch == SchedulerSolveEpoch() &&
+                SchedulerSolveEpoch() != 0u
+            : sourceReady &&
+                completedTransportGeneration == (SchedulerTransportGeneration() & 0xffu) &&
+                stableUpdates >= max(SchedulerFrame(30u), 1u);
         bool hasFresh = (flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u;
         bool hasExposed = (flags & SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED) != 0u;
         bool hasRelocation = (flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u;
@@ -180,11 +206,11 @@ void main()
     SchedulerArenaWrite(base + 56u, visibleParticipants);
     SchedulerArenaWrite(base + 57u, visibleSourceReady);
     SchedulerArenaWrite(base + 58u, visiblePublished);
-    SchedulerArenaWrite(base + 59u, 0u);
-    SchedulerArenaWrite(base + 60u, 0u);
-    SchedulerArenaWrite(base + 61u, 0u);
+    SchedulerArenaWrite(base + 59u, participatingCount);
+    SchedulerArenaWrite(base + 60u, solveEpochVisitedCount);
+    SchedulerArenaWrite(base + 61u, SchedulerSolveEpoch());
     SchedulerArenaWrite(base + 62u, 0u);
-    SchedulerArenaWrite(base + 63u, 0u);
+    SchedulerArenaWrite(base + 63u, published);
     // Feedback reserves the words after the fixed 64-word summary for the
     // persistent rotating lane cursors. They are copied only after the
     // summary generation/serial has been validated by the host.

@@ -1,0 +1,490 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "gi_material_transport.glsl"
+#include "ddgi_simple_shared.glsl"
+#include "ddgi_simple_transport_operator.glsl"
+
+// One workgroup owns one physical probe. The dispatch is chunked by the CPU;
+// the frozen canonical atlas is read-only and no ray-query or source-light
+// evaluation is reachable from this kernel.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform SimpleDdgiTransportAuditPushBlock
+{
+    uint ParamsBufferIndex;
+    uint IrradianceAtlasBufferIndex;
+    uint VisibilityAtlasBufferIndex;
+    uint RayResultScratchBufferIndex;
+    uint CurrentFrameIndex;
+    uint LightCount;
+    uint DirectionalLightCount;
+    uint LocalLightCount;
+    uint MaxShadedLights;
+    uint EmissiveSourceCount;
+    uint FarFieldParamsBufferIndex;
+    uint FarFieldVoxelBufferIndex;
+    uint FarFieldInstanceBufferIndex;
+    uint Flags;
+    uint MaterialTextureMaxCascade;
+    uint ProbeStateBufferIndex;
+    uint ProbeUpdateQueueBufferIndex;
+    uint RelocationClassificationBufferIndex;
+    uint TransportSourceCacheBufferIndex;
+    uint TransportReadIrradianceAtlasBufferIndex;
+    uint TransportWriteIrradianceAtlasBufferIndex;
+    uint PrivateVisibilityAtlasOffsetWords;
+    uint TransportGeneration;
+    uint PrimaryDirectionalLightIndex;
+    uint DispatchQueueOffset;
+    uint DispatchProbeCount;
+    uint DispatchRaysPerProbe;
+    uint SchedulerArenaBufferIndex;
+    uint SchedulerRayBucketIndex;
+    uint SchedulerRayBucketCommandsOffsetWords;
+    uint SchedulerRayBucketMetadataOffsetWords;
+    uint SchedulerOutcomesOffsetWords;
+    uint SchedulerCountersOffsetWords;
+    uint SchedulerUpdateRecordsOffsetWords;
+    uint AuditSummaryBufferIndex;
+    uint AuditSummaryBaseWord;
+    uint AuditProbeOffset;
+    uint AuditProbeCount;
+    uint AuditExpectedParticipantCount;
+    uint AuditExpectedTexelCount;
+    uint AuditChunkIndex;
+    uint AuditFlags;
+    uint AuditSchedulerFrameOffsetWords;
+    uint AuditVolumeTableGeneration;
+    uint AuditPhysicalOwnershipGeneration;
+    uint AuditSourceLightingGeneration;
+    uint AuditSourceEpochGeneration;
+    uint AuditTransportOperatorGeneration;
+    uint AuditCanonicalFieldGeneration;
+    uint AuditSolveGeneration;
+    uint AuditEpochGeneration;
+    uint AuditQueueGeneration;
+    uint AuditSchedulerResourceGeneration;
+    uint AuditSchedulerProbeStateOffsetWords;
+    uint AuditSolveEpoch;
+} pc;
+
+const uint SIMPLE_DDGI_AUDIT_DEFECT_WORD = 0u;
+const uint SIMPLE_DDGI_AUDIT_FIELD_MAGNITUDE_WORD = 1u;
+const uint SIMPLE_DDGI_AUDIT_EXPECTED_PARTICIPANT_WORD = 2u;
+const uint SIMPLE_DDGI_AUDIT_AUDITED_PARTICIPANT_WORD = 3u;
+const uint SIMPLE_DDGI_AUDIT_EXPECTED_TEXEL_WORD = 4u;
+const uint SIMPLE_DDGI_AUDIT_AUDITED_TEXEL_WORD = 5u;
+const uint SIMPLE_DDGI_AUDIT_NONFINITE_WORD = 6u;
+const uint SIMPLE_DDGI_AUDIT_INVALID_CACHE_WORD = 7u;
+const uint SIMPLE_DDGI_AUDIT_CHUNK_WORD = 8u;
+const uint SIMPLE_DDGI_AUDIT_OBSERVED_CONTRACTION_WORD = 9u;
+const uint SIMPLE_DDGI_AUDIT_QUANTIZATION_FLOOR_WORD = 10u;
+const uint SIMPLE_DDGI_AUDIT_EXCLUDED_INACTIVE_WORD = 11u;
+const uint SIMPLE_DDGI_AUDIT_EXCLUDED_NOT_VISIBLE_WORD = 12u;
+const uint SIMPLE_DDGI_AUDIT_EXCLUDED_STALE_SOURCE_WORD = 13u;
+const uint SIMPLE_DDGI_AUDIT_COUNTER_OVERFLOW_WORD = 14u;
+const uint SIMPLE_DDGI_AUDIT_PROBE_META_VISIBLE = 1u << 16u;
+const uint SIMPLE_DDGI_AUDIT_PROBE_STATE_WORDS = 10u;
+const uint SIMPLE_DDGI_AUDIT_TRANSIENT_FLAGS =
+    SIMPLE_DDGI_PROBE_FLAG_FRESH |
+    SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED |
+    SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING |
+    SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID;
+
+// Evaluate each cached source direction once per probe. Reconstructing every
+// texel from these shared totals avoids 64 identical recursive gathers per
+// ray and keeps the audit cost proportional to rays + texels*rays.
+shared vec3 SharedAuditRadiance[SIMPLE_DDGI_MAX_RAYS_PER_PROBE];
+shared vec3 SharedAuditDirection[SIMPLE_DDGI_MAX_RAYS_PER_PROBE];
+shared uint SharedAuditValid[SIMPLE_DDGI_MAX_RAYS_PER_PROBE];
+shared uint SharedAuditBackface[SIMPLE_DDGI_MAX_RAYS_PER_PROBE];
+shared uint SharedAuditSourceRayCount;
+
+uint SimpleDdgiAuditWord(uint relativeWord)
+{
+    return pc.AuditSummaryBaseWord + relativeWord;
+}
+
+void SimpleDdgiAuditAtomicAdd(uint relativeWord, uint value)
+{
+    if (pc.AuditSummaryBufferIndex != 0u)
+    {
+        uint previous = atomicAdd(
+            BindlessStorageBuffers[nonuniformEXT(pc.AuditSummaryBufferIndex)].Words[
+                SimpleDdgiAuditWord(relativeWord)],
+            value);
+        if (value != 0u && previous > uint(0xffffffffu) - value)
+        {
+            atomicOr(
+                BindlessStorageBuffers[nonuniformEXT(pc.AuditSummaryBufferIndex)].Words[
+                    SimpleDdgiAuditWord(SIMPLE_DDGI_AUDIT_COUNTER_OVERFLOW_WORD)],
+                1u);
+        }
+    }
+}
+
+void SimpleDdgiAuditAtomicMax(uint relativeWord, uint value)
+{
+    if (pc.AuditSummaryBufferIndex != 0u)
+        atomicMax(BindlessStorageBuffers[nonuniformEXT(pc.AuditSummaryBufferIndex)].Words[
+            SimpleDdgiAuditWord(relativeWord)], value);
+}
+
+uint SimpleDdgiAuditSchedulerFrame(uint relativeWord)
+{
+    return ReadStorageWordUniform(
+        pc.SchedulerArenaBufferIndex,
+        pc.AuditSchedulerFrameOffsetWords + relativeWord);
+}
+
+// Return a conservative half-storage rounding interval for a non-negative
+// finite canonical value. Positive half encodings are monotonically ordered,
+// so adjacent encoded values provide the exact local spacing without a
+// device-specific nextafter implementation. The maximum interval across the
+// frozen field is reported separately from the fixed-point defect.
+float SimpleDdgiAuditHalfQuantizationFloor(float value)
+{
+    if (isnan(value) || isinf(value) || value < 0.0)
+        return 0.0;
+
+    uint bits = packHalf2x16(vec2(value, 0.0)) & 0xffffu;
+    uint previousBits = bits > 0u ? bits - 1u : 0u;
+    float previous = unpackHalf2x16(previousBits).x;
+    float next = value;
+    if (bits < 0x7bffu)
+        next = unpackHalf2x16(bits + 1u).x;
+
+    return 0.5 * max(max(value - previous, 0.0), max(next - value, 0.0));
+}
+
+bool SimpleDdgiAuditGenerationsMatch(SimpleDdgiParams params)
+{
+    // The params and scheduler frame are the GPU-resident witnesses for the
+    // CPU-frozen generation tuple.  The remaining solve/audit/canonical
+    // generations are carried as non-zero push constants and are checked by
+    // the delayed CPU acceptance path; they have no mutable shader-side field.
+    bool pushGenerationsValid =
+        pc.AuditVolumeTableGeneration != 0u &&
+        pc.AuditPhysicalOwnershipGeneration != 0u &&
+        pc.AuditSourceLightingGeneration != 0u &&
+        pc.AuditSourceEpochGeneration != 0u &&
+        pc.AuditTransportOperatorGeneration != 0u &&
+        pc.AuditCanonicalFieldGeneration != 0u &&
+        pc.AuditSolveGeneration != 0u &&
+        pc.AuditEpochGeneration != 0u &&
+        pc.AuditQueueGeneration != 0u &&
+        pc.AuditSchedulerResourceGeneration != 0u;
+    if (!pushGenerationsValid || pc.SchedulerArenaBufferIndex == 0u)
+        return false;
+
+    return params.transportGeneration == pc.TransportGeneration &&
+        SimpleDdgiAuditSchedulerFrame(14u) == pc.AuditVolumeTableGeneration &&
+        SimpleDdgiAuditSchedulerFrame(15u) == pc.AuditSchedulerResourceGeneration &&
+        SimpleDdgiAuditSchedulerFrame(16u) == pc.AuditQueueGeneration &&
+        SimpleDdgiAuditSchedulerFrame(17u) == pc.AuditSourceLightingGeneration &&
+        SimpleDdgiAuditSchedulerFrame(18u) == pc.TransportGeneration &&
+        pc.AuditSchedulerProbeStateOffsetWords != 0u &&
+        pc.AuditSolveEpoch != 0u &&
+        SimpleDdgiAuditSchedulerFrame(19u) == pc.AuditSolveEpoch;
+}
+
+vec3 SimpleDdgiAuditTexelDirection(uint texel, uint texelsPerProbe)
+{
+    uint x = texel % texelsPerProbe;
+    uint y = texel / texelsPerProbe;
+    vec2 uv = (vec2(x, y) + vec2(0.5)) / vec2(texelsPerProbe);
+    return SimpleDdgiOctDecode(uv);
+}
+
+void main()
+{
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    uint localTexel = gl_LocalInvocationID.x;
+    uint probeIndex = pc.AuditProbeOffset + gl_WorkGroupID.x;
+    if (probeIndex >= pc.AuditProbeCount || probeIndex >= params.probeCount)
+    {
+        return;
+    }
+    uint auditTexelCount = min(
+        params.irradianceTexels * params.irradianceTexels,
+        gl_WorkGroupSize.x);
+    bool texelActive = localTexel < auditTexelCount;
+
+    if (!SimpleDdgiAuditGenerationsMatch(params))
+    {
+        if (localTexel == 0u)
+            SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_NONFINITE_WORD, 1u);
+        return;
+    }
+
+    if (localTexel == 0u)
+    {
+        SimpleDdgiAuditAtomicMax(
+            SIMPLE_DDGI_AUDIT_EXPECTED_PARTICIPANT_WORD,
+            pc.AuditExpectedParticipantCount);
+        SimpleDdgiAuditAtomicMax(
+            SIMPLE_DDGI_AUDIT_EXPECTED_TEXEL_WORD,
+            pc.AuditExpectedTexelCount);
+        SimpleDdgiAuditAtomicMax(
+            SIMPLE_DDGI_AUDIT_CHUNK_WORD,
+            pc.AuditChunkIndex);
+    }
+    barrier();
+
+    SimpleDdgiProbeState state = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
+    uint schedulerStateBase = pc.AuditSchedulerProbeStateOffsetWords +
+        probeIndex * SIMPLE_DDGI_AUDIT_PROBE_STATE_WORDS;
+    uint schedulerMetadata = ReadStorageWordUniform(
+        pc.SchedulerArenaBufferIndex,
+        schedulerStateBase + 5u);
+    uint schedulerSourceLightingGeneration = ReadStorageWordUniform(
+        pc.SchedulerArenaBufferIndex,
+        schedulerStateBase + 2u);
+    uint schedulerSourceEpoch = ReadStorageWordUniform(
+        pc.SchedulerArenaBufferIndex,
+        schedulerStateBase + 3u);
+    uint schedulerVolumeTableGeneration = ReadStorageWordUniform(
+        pc.SchedulerArenaBufferIndex,
+        schedulerStateBase + 4u);
+    uint schedulerSolveEpoch = ReadStorageWordUniform(
+        pc.SchedulerArenaBufferIndex,
+        schedulerStateBase + 9u);
+    bool activeWeightFinite =
+        !isnan(state.activeWeight) && !isinf(state.activeWeight);
+    if (!activeWeightFinite)
+    {
+        if (localTexel == 0u)
+            SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_NONFINITE_WORD, 1u);
+        return;
+    }
+
+    bool inactiveState =
+        state.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE ||
+        (state.flags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u ||
+        state.activeWeight <= 0.001;
+    if (inactiveState)
+    {
+        if (localTexel == 0u)
+            SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_EXCLUDED_INACTIVE_WORD, 1u);
+        return;
+    }
+
+    if ((schedulerMetadata & SIMPLE_DDGI_AUDIT_PROBE_META_VISIBLE) == 0u)
+    {
+        if (localTexel == 0u)
+            SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_EXCLUDED_NOT_VISIBLE_WORD, 1u);
+        return;
+    }
+
+    if ((state.flags & SIMPLE_DDGI_AUDIT_TRANSIENT_FLAGS) != 0u)
+    {
+        if (localTexel == 0u)
+            SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_INVALID_CACHE_WORD, 1u);
+        return;
+    }
+
+    if (schedulerSolveEpoch != pc.AuditSolveEpoch)
+    {
+        if (localTexel == 0u)
+            SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_EXCLUDED_STALE_SOURCE_WORD, 1u);
+        return;
+    }
+
+    // The private scheduler record is the per-probe source/ownership witness.
+    // A matching global frame is insufficient: a slot that missed a local
+    // invalidation could otherwise contribute plausible but stale cache data.
+    if (schedulerSourceLightingGeneration != pc.AuditSourceLightingGeneration ||
+        schedulerSourceEpoch != pc.AuditSourceEpochGeneration ||
+        schedulerVolumeTableGeneration != pc.AuditVolumeTableGeneration)
+    {
+        if (localTexel == 0u)
+            SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_EXCLUDED_STALE_SOURCE_WORD, 1u);
+        return;
+    }
+
+    SimpleDdgiVolume volume;
+    uint localProbeIndex;
+    if (!ResolveSimpleDdgiProbeVolume(probeIndex, params, volume, localProbeIndex))
+    {
+        if (localTexel == 0u)
+            SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_NONFINITE_WORD, 1u);
+        return;
+    }
+
+    // The operator's gather reads this exact frozen canonical generation, not
+    // the sampled mirror. No writes are issued by the audit kernel.
+    SimpleDdgiParams auditParams = params;
+    auditParams.publishedIrradianceAtlasBufferIndex =
+        pc.TransportReadIrradianceAtlasBufferIndex;
+    auditParams.transportSourceCacheBufferIndex = pc.TransportSourceCacheBufferIndex;
+
+    // Source cohorts can use different full ray cardinalities by volume. The
+    // cardinality is stamped into the persistent cache by the source trace;
+    // using the global allocation capacity here would treat untouched cache
+    // slots as missing evidence and make mixed-ring certification impossible.
+    if (localTexel == 0u)
+    {
+        SimpleDdgiTransportRayCache metadataSource;
+        SharedAuditSourceRayCount = ReadSimpleDdgiTransportRayCache(
+            auditParams.transportSourceCacheBufferIndex,
+            probeIndex,
+            0u,
+            auditParams,
+            SimpleDdgiProbeGeneration(state),
+            metadataSource)
+            ? metadataSource.sourceRayCount
+            : 0u;
+    }
+    barrier();
+    uint sourceRayCount = SharedAuditSourceRayCount;
+    if (sourceRayCount == 0u || sourceRayCount > auditParams.raysPerProbe ||
+        sourceRayCount > SIMPLE_DDGI_MAX_RAYS_PER_PROBE)
+    {
+        if (localTexel == 0u)
+            SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_INVALID_CACHE_WORD, 1u);
+        return;
+    }
+    uint expectedGeneration = SimpleDdgiProbeGeneration(state);
+    for (uint ray = localTexel; ray < sourceRayCount; ray += gl_WorkGroupSize.x)
+    {
+        SharedAuditRadiance[ray] = vec3(0.0);
+        SharedAuditDirection[ray] = vec3(0.0, 1.0, 0.0);
+        SharedAuditValid[ray] = 0u;
+        SharedAuditBackface[ray] = 0u;
+
+        uint directionRayIndex = ray * auditParams.raysPerProbe / sourceRayCount;
+        SimpleDdgiTransportRayCache source;
+        if (!ReadSimpleDdgiTransportRayCache(
+                auditParams.transportSourceCacheBufferIndex,
+                probeIndex,
+                directionRayIndex,
+                auditParams,
+                expectedGeneration,
+                source) ||
+            source.sourceRayCount != sourceRayCount)
+        {
+            SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_INVALID_CACHE_WORD, 1u);
+            continue;
+        }
+
+        vec3 reflectedBounce;
+        vec3 transmittedBounce;
+        uint gatherCount;
+        float ownershipSum;
+        float fallbackWeightSum;
+        bool malformedOperatorInput;
+        float enforcedThroughput;
+        vec3 bounce = EvaluateSimpleDdgiCachedRecursiveBounce(
+            auditParams,
+            volume,
+            localProbeIndex,
+            state,
+            source,
+            reflectedBounce,
+            transmittedBounce,
+            gatherCount,
+            ownershipSum,
+            fallbackWeightSum,
+            malformedOperatorInput,
+            enforcedThroughput);
+        if (!malformedOperatorInput &&
+            !isnan(enforcedThroughput) &&
+            !isinf(enforcedThroughput) &&
+            enforcedThroughput >= 0.0)
+        {
+            SimpleDdgiAuditAtomicMax(
+                SIMPLE_DDGI_AUDIT_OBSERVED_CONTRACTION_WORD,
+                floatBitsToUint(enforcedThroughput));
+        }
+        vec3 rawRadiance = source.sourceRadiance + bounce;
+        if (malformedOperatorInput ||
+            !SimpleDdgiTransportFinite(rawRadiance) ||
+            any(lessThan(rawRadiance, vec3(0.0))))
+        {
+            SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_INVALID_CACHE_WORD, 1u);
+            continue;
+        }
+
+        vec3 radiance = SimpleDdgiClampTransportRadiance(rawRadiance);
+        if (!SimpleDdgiTransportFinite(radiance) ||
+            any(lessThan(radiance, vec3(0.0))))
+        {
+            SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_NONFINITE_WORD, 1u);
+            continue;
+        }
+
+        SharedAuditRadiance[ray] = radiance;
+        SharedAuditDirection[ray] = normalize(source.direction);
+        SharedAuditBackface[ray] = SimpleDdgiRayHitKindIsOneSidedBackFace(
+            SimpleDdgiTransportRayCacheHitKind(source)) ? 1u : 0u;
+        SharedAuditValid[ray] = 1u;
+    }
+    barrier();
+
+    if (!texelActive)
+        return;
+
+    vec3 texelDirection = SimpleDdgiAuditTexelDirection(
+        localTexel,
+        auditParams.irradianceTexels);
+    vec3 accumulated = vec3(0.0);
+    float weightSum = 0.0;
+    for (uint ray = 0u; ray < sourceRayCount; ray++)
+    {
+        if (SharedAuditValid[ray] == 0u || SharedAuditBackface[ray] != 0u)
+            continue;
+        float weight = SimpleDdgiPositiveCosineWeight(
+            texelDirection,
+            SharedAuditDirection[ray]);
+        accumulated += SharedAuditRadiance[ray] * weight;
+        weightSum += weight;
+    }
+
+    if (!SimpleDdgiTransportFinite(accumulated) || isnan(weightSum) || isinf(weightSum))
+    {
+        SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_NONFINITE_WORD, 1u);
+        return;
+    }
+
+    vec3 candidate = SimpleDdgiEvaluatePositiveIrradiance(
+        accumulated,
+        weightSum);
+    vec3 canonical = ReadSimpleDdgiAtlasTexel(
+        pc.TransportReadIrradianceAtlasBufferIndex,
+        probeIndex,
+        localTexel,
+        auditParams.irradianceTexels).rgb;
+    if (!SimpleDdgiTransportFinite(candidate) ||
+        !SimpleDdgiTransportFinite(canonical) ||
+        any(lessThan(candidate, vec3(0.0))) ||
+        any(lessThan(canonical, vec3(0.0))))
+    {
+        SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_NONFINITE_WORD, 1u);
+        return;
+    }
+
+    float defect = max(abs(candidate.r - canonical.r),
+        max(abs(candidate.g - canonical.g), abs(candidate.b - canonical.b)));
+    float fieldMagnitude = max(canonical.r, max(canonical.g, canonical.b));
+    SimpleDdgiAuditAtomicMax(
+        SIMPLE_DDGI_AUDIT_DEFECT_WORD,
+        floatBitsToUint(max(defect, 0.0)));
+    SimpleDdgiAuditAtomicMax(
+        SIMPLE_DDGI_AUDIT_FIELD_MAGNITUDE_WORD,
+        floatBitsToUint(max(fieldMagnitude, 0.0)));
+    float quantizationFloor = max(
+        SimpleDdgiAuditHalfQuantizationFloor(canonical.r),
+        max(
+            SimpleDdgiAuditHalfQuantizationFloor(canonical.g),
+            SimpleDdgiAuditHalfQuantizationFloor(canonical.b)));
+    SimpleDdgiAuditAtomicMax(
+        SIMPLE_DDGI_AUDIT_QUANTIZATION_FLOOR_WORD,
+        floatBitsToUint(max(quantizationFloor, 0.0)));
+    SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_AUDITED_TEXEL_WORD, 1u);
+
+    if (localTexel == 0u)
+        SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_AUDITED_PARTICIPANT_WORD, 1u);
+}

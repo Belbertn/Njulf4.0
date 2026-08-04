@@ -1696,8 +1696,12 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "gi.simpleDdgi.automaticProbeDensity.active", diagnostics.SimpleDdgiAutomaticProbeDensityActive);
             AddSetting(settings, "gi.simpleDdgi.transport.relaxation", diagnostics.SimpleDdgiTransportSolverRelaxation);
             AddSetting(settings, "gi.simpleDdgi.transport.albedoClamp", diagnostics.SimpleDdgiTransportAlbedoClamp);
-            AddSetting(settings, "gi.simpleDdgi.transport.residualThreshold", diagnostics.SimpleDdgiTransportResidualThreshold);
-            AddSetting(settings, "gi.simpleDdgi.transport.maximumSolverGenerations", diagnostics.SimpleDdgiTransportMaximumSolverGenerations);
+            AddSetting(settings, "gi.simpleDdgi.transport.tailRelativeTolerance", diagnostics.SimpleDdgiTransportTailRelativeTolerance);
+            AddSetting(settings, "gi.simpleDdgi.transport.acceleratedSweepCount", diagnostics.SimpleDdgiTransportAcceleratedSweepCount);
+            AddSetting(settings, "gi.simpleDdgi.transport.accelerationEnabled", diagnostics.SimpleDdgiTransportAccelerationEnabled ? 1 : 0);
+            AddSetting(settings, "gi.simpleDdgi.transport.tailCertificationEnabled", diagnostics.SimpleDdgiTransportTailCertificationEnabled ? 1 : 0);
+            AddSetting(settings, "gi.simpleDdgi.transport.legacy.residualThreshold", diagnostics.SimpleDdgiTransportResidualThreshold);
+            AddSetting(settings, "gi.simpleDdgi.transport.legacy.maximumSolverGenerations", diagnostics.SimpleDdgiTransportMaximumSolverGenerations);
             AddSetting(settings, "gi.simpleDdgi.transport.sourceRefreshFrames.configured", diagnostics.SimpleDdgiTransportConfiguredSourceRefreshFrames);
             AddSetting(settings, "gi.rayQuery.requested", diagnostics.GlobalIlluminationRayQueryRequested);
             AddSetting(settings, "gi.rayQuery.supported", diagnostics.GlobalIlluminationRayQuerySupported);

@@ -101,6 +101,41 @@ namespace Njulf.Rendering.Data
         /// </summary>
         public int RoutineMaintenancePendingProbeCount { get; init; }
         public int DispatchBatchCount { get; init; }
+        // Tail-certificate evidence. These fields are deliberately separate
+        // from the legacy residual histograms above: the latter remain useful
+        // for scheduling diagnostics but cannot authorize V2 retirement.
+        public SimpleDdgiTransportPhase TailPhase { get; init; } =
+            SimpleDdgiTransportPhase.SourceRepair;
+        public SimpleDdgiTransportCertificationReason TailReason { get; init; } =
+            SimpleDdgiTransportCertificationReason.SourceRepairRequired;
+        public SimpleDdgiTransportGenerations TailGenerations { get; init; }
+        public uint TailSolveEpoch { get; init; }
+        public uint TailAuditEpoch { get; init; }
+        public uint TailExpectedParticipantCount { get; init; }
+        public uint TailAuditedParticipantCount { get; init; }
+        public uint TailExcludedInactiveCount { get; init; }
+        public uint TailExcludedNotVisibleCount { get; init; }
+        public uint TailExcludedStaleSourceCount { get; init; }
+        public uint TailExcludedInvalidCacheCount { get; init; }
+        public uint TailNonFiniteCount { get; init; }
+        public uint TailCounterOverflowCount { get; init; }
+        public uint TailExpectedTexelCount { get; init; }
+        public uint TailAuditedTexelCount { get; init; }
+        public float TailFixedPointDefect { get; init; }
+        public float TailFieldMagnitude { get; init; }
+        public float TailConfiguredContractionBound { get; init; }
+        public float TailObservedContractionBound { get; init; }
+        public float TailCertifiedContractionBound { get; init; }
+        public float TailAbsoluteBound { get; init; }
+        public float TailRelativeBound { get; init; }
+        public float TailTolerance { get; init; }
+        public float TailCanonicalQuantizationFloor { get; init; }
+        public ulong TailAuditMicroseconds { get; init; }
+        public ulong TailAuditFirstFrameSerial { get; init; }
+        public ulong TailAuditFinalFrameSerial { get; init; }
+        public uint TailAuditChunkCount { get; init; }
+        public bool TailAuditComplete { get; init; }
+        public bool TailCertificateCurrent { get; init; }
         public static SimpleDdgiTransportConvergenceTelemetry Empty { get; } = new(
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0f,
             Array.Empty<SimpleDdgiTransportRingConvergenceTelemetry>());
@@ -1122,7 +1157,13 @@ namespace Njulf.Rendering.Data
         public ulong SimpleDdgiTransportSourceCacheBytes { get; init; }
         public float SimpleDdgiTransportSolverRelaxation { get; init; }
         public float SimpleDdgiTransportAlbedoClamp { get; init; }
+        public float SimpleDdgiTransportTailRelativeTolerance { get; init; }
+        public int SimpleDdgiTransportAcceleratedSweepCount { get; init; }
+        public bool SimpleDdgiTransportAccelerationEnabled { get; init; }
+        public bool SimpleDdgiTransportTailCertificationEnabled { get; init; }
+        /// <summary>Legacy alias retained for capture-schema compatibility only.</summary>
         public float SimpleDdgiTransportResidualThreshold { get; init; }
+        /// <summary>Legacy deserialization value; never a V2 convergence gate.</summary>
         public int SimpleDdgiTransportMaximumSolverGenerations { get; init; }
         public int SimpleDdgiTransportSourceRefreshFrames { get; init; }
         /// <summary>The user-configured floor before convergence-window expansion.</summary>

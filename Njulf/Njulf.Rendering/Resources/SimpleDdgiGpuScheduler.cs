@@ -32,6 +32,16 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
         new ulong[RenderingConstants.FramesInFlight];
     private readonly uint[] _feedbackSubmittedResourceGeneration =
         new uint[RenderingConstants.FramesInFlight];
+    private readonly BufferHandle[] _auditReadbackBuffers =
+        new BufferHandle[RenderingConstants.FramesInFlight];
+    private readonly bool[] _auditReadbackRecorded =
+        new bool[RenderingConstants.FramesInFlight];
+    private readonly ulong[] _auditSubmittedFrameSerial =
+        new ulong[RenderingConstants.FramesInFlight];
+    private readonly uint[] _auditSubmittedResourceGeneration =
+        new uint[RenderingConstants.FramesInFlight];
+    private readonly uint[] _auditSubmittedEpoch =
+        new uint[RenderingConstants.FramesInFlight];
     private readonly List<RetiredArena> _retiredArenas = new();
 
     private BufferHandle _arenaBuffer;
@@ -72,6 +82,8 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
     public ulong ArenaBytes => _layout?.TotalBytes ?? 0UL;
     public ulong FeedbackReadbackBytes =>
         CountValidFeedbackReadbackBytes();
+    public ulong AuditReadbackBytes =>
+        CountValidAuditReadbackBytes();
     public ulong RetiredBytes => _retiredBytes;
     public ulong StaleFeedbackCount => _staleFeedbackCount;
 
@@ -90,6 +102,7 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 _policiesInitialized = false;
                 ReleaseArena(frameSerial, force: false);
                 ReleaseFeedbackReadbackBuffers(frameSerial, force: false);
+                ReleaseAuditReadbackBuffers(frameSerial, force: false);
             }
         }
     }
@@ -145,6 +158,8 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 debugName: "Simple DDGI GPU Scheduler Arena");
 
             BufferHandle priorArena = _arenaBuffer;
+            if (priorArena.IsValid)
+                ReleaseAuditReadbackBuffers(frameSerial, force: false);
             _arenaBuffer = nextArena;
             _layout = nextLayout;
             // A replacement arena has no policy contents.  Do not rely on a
@@ -167,6 +182,7 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
             }
 
             EnsureFeedbackReadbackBuffers();
+            EnsureAuditReadbackBuffers();
             RegisterArenaIfPossible();
             return true;
         }
@@ -404,6 +420,148 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
     }
 
     /// <summary>
+    /// Clears the epoch reduction before the first audit chunk.  The clear is
+    /// recorded on the same command buffer as the audit and is followed by a
+    /// transfer-to-compute barrier, so no workgroup can observe a prior epoch.
+    /// </summary>
+    public bool ResetTransportAuditSummary(CommandBuffer commandBuffer)
+    {
+        if (commandBuffer.Handle == 0)
+            return false;
+
+        lock (_lock)
+        {
+            ThrowIfDisposed();
+            if (!_mode.IsGpuMode() || !_arenaBuffer.IsValid || _layout == null)
+                return false;
+
+            Silk.NET.Vulkan.Buffer arena = _bufferManager.GetBuffer(_arenaBuffer);
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                arena,
+                _layout.AuditSummary.Offset,
+                _layout.AuditSummary.ByteSize,
+                0u);
+            BufferMemoryBarrier2 barrier = BarrierBuilder.BufferBarrier(
+                arena,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit,
+                _layout.AuditSummary.Offset,
+                _layout.AuditSummary.ByteSize);
+            ExecuteBufferBarrier(commandBuffer, barrier);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Copies only the compact audit header into a delayed host-visible slot.
+    /// The full 1 KiB arena region remains GPU-resident and is not read back.
+    /// </summary>
+    public bool RecordTransportAuditReadback(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        ulong frameSerial,
+        uint auditEpoch)
+    {
+        RenderingConstants.ValidateFrameIndex(frameIndex);
+        if (commandBuffer.Handle == 0)
+            return false;
+
+        lock (_lock)
+        {
+            ThrowIfDisposed();
+            if (!_mode.IsGpuMode() || !_arenaBuffer.IsValid || _layout == null)
+                return false;
+            EnsureAuditReadbackBuffers();
+            if (_auditReadbackRecorded[frameIndex])
+                return false;
+
+            Silk.NET.Vulkan.Buffer source = _bufferManager.GetBuffer(_arenaBuffer);
+            Silk.NET.Vulkan.Buffer destination = _bufferManager.GetBuffer(
+                _auditReadbackBuffers[frameIndex]);
+            ulong summaryBytes = checked((ulong)Marshal.SizeOf<GPUSimpleDdgiTransportAuditSummary>());
+            BufferMemoryBarrier2 beforeCopy = BarrierBuilder.BufferBarrier(
+                source,
+                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TransferBit,
+                AccessFlags2.ShaderStorageWriteBit | AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferReadBit,
+                _layout.AuditSummary.Offset,
+                summaryBytes);
+            ExecuteBufferBarrier(commandBuffer, beforeCopy);
+
+            BufferCopy copy = new()
+            {
+                SrcOffset = _layout.AuditSummary.Offset,
+                DstOffset = 0,
+                Size = summaryBytes
+            };
+            _context.Api.CmdCopyBuffer(commandBuffer, source, destination, 1, &copy);
+
+            BufferMemoryBarrier2 afterCopy = BarrierBuilder.BufferBarrier(
+                destination,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.HostBit,
+                AccessFlags2.HostReadBit,
+                0,
+                summaryBytes);
+            ExecuteBufferBarrier(commandBuffer, afterCopy);
+            _auditReadbackRecorded[frameIndex] = true;
+            _auditSubmittedFrameSerial[frameIndex] = frameSerial;
+            _auditSubmittedResourceGeneration[frameIndex] = _resourceGeneration;
+            _auditSubmittedEpoch[frameIndex] = auditEpoch;
+            return true;
+        }
+    }
+
+    public bool TryReadCompletedTransportAudit(
+        int frameIndex,
+        ulong completedFrameSerial,
+        out SimpleDdgiTransportAuditReadback readback)
+    {
+        RenderingConstants.ValidateFrameIndex(frameIndex);
+        lock (_lock)
+        {
+            ThrowIfDisposed();
+            readback = default;
+            if (!_auditReadbackRecorded[frameIndex] ||
+                !_auditReadbackBuffers[frameIndex].IsValid ||
+                completedFrameSerial <= _auditSubmittedFrameSerial[frameIndex])
+            {
+                return false;
+            }
+
+            BufferHandle handle = _auditReadbackBuffers[frameIndex];
+            ulong summaryBytes = checked((ulong)Marshal.SizeOf<GPUSimpleDdgiTransportAuditSummary>());
+            _bufferManager.InvalidateBuffer(handle, 0, summaryBytes);
+            GPUSimpleDdgiTransportAuditSummary summary =
+                *(GPUSimpleDdgiTransportAuditSummary*)_bufferManager.GetMappedPointer(handle);
+            ulong expectedFrameSerial = _auditSubmittedFrameSerial[frameIndex];
+            bool resourceMatches =
+                _auditSubmittedResourceGeneration[frameIndex] == _resourceGeneration;
+            bool serialMatches =
+                summary.LastChunkIndex != uint.MaxValue &&
+                expectedFrameSerial <= completedFrameSerial;
+            _auditReadbackRecorded[frameIndex] = false;
+            if (!resourceMatches || !serialMatches)
+            {
+                _staleFeedbackCount++;
+                return false;
+            }
+
+            readback = new SimpleDdgiTransportAuditReadback(
+                _auditSubmittedEpoch[frameIndex],
+                expectedFrameSerial,
+                summary);
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Reads a previously submitted feedback copy. Requiring a strictly later
     /// completed serial makes an accidental same-frame poll fail closed.
     /// </summary>
@@ -519,6 +677,13 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 _feedbackReadbackBuffers[i] = BufferHandle.Invalid;
                 _feedbackRecorded[i] = false;
             }
+            for (int i = 0; i < _auditReadbackBuffers.Length; i++)
+            {
+                if (_auditReadbackBuffers[i].IsValid)
+                    _bufferManager.DestroyBuffer(_auditReadbackBuffers[i]);
+                _auditReadbackBuffers[i] = BufferHandle.Invalid;
+                _auditReadbackRecorded[i] = false;
+            }
             for (int i = 0; i < _retiredArenas.Count; i++)
             {
                 if (_retiredArenas[i].Buffer.IsValid)
@@ -602,6 +767,22 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
         }
     }
 
+    private void EnsureAuditReadbackBuffers()
+    {
+        for (int frameIndex = 0; frameIndex < _auditReadbackBuffers.Length; frameIndex++)
+        {
+            if (_auditReadbackBuffers[frameIndex].IsValid)
+                continue;
+            _auditReadbackBuffers[frameIndex] = _bufferManager.CreateBuffer(
+                checked((ulong)Marshal.SizeOf<GPUSimpleDdgiTransportAuditSummary>()),
+                BufferUsageFlags.TransferDstBit,
+                MemoryUsage.AutoPreferHost,
+                AllocationCreateFlags.MappedBit | AllocationCreateFlags.HostAccessRandomBit,
+                $"Simple DDGI Transport Audit Frame {frameIndex}",
+                MemoryBudgetCategory.GlobalIllumination);
+        }
+    }
+
     private ulong CountValidFeedbackReadbackBytes()
     {
         ulong bytes = 0;
@@ -609,6 +790,18 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
         {
             if (_feedbackReadbackBuffers[frameIndex].IsValid)
                 bytes = checked(bytes + SimpleDdgiGpuSchedulerLayout.ShippingFeedbackBytes);
+        }
+        return bytes;
+    }
+
+    private ulong CountValidAuditReadbackBytes()
+    {
+        ulong bytes = 0;
+        ulong summaryBytes = checked((ulong)Marshal.SizeOf<GPUSimpleDdgiTransportAuditSummary>());
+        for (int frameIndex = 0; frameIndex < _auditReadbackBuffers.Length; frameIndex++)
+        {
+            if (_auditReadbackBuffers[frameIndex].IsValid)
+                bytes = checked(bytes + summaryBytes);
         }
         return bytes;
     }
@@ -660,6 +853,26 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
         }
     }
 
+    private void ReleaseAuditReadbackBuffers(ulong frameSerial, bool force)
+    {
+        ulong bytes = checked((ulong)Marshal.SizeOf<GPUSimpleDdgiTransportAuditSummary>());
+        for (int frameIndex = 0; frameIndex < _auditReadbackBuffers.Length; frameIndex++)
+        {
+            BufferHandle readback = _auditReadbackBuffers[frameIndex];
+            _auditReadbackBuffers[frameIndex] = BufferHandle.Invalid;
+            _auditReadbackRecorded[frameIndex] = false;
+            _auditSubmittedFrameSerial[frameIndex] = 0;
+            _auditSubmittedResourceGeneration[frameIndex] = 0;
+            _auditSubmittedEpoch[frameIndex] = 0;
+            if (!readback.IsValid)
+                continue;
+            if (force)
+                _bufferManager.DestroyBuffer(readback);
+            else
+                RetireArena(readback, bytes, frameSerial);
+        }
+    }
+
     private void RetireArena(BufferHandle arena, ulong bytes, ulong frameSerial)
     {
         if (!arena.IsValid)
@@ -694,3 +907,8 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
         ulong Bytes,
         ulong RetireAfterFrameSerial);
 }
+
+public readonly record struct SimpleDdgiTransportAuditReadback(
+    uint AuditEpoch,
+    ulong FrameSerial,
+    GPUSimpleDdgiTransportAuditSummary Summary);
