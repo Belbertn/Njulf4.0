@@ -1,0 +1,39 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_schedule_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    uint updateIndex = gl_GlobalInvocationID.x;
+    uint accepted = min(
+        SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
+        SchedulerRequestCapacity());
+    if (updateIndex >= accepted)
+        return;
+
+    uint updateBase = updateIndex * SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS;
+    uint probeIndex = ReadStorageWordUniform(pc.UpdateQueueBufferIndex, updateBase + 0u);
+    uint volumeIndex = ReadStorageWordUniform(pc.UpdateQueueBufferIndex, updateBase + 1u);
+    uint updateFlags = ReadStorageWordUniform(pc.UpdateQueueBufferIndex, updateBase + 2u);
+    uint metadata = ReadStorageWordUniform(pc.UpdateQueueBufferIndex, updateBase + 3u);
+    uint sourceRayCount = ReadStorageWordUniform(pc.UpdateQueueBufferIndex, updateBase + 4u);
+    uint expectedGeneration = metadata & 0x00ffffffu;
+    if (probeIndex == SIMPLE_DDGI_SCHEDULER_INVALID_PROBE || expectedGeneration == 0u)
+    {
+        SchedulerArenaAtomicAdd(
+            pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_INVALID_GENERATION, 1u);
+        return;
+    }
+    SchedulerWriteOutcome(
+        updateIndex,
+        probeIndex,
+        volumeIndex,
+        expectedGeneration,
+        sourceRayCount,
+        1u,
+        updateFlags);
+}

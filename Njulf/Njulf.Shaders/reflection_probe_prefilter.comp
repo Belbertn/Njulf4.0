@@ -1,0 +1,92 @@
+#version 460
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 2, binding = 0) uniform samplerCube ReflectionScratchInput;
+layout(set = 2, binding = 1, rgba16f) uniform writeonly image2DArray ReflectionPrefilterOutput;
+
+layout(push_constant) uniform ReflectionPrefilterPushBlock
+{
+    uint OutputSize;
+    uint SampleCount;
+    float Roughness;
+    uint Padding0;
+} pc;
+
+#include "ggx_prefilter.glsl"
+
+vec3 ReflectionCubeDirection(uint face, vec2 uv)
+{
+    float a = 2.0 * uv.x - 1.0;
+    float b = 1.0 - 2.0 * uv.y;
+    if (face == 0u)
+        return normalize(vec3(1.0, b, -a));
+    if (face == 1u)
+        return normalize(vec3(-1.0, b, a));
+    if (face == 2u)
+        return normalize(vec3(a, 1.0, -b));
+    if (face == 3u)
+        return normalize(vec3(a, -1.0, b));
+    if (face == 4u)
+        return normalize(vec3(a, b, 1.0));
+    return normalize(vec3(-a, b, -1.0));
+}
+
+void main()
+{
+    uvec3 invocation = gl_GlobalInvocationID;
+    if (invocation.x >= pc.OutputSize ||
+        invocation.y >= pc.OutputSize ||
+        invocation.z >= 6u)
+    {
+        return;
+    }
+
+    vec2 uv = (vec2(invocation.xy) + vec2(0.5)) /
+        max(float(pc.OutputSize), 1.0);
+    vec3 reflection = ReflectionCubeDirection(invocation.z, uv);
+    vec3 result = vec3(0.0);
+    float totalWeight = 0.0;
+    uint sampleCount = max(pc.SampleCount, 1u);
+    if (pc.Roughness <= 0.0001 || sampleCount == 1u)
+    {
+        result = textureLod(ReflectionScratchInput, reflection, 0.0).rgb;
+        totalWeight = 1.0;
+    }
+    else
+    {
+        vec3 tangent;
+        vec3 bitangent;
+        EnvironmentPrefilterBasis(reflection, tangent, bitangent);
+        for (uint sampleIndex = 0u; sampleIndex < sampleCount; sampleIndex++)
+        {
+            vec2 samplePoint = vec2(
+                (float(sampleIndex) + 0.5) / float(sampleCount),
+                EnvironmentPrefilterRadicalInverse(sampleIndex));
+            vec3 localHalf = EnvironmentPrefilterImportanceSampleGgx(
+                samplePoint,
+                pc.Roughness);
+            vec3 halfVector = normalize(
+                tangent * localHalf.x +
+                bitangent * localHalf.y +
+                reflection * localHalf.z);
+            vec3 lightDirection = normalize(
+                2.0 * dot(reflection, halfVector) * halfVector - reflection);
+            float nDotL = max(dot(reflection, lightDirection), 0.0);
+            if (nDotL <= 0.0)
+                continue;
+            result += textureLod(ReflectionScratchInput, lightDirection, 0.0).rgb * nDotL;
+            totalWeight += nDotL;
+        }
+    }
+
+    if (totalWeight > 0.0)
+        result /= totalWeight;
+    imageStore(
+        ReflectionPrefilterOutput,
+        ivec3(invocation),
+        vec4(max(result, vec3(0.0)), 1.0));
+}

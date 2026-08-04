@@ -40,14 +40,17 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint DispatchQueueOffset;
     uint DispatchProbeCount;
     uint DispatchRaysPerProbe;
+    uint SchedulerArenaBufferIndex;
+    uint SchedulerRayBucketIndex;
+    uint SchedulerRayBucketCommandsOffsetWords;
+    uint SchedulerCountersOffsetWords;
 } pc;
 
 const float PI = SIMPLE_DDGI_PI;
 const uint DDGI_MATERIAL_TEXTURE_DISABLED_CASCADE = 4u;
-// ddgi_hit_shading.glsl is shared with the legacy DDGI path, where this
-// sentinel lives in ddgi_update_shared.glsl.  The simple-DDGI path owns its
-// volume convention, so provide the equivalent sentinel locally before
-// including the shared material policy.
+// The shared hit-shading policy needs an authored-volume sentinel. The
+// simple-DDGI path owns the volume convention, so provide it locally before
+// including that policy.
 const uint DDGI_AUTHORED_VOLUME_CASCADE = SIMPLE_DDGI_AUTHORED_VOLUME_CASCADE;
 const float DDGI_DIRECTIONAL_SHADOW_RAY_DISTANCE = 256.0;
 const float DDGI_PROBE_TRACE_EPSILON = 0.02;
@@ -175,20 +178,34 @@ void main()
     SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
     simpleDdgiCurrentDetailedDiagnostics = SimpleDdgiDetailedDiagnosticsEnabled(params);
     uint dispatchRay = gl_GlobalInvocationID.x;
+    bool gpuScheduler = SimpleDdgiGpuSchedulerActive(pc.SchedulerArenaBufferIndex);
+    uint schedulerQueueOffset = 0u;
+    uint schedulerProbeCount = 0u;
+    uint schedulerRaysPerProbe = 0u;
+    if (gpuScheduler)
+    {
+        SimpleDdgiResolveSchedulerRayBucket(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerRayBucketCommandsOffsetWords,
+            pc.SchedulerRayBucketIndex,
+            schedulerQueueOffset,
+            schedulerProbeCount,
+            schedulerRaysPerProbe);
+    }
     uint dispatchProbeCount = pc.DispatchProbeCount > 0u
         ? pc.DispatchProbeCount
-        : params.probesToUpdate;
+        : (gpuScheduler ? schedulerProbeCount : params.probesToUpdate);
     uint dispatchRaysPerProbe = pc.DispatchRaysPerProbe > 0u
         ? pc.DispatchRaysPerProbe
-        : params.raysPerProbe;
+        : (gpuScheduler ? schedulerRaysPerProbe : params.raysPerProbe);
     uint dispatchRayCount = dispatchProbeCount * dispatchRaysPerProbe;
     if (dispatchRay >= dispatchRayCount || params.probeCount == 0u)
         return;
 
-    uint updateProbeOffset = pc.DispatchQueueOffset +
+    uint updateProbeOffset = (gpuScheduler ? schedulerQueueOffset : pc.DispatchQueueOffset) +
         dispatchRay / dispatchRaysPerProbe;
     uint rayIndex = dispatchRay % dispatchRaysPerProbe;
-    if (updateProbeOffset >= params.probesToUpdate)
+    if (!gpuScheduler && updateProbeOffset >= params.probesToUpdate)
         return;
     // Scratch remains addressed by the canonical queue-wide ray stride so later
     // probe-oriented passes are independent of dispatch batching.

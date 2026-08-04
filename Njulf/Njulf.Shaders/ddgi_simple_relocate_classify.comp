@@ -35,6 +35,10 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint DispatchQueueOffset;
     uint DispatchProbeCount;
     uint DispatchRaysPerProbe;
+    uint SchedulerArenaBufferIndex;
+    uint SchedulerRayBucketIndex;
+    uint SchedulerRayBucketCommandsOffsetWords;
+    uint SchedulerCountersOffsetWords;
 } pc;
 
 const float SIMPLE_DDGI_RELOCATION_TARGET_DISTANCE = 0.10;
@@ -79,7 +83,13 @@ void main()
 {
     SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
     uint queueOffset = gl_GlobalInvocationID.x;
-    if (queueOffset >= params.probesToUpdate || params.probeCount == 0u)
+    bool gpuScheduler = SimpleDdgiGpuSchedulerActive(pc.SchedulerArenaBufferIndex);
+    uint requestCount = gpuScheduler
+        ? SimpleDdgiSchedulerAcceptedCount(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerCountersOffsetWords)
+        : params.probesToUpdate;
+    if (queueOffset >= requestCount || params.probeCount == 0u)
         return;
 
     SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, queueOffset);

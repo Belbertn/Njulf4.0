@@ -17,6 +17,7 @@ namespace Njulf.Tests
             {
                 Assert.That(settings.Particles.Enabled, Is.True);
                 Assert.That(settings.Particles.SimulationMode, Is.EqualTo(ParticleSimulationMode.Cpu));
+                Assert.That(settings.Particles.FixedSimulationDeltaSeconds, Is.EqualTo(0.0f));
                 Assert.That(settings.Particles.DebugView, Is.EqualTo(ParticleDebugView.None));
                 Assert.That(settings.Particles.MaxParticles, Is.EqualTo(65536));
                 Assert.That(settings.Particles.MaxEmitters, Is.EqualTo(1024));
@@ -46,6 +47,10 @@ namespace Njulf.Tests
                 DistanceCullMultiplier = -3.0f
             };
 
+            settings.FixedSimulationDeltaSeconds = float.NaN;
+            Assert.That(settings.FixedSimulationDeltaSeconds, Is.EqualTo(0.0f));
+            settings.FixedSimulationDeltaSeconds = 1.0f;
+
             Assert.Multiple(() =>
             {
                 Assert.That(settings.MaxParticles, Is.EqualTo(1_000_000));
@@ -58,6 +63,7 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalVelocityScale, Is.EqualTo(0.0f));
                 Assert.That(settings.GlobalEmissiveScale, Is.EqualTo(64.0f));
                 Assert.That(settings.DistanceCullMultiplier, Is.EqualTo(0.0f));
+                Assert.That(settings.FixedSimulationDeltaSeconds, Is.EqualTo(1.0f / 15.0f));
             });
         }
 

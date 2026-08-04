@@ -2,12 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "common.glsl"
-#include "gi_material_transport.glsl"
 #include "foliage_coverage.glsl"
-
-#ifndef NJULF_SSGI_TRACE_OUTPUT
-#define NJULF_SSGI_TRACE_OUTPUT 0
-#endif
 
 #ifndef NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
 #define NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT 0
@@ -25,16 +20,8 @@ layout(location = 8) flat in vec4 fragColorVariation;
 layout(location = 9) flat in vec4 fragDdgiIrradianceCoverage;
 
 layout(location = 0) out vec4 outColor;
-#if NJULF_SSGI_TRACE_OUTPUT
-layout(location = 1) out vec4 outSsgiTraceSource;
-layout(location = 2) out vec4 outGiCompositionBaseline;
-#if NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
-layout(location = 3) out float outMaterialTransportProvenance;
-#endif
-#else
 #if NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
 layout(location = 1) out float outMaterialTransportProvenance;
-#endif
 #endif
 
 layout(push_constant) uniform FoliageDrawPushConstantBlock
@@ -45,22 +32,6 @@ layout(push_constant) uniform FoliageDrawPushConstantBlock
 void WriteFoliageForwardColor(vec4 color)
 {
     outColor = color;
-}
-
-void WriteFoliageSsgiTraceSource(vec4 color)
-{
-#if NJULF_SSGI_TRACE_OUTPUT
-    outSsgiTraceSource = color;
-#endif
-}
-
-void WriteFoliageGiCompositionBaseline(vec3 diffuseIndirect, float ddgiOwnership)
-{
-#if NJULF_SSGI_TRACE_OUTPUT
-    outGiCompositionBaseline = vec4(
-        clamp(diffuseIndirect, vec3(0.0), vec3(GI_MATERIAL_MAXIMUM_FINITE_RADIANCE)),
-        clamp(ddgiOwnership, 0.0, 1.0));
-#endif
 }
 
 void WriteFoliageMaterialTransportProvenance(uint sourcePath)
@@ -123,8 +94,6 @@ vec3 ApplyFoliageLighting(vec3 baseColor, vec3 normal, vec3 viewDirection, GPUFo
 
 void main()
 {
-    WriteFoliageSsgiTraceSource(vec4(0.0, 0.0, 0.0, 1.0));
-    WriteFoliageGiCompositionBaseline(vec3(0.0), 0.0);
     WriteFoliageMaterialTransportProvenance(255u);
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
     vec4 sampledAlbedo;
@@ -168,16 +137,6 @@ void main()
     vec3 ddgiIndirect = fragDdgiIrradianceCoverage.rgb * (baseColor / 3.14159265359) * fragDdgiIrradianceCoverage.a;
     vec3 foliageLighting = clamp(foliageDirectLighting + ddgiIndirect, vec3(0.0), vec3(64.0));
     WriteFoliageForwardColor(vec4(foliageLighting, 1.0));
-    // Only direct diffuse is eligible as an SSGI bounce source. The existing
-    // DDGI term is recorded separately so hybrid composition can replace, not
-    // add to, the same diffuse path space.
-    vec3 foliageEmission = GiMaterialHasFlag(material.TransportFlags, GI_MATERIAL_EMITS_INTO_GI)
-        ? max(material.Emissive.rgb, vec3(0.0))
-        : vec3(0.0);
-    WriteFoliageSsgiTraceSource(vec4(
-        clamp(foliageDirectLighting + foliageEmission, vec3(0.0), vec3(64.0)),
-        1.0));
-    WriteFoliageGiCompositionBaseline(ddgiIndirect, fragDdgiIrradianceCoverage.a);
     // Foliage carries a precomputed DDGI estimate rather than enough per-probe
     // metadata to identify a compact/far contributor. Mark covered foliage as
     // the detailed mesh path and leave unsupported pixels explicitly unknown.

@@ -60,9 +60,9 @@ public static class SampleSmokeOptionsParser
         "--async-compute",
         "--async-compute-mode",
         "--async-compute-path",
+        "--simple-ddgi-scheduler-mode",
         "--far-field-clipmap",
-        "--far-field-force-all",
-        "--ddgi-scheduler-mode"
+        "--far-field-force-all"
     };
 
     public static SampleSmokeOptions Parse(string[] args)
@@ -157,6 +157,8 @@ public static class SampleSmokeOptionsParser
             Environment.GetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE_MODE"));
         AsyncComputePath? asyncComputeValidationPath = ParseAsyncComputePath(
             Environment.GetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE_PATH"));
+        SimpleDdgiSchedulerMode? simpleDdgiSchedulerModeOverride = ParseSimpleDdgiSchedulerMode(
+            Environment.GetEnvironmentVariable("NJULF_RENDERER_SIMPLE_DDGI_SCHEDULER_MODE"));
         if (asyncComputeModeOverride.HasValue)
             enableAsyncCompute =
                 asyncComputeModeOverride == AsyncComputeMode.ForceEnabledForValidation;
@@ -169,7 +171,6 @@ public static class SampleSmokeOptionsParser
             Environment.GetEnvironmentVariable("NJULF_RENDERER_FAR_FIELD_FORCE_ALL"),
             "NJULF_RENDERER_FAR_FIELD_FORCE_ALL");
         enableFarFieldClipmap |= enableFarFieldForceAll;
-        DdgiSchedulerMode? ddgiSchedulerModeOverride = ParseDdgiSchedulerMode(Environment.GetEnvironmentVariable("NJULF_RENDERER_DDGI_SCHEDULER_MODE"));
         bool enableBenchmark = ParseBool(
                 Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK"),
                 "NJULF_RENDERER_BENCHMARK") ||
@@ -429,16 +430,17 @@ public static class SampleSmokeOptionsParser
                     asyncComputeValidationPath = ParseAsyncComputePath(value) ??
                         throw new ArgumentException("--async-compute-path requires a known atomic async path.");
                     break;
+                case "--simple-ddgi-scheduler-mode":
+                    simpleDdgiSchedulerModeOverride = ParseSimpleDdgiSchedulerMode(value) ??
+                        throw new ArgumentException(
+                            "--simple-ddgi-scheduler-mode requires cpu-reference, gpu-mirror, or gpu-resident.");
+                    break;
                 case "--far-field-clipmap":
                     enableFarFieldClipmap = ParseBool(value, optionName);
                     break;
                 case "--far-field-force-all":
                     enableFarFieldForceAll = ParseBool(value, optionName);
                     enableFarFieldClipmap |= enableFarFieldForceAll;
-                    break;
-                case "--ddgi-scheduler-mode":
-                    ddgiSchedulerModeOverride = ParseDdgiSchedulerMode(value) ??
-                        throw new ArgumentException("--ddgi-scheduler-mode requires a scheduler mode.");
                     break;
             }
         }
@@ -566,7 +568,6 @@ public static class SampleSmokeOptionsParser
             }
             if (forceMissingAssets ||
                 transparencyMode != TransparencyMode.SortedAlphaBlend ||
-                ddgiSchedulerModeOverride.HasValue ||
                 asyncComputeModeOverride.HasValue ||
                 enableFarFieldClipmap ||
                 enableFarFieldForceAll ||
@@ -688,12 +689,13 @@ public static class SampleSmokeOptionsParser
         }
         else
         {
-            if (performanceScenario == SamplePerformanceScenario.GiSponzaRightWallStationary)
+            if (performanceScenario == SamplePerformanceScenario.GiSponzaRightWallStationary ||
+                SampleSponzaAtmosphereScenario.IsScenario(performanceScenario))
             {
                 if (sceneSpecified && sceneKind != SampleSceneKind.SponzaPlaza)
                 {
                     throw new ArgumentException(
-                        "The stationary Sponza right-wall scenario requires the Sponza plaza scene.");
+                        "Sponza atmosphere/reflection scenario requires the Sponza plaza scene.");
                 }
 
                 sceneKind = SampleSceneKind.SponzaPlaza;
@@ -779,9 +781,9 @@ public static class SampleSmokeOptionsParser
                     mode = SampleSmokeMode.Startup;
                 if (mode == SampleSmokeMode.None && asyncComputeModeOverride.HasValue && !smokeModeSpecified)
                     mode = SampleSmokeMode.Startup;
-                if (mode == SampleSmokeMode.None && (enableFarFieldClipmap || enableFarFieldForceAll) && !smokeModeSpecified)
+                if (mode == SampleSmokeMode.None && simpleDdgiSchedulerModeOverride.HasValue && !smokeModeSpecified)
                     mode = SampleSmokeMode.Startup;
-                if (mode == SampleSmokeMode.None && ddgiSchedulerModeOverride.HasValue && !smokeModeSpecified)
+                if (mode == SampleSmokeMode.None && (enableFarFieldClipmap || enableFarFieldForceAll) && !smokeModeSpecified)
                     mode = SampleSmokeMode.Startup;
                 if (mode == SampleSmokeMode.None && qualityPresetOverride.HasValue && !smokeModeSpecified)
                     mode = SampleSmokeMode.Startup;
@@ -868,7 +870,6 @@ public static class SampleSmokeOptionsParser
             enableFarFieldClipmap,
             enableFarFieldForceAll,
             baselineSnapshotDirectory,
-            ddgiSchedulerModeOverride,
             sceneKind,
             transparencyMode,
             benchmark,
@@ -884,7 +885,8 @@ public static class SampleSmokeOptionsParser
             longRunMinutes,
             khronosRenderedGate,
             materialGiQualificationManifestPath,
-            asyncComputeValidationPath);
+            asyncComputeValidationPath,
+            simpleDdgiSchedulerModeOverride);
     }
 
     private static AsyncComputePath? ParseAsyncComputePath(string? value)
@@ -896,6 +898,25 @@ public static class SampleSmokeOptionsParser
             if (string.Equals(path.ToString(), normalized, StringComparison.OrdinalIgnoreCase))
                 return path;
         throw new ArgumentException($"Unknown async compute path '{value}'.");
+    }
+
+    private static SimpleDdgiSchedulerMode? ParseSimpleDdgiSchedulerMode(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        string normalized = value.Trim()
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .ToLowerInvariant();
+        return normalized switch
+        {
+            "cpureference" or "cpu" => SimpleDdgiSchedulerMode.CpuReference,
+            "gpumirror" or "mirror" => SimpleDdgiSchedulerMode.GpuMirror,
+            "gpuresident" or "resident" => SimpleDdgiSchedulerMode.GpuResident,
+            _ => throw new ArgumentException(
+                $"Invalid Simple DDGI scheduler mode '{value}'. Valid values: cpu-reference, gpu-mirror, gpu-resident.")
+        };
     }
 
     private static string ReadValue(string[] args, ref int index)
@@ -1026,21 +1047,6 @@ public static class SampleSmokeOptionsParser
         throw new ArgumentException($"Invalid performance scenario '{value}'. Valid values: {string.Join(", ", Enum.GetNames<SamplePerformanceScenario>())}.");
     }
 
-    private static DdgiSchedulerMode? ParseDdgiSchedulerMode(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-
-        string normalized = value.Trim().Replace("-", string.Empty).Replace("_", string.Empty);
-        foreach (DdgiSchedulerMode mode in Enum.GetValues<DdgiSchedulerMode>())
-        {
-            string modeName = mode.ToString().Replace("-", string.Empty).Replace("_", string.Empty);
-            if (modeName.Equals(normalized, StringComparison.OrdinalIgnoreCase))
-                return mode;
-        }
-
-        throw new ArgumentException("Invalid DDGI scheduler mode '" + value + "'. Valid values: cpu-reference, gpu, cpu-gpu-compare.");
-    }
 
     private static AsyncComputeMode? ParseAsyncComputeMode(string? value)
     {

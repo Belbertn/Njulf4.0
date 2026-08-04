@@ -72,7 +72,6 @@ internal sealed class SampleInputController
     private const string CycleGlobalIlluminationMode = "cycle_global_illumination_mode";
     private const string CycleGlobalIlluminationDebug = "cycle_global_illumination_debug";
     private const string ToggleDdgiDiagnosticsFilter = "toggle_ddgi_diagnostics_filter";
-    private const string ToggleSimpleDdgi = "toggle_simple_ddgi";
     private const string GlobalIlluminationIntensityDown = "global_illumination_intensity_down";
     private const string GlobalIlluminationIntensityUp = "global_illumination_intensity_up";
     private const string GlobalIlluminationDistanceDown = "global_illumination_distance_down";
@@ -271,7 +270,6 @@ internal sealed class SampleInputController
     private bool _ambientOcclusionIntensityUpPressed;
     private bool _toggleGlobalIlluminationPressed;
     private bool _cycleGlobalIlluminationModePressed;
-    private bool _toggleSimpleDdgiPressed;
     private bool _cycleGlobalIlluminationDebugPressed;
     private bool _cycleGlobalIlluminationFocusDebugPressed;
     private bool _clearGlobalIlluminationDebugPressed;
@@ -634,12 +632,6 @@ internal sealed class SampleInputController
         if (_renderer != null && WasChordPressed(Key.D, ref _cycleDdgiDebugPressed))
             CycleDdgiDebugView();
 
-        if (_renderer != null && WasChordPressed(Key.S, ref _toggleSimpleDdgiPressed))
-        {
-            _renderer.Settings.GlobalIllumination.DdgiSimpleEnabled = !_renderer.Settings.GlobalIllumination.DdgiSimpleEnabled;
-            PrintGlobalIlluminationSettings("Simple DDGI");
-        }
-
         if (WasChordPressed(Key.F, ref _toggleDdgiDiagnosticsFilterPressed))
         {
             _toggleDdgiDiagnosticsFilter?.Invoke();
@@ -896,9 +888,8 @@ internal sealed class SampleInputController
             GlobalIlluminationSettings gi = _renderer.Settings.GlobalIllumination;
             gi.Mode = NextGlobalIlluminationMode(gi.Mode);
             gi.Enabled = gi.Mode != GlobalIlluminationMode.Disabled;
-            gi.UseSsgi = ModeUsesSsgi(gi.Mode);
-            gi.UseDdgi = ModeUsesDdgi(gi.Mode);
-            gi.UseRayQueryBackend = ModeUsesDdgi(gi.Mode);
+            gi.UseDdgi = gi.Mode == GlobalIlluminationMode.Ddgi;
+            gi.UseRayQueryBackend = gi.Mode == GlobalIlluminationMode.Ddgi;
             PrintGlobalIlluminationSettings("GI mode");
         }
 
@@ -2206,31 +2197,12 @@ internal sealed class SampleInputController
 
         GlobalIlluminationSettings gi = _renderer.Settings.GlobalIllumination;
         RendererDiagnostics diagnostics = _renderer.LastDiagnostics;
-        long gpuMicroseconds = diagnostics.GpuSsgiTraceMicroseconds +
-            diagnostics.GpuSsgiTemporalMicroseconds +
-            diagnostics.GpuSsgiDenoiseMicroseconds +
-            diagnostics.GpuDdgiUpdateMicroseconds +
-            diagnostics.GpuGiCompositeMicroseconds;
-        ulong giBytes = diagnostics.GlobalIlluminationRenderTargetBytes +
-            diagnostics.DdgiTextureBytes +
-            diagnostics.DdgiBufferBytes +
-            diagnostics.AccelerationStructureBytes;
         Console.WriteLine(
-            $"{prefix}: {(gi.Enabled ? "enabled" : "disabled")}, mode={gi.Mode}, lastEffectiveMode={diagnostics.GlobalIlluminationMode}, debug={gi.DebugView}, " +
-            $"scale={gi.ResolutionScale:F2}, intensity={gi.IndirectIntensity:F2}, fallback={gi.EnvironmentFallbackIntensity:F2}, " +
-            $"selfShadowBias={gi.DdgiSelfShadowBiasScale:F2}, hysteresisResponse={gi.DdgiHysteresisResponse:F2}, " +
-            $"distance={gi.MaxBounceDistance:F1}, ssgi={(gi.EffectiveUseSsgi ? "on" : "off")}, " +
-            $"ssgiSize={diagnostics.SsgiWidth}x{diagnostics.SsgiHeight}, ssgiRays={diagnostics.SsgiRayCount}, " +
-            $"ssgiHistoryValid={diagnostics.SsgiHistoryValid}, ssgiRejected={diagnostics.SsgiRejectedHistoryPixelCount}, " +
-            $"ddgi={(gi.EffectiveUseDdgi ? "legacy" : gi.EffectiveUseSimpleDdgi ? "simple" : "off")}, simpleActive={diagnostics.SimpleDdgiActive != 0}, ddgiProbes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount}, " +
-            $"ddgiUpdated={diagnostics.DdgiProbesUpdated}, ddgiRays={diagnostics.DdgiRaysPerProbe}, " +
-            $"relocation={diagnostics.DdgiProbeRelocationCount}, classification={diagnostics.DdgiProbeClassificationCount}, l1Metadata={(gi.DdgiProbeL1MetadataEnabled ? "on" : "off")}, " +
-            $"temporal={(gi.TemporalEnabled ? "on" : "off")}, denoise={(gi.DenoiserEnabled ? "on" : "off")}, " +
-            $"rayQuerySupported={diagnostics.GlobalIlluminationRayQuerySupported != 0}, rayQueryActive={diagnostics.GlobalIlluminationRayQueryActive != 0}, " +
-            $"cpuSsgiUs={diagnostics.CpuSsgiRecordMicroseconds}, cpuDdgiUs={diagnostics.CpuDdgiRecordMicroseconds}, " +
-            $"gpuTrace/Temporal/Denoise/Ddgi/CompositeUs={diagnostics.GpuSsgiTraceMicroseconds}/{diagnostics.GpuSsgiTemporalMicroseconds}/{diagnostics.GpuSsgiDenoiseMicroseconds}/{diagnostics.GpuDdgiUpdateMicroseconds}/{diagnostics.GpuGiCompositeMicroseconds}, " +
-            $"gpuUs={gpuMicroseconds}, bytes={giBytes} " +
-            $"(targets={diagnostics.GlobalIlluminationRenderTargetBytes}, ddgiTex={diagnostics.DdgiTextureBytes}, ddgiBuf={diagnostics.DdgiBufferBytes}, as={diagnostics.AccelerationStructureBytes})");
+            $"{prefix}: {(gi.Enabled ? "enabled" : "disabled")}, mode={gi.Mode}, debug={gi.DebugView}, " +
+            $"intensity={gi.IndirectIntensity:F2}, fallback={gi.EnvironmentFallbackIntensity:F2}, " +
+            $"simpleActive={diagnostics.SimpleDdgiActive != 0}, probes={diagnostics.SimpleDdgiProbeCount}, " +
+            $"updated={diagnostics.SimpleDdgiProbesUpdated}, rays={diagnostics.SimpleDdgiRaysPerFrame}, " +
+            $"rayQuery={gi.EffectiveUseRayQueryBackend}/{diagnostics.GlobalIlluminationRayQueryActive}");
     }
 
     private void PrintDdgiDiagnostics(string prefix)
@@ -2240,87 +2212,13 @@ internal sealed class SampleInputController
 
         GlobalIlluminationSettings gi = _renderer.Settings.GlobalIllumination;
         RendererDiagnostics diagnostics = _renderer.LastDiagnostics;
-        DdgiRuntimeSnapshot snapshot = diagnostics.DdgiRuntimeSnapshot;
-        ulong currentAtlasBytes = diagnostics.DdgiCurrentIrradianceAtlasBytes + diagnostics.DdgiCurrentVisibilityAtlasBytes;
         Console.WriteLine(
-            $"{prefix}: preset={_renderer.Settings.QualityPreset}, tier={gi.DdgiQualityTier}, mode={gi.Mode}, " +
-            $"effective={diagnostics.GlobalIlluminationMode}, enabled={gi.Enabled}, ddgi={(gi.EffectiveUseDdgi ? "legacy" : gi.EffectiveUseSimpleDdgi ? "simple" : "off")}, " +
-            $"simpleActive={diagnostics.SimpleDdgiActive != 0}, simpleProbes={diagnostics.SimpleDdgiProbeCount}, simpleUpdated={diagnostics.SimpleDdgiProbesUpdated}, simpleRays={diagnostics.SimpleDdgiRaysPerFrame}, ssgi={gi.EffectiveUseSsgi}, " +
-            $"simpleRecenter={diagnostics.SimpleDdgiRecentered}, simplePreserve={diagnostics.SimpleDdgiAtlasPreservedOnRecenter}, simpleClear={diagnostics.SimpleDdgiAtlasCleared}, simpleFresh={diagnostics.SimpleDdgiAtlasFresh}, " +
-            $"rayQuery={gi.EffectiveUseRayQueryBackend}/{diagnostics.GlobalIlluminationRayQueryActive}, debug={gi.DebugView}, async={diagnostics.DdgiAsyncComputeEnabled != 0}");
-        Console.WriteLine(
-            $"{prefix}: investigation simpleEvents recenter/clear/preserve/framesSinceClear/framesSinceRecenter={diagnostics.SimpleDdgiRecenterCount}/{diagnostics.SimpleDdgiAtlasClearCount}/{diagnostics.SimpleDdgiAtlasPreserveOnRecenterCount}/{diagnostics.SimpleDdgiFramesSinceLastClear}/{diagnostics.SimpleDdgiFramesSinceLastRecenter}, " +
-            $"simpleForward fresh/zero/nonzero/avgIrrLum/avgVisibility/lowVisibility={diagnostics.SimpleDdgiFreshAtlasForwardSampleCount}/{diagnostics.SimpleDdgiZeroIrradianceSampleCount}/{diagnostics.SimpleDdgiNonzeroIrradianceSampleCount}/{diagnostics.SimpleDdgiAverageSampledIrradianceLuminance:F5}/{diagnostics.SimpleDdgiAverageVisibility:F3}/{diagnostics.SimpleDdgiLowVisibilitySampleCount}, " +
-            $"update full/partial/fraction/start/end/skipped={diagnostics.DdgiFullRefreshFrameCount}/{diagnostics.DdgiPartialRefreshFrameCount}/{diagnostics.DdgiUpdatedProbeFraction:F3}/{diagnostics.DdgiProbeUpdateStartIndex}/{diagnostics.DdgiProbeUpdateEndIndex}/{diagnostics.DdgiSkippedProbeCount}, " +
-            $"age p50/p95/max={diagnostics.DdgiFramesSinceProbeUpdatedP50:F1}/{diagnostics.DdgiFramesSinceProbeUpdatedP95:F1}/{diagnostics.DdgiFramesSinceProbeUpdatedMax:F1}, invalidated={diagnostics.DdgiNewlyInvalidatedProbeCount}, reasons={diagnostics.DdgiRefreshReasonRecenterProbeCount}/{diagnostics.DdgiRefreshReasonDirtyProbeCount}/{diagnostics.DdgiRefreshReasonAgeProbeCount}/{diagnostics.DdgiRefreshReasonVisibilityProbeCount}/{diagnostics.DdgiRefreshReasonFullRefreshProbeCount}, " +
-            $"forward={diagnostics.DdgiForwardSimplePathSampleCount}/{diagnostics.DdgiForwardLegacyPathSampleCount}/{diagnostics.DdgiForwardZeroFinalIndirectCount}/{diagnostics.DdgiForwardZeroDdgiButNonzeroIblCount}/{diagnostics.DdgiForwardZeroDdgiAndZeroIblCount}/{diagnostics.DdgiForwardOutOfGridSampleCount}/{diagnostics.DdgiForwardClampedProbeSampleCount}/{diagnostics.DdgiForwardNanOrInfSampleCount}, " +
-            $"atlas={diagnostics.DdgiIrradianceAtlasZeroTexelSampleCount}/{diagnostics.DdgiVisibilityAtlasZeroMomentSampleCount}/{diagnostics.DdgiAtlasWriteProbeCount}/{diagnostics.DdgiAtlasWriteTexelCount}/{diagnostics.DdgiBlendZeroRayWeightProbeCount}/{diagnostics.DdgiBlendNonzeroIrradianceProbeCount}/{diagnostics.DdgiBlendPreviousAtlasUsedCount}/{diagnostics.DdgiBlendHysteresisZeroFrameCount}, " +
-            $"trace={diagnostics.DdgiSimpleTraceHitCount}/{diagnostics.DdgiSimpleTraceMissCount}/{diagnostics.DdgiSimpleTraceZeroRadianceHitCount}/{diagnostics.DdgiSimpleTraceDirectLightHitCount}/{diagnostics.DdgiSimpleTraceEmissiveHitCount}/{diagnostics.DdgiSimpleTraceFarFieldHitCount}/{diagnostics.DdgiSimpleTraceFarFieldMissCount}/{diagnostics.DdgiSimpleTraceTlasUnavailableFrameCount}, " +
-            $"simpleFar={diagnostics.SimpleDdgiSkyVisibilitySampleCount}/{diagnostics.SimpleDdgiAverageSkyVisibility:F3}/{diagnostics.FarFieldSunShadowSampleCount}/{diagnostics.FarFieldSunShadowOccludedCount}/{diagnostics.SimpleDdgiRoughSpecularSampleCount}/{diagnostics.SimpleDdgiRoughSpecularNonzeroCount}, " +
-            $"farSteps={diagnostics.DdgiSimpleTraceFarFieldStepBucket0Count}/{diagnostics.DdgiSimpleTraceFarFieldStepBucket1Count}/{diagnostics.DdgiSimpleTraceFarFieldStepBucket2Count}/{diagnostics.DdgiSimpleTraceFarFieldStepBucket3Count}/{diagnostics.DdgiSimpleTraceFarFieldStepBucket4Count}, " +
-            $"black={diagnostics.DdgiBlackFrameSuspect}/{diagnostics.DdgiBlackFrameAfterRecenter}/{diagnostics.DdgiBlackFrameAfterAtlasClear}/{diagnostics.DdgiBlackFrameDuringFreshAtlas}/{diagnostics.DdgiBlackFrameMovementClass}");
-        Console.WriteLine(
-            $"{prefix}: volumes={diagnostics.DdgiProbeVolumeCount}, cascades={diagnostics.DdgiCascadeCount}, probes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount}, " +
-            $"updated={diagnostics.DdgiProbesUpdated}, raysPerProbe={diagnostics.DdgiRaysPerProbe}, scheduledPrimaryRays={diagnostics.DdgiScheduledPrimaryRayCount}, " +
-            $"shadowRayUpper={diagnostics.DdgiEstimatedShadowRayUpperBound}, updateBudget={diagnostics.DdgiMaxProbeUpdatesPerFrame}, rayBudget={diagnostics.DdgiProbeUpdatePrimaryRayBudget}, " +
-            $"gatherFallback={diagnostics.DdgiGatherFallbackTileCount}, forwardFallback={diagnostics.DdgiForwardGatherFallbackUsed}/{diagnostics.DdgiForwardGatherFallbackDisabled}, emptyTiles={diagnostics.DdgiForwardGatherTileEmpty}");
-        Console.WriteLine(
-            $"{prefix}: snapshot volumes={snapshot.VolumeCount}, active={snapshot.ActiveProbeCount}, scheduled={snapshot.ScheduledProbeUpdates}, " +
-            $"scheduler candidates/requests/rejected={snapshot.SchedulerCandidateCount}/{snapshot.SchedulerRequestCount}/{snapshot.SchedulerBudgetRejectedCount}, " +
-            $"scheduleUs/p95={snapshot.SchedulerGpuMicroseconds}/{snapshot.SchedulerGpuP95Microseconds}, " +
-            $"estimate spatial/support/data/visibility/effective/reloc/inactive={snapshot.EstimateSpatialCoverage:F3}/{snapshot.EstimateSupportCoverage:F3}/{snapshot.EstimateDataConfidence:F3}/{snapshot.EstimateVisibilityConfidence:F3}/{snapshot.EstimateEffectiveWeight:F3}/{snapshot.EstimateRelocationMagnitude:F3}/{snapshot.EstimateInactiveProbeCount}, " +
-            $"tiles local/clipmap/fallback/empty={snapshot.SelectedLocalTileCount}/{snapshot.SelectedClipmapTileCount}/{snapshot.GatherFallbackTileCount}/{snapshot.EmptyGatherTileCount}");
-        Console.WriteLine(
-            $"{prefix}: warmup state={diagnostics.DdgiWarmupState}, warmed visible/local/cascade0={diagnostics.DdgiWarmedVisibleProbeFraction:P1}/{diagnostics.DdgiWarmedLocalProbeFraction:P1}/{diagnostics.DdgiWarmedCascade0ProbeFraction:P1}");
-        Console.WriteLine(
-            $"{prefix}: forwardEstimate valid={diagnostics.DdgiForwardEstimateCountersReadbackValid}, samples={diagnostics.DdgiForwardEstimateSampleCount}, " +
-            $"zeroSupportSpatial={diagnostics.DdgiForwardEstimateZeroVisibleButCoveredCount}, zeroEffectiveSpatial={diagnostics.DdgiForwardEstimateZeroEffectiveButCoveredCount}, highOwnershipLowIndirect={diagnostics.DdgiForwardEstimateHighOwnershipLowDeliveredIndirectCount}, " +
-            $"sampledIrrLum={diagnostics.DdgiForwardEstimateSampledIrradianceLuminance:F4}, ddgiDiffuseLum={diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F4}, " +
-            $"hybridFinalLum={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F4}, fallbackWeight={diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight:F3}, " +
-            $"sampledProbes currentFrustum/sideRear/staleAge={diagnostics.DdgiSampledProbeCurrentFrustumCount}/{diagnostics.DdgiSampledProbeSideRearCount}/{diagnostics.DdgiSampledProbeStaleAgeCount}");
-        Console.WriteLine(
-            $"{prefix}: probeHitShadows rays/occluded/near(<spacing)/avgCommittedDistance=" +
-            $"{diagnostics.DdgiShadowVisibilityRayCount}/{diagnostics.DdgiShadowVisibilityOccludedCount}/{diagnostics.DdgiShadowVisibilityNearHitCount}/{diagnostics.DdgiShadowVisibilityCommittedHitDistanceAverage:F3}");
-        Console.WriteLine(
-            $"{prefix}: visibilityMoments samples={diagnostics.DdgiVisibilityMomentSampleCount}, mean/variance/distance={diagnostics.DdgiVisibilityMomentMeanAverage:F3}/{diagnostics.DdgiVisibilityMomentVarianceAverage:F3}/{diagnostics.DdgiVisibilityProbeDistanceAverage:F3}, " +
-            $"largeMargin={diagnostics.DdgiVisibilityLargeDistanceMarginCount}, zeroTransport={diagnostics.DdgiVisibilityZeroTransportCount}, zeroTransportWithIrradiance={diagnostics.DdgiVisibilityZeroTransportWithIrradianceCount}");
-        if (diagnostics.DdgiDiagnosticWarnings.Count > 0)
-            Console.WriteLine($"{prefix}: warnings={string.Join("; ", diagnostics.DdgiDiagnosticWarnings)}");
-        Console.WriteLine(
-            $"{prefix}: ddgiLightMode={diagnostics.DdgiLightSelectionMode}, selectedDirHits={diagnostics.DdgiSelectedDirectionalHitCount}, " +
-            $"selectedLocalHits={diagnostics.DdgiSelectedLocalHitCount}, visibilityRays={diagnostics.DdgiVisibilityRayCount}, skippedLocalHits={diagnostics.DdgiSkippedLocalLightCount}, " +
-            $"emissiveSources={diagnostics.DdgiEmissiveSourceCount}, emissiveRevision={diagnostics.DdgiEmissiveSourceRevision}");
-        Console.WriteLine(
-            $"{prefix}: updates new/dirty/frustum/safety/age={diagnostics.DdgiNewProbeCount}/{diagnostics.DdgiDirtyBoundsProbeUpdateCount}/" +
-            $"{diagnostics.DdgiVisibleFrustumProbeUpdateCount}/{diagnostics.DdgiOutsideFrustumSafetyProbeUpdateCount}/{diagnostics.DdgiAgeRefreshProbeUpdateCount}, " +
-            $"frustum={diagnostics.DdgiFrustumUpdatePercentage:F1}%, outside={diagnostics.DdgiOutsideFrustumUpdatePercentage:F1}%, stale={diagnostics.DdgiStaleProbeCount}, " +
-            $"avgAge={diagnostics.DdgiAverageProbeAge:F1}, maxAge={diagnostics.DdgiMaxProbeAge}, scrolls={diagnostics.DdgiScrollCount}, movement={diagnostics.DdgiCameraMovementClass}");
-        Console.WriteLine(
-            $"{prefix}: adaptive scale={diagnostics.DdgiAdaptiveBudgetScale:F2}, reduced={diagnostics.DdgiAdaptiveBudgetReduced}, " +
-            $"emergency={diagnostics.DdgiEmergencyDegradeActive}, reason='{diagnostics.DdgiAdaptiveBudgetReason}', " +
-            $"reinit={diagnostics.DdgiResourceReinitializationCount}/{diagnostics.DdgiTotalResourceReinitializationCount}, cacheClear='{diagnostics.DdgiCacheClearReason}', " +
-            $"localSlots={diagnostics.DdgiActiveLocalSlotCount}, localGen={diagnostics.DdgiLocalSlotGeneration}, eviction='{diagnostics.DdgiLocalVolumeEvictionReason}', " +
-            $"shadedLights={diagnostics.DdgiEffectiveMaxShadedLights}");
-        Console.WriteLine(
-            $"{prefix}: memory currentAtlas={currentAtlasBytes}/{diagnostics.DdgiAtlasMemoryBudgetBytes}, rayScratch={diagnostics.DdgiRayScratchBytes}, updatedAtlas={diagnostics.DdgiUpdatedAtlasBytes}, latencyFrames={diagnostics.DdgiPublishedCacheLatencyFrames}, " +
-            $"cacheGen={diagnostics.DdgiCacheGeneration}, cacheFrame={diagnostics.DdgiLastUpdatedFrameSerial}, cacheWarmup={diagnostics.DdgiCacheWarmupState}, " +
-            $"updateExec={diagnostics.DdgiUpdateExecuted}:'{diagnostics.DdgiUpdateSkipReason}', publishExec={diagnostics.DdgiPublishExecuted}:'{diagnostics.DdgiPublishSkipReason}', " +
-            $"probeVolume={diagnostics.DdgiProbeVolumeBufferBytes}, probeState={diagnostics.DdgiProbeStateBufferBytes}, updateQueue={diagnostics.DdgiProbeUpdateQueueBytes}, relocationClassify={diagnostics.DdgiProbeRelocationClassificationBytes}, " +
-            $"scheduler={diagnostics.DdgiGpuSchedulerBufferBytes}, gatherTiles={diagnostics.DdgiGatherTileBufferBytes}, localPool={diagnostics.DdgiLocalSlotReservedPoolBytes}, localSlotInit={diagnostics.DdgiLocalSlotInitBytes}, " +
-            $"ddgiTex={diagnostics.DdgiTextureBytes}, ddgiBuf={diagnostics.DdgiBufferBytes}, ssgiTargets={diagnostics.SsgiRenderTargetBytes}, " +
-            $"giTargets={diagnostics.GlobalIlluminationRenderTargetBytes}, as={diagnostics.AccelerationStructureBytes}, asScratch={diagnostics.AccelerationStructureScratchBytes}");
-        Console.WriteLine(
-            $"{prefix}: AS blas/tlas/instances={diagnostics.AccelerationStructureBottomLevelCount}/{diagnostics.AccelerationStructureTlasBuildCount}/{diagnostics.AccelerationStructureTopLevelInstanceCount}, " +
-            $"blasBuilds={diagnostics.AccelerationStructureBlasBuildCount}, tlasUpdates={diagnostics.AccelerationStructureTlasUpdateCount}, tlasSkips={diagnostics.AccelerationStructureTlasSkipCount}, " +
-            $"blasCompact=query:{diagnostics.AccelerationStructureBlasCompactionQueryCount},copy:{diagnostics.AccelerationStructureBlasCompactionCount},pending:{diagnostics.AccelerationStructureBlasCompactionPendingCount}," +
-            $"savedFrame:{diagnostics.AccelerationStructureBlasCompactionBytesSaved},savedResident:{diagnostics.AccelerationStructureBlasCompactedResidentBytesSaved}," +
-            $"queryOverflow:{diagnostics.AccelerationStructureBlasCompactionQueryOverflowCount},readbackFailure:{diagnostics.AccelerationStructureBlasCompactionQueryReadbackFailureCount}, " +
-            $"fallback='{diagnostics.AccelerationStructureFallbackReason}'");
-        Console.WriteLine(
-            $"{prefix}: cpuUs ssgi/ddgi/as={diagnostics.CpuSsgiRecordMicroseconds}/{diagnostics.CpuDdgiRecordMicroseconds}/{diagnostics.CpuAccelerationStructureBuildMicroseconds}, " +
-            $"gpuUs ssgiTrace/ssgiTemporal/ssgiDenoise/ddgiTrace/ddgiBlend/ddgiRelocateClassify/ddgiPublish/ddgiTotal/composite={diagnostics.GpuSsgiTraceMicroseconds}/{diagnostics.GpuSsgiTemporalMicroseconds}/" +
-            $"{diagnostics.GpuSsgiDenoiseMicroseconds}/{diagnostics.GpuDdgiTraceMicroseconds}/{diagnostics.GpuDdgiBlendMicroseconds}/{diagnostics.GpuDdgiRelocateClassifyMicroseconds}/{diagnostics.GpuDdgiPublishMicroseconds}/{diagnostics.GpuDdgiUpdateMicroseconds}/{diagnostics.GpuGiCompositeMicroseconds}, " +
-            $"gpuAS blas/tlas={diagnostics.GpuAccelerationStructureBlasMicroseconds}/{diagnostics.GpuAccelerationStructureTlasMicroseconds}");
+            $"{prefix}: tier={gi.DdgiQualityTier}, mode={gi.Mode}, enabled={gi.Enabled}, " +
+            $"simpleActive={diagnostics.SimpleDdgiActive != 0}, probes={diagnostics.SimpleDdgiProbeCount}, " +
+            $"updated={diagnostics.SimpleDdgiProbesUpdated}, rays={diagnostics.SimpleDdgiRaysPerFrame}, " +
+            $"recenter={diagnostics.SimpleDdgiRecentered}, atlasFresh={diagnostics.SimpleDdgiAtlasFresh}, " +
+            $"rayQuery={gi.EffectiveUseRayQueryBackend}/{diagnostics.GlobalIlluminationRayQueryActive}, " +
+            $"debug={gi.DebugView}");
     }
 
     private void CycleDdgiDebugView()
@@ -2392,7 +2290,6 @@ internal sealed class SampleInputController
     {
         gi.Enabled = true;
         gi.Mode = GlobalIlluminationMode.Ddgi;
-        gi.UseSsgi = false;
         gi.UseDdgi = true;
         gi.DdgiCameraRelativeEnabled = true;
         gi.DdgiProbeClassificationEnabled = true;
@@ -2414,7 +2311,7 @@ internal sealed class SampleInputController
             }
 
             diagnostics.DdgiForwardEstimateCountersEnabled = true;
-            Console.WriteLine("DDGI forward estimate counters: enabled for DDGI-only diagnostics.");
+            Console.WriteLine("DDGI forward estimate counters: enabled for Simple DDGI diagnostics.");
             return;
         }
 
@@ -2430,86 +2327,14 @@ internal sealed class SampleInputController
     {
         return mode switch
         {
-            GlobalIlluminationMode.Disabled => GlobalIlluminationMode.Ssgi,
-            GlobalIlluminationMode.Ssgi => GlobalIlluminationMode.Ddgi,
-            GlobalIlluminationMode.Ddgi => GlobalIlluminationMode.Hybrid,
-            GlobalIlluminationMode.Hybrid => GlobalIlluminationMode.RayQueryHybrid,
+            GlobalIlluminationMode.Disabled => GlobalIlluminationMode.Ddgi,
             _ => GlobalIlluminationMode.Disabled
         };
     }
 
-    private static bool ModeUsesDdgi(GlobalIlluminationMode mode)
-    {
-        return mode is GlobalIlluminationMode.Ddgi
-            or GlobalIlluminationMode.Hybrid
-            or GlobalIlluminationMode.RayQueryHybrid;
-    }
-
-    private static bool ModeUsesSsgi(GlobalIlluminationMode mode)
-    {
-        return mode is GlobalIlluminationMode.Ssgi
-            or GlobalIlluminationMode.Hybrid
-            or GlobalIlluminationMode.RayQueryHybrid;
-    }
-
     internal static GlobalIlluminationDebugView NextGlobalIlluminationDebugView(GlobalIlluminationDebugView mode)
     {
-        return mode switch
-        {
-            GlobalIlluminationDebugView.None => GlobalIlluminationDebugView.FinalIndirect,
-            GlobalIlluminationDebugView.FinalIndirect => GlobalIlluminationDebugView.SsgiRaw,
-            GlobalIlluminationDebugView.SsgiRaw => GlobalIlluminationDebugView.SsgiFiltered,
-            GlobalIlluminationDebugView.SsgiFiltered => GlobalIlluminationDebugView.SsgiHistory,
-            GlobalIlluminationDebugView.SsgiHistory => GlobalIlluminationDebugView.SsgiRayHitMask,
-            GlobalIlluminationDebugView.SsgiRayHitMask => GlobalIlluminationDebugView.SsgiHistoryRejection,
-            GlobalIlluminationDebugView.SsgiHistoryRejection => GlobalIlluminationDebugView.DdgiIrradiance,
-            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiSourceCacheRadiance,
-            GlobalIlluminationDebugView.DdgiSourceCacheRadiance => GlobalIlluminationDebugView.DdgiSampledIrradiance,
-            GlobalIlluminationDebugView.DdgiSampledIrradiance => GlobalIlluminationDebugView.DdgiFinalDiffuse,
-            GlobalIlluminationDebugView.DdgiFinalDiffuse => GlobalIlluminationDebugView.DdgiRawDiffuse,
-            GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiConfidenceBypass,
-            GlobalIlluminationDebugView.DdgiConfidenceBypass => GlobalIlluminationDebugView.DdgiSuppressionMask,
-            GlobalIlluminationDebugView.DdgiSuppressionMask => GlobalIlluminationDebugView.DdgiEffectiveWeight,
-            GlobalIlluminationDebugView.DdgiEffectiveWeight => GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight,
-            GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight => GlobalIlluminationDebugView.DdgiVisibility,
-            GlobalIlluminationDebugView.DdgiVisibility => GlobalIlluminationDebugView.DdgiVisibilityMoments,
-            GlobalIlluminationDebugView.DdgiVisibilityMoments => GlobalIlluminationDebugView.DdgiProbeIndex,
-            GlobalIlluminationDebugView.DdgiProbeIndex => GlobalIlluminationDebugView.DdgiProbeState,
-            GlobalIlluminationDebugView.DdgiProbeState => GlobalIlluminationDebugView.DdgiProbeRelocation,
-            GlobalIlluminationDebugView.DdgiProbeRelocation => GlobalIlluminationDebugView.DdgiRelocationNormalized,
-            GlobalIlluminationDebugView.DdgiRelocationNormalized => GlobalIlluminationDebugView.DdgiProbeLogicalPosition,
-            GlobalIlluminationDebugView.DdgiProbeLogicalPosition => GlobalIlluminationDebugView.DdgiProbeRelocatedPosition,
-            GlobalIlluminationDebugView.DdgiProbeRelocatedPosition => GlobalIlluminationDebugView.DdgiProbeRelocationDirection,
-            GlobalIlluminationDebugView.DdgiProbeRelocationDirection => GlobalIlluminationDebugView.DdgiClassificationInvalidScore,
-            GlobalIlluminationDebugView.DdgiClassificationInvalidScore => GlobalIlluminationDebugView.DdgiLeakClamp,
-            GlobalIlluminationDebugView.DdgiLeakClamp => GlobalIlluminationDebugView.DdgiCoverage,
-            GlobalIlluminationDebugView.DdgiCoverage => GlobalIlluminationDebugView.DdgiSpatialCoverage,
-            GlobalIlluminationDebugView.DdgiSpatialCoverage => GlobalIlluminationDebugView.DdgiSupportCoverage,
-            GlobalIlluminationDebugView.DdgiSupportCoverage => GlobalIlluminationDebugView.DdgiDataConfidence,
-            GlobalIlluminationDebugView.DdgiDataConfidence => GlobalIlluminationDebugView.DdgiDirectionalSupport,
-            GlobalIlluminationDebugView.DdgiDirectionalSupport => GlobalIlluminationDebugView.DdgiVisibilityConfidence,
-            GlobalIlluminationDebugView.DdgiVisibilityConfidence => GlobalIlluminationDebugView.DdgiConfidenceChain,
-            GlobalIlluminationDebugView.DdgiConfidenceChain => GlobalIlluminationDebugView.DdgiCascadeSelection,
-            GlobalIlluminationDebugView.DdgiCascadeSelection => GlobalIlluminationDebugView.DdgiCascadeBlendWeight,
-            GlobalIlluminationDebugView.DdgiCascadeBlendWeight => GlobalIlluminationDebugView.DdgiUpdateReasons,
-            GlobalIlluminationDebugView.DdgiUpdateReasons => GlobalIlluminationDebugView.DdgiRayBudget,
-            GlobalIlluminationDebugView.DdgiRayBudget => GlobalIlluminationDebugView.DdgiGatherLocalVolume,
-            GlobalIlluminationDebugView.DdgiGatherLocalVolume => GlobalIlluminationDebugView.DdgiGatherClipmap,
-            GlobalIlluminationDebugView.DdgiGatherClipmap => GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight,
-            GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight => GlobalIlluminationDebugView.DdgiGatherBlendWeight,
-            GlobalIlluminationDebugView.DdgiGatherBlendWeight => GlobalIlluminationDebugView.DdgiGatherFallback,
-            GlobalIlluminationDebugView.DdgiGatherFallback => GlobalIlluminationDebugView.RayQueryCost,
-            GlobalIlluminationDebugView.RayQueryCost => GlobalIlluminationDebugView.FarFieldOccupancySlice,
-            GlobalIlluminationDebugView.FarFieldOccupancySlice => GlobalIlluminationDebugView.FarFieldTraceResult,
-            GlobalIlluminationDebugView.FarFieldTraceResult => GlobalIlluminationDebugView.FarFieldSkyVisibility,
-            GlobalIlluminationDebugView.FarFieldSkyVisibility => GlobalIlluminationDebugView.FarFieldSunShadow,
-            GlobalIlluminationDebugView.FarFieldSunShadow => GlobalIlluminationDebugView.MaterialTransportSourceOwnership,
-            GlobalIlluminationDebugView.MaterialTransportSourceOwnership => GlobalIlluminationDebugView.HybridEstimatorOwnership,
-            GlobalIlluminationDebugView.HybridEstimatorOwnership => GlobalIlluminationDebugView.HybridFinalComposition,
-            GlobalIlluminationDebugView.HybridFinalComposition => GlobalIlluminationDebugView.MaterialTransportHitProvenance,
-            GlobalIlluminationDebugView.MaterialTransportHitProvenance => GlobalIlluminationDebugView.None,
-            _ => GlobalIlluminationDebugView.None
-        };
+        return NextDdgiDebugView(mode);
     }
 
     private static GlobalIlluminationDebugView NextDdgiDebugView(GlobalIlluminationDebugView mode)
@@ -2531,8 +2356,7 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiVisibilityMoments => GlobalIlluminationDebugView.DdgiProbeIndex,
             GlobalIlluminationDebugView.DdgiProbeIndex => GlobalIlluminationDebugView.DdgiProbeState,
             GlobalIlluminationDebugView.DdgiProbeState => GlobalIlluminationDebugView.DdgiProbeRelocation,
-            GlobalIlluminationDebugView.DdgiProbeRelocation => GlobalIlluminationDebugView.DdgiRelocationNormalized,
-            GlobalIlluminationDebugView.DdgiRelocationNormalized => GlobalIlluminationDebugView.DdgiProbeLogicalPosition,
+            GlobalIlluminationDebugView.DdgiProbeRelocation => GlobalIlluminationDebugView.DdgiProbeLogicalPosition,
             GlobalIlluminationDebugView.DdgiProbeLogicalPosition => GlobalIlluminationDebugView.DdgiProbeRelocatedPosition,
             GlobalIlluminationDebugView.DdgiProbeRelocatedPosition => GlobalIlluminationDebugView.DdgiProbeRelocationDirection,
             GlobalIlluminationDebugView.DdgiProbeRelocationDirection => GlobalIlluminationDebugView.DdgiClassificationInvalidScore,
@@ -2553,7 +2377,12 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiGatherClipmap => GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight,
             GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight => GlobalIlluminationDebugView.DdgiGatherBlendWeight,
             GlobalIlluminationDebugView.DdgiGatherBlendWeight => GlobalIlluminationDebugView.DdgiGatherFallback,
-            GlobalIlluminationDebugView.DdgiGatherFallback => GlobalIlluminationDebugView.FinalIndirect,
+            GlobalIlluminationDebugView.DdgiGatherFallback => GlobalIlluminationDebugView.FarFieldOccupancySlice,
+            GlobalIlluminationDebugView.FarFieldOccupancySlice => GlobalIlluminationDebugView.FarFieldTraceResult,
+            GlobalIlluminationDebugView.FarFieldTraceResult => GlobalIlluminationDebugView.FarFieldSkyVisibility,
+            GlobalIlluminationDebugView.FarFieldSkyVisibility => GlobalIlluminationDebugView.FarFieldSunShadow,
+            GlobalIlluminationDebugView.FarFieldSunShadow => GlobalIlluminationDebugView.MaterialTransportHitProvenance,
+            GlobalIlluminationDebugView.MaterialTransportHitProvenance => GlobalIlluminationDebugView.None,
             _ => GlobalIlluminationDebugView.None
         };
     }
@@ -2633,7 +2462,6 @@ internal sealed class SampleInputController
             or GlobalIlluminationDebugView.DdgiSuppressionMask
             or GlobalIlluminationDebugView.DdgiEffectiveWeight
             or GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight
-            or GlobalIlluminationDebugView.DdgiRelocationNormalized
             or GlobalIlluminationDebugView.DdgiClassificationInvalidScore
             or GlobalIlluminationDebugView.DdgiVisibilityMoments
             or GlobalIlluminationDebugView.DdgiSpatialCoverage

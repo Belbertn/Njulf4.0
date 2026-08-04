@@ -74,10 +74,10 @@ namespace Njulf.Rendering.Pipeline
         {
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
             Dispatch(cmd, _horizontalSet, _renderTargets.AmbientOcclusionRaw.Extent, new Vector2(1.0f, 0.0f), sceneData, "AmbientOcclusionBlurPass Horizontal");
-            _renderTargets.AmbientOcclusionScratch.TransitionToShaderRead(cmd);
+            _renderTargets.AmbientOcclusionScratch.TransitionToComputeShaderRead(cmd);
 
             Dispatch(cmd, _verticalSet, _renderTargets.AmbientOcclusionBlurred.Extent, new Vector2(0.0f, 1.0f), sceneData, "AmbientOcclusionBlurPass Vertical");
-            _renderTargets.AmbientOcclusionBlurred.TransitionToShaderRead(cmd);
+            _renderTargets.AmbientOcclusionBlurred.TransitionToComputeShaderRead(cmd);
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

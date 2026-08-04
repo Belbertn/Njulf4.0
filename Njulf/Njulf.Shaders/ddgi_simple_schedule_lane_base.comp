@@ -1,0 +1,40 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_schedule_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    uint lane = gl_GlobalInvocationID.x;
+    if (lane >= SIMPLE_DDGI_SCHEDULER_MAX_LANES)
+        return;
+    SchedulerArenaWrite(pc.LaneAdmissionOffsetWords + lane, 0u);
+    uint base = 0u;
+    for (uint i = 0u; i < lane; i++)
+        base += SchedulerArenaRead(pc.LaneCandidateCountsOffsetWords + i);
+    SchedulerArenaWrite(pc.LaneCursorsOffsetWords + lane, base);
+    SchedulerArenaWrite(pc.LanePrefixesOffsetWords + lane, base);
+    if (lane == 0u)
+    {
+        uint total = 0u;
+        for (uint i = 0u; i < SIMPLE_DDGI_SCHEDULER_MAX_LANES; i++)
+            total += SchedulerArenaRead(pc.LaneCandidateCountsOffsetWords + i);
+        SchedulerArenaWrite(
+            pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_COMPACTED,
+            total);
+        if (total > SchedulerCandidateCapacity())
+        {
+            SchedulerArenaAtomicAdd(
+                pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_OVERFLOW,
+                1u);
+            return;
+        }
+        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_COMPACT,
+            SchedulerGroupsFor(SchedulerCandidateCapacity()), 1u, 1u);
+        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_ADMIT,
+            SchedulerGroupsFor(SIMPLE_DDGI_SCHEDULER_MAX_LANES), 1u, 1u);
+    }
+}

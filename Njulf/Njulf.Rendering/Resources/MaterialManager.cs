@@ -71,7 +71,7 @@ namespace Njulf.Rendering.Resources
         private uint _materialBufferCapacity;
         private uint _materialExtensionBufferCapacity;
         private uint _materialDataRevision;
-        private uint _ssgiInputRevision = 1;
+        private uint _giTransportInputRevision = 1;
         private uint _materialContentRevisionSerial;
         private uint _textureContentRevisionSerial;
         private uint _referencedTextureCacheRevision = uint.MaxValue;
@@ -415,16 +415,16 @@ namespace Njulf.Rendering.Resources
         }
 
         /// <summary>
-        /// Monotonic revision of material channels consumed by SSGI tracing
-        /// and composition. Far-field-only and raster-only edits do not
-        /// invalidate SSGI history.
+        /// Monotonic revision of material channels consumed by dynamic-GI
+        /// transport. Far-field-only and raster-only edits do not invalidate
+        /// the probe transport state.
         /// </summary>
-        public uint SsgiInputRevision
+        public uint GiTransportInputRevision
         {
             get
             {
                 lock (_lock)
-                    return _ssgiInputRevision;
+                    return _giTransportInputRevision;
             }
         }
 
@@ -492,7 +492,7 @@ namespace Njulf.Rendering.Resources
                 if (published.Count > 0)
                 {
                     MarkMaterialDataDirtyLocked();
-                    AdvanceSsgiInputRevisionLocked(MaterialChangeMask.All);
+                    AdvanceGiTransportInputRevisionLocked(MaterialChangeMask.All);
                 }
                 changes = published.ToArray();
             }
@@ -905,7 +905,7 @@ namespace Njulf.Rendering.Resources
                     AddActiveProfileClassificationLocked(slot);
                     AddTextureDependenciesLocked(handle.Index, slot.TextureHandles);
                     MarkMaterialDataDirtyLocked();
-                    AdvanceSsgiInputRevisionLocked(changeMask);
+                    AdvanceGiTransportInputRevisionLocked(changeMask);
                     ReleaseMaterialExtensionDataLocked(retiredExtensionIndex);
                     changed = new MaterialChangedEvent(handle, changeMask, slot.AspectRevisions);
 
@@ -1186,7 +1186,7 @@ namespace Njulf.Rendering.Resources
                             RecordCompileDiagnosticsLocked(
                                 compiled,
                                 compileMicroseconds);
-                            AdvanceSsgiInputRevisionLocked(
+                            AdvanceGiTransportInputRevisionLocked(
                                 changeMask);
                             if (HasGpuServices)
                             {
@@ -1568,7 +1568,7 @@ namespace Njulf.Rendering.Resources
                 AddActiveProfileClassificationLocked(slot);
                 _legacyV1FallbackCount++;
                 MarkMaterialDataDirtyLocked();
-                AdvanceSsgiInputRevisionLocked(MaterialChangeMask.All);
+                AdvanceGiTransportInputRevisionLocked(MaterialChangeMask.All);
                 changed = new MaterialChangedEvent(handle, MaterialChangeMask.All, slot.AspectRevisions);
             }
             MaterialChanged?.Invoke(changed);
@@ -2718,22 +2718,22 @@ namespace Njulf.Rendering.Resources
                 data.TransportFlags |= legacyFlag;
         }
 
-        private void AdvanceSsgiInputRevisionLocked(MaterialChangeMask changeMask)
+        private void AdvanceGiTransportInputRevisionLocked(MaterialChangeMask changeMask)
         {
-            if (!AffectsSsgiInputs(changeMask))
+            if (!AffectsGiTransportInputs(changeMask))
                 return;
 
-            _ssgiInputRevision = NextNonZero(_ssgiInputRevision);
+            _giTransportInputRevision = NextNonZero(_giTransportInputRevision);
         }
 
-        internal static bool AffectsSsgiInputs(MaterialChangeMask changeMask)
+        internal static bool AffectsGiTransportInputs(MaterialChangeMask changeMask)
         {
-            const MaterialChangeMask ssgiInputs =
+            const MaterialChangeMask transportInputs =
                 MaterialChangeMask.DiffuseTransport |
                 MaterialChangeMask.Emission |
                 MaterialChangeMask.AlphaCoverage |
                 MaterialChangeMask.ShadingModel;
-            return (changeMask & ssgiInputs) != 0;
+            return (changeMask & transportInputs) != 0;
         }
 
         private uint NextMaterialContentRevisionLocked()
@@ -3588,7 +3588,7 @@ namespace Njulf.Rendering.Resources
             }
 
             MarkMaterialDataDirtyLocked();
-            AdvanceSsgiInputRevisionLocked(combinedMask);
+            AdvanceGiTransportInputRevisionLocked(combinedMask);
             return changes;
         }
 

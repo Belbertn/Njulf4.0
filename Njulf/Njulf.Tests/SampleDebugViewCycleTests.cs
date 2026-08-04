@@ -20,9 +20,6 @@ public sealed class SampleDebugViewCycleTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(visited, Does.Contain(GlobalIlluminationDebugView.MaterialTransportSourceOwnership));
-            Assert.That(visited, Does.Contain(GlobalIlluminationDebugView.HybridEstimatorOwnership));
-            Assert.That(visited, Does.Contain(GlobalIlluminationDebugView.HybridFinalComposition));
             Assert.That(visited, Does.Contain(GlobalIlluminationDebugView.MaterialTransportHitProvenance));
             Assert.That(visited, Does.Contain(GlobalIlluminationDebugView.FarFieldOccupancySlice));
             Assert.That(visited, Does.Contain(GlobalIlluminationDebugView.FarFieldSunShadow));

@@ -368,7 +368,7 @@ namespace Njulf.Rendering.Resources
 
                 EnsureStaticInstances(scene, sceneContentRevision, stagingRing, commandBuffer);
 
-                BoundingBox bounds = ExpandBounds(DdgiFrameLayoutBuilder.EstimateSceneProbeBounds(scene), gi.SimpleDdgiProbeSpacing * 2.0f);
+                BoundingBox bounds = ExpandBounds(SimpleDdgiSceneBounds.Estimate(scene), gi.SimpleDdgiProbeSpacing * 2.0f);
                 Vector3 extent = bounds.Max - bounds.Min;
                 float maxExtent = MathF.Max(MathF.Max(extent.X, extent.Y), extent.Z);
                 float voxelSize = MathF.Max(maxExtent / Math.Max(1, resolution), 0.001f);

@@ -888,6 +888,10 @@ namespace Njulf.Rendering.Data
         private const uint DecalGlobalIlluminationEnabledFlag = 1u << 4;
         private const uint DdgiLayeredReceiverCountersEnabledFlag = 1u << 5;
         private const uint DecalReceiveShadowsFlag = 1u << 6;
+        // Keep the forward push-constant ABI at 256 bytes. The low diagnostic
+        // bits are already part of the shader contract; bit 31 is reserved for
+        // the capture-only path and is exposed through the property below.
+        private const uint ReflectionCaptureEnabledFlag = 1u << 31;
         private const int DirectionalShadowPreviewCascadeShift = 8;
         private const uint DirectionalShadowPreviewCascadeMask = 0x03u;
 
@@ -907,6 +911,19 @@ namespace Njulf.Rendering.Data
         public float OcclusionBias;
         public uint DebugAndAoFlags;
         public uint DiagnosticFlags;
+
+        public uint CaptureFlags
+        {
+            get => DiagnosticFlags & ReflectionCaptureEnabledFlag;
+            set
+            {
+                DiagnosticFlags = (DiagnosticFlags & ~ReflectionCaptureEnabledFlag) |
+                                  (value & ReflectionCaptureEnabledFlag);
+            }
+        }
+
+        public static uint PackCaptureFlags(bool reflectionCaptureEnabled) =>
+            reflectionCaptureEnabled ? ReflectionCaptureEnabledFlag : 0u;
 
         public static uint PackDebugAndAoFlags(
             uint debugViewMode,
@@ -1216,128 +1233,6 @@ namespace Njulf.Rendering.Data
         public Vector4 RadianceSelectionProbability;
     }
 
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDdgiGatherTileHeader
-    {
-        public uint TileCountX;
-        public uint TileCountY;
-        public uint TileSize;
-        public uint Flags;
-    }
-
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDdgiGatherTile
-    {
-        public uint LocalVolumeIndex;
-        public uint PrimaryClipmapVolumeIndex;
-        public uint SecondaryClipmapVolumeIndex;
-        public uint Flags;
-        public Vector4 BlendWeights;
-    }
-
-    // 168 bytes, std430-compatible. Mirrors the DDGI GPU scheduler constants buffer.
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDdgiSchedulerConstants
-    {
-        public uint ActiveProbeCount;
-        public uint VolumeCount;
-        public uint RequestBudget;
-        public uint PrimaryRayBudget;
-        public uint DirtyRegionCount;
-        public uint PriorityBucketCount;
-        public uint FrameSerial;
-        public uint Flags;
-        public Vector4 CameraPositionNearPlane;
-        public Vector4 ForwardFarPlane;
-        public Vector4 RightTanHalfFovX;
-        public Vector4 UpTanHalfFovY;
-        public Vector4 CameraVelocitySafetyRadius;
-        public float FrustumPriorityWeight;
-        public float NewProbeUpdateBoost;
-        public float OutOfFrustumMinimumUpdateFraction;
-        public uint MinimumProbeRefreshFrames;
-        public uint WarmupState;
-        public uint WarmupLocalBudget;
-        public uint WarmupCascade0Budget;
-        public uint WarmupNewCellBudget;
-        public uint WarmupSafetyBudget;
-        public uint ScanProbeCount;
-        public uint CandidateOutputOffset;
-        public uint CandidateOutputCapacity;
-        public uint SchedulerScanMode;
-        public uint RayCapacityPerProbe;
-    }
-
-    // 32 bytes. MinReason.xyz and MaxPadding.xyz store dirty bounds; MinReason.w stores DdgiDirtyReason.
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDdgiDirtyRegion
-    {
-        public Vector4 MinReason;
-        public Vector4 MaxPadding;
-    }
-
-    // 120 bytes. Written by the GPU scheduler and optionally copied into frame-late readback.
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDdgiSchedulerCounters
-    {
-        public uint RequestCount;
-        public uint PrimaryRayCount;
-        public uint CandidateCount;
-        public uint OverflowCount;
-        public uint DuplicateRequestCount;
-        public uint BudgetRejectedCount;
-        public uint InvalidProbeCount;
-        public uint DirtyRegionCount;
-        public uint VisibleFrustumCount;
-        public uint SafetyShellCount;
-        public uint AgeRefreshCount;
-        public uint HighVarianceCount;
-        public uint LowConfidenceCount;
-        public uint StableSkippedCount;
-        public uint Priority0RequestCount;
-        public uint Priority1RequestCount;
-        public uint Priority2RequestCount;
-        public uint Priority3RequestCount;
-        public uint WarmupVisibleProbeCount;
-        public uint WarmupWarmedVisibleProbeCount;
-        public uint WarmupLocalProbeCount;
-        public uint WarmupWarmedLocalProbeCount;
-        public uint WarmupCascade0ProbeCount;
-        public uint WarmupWarmedCascade0ProbeCount;
-        public uint CandidateBufferOverflowCount;
-        public uint PerBucketOverflowCount;
-        public uint RequestBudgetRejectedCount;
-        public uint PrimaryRayBudgetRejectedCount;
-        public uint ScanProbeCount;
-        public uint CandidateOutputCapacity;
-        public uint PriorityBucketMismatchSkipCount;
-    }
-
-    // 40 bytes. Candidate compaction record; final queue still uses GPUDdgiProbeUpdateRequest.
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDdgiProbeCandidate
-    {
-        public uint ProbeIndex;
-        public uint VolumeIndex;
-        public uint Priority;
-        public uint ReasonFlags;
-        public int LogicalCellX;
-        public int LogicalCellY;
-        public int LogicalCellZ;
-        public uint PrimaryRayCost;
-        public uint ScoreKey;
-        public uint Reserved0;
-    }
-
-    // 12 bytes. Matches VkDispatchIndirectCommand.
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDdgiTraceIndirectDispatch
-    {
-        public uint GroupCountX;
-        public uint GroupCountY;
-        public uint GroupCountZ;
-    }
-
     // 208 bytes. Fixed-grid DDGI params, mirrored by ddgi_simple_shared.glsl.
     // The final two vectors are the V2 transport contract.  They deliberately
     // live in the params header instead of pass-local state so every shader that
@@ -1543,6 +1438,10 @@ namespace Njulf.Rendering.Data
         public uint DispatchQueueOffset;
         public uint DispatchProbeCount;
         public uint DispatchRaysPerProbe;
+        public uint SchedulerArenaBufferIndex;
+        public uint SchedulerRayBucketIndex;
+        public uint SchedulerRayBucketCommandsOffsetWords;
+        public uint SchedulerCountersOffsetWords;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1556,6 +1455,286 @@ namespace Njulf.Rendering.Data
         public uint TransportIrradianceAtlasBufferIndex;
         public uint SampledAtlasGroupCount;
         public uint SampledAtlasLayersPerTexture;
+        public uint SchedulerArenaBufferIndex;
+        public uint SchedulerCountersOffsetWords;
+    }
+
+    // 160 bytes.  This is the only CPU-authored scheduler record that changes
+    // on a normal frame.  Generation/frame ownership is represented by uints,
+    // never float bitcasts.  Ray targets are bounded by the authored DDGI
+    // budgets and therefore fit in uint without lossy conversion.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiSchedulerFrame
+    {
+        public uint ActiveProbeCount;
+        public uint ActiveVolumeCount;
+        public uint CandidateCapacity;
+        public uint RequestCapacity;
+        public uint ConfiguredRequestBudget;
+        public uint EffectiveRequestBudget;
+        public uint PrimaryRayBudget;
+        public uint SourceThroughputProbeTarget;
+        public uint SourceThroughputRayTarget;
+        public uint SourceThroughputRayCapacity;
+        public uint FrameIndex;
+        public uint DeterministicFlags;
+        public uint FrameSerialLow;
+        public uint FrameSerialHigh;
+        public uint VolumeTableGeneration;
+        public uint SchedulerResourceGeneration;
+        public uint QueueTransactionGeneration;
+        public uint SourceLightingGeneration;
+        public uint TransportGeneration;
+        public uint GlobalConvergenceGeneration;
+        public Vector4 CameraPositionAndNearProximity;
+        public uint DirtyRegionCount;
+        public uint DirtyRegionCapacity;
+        public uint DirtyReasonFlags;
+        public uint FeatureFlags;
+        public uint ClassificationRetryFrames;
+        public uint SourceRefreshIntervalFrames;
+        public uint StableGenerationRequirement;
+        public uint SourceEpoch;
+        public uint RayBucket0;
+        public uint RayBucket1;
+        public uint RayBucket2;
+        public uint RayBucket3;
+        public uint RayBucket4;
+        public uint RayBucket5;
+        public uint InvalidationMarkerGeneration;
+        public uint Reserved0;
+    }
+
+    // 160 bytes.  Volume policy is uploaded only when topology, quality, or
+    // scheduler policy changes.  Current/previous origins and toroidal offsets
+    // are explicit so a shader can fail closed on incompatible remaps.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiSchedulerVolumePolicy
+    {
+        public uint FirstProbe;
+        public uint ProbeCount;
+        public uint VolumeKind;
+        public uint RingIndex;
+        public uint SourceOrdinal;
+        public uint Purpose;
+        public uint LayoutGeneration;
+        public uint PreviousLayoutGeneration;
+        public Vector4 CurrentOriginAndSpacing;
+        public Vector4 PreviousOriginAndSpacing;
+        public uint CurrentCountX;
+        public uint CurrentCountY;
+        public uint CurrentCountZ;
+        public uint PreviousCountX;
+        public uint PreviousCountY;
+        public uint PreviousCountZ;
+        public uint PhysicalOffsetX;
+        public uint PhysicalOffsetY;
+        public uint PhysicalOffsetZ;
+        public uint LayoutFlags;
+        public uint MinimumQuota;
+        public uint PreferredMaximumQuota;
+        public uint SchedulingWeight;
+        public uint Priority;
+        public uint FullRaysPerProbe;
+        public uint MaintenanceRaysPerProbe;
+        public uint MaterialTextureMaxCascade;
+        public uint MaxShadedLights;
+        public uint SequenceStride;
+        public uint LaneCursorGeneration;
+        public int CellDeltaX;
+        public int CellDeltaY;
+        public int CellDeltaZ;
+        public uint DirtyGeneration;
+    }
+
+    // 48 bytes.  Dirty-region records are bounded and coalesced by the CPU;
+    // generation and reason remain integer fields so overlap handling cannot
+    // accidentally reinterpret ownership metadata as a float.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiSchedulerDirtyRegion
+    {
+        public Vector4 Minimum;
+        public Vector4 Maximum;
+        public uint ReasonFlags;
+        public uint Generation;
+        public uint Reserved0;
+        public uint Reserved1;
+    }
+
+    // 32 bytes.  The packed word has documented, unit-tested bounds in
+    // SimpleDdgiSchedulerProbeStatePacking.  It contains only bounded counters
+    // and flags; generation/frame ownership stays in dedicated uint fields.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiSchedulerProbeState
+    {
+        public uint LastCommittedUpdateFrame;
+        public uint LastCommittedSourceRefreshFrame;
+        public uint CommittedSourceLightingGeneration;
+        public uint SourceEpoch;
+        public uint OwningVolumeTableGeneration;
+        public uint DirtyReasonFlags;
+        public uint DirtyStartFrame;
+        public uint PackedTransportAndLifecycle;
+    }
+
+    // 32 bytes.  Invalid candidates use ProbeIndex == uint.MaxValue.  The
+    // remaining words are packed only from bounded integer enums/counts.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiSchedulerCandidate
+    {
+        public uint ProbeIndex;
+        public uint VolumeIndex;
+        public uint ExpectedPhysicalGeneration;
+        public uint SequenceOrdinal;
+        public uint WorkClassAndTransport;
+        public uint RayTierAndReasonFlags;
+        public uint ActiveRayCount;
+        public uint SourceRayCount;
+
+        public bool IsValid => ProbeIndex != uint.MaxValue;
+    }
+
+    // 64 bytes.  Update producers write transaction-private outcomes; commit
+    // is the first stage allowed to mutate receiver-visible lifecycle state.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiUpdateOutcome
+    {
+        public uint QueueTransactionGeneration;
+        public uint SchedulerResourceGeneration;
+        public uint ProbeIndex;
+        public uint ExpectedPhysicalGeneration;
+        public uint VolumeTableGeneration;
+        public uint SourceLightingGeneration;
+        public uint TransportGeneration;
+        public uint CompletionFlags;
+        public uint TraceFlags;
+        public uint SourceRayCountCompleted;
+        public uint TransportGenerationCompleted;
+        public uint ResidualBits;
+        public uint ProposedStateFlags;
+        public uint ProposedClassification;
+        public uint FailClosedReason;
+        public uint Reserved0;
+    }
+
+    // A Vulkan dispatch command occupies 12 bytes.  Arena slots are 16 bytes
+    // so every command begins at the same alignment and a failed schedule can
+    // reset x without touching neighbouring metadata.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiDispatchIndirectCommand
+    {
+        public uint GroupCountX;
+        public uint GroupCountY;
+        public uint GroupCountZ;
+        public uint Reserved;
+    }
+
+    // Fixed, compact feedback header.  The arena reserves the full 4 KiB
+    // shipping summary; this header is the portion consumed by CPU admission
+    // and stale-generation validation.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiSchedulerFeedback
+    {
+        public uint FrameSerialLow;
+        public uint FrameSerialHigh;
+        public uint VolumeTableGeneration;
+        public uint SchedulerResourceGeneration;
+        public uint QueueTransactionGeneration;
+        public uint SourceLightingGeneration;
+        public uint TransportGeneration;
+        public uint StatusFlags;
+        public uint ConsideredCount;
+        public uint EligibleCount;
+        public uint AcceptedCount;
+        public uint CommittedCount;
+        public uint RejectedCount;
+        public uint RequestBudget;
+        public uint RequestUsed;
+        public uint PrimaryRayBudget;
+        public uint PrimaryRayUsed;
+        public uint SourceTargetRays;
+        public uint SourceAchievedRays;
+        public uint SourceCapacityShortfall;
+        public uint InvalidGenerationCount;
+        public uint DuplicateCount;
+        public uint OverflowCount;
+        public uint FailedCommitCount;
+        public uint PendingFreshCount;
+        public uint PendingExposedCount;
+        public uint PendingRelocationCount;
+        public uint PendingSourceCount;
+        public uint PendingSolverCount;
+        public uint ConvergedCount;
+        public uint MaximumFreshAge;
+        public uint MaximumExposedAge;
+        public uint MaximumRelocationAge;
+        public uint MaximumUnpublishedAge;
+        public uint MaximumVisibleUnsupportedAge;
+        public uint SourceCohortStartFrame;
+        public uint SourceCohortCompletionFrame;
+        public uint SourceCohortStartCount;
+        public uint SourceCohortCompletionCount;
+        public uint PropagationGeneration;
+        public uint PublishedPropagationGeneration;
+        public uint StaticConvergedGeneration;
+        public uint StaticConvergencePending;
+        public uint StaleReadbackRejectionCount;
+        public uint ResourceGenerationRejectionCount;
+        public uint DirtyFirstScheduledP95;
+        public uint DirtyFirstCommittedP95;
+        public uint DirtyConvergenceP95;
+        public uint RayBucket0Count;
+        public uint RayBucket1Count;
+        public uint RayBucket2Count;
+        public uint RayBucket3Count;
+        public uint RayBucket4Count;
+        public uint RayBucket5Count;
+        public uint DispatchedLaneCount;
+        public uint NoOpLaneCount;
+        public uint VisiblePriorityParticipatingProbeCount;
+        public uint VisiblePrioritySourceReadyProbeCount;
+        public uint VisiblePriorityPublishedProbeCount;
+        public uint Reserved0;
+        public uint Reserved1;
+        public uint Reserved2;
+        public uint Reserved3;
+        public uint Reserved4;
+    }
+
+    // Kept below the common 128-byte Vulkan minimum push-constant range. The
+    // frame header carries mutable counts/generations; this block carries only
+    // bindless indices, immutable arena offsets, and the current scheduler
+    // stage. That keeps stage dispatch cheap without uploading a second header
+    // for every pass.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiSchedulePushConstants
+    {
+        public uint ArenaBufferIndex;
+        public uint ParamsBufferIndex;
+        public uint ProbeStateBufferIndex;
+        public uint UpdateQueueBufferIndex;
+        public uint RelocationBufferIndex;
+        public uint FrameOffsetWords;
+        public uint VolumePolicyOffsetWords;
+        public uint PreviousVolumePolicyOffsetWords;
+        public uint DirtyRegionOffsetWords;
+        public uint SchedulerProbeStateOffsetWords;
+        public uint CandidateInputOffsetWords;
+        public uint CandidateGroupLaneCountsOffsetWords;
+        public uint CandidateOutputOffsetWords;
+        public uint LaneCandidateCountsOffsetWords;
+        public uint LanePrefixesOffsetWords;
+        public uint LaneTotalsOffsetWords;
+        public uint LaneCursorsOffsetWords;
+        public uint LaneAdmissionOffsetWords;
+        public uint CountersOffsetWords;
+        public uint UpdateRecordsOffsetWords;
+        public uint RayBucketCommandsOffsetWords;
+        public uint IndirectCommandsOffsetWords;
+        public uint OutcomesOffsetWords;
+        public uint FeedbackOffsetWords;
+        public uint Stage;
+        public uint Reserved0;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1640,29 +1819,6 @@ namespace Njulf.Rendering.Data
         public uint RevealageTextureIndex;
         public uint DebugView;
         public uint Padding0;
-    }
-
-    [Flags]
-    public enum SsgiCompositionFlags : uint
-    {
-        None = 0,
-        HybridV2 = 1u << 0,
-        EnvironmentFallback = 1u << 1,
-        MaterialTransportV2 = 1u << 2,
-        FarFieldTransport = 1u << 3
-    }
-
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSsgiCompositePushConstants
-    {
-        public uint GiFinalDiffuseTextureIndex;
-        public uint SceneMaterialTextureIndex;
-        public uint MaterialTransportProvenanceTextureIndex;
-        public uint DebugView;
-        public uint CompositionFlags;
-        public uint Padding0;
-        public uint Padding1;
-        public uint Padding2;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1766,20 +1922,6 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSsgiTracePushConstants
-    {
-        public Matrix4x4 ViewProjectionMatrix;
-        public Matrix4x4 InverseViewProjectionMatrix;
-        public Vector4 SourceDimensions;
-        public Vector4 DestinationDimensions;
-        public Vector4 TraceParams;
-        public uint RayCount;
-        public uint StepCount;
-        public uint FrameIndex;
-        public uint Padding0;
-    }
-
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUDdgiUpdatePushConstants
     {
         public Vector4 EnvironmentRadianceAndIntensity;
@@ -1815,28 +1957,4 @@ namespace Njulf.Rendering.Data
         public uint FrameSerial;
     }
 
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSsgiTemporalPushConstants
-    {
-        public Vector4 SourceDimensions;
-        public Vector4 ReprojectionParams;
-        public Matrix4x4 InverseProjectionMatrix;
-        public uint HistoryValid;
-        public uint MotionVectorsEnabled;
-        public uint FrameIndex;
-        public uint DebugView;
-    }
-
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSsgiDenoisePushConstants
-    {
-        public Vector4 SourceDimensions;
-        public Vector4 DestinationDimensions;
-        public Vector4 FilterParams;
-        public Matrix4x4 InverseProjectionMatrix;
-        public uint Radius;
-        public uint DenoiserEnabled;
-        public uint DebugView;
-        public uint TemporalEnabled;
-    }
 }

@@ -30,7 +30,7 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_FAR_FIELD_CLIPMAP", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_FAR_FIELD_FORCE_ALL", null);
-        Environment.SetEnvironmentVariable("NJULF_RENDERER_DDGI_SCHEDULER_MODE", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_SIMPLE_DDGI_SCHEDULER_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR", null);
         Environment.SetEnvironmentVariable("NJULF_SPONZA_GI_CAPTURE_DIR", null);
@@ -241,7 +241,7 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
-    public void GlobalIlluminationValidation_CoversPhase9ScenarioAndSchedulerMatrix()
+    public void GlobalIlluminationValidation_CoversPhase9Scenarios()
     {
         SamplePerformanceScenario[] scenarios =
         [
@@ -257,12 +257,6 @@ public sealed class SampleSmokeOptionsParserTests
             SamplePerformanceScenario.GiFastTraversalTeleport,
             SamplePerformanceScenario.GiInstancedCityStress
         ];
-        DdgiSchedulerMode[] schedulerModes =
-        [
-            DdgiSchedulerMode.CpuReference,
-            DdgiSchedulerMode.Gpu,
-            DdgiSchedulerMode.CpuGpuCompare
-        ];
         SamplePerformanceScenario[] benchmarkScenarios = SampleDdgiBenchmarkSuite.Scenes
             .Select(scene => scene.Scenario)
             .ToArray();
@@ -274,21 +268,11 @@ public sealed class SampleSmokeOptionsParserTests
                 Assert.That(SampleGlobalIlluminationValidation.IsValidationScenario(scenario), Is.True, scenario.ToString());
                 Assert.That(benchmarkScenarios, Does.Contain(scenario), scenario.ToString());
 
-                foreach (DdgiSchedulerMode schedulerMode in schedulerModes)
-                {
-                    var settings = new RenderSettings();
-                    SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, scenario);
-                    SampleGlobalIlluminationValidation.ConfigureSchedulerMode(settings, schedulerMode);
+                var settings = new RenderSettings();
+                SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, scenario);
 
-                    Assert.That(settings.GlobalIllumination.EffectiveUseSimpleDdgi, Is.True, $"{scenario} {schedulerMode}");
-                    Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.False, $"{scenario} {schedulerMode}");
-                    Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True, $"{scenario} {schedulerMode}");
-                    Assert.That(settings.GlobalIllumination.DdgiSchedulerMode, Is.EqualTo(schedulerMode), $"{scenario} {schedulerMode}");
-                    Assert.That(
-                        settings.GlobalIllumination.DdgiGpuSchedulerReadbackValidationEnabled,
-                        Is.EqualTo(schedulerMode == DdgiSchedulerMode.CpuGpuCompare),
-                        $"{scenario} {schedulerMode}");
-                }
+                Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True, scenario.ToString());
+                Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True, scenario.ToString());
             }
         });
     }
@@ -388,7 +372,7 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
-    public void GlobalIlluminationValidationSettings_EnableVisibleRayQueryHybridPath()
+    public void GlobalIlluminationValidationSettings_EnableVisibleRayQuerySimpleDdgiPath()
     {
         var settings = new RenderSettings();
         settings.ApplyQualityPreset(RenderQualityPreset.High);
@@ -400,27 +384,18 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(settings.GlobalIllumination.Enabled, Is.True);
             Assert.That(settings.QualityPreset, Is.EqualTo(RenderQualityPreset.DdgiHigh));
             Assert.That(settings.GlobalIllumination.Mode, Is.EqualTo(GlobalIlluminationMode.Ddgi));
-            Assert.That(settings.GlobalIllumination.UseSsgi, Is.False);
             Assert.That(settings.GlobalIllumination.UseDdgi, Is.True);
             Assert.That(settings.GlobalIllumination.UseRayQueryBackend, Is.True);
-            Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.False);
-            Assert.That(settings.GlobalIllumination.DdgiSimpleEnabled, Is.True);
-            Assert.That(settings.GlobalIllumination.EffectiveUseSimpleDdgi, Is.True);
-            Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.False);
+            Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
             Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True);
             Assert.That(settings.GlobalIllumination.DdgiQualityTier, Is.EqualTo(DdgiQualityTier.DdgiHigh));
             Assert.That(settings.GlobalIllumination.DdgiCameraRelativeEnabled, Is.True);
-            Assert.That(settings.GlobalIllumination.DdgiClipmapBaseSpacing, Is.EqualTo(0.75f));
-            Assert.That(settings.GlobalIllumination.DdgiSchedulerMode, Is.EqualTo(DdgiSchedulerMode.Gpu));
             Assert.That(settings.GlobalIllumination.IndirectIntensity, Is.EqualTo(0.85f));
             Assert.That(settings.GlobalIllumination.EnvironmentFallbackIntensity, Is.EqualTo(0.0f));
             Assert.That(settings.GlobalIllumination.MaxBounceDistance, Is.EqualTo(10.0f));
             Assert.That(settings.GlobalIllumination.DdgiThinWallPolicyEnabled, Is.True);
-            Assert.That(settings.GlobalIllumination.DdgiRoomSpacingScaledBiasEnabled, Is.True);
             Assert.That(settings.GlobalIllumination.DdgiThinWallLeakClampStrength, Is.EqualTo(0.9f));
-            Assert.That(settings.GlobalIllumination.DdgiThinWallProxyThickness, Is.EqualTo(0.12f));
             Assert.That(settings.GlobalIllumination.DdgiSelfShadowBiasScale, Is.EqualTo(1.0f));
-            Assert.That(settings.GlobalIllumination.DdgiHysteresisResponse, Is.EqualTo(1.0f));
             Assert.That(settings.GlobalIllumination.TemporalEnabled, Is.False);
             Assert.That(settings.GlobalIllumination.DenoiserEnabled, Is.False);
             Assert.That(
@@ -463,7 +438,7 @@ public sealed class SampleSmokeOptionsParserTests
                     "emissive-room",
                     "moving-rigid-object",
                     "moving-local-light",
-                    "camera-teleport-scroll",
+                    "camera-teleport-recenter",
                     "verticality-rings",
                     "outdoor-foliage-plaza"
                 }));
@@ -518,9 +493,6 @@ public sealed class SampleSmokeOptionsParserTests
                     "ddgi-gpu-scheduler-duplicate-requests",
                     "ddgi-gpu-scheduler-fallback-active",
                     "ddgi-gpu-mode-cpu-scheduler-us",
-                    "ssgi-trace-gpu-us",
-                    "ssgi-temporal-gpu-us",
-                    "ssgi-spatial-gpu-us"
                 }));
             Assert.That(
                 SampleGlobalIlluminationValidation.Gates.Single(gate => gate.Metric == "history-rejection-ratio").Maximum,
@@ -559,7 +531,7 @@ public sealed class SampleSmokeOptionsParserTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(settings.GlobalIllumination.Mode, Is.EqualTo(GlobalIlluminationMode.Hybrid));
+            Assert.That(settings.GlobalIllumination.Mode, Is.EqualTo(GlobalIlluminationMode.Ddgi));
             Assert.That(settings.GlobalIllumination.UseRayQueryBackend, Is.False);
             Assert.That(settings.GlobalIllumination.IndirectIntensity, Is.EqualTo(1.0f));
             Assert.That(settings.GlobalIllumination.EnvironmentFallbackIntensity, Is.EqualTo(1.0f));
@@ -660,49 +632,6 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(options.EnableSceneGpuCompaction, Is.True);
             Assert.That(options.EnableSceneIndirectDispatch, Is.True);
             Assert.That(options.EnableSceneSubmissionValidation, Is.True);
-        });
-    }
-
-    [TestCase("cpu-reference", DdgiSchedulerMode.CpuReference)]
-    [TestCase("gpu", DdgiSchedulerMode.Gpu)]
-    [TestCase("cpu-gpu-compare", DdgiSchedulerMode.CpuGpuCompare)]
-    public void ParsesDdgiSchedulerModeForScriptedGiValidation(string value, DdgiSchedulerMode expected)
-    {
-        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
-        {
-            "--ddgi-scheduler-mode", value
-        });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(options.DdgiSchedulerModeOverride, Is.EqualTo(expected));
-            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
-            Assert.That(options.FrameCount, Is.EqualTo(3));
-        });
-    }
-
-    [Test]
-    public void ParsesDdgiSchedulerModeEnvironment()
-    {
-        Environment.SetEnvironmentVariable("NJULF_RENDERER_DDGI_SCHEDULER_MODE", "cpu_gpu_compare");
-
-        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(Array.Empty<string>());
-
-        Assert.That(options.DdgiSchedulerModeOverride, Is.EqualTo(DdgiSchedulerMode.CpuGpuCompare));
-    }
-
-    [Test]
-    public void GlobalIlluminationValidationSchedulerMode_EnablesCompareReadback()
-    {
-        var settings = new RenderSettings();
-
-        SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, SamplePerformanceScenario.GiCornellRoom);
-        SampleGlobalIlluminationValidation.ConfigureSchedulerMode(settings, DdgiSchedulerMode.CpuGpuCompare);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(settings.GlobalIllumination.DdgiSchedulerMode, Is.EqualTo(DdgiSchedulerMode.CpuGpuCompare));
-            Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerReadbackValidationEnabled, Is.True);
         });
     }
 

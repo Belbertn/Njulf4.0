@@ -360,9 +360,7 @@ namespace Njulf.Rendering.Pipeline
 
         private bool NeedsMotionVectors()
         {
-            return _settings.AntiAliasing.EffectiveMode == AntiAliasingMode.Taa ||
-                   (_settings.GlobalIllumination.EffectiveUseSsgi &&
-                    _settings.GlobalIllumination.TemporalEnabled);
+            return _settings.AntiAliasing.EffectiveMode == AntiAliasingMode.Taa;
         }
 
         private static bool IsCameraCut(Matrix4x4 current, Matrix4x4 previous)

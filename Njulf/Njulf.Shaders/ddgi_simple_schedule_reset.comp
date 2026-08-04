@@ -1,0 +1,65 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_schedule_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    uint localIndex = gl_LocalInvocationID.x;
+    uint requestCapacity = SchedulerRequestCapacity();
+    uint candidateCapacity = SchedulerCandidateCapacity();
+
+    for (uint i = localIndex; i < candidateCapacity * SIMPLE_DDGI_SCHEDULER_CANDIDATE_WORDS; i += 64u)
+        SchedulerArenaWrite(pc.CandidateInputOffsetWords + i, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE);
+    for (uint i = localIndex; i < SchedulerCandidateGroupLaneWordCount(); i += 64u)
+        SchedulerArenaWrite(pc.CandidateGroupLaneCountsOffsetWords + i, 0u);
+    for (uint i = localIndex; i < candidateCapacity * SIMPLE_DDGI_SCHEDULER_COMPACT_OUTPUT_WORDS; i += 64u)
+        SchedulerArenaWrite(pc.CandidateOutputOffsetWords + i, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE);
+    for (uint i = localIndex; i < requestCapacity * SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS; i += 64u)
+        SchedulerArenaWrite(pc.UpdateRecordsOffsetWords + i, 0u);
+    for (uint i = localIndex; i < SIMPLE_DDGI_SCHEDULER_MAX_LANES; i += 64u)
+    {
+        SchedulerArenaWrite(pc.LaneCandidateCountsOffsetWords + i, 0u);
+        SchedulerArenaWrite(pc.LanePrefixesOffsetWords + i, 0u);
+        SchedulerArenaWrite(pc.LaneTotalsOffsetWords + i, 0u);
+        SchedulerArenaWrite(pc.LaneAdmissionOffsetWords + i, 0u);
+    }
+    for (uint i = localIndex; i < SIMPLE_DDGI_SCHEDULER_COUNTER_WORDS; i += 64u)
+        SchedulerArenaWrite(pc.CountersOffsetWords + i, 0u);
+    for (uint i = localIndex; i < requestCapacity * SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS; i += 64u)
+        SchedulerArenaWrite(pc.OutcomesOffsetWords + i, 0u);
+    for (uint i = localIndex; i < SIMPLE_DDGI_SCHEDULER_FEEDBACK_WORDS; i += 64u)
+        SchedulerArenaWrite(pc.FeedbackOffsetWords + i, 0u);
+    for (uint command = localIndex; command < 6u; command += 64u)
+    {
+        uint base = pc.RayBucketCommandsOffsetWords +
+            command * SIMPLE_DDGI_SCHEDULER_INDIRECT_WORDS;
+        SchedulerArenaWrite(base + 0u, 0u);
+        SchedulerArenaWrite(base + 1u, 1u);
+        SchedulerArenaWrite(base + 2u, 1u);
+        SchedulerArenaWrite(base + 3u, 0u);
+    }
+    for (uint command = localIndex; command < 15u; command += 64u)
+    {
+        uint base = pc.IndirectCommandsOffsetWords +
+            command * SIMPLE_DDGI_SCHEDULER_INDIRECT_WORDS;
+        SchedulerArenaWrite(base + 0u, 0u);
+        SchedulerArenaWrite(base + 1u, 1u);
+        SchedulerArenaWrite(base + 2u, 1u);
+        SchedulerArenaWrite(base + 3u, 0u);
+    }
+
+    if (localIndex == 0u)
+    {
+        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_RESET, 1u, 1u, 1u);
+        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_CLASSIFY, 0u, 1u, 1u);
+        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_PREFIX, 0u, 1u, 1u);
+        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_LANE_BASE, 0u, 1u, 1u);
+        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_COMPACT, 0u, 1u, 1u);
+        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_ADMIT, 0u, 1u, 1u);
+        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_EMIT, 1u, 1u, 1u);
+    }
+}

@@ -150,7 +150,6 @@ internal sealed class SampleDiagnosticsReporter
             PrintGiDiagnostics(diagnostics);
             PrintDdgiRingDiagnostics(diagnostics);
             PrintDdgiVolumeActivityDiagnostics(diagnostics);
-            PrintDdgiSchedulerDiagnostics(diagnostics);
             PrintDdgiUpdateDiagnostics(diagnostics);
             return;
         }
@@ -349,7 +348,6 @@ internal sealed class SampleDiagnosticsReporter
         PrintDdgiRingDiagnostics(diagnostics);
         PrintDdgiVolumeActivityDiagnostics(diagnostics);
         PrintDdgiInvestigationDiagnostics(diagnostics);
-        PrintDdgiSchedulerDiagnostics(diagnostics);
         PrintDdgiUpdateDiagnostics(diagnostics);
         Console.WriteLine(
             $"Frame diagnostics AA: mode={diagnostics.AntiAliasingMode}, size={diagnostics.AntiAliasingWidth}x{diagnostics.AntiAliasingHeight}, " +
@@ -427,16 +425,12 @@ internal sealed class SampleDiagnosticsReporter
         Console.WriteLine(
             $"Frame diagnostics GI: enabled={diagnostics.GlobalIlluminationEnabled}, mode={diagnostics.GlobalIlluminationMode}, debug={diagnostics.GlobalIlluminationDebugView}, " +
             $"rayQuerySupported={diagnostics.GlobalIlluminationRayQuerySupported}, rayQueryActive={diagnostics.GlobalIlluminationRayQueryActive}, " +
-            $"ssgi={diagnostics.SsgiWidth}x{diagnostics.SsgiHeight}, ssgiScale={diagnostics.SsgiResolutionScale:F2}, ssgiRays={diagnostics.SsgiRayCount}, " +
-            $"history={diagnostics.SsgiHistoryValid}, rejected={diagnostics.SsgiRejectedHistoryPixelCount}, " +
             $"ddgiVolumes={diagnostics.DdgiProbeVolumeCount}, ddgiProbes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount}, " +
             $"ddgiUpdated={diagnostics.DdgiProbesUpdated}, ddgiRays={diagnostics.DdgiRaysPerProbe}, relocation={diagnostics.DdgiProbeRelocationCount}, " +
             $"simpleState active/probes/updated/recenter/preserve/clear/fresh={diagnostics.SimpleDdgiActive}/{diagnostics.SimpleDdgiProbeCount}/{diagnostics.SimpleDdgiProbesUpdated}/" +
             $"{diagnostics.SimpleDdgiRecentered}/{diagnostics.SimpleDdgiAtlasPreservedOnRecenter}/{diagnostics.SimpleDdgiAtlasCleared}/{diagnostics.SimpleDdgiAtlasFresh}, " +
             $"updateExec={diagnostics.DdgiUpdateExecuted}:'{diagnostics.DdgiUpdateSkipReason}', publishExec={diagnostics.DdgiPublishExecuted}:'{diagnostics.DdgiPublishSkipReason}', " +
             $"cacheGeneration={diagnostics.DdgiCacheGeneration}, cacheFrame={diagnostics.DdgiLastUpdatedFrameSerial}, cacheWarmup={diagnostics.DdgiCacheWarmupState}, cacheLatencyFrames={diagnostics.DdgiPublishedCacheLatencyFrames}, " +
-            $"gatherFallback={diagnostics.DdgiGatherFallbackTileCount}, forwardFallback={diagnostics.DdgiForwardGatherFallbackUsed}/{diagnostics.DdgiForwardGatherFallbackDisabled}, emptyTiles={diagnostics.DdgiForwardGatherTileEmpty}, " +
-            $"gatherFractions local/clipmap/fallback={diagnostics.DdgiGatherSelectedLocalTileFraction:F3}/{diagnostics.DdgiGatherSelectedClipmapTileFraction:F3}/{diagnostics.DdgiGatherFallbackTileFraction:F3}, " +
             $"ddgiClipmapCoverage attempts/ok/fail/avgEdgeFade/avgBlend=" +
             $"{diagnostics.DdgiClipmapInfoPrimaryAttemptCount}/{diagnostics.DdgiClipmapInfoPrimaryOkCount}/{diagnostics.DdgiClipmapInfoPrimaryFailedCount}/" +
             $"{diagnostics.DdgiClipmapInfoPrimaryEdgeFadeAverage:F3}/{diagnostics.DdgiClipmapInfoPrimaryBlendWeightAverage:F3}, " +
@@ -480,10 +474,9 @@ internal sealed class SampleDiagnosticsReporter
             $"ddgiProbeConfidence alpha/qx/qy/qz={diagnostics.DdgiProbeIrradianceAlphaAverage:F3}/{diagnostics.DdgiProbeQualityXAverage:F3}/{diagnostics.DdgiProbeQualityYAverage:F3}/{diagnostics.DdgiProbeQualityZAverage:F3}, " +
             $"warmup={diagnostics.DdgiWarmupState}:{diagnostics.DdgiWarmedVisibleProbeFraction:F3}/{diagnostics.DdgiWarmedLocalProbeFraction:F3}/{diagnostics.DdgiWarmedCascade0ProbeFraction:F3}, " +
             $"volumeDesign={FormatDdgiVolumeDesignSummary(diagnostics)}, " +
-            $"classification={diagnostics.DdgiProbeClassificationCount}, cpuSsgiUs={diagnostics.CpuSsgiRecordMicroseconds}, cpuDdgiUs={diagnostics.CpuDdgiRecordMicroseconds}, " +
+            $"classification={diagnostics.DdgiProbeClassificationCount}, cpuDdgiUs={diagnostics.CpuDdgiRecordMicroseconds}, " +
             $"cpuSimpleDdgiUs={diagnostics.CpuSimpleDdgiRecordMicroseconds}, cpuFarFieldUs={diagnostics.CpuFarFieldRecordMicroseconds}, cpuGiUs={diagnostics.CpuGlobalIlluminationRecordMicroseconds}, cpuAsBuildUs={diagnostics.CpuAccelerationStructureBuildMicroseconds}, " +
-            $"gpuSsgiUs={diagnostics.GpuSsgiTraceMicroseconds + diagnostics.GpuSsgiTemporalMicroseconds + diagnostics.GpuSsgiDenoiseMicroseconds}, " +
-            $"gpuDdgiUs={diagnostics.GpuDdgiUpdateMicroseconds}, bytes={diagnostics.GlobalIlluminationRenderTargetBytes + diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes + diagnostics.AccelerationStructureBytes}.");
+            $"gpuDdgiUs={diagnostics.GpuDdgiUpdateMicroseconds}, bytes={diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes + diagnostics.AccelerationStructureBytes}.");
         SimpleDdgiUploadTiming upload = diagnostics.SimpleDdgiUploadTiming;
         Console.WriteLine(
             $"Frame diagnostics Simple DDGI upload: totalUs={upload.TotalMicroseconds}, " +
@@ -497,28 +490,6 @@ internal sealed class SampleDiagnosticsReporter
             $"stateDirtySlots/runs={upload.StateDirtySlotCount}/{upload.StateUploadRunCount}.");
     }
 
-    private static void PrintDdgiSchedulerDiagnostics(RendererDiagnostics diagnostics)
-    {
-        Console.WriteLine(
-            $"Frame diagnostics DDGI scheduler: mode={diagnostics.DdgiSchedulerMode}, considered={diagnostics.DdgiGpuSchedulerConsideredProbeCount}, " +
-            $"requestBudget={diagnostics.DdgiScheduledRequestBudget}, primaryRayBudget={diagnostics.DdgiScheduledPrimaryRayBudget}, " +
-            $"ddgiDispatchCapacity={diagnostics.DdgiGpuSchedulerPredictedRequestUpperBound}, ddgiActualRequests={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerActualRequestCount)}, " +
-            $"ddgiActualPrimaryRays={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerActualPrimaryRayCount)}, " +
-            $"scanFull={diagnostics.DdgiGpuSchedulerFullScan}, candidateOutput={diagnostics.DdgiGpuSchedulerCandidateOutputCapacity}, " +
-            $"candidates={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerCandidateCount)}, requests={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerRequestCount)}, primaryRays={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerPrimaryRayCount)}, " +
-            $"priority={diagnostics.DdgiGpuSchedulerPriority0RequestCount}/{diagnostics.DdgiGpuSchedulerPriority1RequestCount}/{diagnostics.DdgiGpuSchedulerPriority2RequestCount}/{diagnostics.DdgiGpuSchedulerPriority3RequestCount}, priorityMismatchSkip={diagnostics.DdgiGpuSchedulerPriorityBucketMismatchSkipCount}, " +
-            $"rejected request/primary/duplicate/invalid={diagnostics.DdgiGpuSchedulerRequestBudgetRejectedCount}/{diagnostics.DdgiGpuSchedulerPrimaryRayBudgetRejectedCount}/{diagnostics.DdgiGpuSchedulerDuplicateRequestCount}/{diagnostics.DdgiGpuSchedulerInvalidProbeCount}, " +
-            $"candidateDrop buffer/bucketCap/total={diagnostics.DdgiGpuSchedulerCandidateBufferOverflowCount}/{diagnostics.DdgiGpuSchedulerPerBucketOverflowCount}/{diagnostics.DdgiGpuSchedulerOverflowCount}, saturated request/ray={diagnostics.DdgiGpuSchedulerRequestBudgetSaturated}/{diagnostics.DdgiGpuSchedulerPrimaryRayBudgetSaturated}, " +
-            $"reasons dirty/visible/safety/age/variance/confidence/stable={diagnostics.DdgiGpuSchedulerDirtyRegionCount}/{diagnostics.DdgiGpuSchedulerVisibleFrustumCandidateCount}/" +
-            $"{diagnostics.DdgiGpuSchedulerSafetyShellCandidateCount}/{diagnostics.DdgiGpuSchedulerAgeRefreshCandidateCount}/{diagnostics.DdgiGpuSchedulerHighVarianceCandidateCount}/" +
-            $"{diagnostics.DdgiGpuSchedulerLowConfidenceCandidateCount}/{diagnostics.DdgiGpuSchedulerStableSkippedCount}, readback={FormatReadbackStatus(diagnostics)}, " +
-            $"validation={diagnostics.DdgiGpuSchedulerValidationStatus}:{diagnostics.DdgiGpuSchedulerValidationMismatchCount}, fallback={diagnostics.DdgiGpuSchedulerFallbackActive}:'{diagnostics.DdgiGpuSchedulerFallbackReason}', " +
-            $"schedulerReinit={diagnostics.DdgiGpuSchedulerResourceReinitializationCount}/{diagnostics.DdgiGpuSchedulerTotalResourceReinitializationCount}, " +
-            $"scheduleUs={diagnostics.GpuDdgiScheduleMicroseconds}, scheduleWindowP95Us={diagnostics.GpuDdgiScheduleP95Microseconds}, scheduleOverBudget={diagnostics.GpuDdgiScheduleOverBudget}, " +
-            $"scheduleStages reset/score/prefix/compact/finalize/readback/barrier={diagnostics.GpuDdgiScheduleResetMicroseconds}/{diagnostics.GpuDdgiScheduleScoreMicroseconds}/" +
-            $"{diagnostics.GpuDdgiSchedulePrefixMicroseconds}/{diagnostics.GpuDdgiScheduleCompactMicroseconds}/{diagnostics.GpuDdgiScheduleFinalizeMicroseconds}/" +
-            $"{diagnostics.GpuDdgiScheduleReadbackMicroseconds}/{diagnostics.GpuDdgiScheduleBarrierMicroseconds}.");
-    }
 
     private static void PrintDdgiInvestigationDiagnostics(RendererDiagnostics diagnostics)
     {
@@ -537,7 +508,7 @@ internal sealed class SampleDiagnosticsReporter
             $"trace hit/miss/zeroRadiance/direct/emissive/farHit/farMiss/tlasUnavailable={diagnostics.DdgiSimpleTraceHitCount}/{diagnostics.DdgiSimpleTraceMissCount}/{diagnostics.DdgiSimpleTraceZeroRadianceHitCount}/{diagnostics.DdgiSimpleTraceDirectLightHitCount}/{diagnostics.DdgiSimpleTraceEmissiveHitCount}/{diagnostics.DdgiSimpleTraceFarFieldHitCount}/{diagnostics.DdgiSimpleTraceFarFieldMissCount}/{diagnostics.DdgiSimpleTraceTlasUnavailableFrameCount}, " +
             $"simpleFar skySamples/avg/farSun/occluded/roughSpec/nonzero={diagnostics.SimpleDdgiSkyVisibilitySampleCount}/{diagnostics.SimpleDdgiAverageSkyVisibility:F3}/{diagnostics.FarFieldSunShadowSampleCount}/{diagnostics.FarFieldSunShadowOccludedCount}/{diagnostics.SimpleDdgiRoughSpecularSampleCount}/{diagnostics.SimpleDdgiRoughSpecularNonzeroCount}, " +
             $"farSteps<=4/<=8/<=16/<=32/>32={diagnostics.DdgiSimpleTraceFarFieldStepBucket0Count}/{diagnostics.DdgiSimpleTraceFarFieldStepBucket1Count}/{diagnostics.DdgiSimpleTraceFarFieldStepBucket2Count}/{diagnostics.DdgiSimpleTraceFarFieldStepBucket3Count}/{diagnostics.DdgiSimpleTraceFarFieldStepBucket4Count}, " +
-            $"black suspect/afterRecenter/afterClear/duringFresh/movement={diagnostics.DdgiBlackFrameSuspect}/{diagnostics.DdgiBlackFrameAfterRecenter}/{diagnostics.DdgiBlackFrameAfterAtlasClear}/{diagnostics.DdgiBlackFrameDuringFreshAtlas}/{diagnostics.DdgiBlackFrameMovementClass}.");
+            $"black suspect/afterRecenter/afterClear/duringFresh={diagnostics.DdgiBlackFrameSuspect}/{diagnostics.DdgiBlackFrameAfterRecenter}/{diagnostics.DdgiBlackFrameAfterAtlasClear}/{diagnostics.DdgiBlackFrameDuringFreshAtlas}.");
     }
 
     private static void PrintDdgiUpdateDiagnostics(RendererDiagnostics diagnostics)
@@ -564,8 +535,6 @@ internal sealed class SampleDiagnosticsReporter
         Console.WriteLine(
             $"DDGI TRIAGE VALUES: volumes={diagnostics.DdgiProbeVolumeCount} probes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount} " +
             $"updated={diagnostics.DdgiProbesUpdated} cache={diagnostics.DdgiCacheGeneration}:{diagnostics.DdgiCacheWarmupState} " +
-            $"gather={diagnostics.DdgiGatherSelectedLocalTileFraction:F3}/{diagnostics.DdgiGatherSelectedClipmapTileFraction:F3}/{diagnostics.DdgiGatherFallbackTileFraction:F3} " +
-            $"fallback={diagnostics.DdgiForwardGatherFallbackUsed}/{diagnostics.DdgiForwardGatherFallbackDisabled} " +
             $"fast={diagnostics.DdgiFastGatherAttemptCount}/{diagnostics.DdgiFastGatherAcceptedCount} " +
             $"shaderFallback={diagnostics.DdgiShaderGatherFallbackAttemptCount}/{diagnostics.DdgiShaderGatherFallbackAcceptedCount}/{diagnostics.DdgiShaderGatherFallbackEmptyCount} " +
             $"samples={diagnostics.DdgiForwardEstimateSampleCount}/{diagnostics.DdgiProbeQualitySampleCount} " +
@@ -594,11 +563,9 @@ internal sealed class SampleDiagnosticsReporter
         if (d.DdgiUpdateExecuted == 0 || d.DdgiProbesUpdated <= 0)
             return "NoProbeUpdates";
 
-        bool fastGatherOnly =
-            d.DdgiGatherSelectedClipmapTileFraction > 0.95f &&
-            d.DdgiGatherFallbackTileFraction < 0.001f &&
-            d.DdgiForwardGatherFallbackUsed == 0 &&
-            d.DdgiForwardGatherFallbackDisabled == 0;
+        bool boundedSimpleGather =
+            d.SimpleDdgiGatherSampleCount > 0 &&
+            d.SimpleDdgiGatherFallbackAllFailedCount == 0;
 
         bool fastGatherMeasured =
             d.DdgiFastGatherAttemptCount > 0 ||
@@ -616,10 +583,10 @@ internal sealed class SampleDiagnosticsReporter
         if (d.DdgiFastGatherAcceptedCount > 0 && !fullForwardEstimateMeasured)
             return "FastGatherAcceptedEstimateUnmeasured";
 
-        if (fastGatherOnly && noForwardContribution && !fastGatherMeasured)
+        if (boundedSimpleGather && noForwardContribution && !fastGatherMeasured)
             return "FastGatherUnmeasured";
 
-        if (fastGatherOnly && noForwardContribution && fullForwardEstimateMeasured)
+        if (boundedSimpleGather && noForwardContribution && fullForwardEstimateMeasured)
             return "FastGatherBlackHole";
 
         if (d.DdgiShaderGatherFallbackAttemptCount > 0 &&
@@ -684,7 +651,7 @@ internal sealed class SampleDiagnosticsReporter
         for (int i = 0; i < diagnostics.DdgiVolumes.Count; i++)
         {
             DdgiVolumeDiagnosticsEntry volume = diagnostics.DdgiVolumes[i];
-            if (volume.Kind == DdgiProbeVolumeKind.Authored)
+            if (volume.Kind == SimpleDdgiVolumeKind.Authored)
                 localCount++;
             if (!string.IsNullOrEmpty(volume.BudgetWarning))
                 warningCount++;
@@ -783,7 +750,7 @@ internal sealed class SampleDiagnosticsReporter
 
             string label = string.Equals(volume.DesignPreset, "simple-ring", StringComparison.Ordinal)
                 ? $"ring{volume.CascadeIndex}"
-                : volume.Kind == DdgiProbeVolumeKind.Authored
+                : volume.Kind == SimpleDdgiVolumeKind.Authored
                     ? "authored"
                     : volume.Kind.ToString();
             result.Append('v')
@@ -933,9 +900,7 @@ internal sealed class SampleDiagnosticsReporter
 
     private static string FormatDdgiUpdateCount(RendererDiagnostics diagnostics, uint value)
     {
-        return diagnostics.DdgiSchedulerMode == DdgiSchedulerMode.CpuReference
-            ? value.ToString(CultureInfo.InvariantCulture)
-            : FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, value);
+        return value.ToString(CultureInfo.InvariantCulture);
     }
 
     private static string FormatDdgiCounterReadback(RendererDiagnostics diagnostics, uint value)
@@ -990,10 +955,4 @@ internal sealed class SampleDiagnosticsReporter
             : diagnostics.DdgiTraceRingMismatchSample;
     }
 
-    private static string FormatReadbackStatus(RendererDiagnostics diagnostics)
-    {
-        return diagnostics.DdgiGpuSchedulerReadbackValid != 0
-            ? $"valid:{diagnostics.DdgiGpuSchedulerReadbackLatencyFrames}f"
-            : "pending";
-    }
 }

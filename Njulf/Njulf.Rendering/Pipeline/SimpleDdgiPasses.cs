@@ -37,6 +37,19 @@ namespace Njulf.Rendering.Pipeline
             SceneRenderingData sceneData,
             GPUSimpleDdgiPushConstants pushConstants)
         {
+            if (IsGpuResidentMode)
+            {
+                for (int bucket = 0; bucket < SimpleDdgiGpuSchedulerLayout.MaxRayBucketCount; bucket++)
+                {
+                    pushConstants.SchedulerRayBucketIndex = checked((uint)bucket);
+                    pushConstants.DispatchQueueOffset = 0u;
+                    pushConstants.DispatchProbeCount = 0u;
+                    pushConstants.DispatchRaysPerProbe = 0u;
+                    PushConstantsAndDispatchRayBucket(cmd, pushConstants, bucket);
+                }
+                return;
+            }
+
             ReadOnlySpan<SimpleDdgiRayDispatchBatch> batches =
                 VolumeManager.RayDispatchBatches;
             if (batches.IsEmpty)
@@ -61,6 +74,9 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
+            if (IsGpuResidentMode)
+                return base.ShouldExecute(frameIndex, sceneData);
+
             // The trace is the transaction producer.  If the ray-query resource is
             // unavailable, invalidate this frame's transaction before relocation or
             // blending have a chance to observe an older scratch allocation.
@@ -76,7 +92,8 @@ namespace Njulf.Rendering.Pipeline
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             base.Execute(cmd, frameIndex, sceneData);
-            VolumeManager.MarkTraceExecuted();
+            if (!IsGpuResidentMode)
+                VolumeManager.MarkTraceExecuted();
         }
     }
 
@@ -98,8 +115,14 @@ namespace Njulf.Rendering.Pipeline
             return checked((uint)Math.Max(1, VolumeManager.ProbesToUpdate));
         }
 
+        protected override SimpleDdgiSchedulerDispatchSlot ResidentDispatchSlot =>
+            SimpleDdgiSchedulerDispatchSlot.Blend;
+
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
+            if (IsGpuResidentMode)
+                return base.ShouldExecute(frameIndex, sceneData);
+
             // A planner evaluates all three predicates before trace is recorded.
             // Use the schedule-time gate here, then require the strict producer
             // chain immediately before recording the actual consumer dispatch.
@@ -114,6 +137,12 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
+            if (IsGpuResidentMode)
+            {
+                base.Execute(cmd, frameIndex, sceneData);
+                return;
+            }
+
             if (!VolumeManager.CanExecuteBlendTransaction)
             {
                 VolumeManager.AbortUpdateTransaction();
@@ -155,6 +184,19 @@ namespace Njulf.Rendering.Pipeline
             SceneRenderingData sceneData,
             GPUSimpleDdgiPushConstants pushConstants)
         {
+            if (IsGpuResidentMode)
+            {
+                for (int bucket = 0; bucket < SimpleDdgiGpuSchedulerLayout.MaxRayBucketCount; bucket++)
+                {
+                    pushConstants.SchedulerRayBucketIndex = checked((uint)bucket);
+                    pushConstants.DispatchQueueOffset = 0u;
+                    pushConstants.DispatchProbeCount = 0u;
+                    pushConstants.DispatchRaysPerProbe = 0u;
+                    PushConstantsAndDispatchRayBucket(cmd, pushConstants, bucket);
+                }
+                return;
+            }
+
             ReadOnlySpan<SimpleDdgiRayDispatchBatch> batches =
                 VolumeManager.RayDispatchBatches;
             if (batches.IsEmpty)
@@ -184,6 +226,8 @@ namespace Njulf.Rendering.Pipeline
             // intentionally selected.
             if (!VolumeManager.TransportV2Active)
                 return false;
+            if (IsGpuResidentMode)
+                return base.ShouldExecute(frameIndex, sceneData);
             if (!base.ShouldExecute(frameIndex, sceneData) || !VolumeManager.CanScheduleTransportTransaction)
             {
                 VolumeManager.AbortUpdateTransaction();
@@ -195,6 +239,12 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
+            if (IsGpuResidentMode)
+            {
+                base.Execute(cmd, frameIndex, sceneData);
+                return;
+            }
+
             if (!VolumeManager.CanExecuteTransportTransaction)
             {
                 VolumeManager.AbortUpdateTransaction();
@@ -224,8 +274,14 @@ namespace Njulf.Rendering.Pipeline
             return checked((uint)Math.Max(1UL, ((ulong)Math.Max(0, VolumeManager.ProbesToUpdate) + 63UL) / 64UL));
         }
 
+        protected override SimpleDdgiSchedulerDispatchSlot ResidentDispatchSlot =>
+            SimpleDdgiSchedulerDispatchSlot.Relocate;
+
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
+            if (IsGpuResidentMode)
+                return base.ShouldExecute(frameIndex, sceneData);
+
             // See SimpleDdgiBlendPass: this must stay schedulable beside trace for
             // async planning, but it may only record after this transaction's trace.
             if (!base.ShouldExecute(frameIndex, sceneData) || !VolumeManager.CanScheduleRelocateClassifyTransaction)
@@ -239,6 +295,12 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
+            if (IsGpuResidentMode)
+            {
+                base.Execute(cmd, frameIndex, sceneData);
+                return;
+            }
+
             if (!VolumeManager.CanExecuteRelocateClassifyTransaction)
             {
                 VolumeManager.AbortUpdateTransaction();
@@ -311,8 +373,19 @@ namespace Njulf.Rendering.Pipeline
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+            if (_volumeManager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident)
+            {
+                return _canonicalPipeline.Handle != 0 &&
+                    gi.EffectiveUseDdgi &&
+                    gi.SimpleDdgiStructuredGatherEnabled &&
+                    gi.EffectiveUseRayQueryBackend &&
+                    _volumeManager.GpuSchedulerFrameExecutionAvailable &&
+                    _volumeManager.ProbeCount > 0 &&
+                    _volumeManager.GpuScheduler.IsReady;
+            }
+
             if (_canonicalPipeline.Handle == 0 ||
-                !gi.EffectiveUseSimpleDdgi ||
+                !gi.EffectiveUseDdgi ||
                 !gi.SimpleDdgiStructuredGatherEnabled ||
                 !gi.EffectiveUseRayQueryBackend ||
                 _volumeManager.ProbeCount <= 0 ||
@@ -328,19 +401,31 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            if (!_volumeManager.CanExecutePublishTransaction)
+            bool gpuResident = _volumeManager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident;
+            if (!gpuResident && !_volumeManager.CanExecutePublishTransaction)
             {
                 _volumeManager.AbortUpdateTransaction();
                 return;
             }
 
             GPUSimpleDdgiPublishPushConstants pushConstants = CreatePushConstants();
-            uint groupCount = checked((uint)Math.Max(1, _volumeManager.ProbesToUpdate));
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _canonicalPipeline);
             BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
             PushConstants(cmd, pushConstants);
-            _context.Api.CmdDispatch(cmd, groupCount, 1, 1);
+            if (gpuResident)
+            {
+                _context.Api.CmdDispatchIndirect(
+                    cmd,
+                    _volumeManager.GpuScheduler.GetArenaVkBuffer(),
+                    _volumeManager.GpuScheduler.GetIndirectCommandOffset(
+                        SimpleDdgiSchedulerDispatchSlot.Publish));
+            }
+            else
+            {
+                uint groupCount = checked((uint)Math.Max(1, _volumeManager.ProbesToUpdate));
+                _context.Api.CmdDispatch(cmd, groupCount, 1, 1);
+            }
             InsertComputeStorageBarrier(cmd);
 
             if (_sampledPublicationSupported &&
@@ -368,14 +453,29 @@ namespace Njulf.Rendering.Pipeline
                     0,
                     null);
                 PushConstants(cmd, pushConstants);
-                _context.Api.CmdDispatch(cmd, groupCount, 1, 1);
+                if (gpuResident)
+                {
+                    _context.Api.CmdDispatchIndirect(
+                        cmd,
+                        _volumeManager.GpuScheduler.GetArenaVkBuffer(),
+                        _volumeManager.GpuScheduler.GetIndirectCommandOffset(
+                            SimpleDdgiSchedulerDispatchSlot.Publish));
+                }
+                else
+                {
+                    uint groupCount = checked((uint)Math.Max(1, _volumeManager.ProbesToUpdate));
+                    _context.Api.CmdDispatch(cmd, groupCount, 1, 1);
+                }
                 _volumeManager.EndSampledAtlasGpuPublication(cmd);
             }
 
             // Capture state only after canonical and optional image publication
             // have been recorded. The transaction is completed at this point.
-            _volumeManager.RecordProbeStateReadback(cmd, frameIndex);
-            _volumeManager.MarkPublishExecuted();
+            if (!gpuResident)
+            {
+                _volumeManager.RecordProbeStateReadback(cmd, frameIndex);
+                _volumeManager.MarkPublishExecuted();
+            }
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
@@ -418,7 +518,13 @@ namespace Njulf.Rendering.Pipeline
             ProbeUpdateQueueBufferIndex = BindlessIndex.SimpleDdgiProbeUpdateQueueBuffer,
             TransportIrradianceAtlasBufferIndex = BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer,
             SampledAtlasGroupCount = checked((uint)Math.Max(0, _volumeManager.SampledAtlasGroupCount)),
-            SampledAtlasLayersPerTexture = checked((uint)Math.Max(0, _volumeManager.SampledAtlasLayersPerTexture))
+            SampledAtlasLayersPerTexture = checked((uint)Math.Max(0, _volumeManager.SampledAtlasLayersPerTexture)),
+            SchedulerArenaBufferIndex = _volumeManager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident
+                ? checked((uint)BindlessIndex.SimpleDdgiSchedulerArenaBuffer)
+                : uint.MaxValue,
+            SchedulerCountersOffsetWords = _volumeManager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident
+                ? _volumeManager.GpuScheduler.Layout!.Counters.OffsetWords
+                : 0u
         };
 
         private void PushConstants(CommandBuffer cmd, GPUSimpleDdgiPublishPushConstants pushConstants)
@@ -660,6 +766,10 @@ namespace Njulf.Rendering.Pipeline
         }
 
         protected SimpleDdgiVolumeManager VolumeManager { get; }
+        protected bool IsGpuResidentMode =>
+            VolumeManager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident;
+        protected virtual SimpleDdgiSchedulerDispatchSlot ResidentDispatchSlot =>
+            SimpleDdgiSchedulerDispatchSlot.Blend;
         public override bool SupportsSecondaryCommandBuffer => true;
         public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
         public override bool SupportsAsyncCompute => true;
@@ -686,12 +796,16 @@ namespace Njulf.Rendering.Pipeline
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             if (_pipeline.Handle == 0)
                 return false;
-            if (!gi.EffectiveUseSimpleDdgi ||
+            if (IsGpuResidentMode && !VolumeManager.GpuSchedulerFrameExecutionAvailable)
+                return false;
+            if (!gi.EffectiveUseDdgi ||
                 !gi.SimpleDdgiStructuredGatherEnabled ||
                 !gi.EffectiveUseRayQueryBackend)
                 return false;
             if (_requiresRayQuery && (_accelerationStructureManager?.Active != true))
                 return false;
+            if (IsGpuResidentMode)
+                return VolumeManager.ProbeCount > 0 && VolumeManager.GpuScheduler.IsReady;
             return VolumeManager.ProbeCount > 0 && VolumeManager.ProbesToUpdate > 0;
         }
 
@@ -719,10 +833,13 @@ namespace Njulf.Rendering.Pipeline
             SceneRenderingData sceneData,
             GPUSimpleDdgiPushConstants pushConstants)
         {
-            PushConstantsAndDispatch(
-                cmd,
-                pushConstants,
-                CalculateGroupCount(sceneData));
+            if (IsGpuResidentMode)
+            {
+                PushConstantsAndDispatchIndirect(cmd, pushConstants, ResidentDispatchSlot);
+                return;
+            }
+
+            PushConstantsAndDispatch(cmd, pushConstants, CalculateGroupCount(sceneData));
         }
 
         protected void PushConstantsAndDispatch(
@@ -738,6 +855,42 @@ namespace Njulf.Rendering.Pipeline
                 (uint)Marshal.SizeOf<GPUSimpleDdgiPushConstants>(),
                 &pushConstants);
             _context.Api.CmdDispatch(cmd, groupCount, 1, 1);
+        }
+
+        protected void PushConstantsAndDispatchIndirect(
+            CommandBuffer cmd,
+            GPUSimpleDdgiPushConstants pushConstants,
+            SimpleDdgiSchedulerDispatchSlot slot)
+        {
+            _context.Api.CmdPushConstants(
+                cmd,
+                _pipelineLayout,
+                ShaderStageFlags.ComputeBit,
+                0,
+                (uint)Marshal.SizeOf<GPUSimpleDdgiPushConstants>(),
+                &pushConstants);
+            _context.Api.CmdDispatchIndirect(
+                cmd,
+                VolumeManager.GpuScheduler.GetArenaVkBuffer(),
+                VolumeManager.GpuScheduler.GetIndirectCommandOffset(slot));
+        }
+
+        protected void PushConstantsAndDispatchRayBucket(
+            CommandBuffer cmd,
+            GPUSimpleDdgiPushConstants pushConstants,
+            int bucketIndex)
+        {
+            _context.Api.CmdPushConstants(
+                cmd,
+                _pipelineLayout,
+                ShaderStageFlags.ComputeBit,
+                0,
+                (uint)Marshal.SizeOf<GPUSimpleDdgiPushConstants>(),
+                &pushConstants);
+            _context.Api.CmdDispatchIndirect(
+                cmd,
+                VolumeManager.GpuScheduler.GetArenaVkBuffer(),
+                VolumeManager.GpuScheduler.GetRayBucketCommandOffset(bucketIndex));
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
@@ -823,8 +976,8 @@ namespace Njulf.Rendering.Pipeline
                 FarFieldInstanceBufferIndex = BindlessIndex.FarFieldClipmapInstanceBuffer,
                 Flags = flags,
                 MaterialTextureMaxCascade = gi.DdgiMaterialTextureMaxCascade < 0
-                    ? GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount
-                    : checked((uint)Math.Clamp(gi.DdgiMaterialTextureMaxCascade, 0, GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount - 1)),
+                    ? GlobalIlluminationSettings.MaxSimpleDdgiMaterialTextureCascade
+                    : checked((uint)Math.Clamp(gi.DdgiMaterialTextureMaxCascade, 0, GlobalIlluminationSettings.MaxSimpleDdgiMaterialTextureCascade - 1)),
                 ProbeStateBufferIndex = BindlessIndex.SimpleDdgiProbeStateBuffer,
                 ProbeUpdateQueueBufferIndex = BindlessIndex.SimpleDdgiProbeUpdateQueueBuffer,
                 RelocationClassificationBufferIndex = BindlessIndex.SimpleDdgiRelocationClassificationBuffer,
@@ -836,7 +989,16 @@ namespace Njulf.Rendering.Pipeline
                 TransportGeneration = VolumeManager.TransportGeneration,
                 PrimaryDirectionalLightIndex = sceneData.DdgiPrimaryDirectionalLightIndex < 0
                     ? uint.MaxValue
-                    : checked((uint)sceneData.DdgiPrimaryDirectionalLightIndex)
+                    : checked((uint)sceneData.DdgiPrimaryDirectionalLightIndex),
+                SchedulerArenaBufferIndex = IsGpuResidentMode
+                    ? checked((uint)BindlessIndex.SimpleDdgiSchedulerArenaBuffer)
+                    : uint.MaxValue,
+                SchedulerRayBucketCommandsOffsetWords = IsGpuResidentMode
+                    ? VolumeManager.GpuScheduler.Layout!.RayBucketCommands.OffsetWords
+                    : 0u,
+                SchedulerCountersOffsetWords = IsGpuResidentMode
+                    ? VolumeManager.GpuScheduler.Layout!.Counters.OffsetWords
+                    : 0u
             };
         }
 

@@ -7,7 +7,7 @@
 - Neural denoising or vendor-specific upscalers
 - Emissive mesh
 - RT VFX
-- Maybe reintroduce SSGI at some point
+- A new SSGI designed to complement Simple DDGI (future work)
 - HDRI
 
 
@@ -44,7 +44,6 @@ For the sun problem, we only need scope 1:
 - Continue the remaining field as a bounded background cohort.
 
 That improves response without redesigning ray tracing. The actual smoothness fix remains generation-safe history retention/crossfading; importance-guided scheduling merely gets the new result ready sooner. I would rename the recommendation to **“importance-guided probe scheduling”** and defer true variance-guided ray allocation until measurements show it is necessary.
-
 
 Content-dependent additions
 - Many-light importance sampling: a light tree, alias table, or reservoir-based selector at probe hits would reduce bias from the current bounded top-light selection. High value in scenes with many local lights; negligible for a mostly single-sun scene.

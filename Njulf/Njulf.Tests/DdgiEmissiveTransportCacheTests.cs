@@ -270,7 +270,7 @@ public sealed class DdgiEmissiveTransportCacheTests
     {
         string hitShading = ReadRepoText("Njulf.Shaders", "ddgi_hit_shading.glsl");
         string simpleTrace = ReadRepoText("Njulf.Shaders", "ddgi_simple_trace.comp");
-        string detailedUpdate = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
+        string simpleTransport = ReadRepoText("Njulf.Shaders", "ddgi_simple_transport.comp");
         string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
         string sceneBuilder = ReadRepoText(
             "Njulf.Rendering",
@@ -285,8 +285,8 @@ public sealed class DdgiEmissiveTransportCacheTests
             Assert.That(simpleTrace, Does.Contain("different paths. Transport-atlas ownership only gates the"));
             Assert.That(simpleTrace, Does.Contain("vec3 emissiveDiffuse = surface.EmissiveRadiance + emissiveProxyDiffuse;"));
             Assert.That(simpleTrace, Does.Not.Contain("emissiveProxyDiffuse * (1.0 - bounceOwnership)"));
-            Assert.That(detailedUpdate, Does.Contain("Cached recursive transport is the"));
-            Assert.That(detailedUpdate, Does.Contain("radiance = surface.EmissiveRadiance + emissiveProxyDiffuse + directDiffuse + stableDiffuse;"));
+            Assert.That(simpleTransport, Does.Contain("vec3 totalRadiance = source.sourceRadiance;"));
+            Assert.That(simpleTransport, Does.Contain("totalRadiance += bounceRadiance;"));
             Assert.That(
                 renderer,
                 Does.Contain(

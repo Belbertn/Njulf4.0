@@ -62,8 +62,8 @@ namespace Njulf.Rendering.Pipeline
             if (!sceneData.HiZBuildEnabled)
                 return;
 
-            // Graph entry owns scene-depth and full-pyramid layouts. This pass owns only the
-            // per-mip compute write/read dependencies needed within the downsample chain.
+            // Graph/queue handoff owns the entry layout. This pass owns the per-mip compute write/read dependencies and publishes the complete pyramid in its
+            // declared final shader-read layout before the queue handoff returns it.
             sceneData.CpuHiZDepthTransitionMicroseconds = 0;
             sceneData.CpuHiZPyramidTransitionMicroseconds = 0;
 
@@ -113,6 +113,15 @@ namespace Njulf.Rendering.Pipeline
                     dependencyBarrierTicks += Stopwatch.GetTimestamp() - stageStart;
                 }
             }
+
+            // The scheduler uses FinalImageLayout as the source layout for the return handoff.
+            // Make that state real here; otherwise the transfer would advertise shader-read
+            // while the image remained in GENERAL after the final storage write.
+            _pyramid.TransitionToLayout(
+                cmd,
+                ImageLayout.ShaderReadOnlyOptimal,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderSampledReadBit);
 
             sceneData.CpuHiZDescriptorBindMicroseconds = TicksToMicroseconds(descriptorBindTicks);
             sceneData.CpuHiZPushDispatchMicroseconds = TicksToMicroseconds(pushDispatchTicks);

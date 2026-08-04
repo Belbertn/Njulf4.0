@@ -1,0 +1,122 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_schedule_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    if (gl_GlobalInvocationID.x != 0u)
+        return;
+
+    // Reset leaves every consumer command at x=0.  An overflow is a failed
+    // transaction, not a partial schedule: do not publish any indirect work.
+    if (SchedulerArenaRead(
+            pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_OVERFLOW) != 0u)
+        return;
+
+    uint accepted = min(
+        SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
+        SchedulerRequestCapacity());
+    // Count the six fixed ray buckets in admission order.  This bounded linear
+    // pass keeps the queue order deterministic; atomic append order is never a
+    // scheduling tie-break.
+    for (uint bucket = 0u; bucket < 6u; bucket++)
+        SchedulerArenaWrite(
+            pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_BUCKET_BASE + bucket,
+            0u);
+
+    for (uint updateIndex = 0u; updateIndex < accepted; updateIndex++)
+    {
+        uint probeIndex;
+        uint volumeIndex;
+        uint flags;
+        uint metadata;
+        uint sourceRayCount;
+        uint sourceLightingGeneration;
+        SchedulerReadUpdate(updateIndex, probeIndex, volumeIndex, flags, metadata,
+            sourceRayCount, sourceLightingGeneration);
+        uint rayCount = clamp(flags >> SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_SHIFT,
+            1u, SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
+        for (uint bucket = 0u; bucket < 6u; bucket++)
+        {
+            if (rayCount == SchedulerFrame(32u + bucket))
+            {
+                SchedulerArenaAtomicAdd(
+                    pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_BUCKET_BASE + bucket,
+                    1u);
+                break;
+            }
+        }
+    }
+
+    uint bucketOffset = 0u;
+    for (uint bucket = 0u; bucket < 6u; bucket++)
+    {
+        uint rayCount = SchedulerFrame(32u + bucket);
+        uint bucketCount = SchedulerArenaRead(
+            pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_BUCKET_BASE + bucket);
+        uint commandBase = pc.RayBucketCommandsOffsetWords +
+            bucket * SIMPLE_DDGI_SCHEDULER_INDIRECT_WORDS;
+        SchedulerArenaWrite(commandBase + 0u,
+            rayCount == 0u ? 0u : SchedulerGroupsFor(bucketCount * rayCount));
+        SchedulerArenaWrite(commandBase + 1u, bucketOffset);
+        SchedulerArenaWrite(commandBase + 2u, bucketCount);
+        SchedulerArenaWrite(commandBase + 3u, rayCount);
+        bucketOffset += bucketCount;
+    }
+
+    // Stable bucket compaction into the canonical queue is performed only by
+    // resident mode. Mirror mode retains the exact GPU records in the arena so
+    // validation can inspect them without changing CPU rendering authority.
+    for (uint bucket = 0u; bucket < 6u; bucket++)
+    {
+        uint rayCount = SchedulerFrame(32u + bucket);
+        if (rayCount == 0u)
+            continue;
+        uint queueOffset = SchedulerArenaRead(
+            pc.RayBucketCommandsOffsetWords +
+            bucket * SIMPLE_DDGI_SCHEDULER_INDIRECT_WORDS + 1u);
+        uint rank = 0u;
+        for (uint updateIndex = 0u; updateIndex < accepted; updateIndex++)
+        {
+            uint probeIndex;
+            uint volumeIndex;
+            uint flags;
+            uint metadata;
+            uint sourceRayCount;
+            uint sourceLightingGeneration;
+            SchedulerReadUpdate(updateIndex, probeIndex, volumeIndex, flags, metadata,
+                sourceRayCount, sourceLightingGeneration);
+            uint candidateRayCount = clamp(flags >> SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_SHIFT,
+                1u, SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
+            if (candidateRayCount != rayCount)
+                continue;
+            if (SchedulerGpuResident())
+                SchedulerCopyUpdateToQueue(updateIndex, queueOffset + rank);
+            rank++;
+        }
+    }
+
+    uint maximumRays = 1u;
+    for (uint i = 0u; i < 6u; i++)
+        maximumRays = max(maximumRays, SchedulerFrame(32u + i));
+
+    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_TRACE,
+        SchedulerGroupsFor(accepted * maximumRays), 1u, 1u);
+    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_RELOCATE,
+        SchedulerGroupsFor(accepted), 1u, 1u);
+    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_TRANSPORT,
+        SchedulerGroupsFor(accepted * maximumRays), 1u, 1u);
+    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_BLEND,
+        SchedulerGroupsFor(accepted), 1u, 1u);
+    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_PUBLISH,
+        SchedulerGroupsFor(accepted), 1u, 1u);
+    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_COMMIT_LOCAL,
+        SchedulerGroupsFor(accepted), 1u, 1u);
+    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_COMMIT_PROPAGATION,
+        SchedulerGroupsFor(accepted), 1u, 1u);
+    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_FEEDBACK, 1u, 1u, 1u);
+}

@@ -21,34 +21,17 @@
       <ForwardSimpleFragmentShader Include="forward.frag" />
       <ForwardWeightedOitFragmentShader Include="forward.frag" />
       <FoliageForwardFragmentShader Include="foliage_forward.frag" />
-      <SceneSurfaceSimpleFragmentShader Include="scene_surface.frag" />
-      <MaterialTransportProvenanceShaderVariant Include="forward_opaque_provenance.frag">
-        <Source>forward.frag</Source>
-        <Defines>-DNJULF_SSGI_TRACE_OUTPUT=1 -DNJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT=1</Defines>
-      </MaterialTransportProvenanceShaderVariant>
       <MaterialTransportProvenanceShaderVariant Include="forward_opaque_ddgi_provenance.frag">
         <Source>forward.frag</Source>
         <Defines>-DNJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT=1</Defines>
-      </MaterialTransportProvenanceShaderVariant>
-      <MaterialTransportProvenanceShaderVariant Include="forward_opaque_simple_provenance.frag">
-        <Source>forward.frag</Source>
-        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DNJULF_SSGI_TRACE_OUTPUT=1 -DNJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT=1</Defines>
       </MaterialTransportProvenanceShaderVariant>
       <MaterialTransportProvenanceShaderVariant Include="forward_opaque_simple_ddgi_provenance.frag">
         <Source>forward.frag</Source>
         <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DNJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT=1</Defines>
       </MaterialTransportProvenanceShaderVariant>
-      <MaterialTransportProvenanceShaderVariant Include="forward_opaque_simple_full_input_provenance.frag">
-        <Source>forward.frag</Source>
-        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_SSGI_TRACE_OUTPUT=1 -DNJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT=1</Defines>
-      </MaterialTransportProvenanceShaderVariant>
       <MaterialTransportProvenanceShaderVariant Include="forward_opaque_simple_full_input_ddgi_provenance.frag">
         <Source>forward.frag</Source>
         <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT=1</Defines>
-      </MaterialTransportProvenanceShaderVariant>
-      <MaterialTransportProvenanceShaderVariant Include="foliage_forward_ssgi_provenance.frag">
-        <Source>foliage_forward.frag</Source>
-        <Defines>-DNJULF_SSGI_TRACE_OUTPUT=1 -DNJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT=1</Defines>
       </MaterialTransportProvenanceShaderVariant>
       <MaterialTransportProvenanceShaderVariant Include="foliage_forward_ddgi_provenance.frag">
         <Source>foliage_forward.frag</Source>
@@ -77,7 +60,7 @@
     <Target Name="CompileNjulfShaders"
             BeforeTargets="AssignTargetPaths"
             Inputs="@(ShaderSource);@(ShaderInclude);$(MSBuildProjectFullPath)"
-            Outputs="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv');@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv');@(MaterialTransportProvenanceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');$(IntermediateOutputPath)Shaders\forward_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_simple_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_opaque.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv;$(IntermediateOutputPath)Shaders\foliage_forward_ssgi.frag.spv;$(IntermediateOutputPath)Shaders\foliage_forward_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\scene_surface_simple.frag.spv">
+            Outputs="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv');@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv');@(MaterialTransportProvenanceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');$(IntermediateOutputPath)Shaders\forward_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_simple_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_opaque_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv;$(IntermediateOutputPath)Shaders\foliage_forward_ddgi.frag.spv">
       <MakeDir Directories="$(IntermediateOutputPath)Shaders" />
       <MakeDir Directories="$(OutDir)Shaders" />
 
@@ -101,23 +84,11 @@
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
-      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DNJULF_SSGI_TRACE_OUTPUT=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
-            StandardOutputImportance="High"
-            StandardErrorImportance="High" />
-
       <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_ddgi.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
-      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DNJULF_SSGI_TRACE_OUTPUT=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_simple.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
-            StandardOutputImportance="High"
-            StandardErrorImportance="High" />
-
       <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
-            StandardOutputImportance="High"
-            StandardErrorImportance="High" />
-
-      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_SSGI_TRACE_OUTPUT=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
@@ -129,19 +100,11 @@
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
-      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DNJULF_SSGI_TRACE_OUTPUT=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\foliage_forward_ssgi.frag.spv&quot; &quot;%(FoliageForwardFragmentShader.FullPath)&quot;"
-            StandardOutputImportance="High"
-            StandardErrorImportance="High" />
-
       <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\foliage_forward_ddgi.frag.spv&quot; &quot;%(FoliageForwardFragmentShader.FullPath)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
       <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) %(MaterialTransportProvenanceShaderVariant.Defines) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(MaterialTransportProvenanceShaderVariant.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(MaterialTransportProvenanceShaderVariant.Source)&quot;"
-            StandardOutputImportance="High"
-            StandardErrorImportance="High" />
-
-      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_SIMPLE_VERTEX_INPUT=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\scene_surface_simple.frag.spv&quot; &quot;%(SceneSurfaceSimpleFragmentShader.FullPath)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
@@ -157,23 +120,11 @@
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
-      <Copy SourceFiles="$(IntermediateOutputPath)Shaders\forward_opaque.frag.spv"
-            DestinationFolder="$(OutDir)Shaders"
-            SkipUnchangedFiles="true" />
-
       <Copy SourceFiles="$(IntermediateOutputPath)Shaders\forward_opaque_ddgi.frag.spv"
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
-      <Copy SourceFiles="$(IntermediateOutputPath)Shaders\forward_opaque_simple.frag.spv"
-            DestinationFolder="$(OutDir)Shaders"
-            SkipUnchangedFiles="true" />
-
       <Copy SourceFiles="$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi.frag.spv"
-            DestinationFolder="$(OutDir)Shaders"
-            SkipUnchangedFiles="true" />
-
-      <Copy SourceFiles="$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input.frag.spv"
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
@@ -185,19 +136,11 @@
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
-      <Copy SourceFiles="$(IntermediateOutputPath)Shaders\foliage_forward_ssgi.frag.spv"
-            DestinationFolder="$(OutDir)Shaders"
-            SkipUnchangedFiles="true" />
-
       <Copy SourceFiles="$(IntermediateOutputPath)Shaders\foliage_forward_ddgi.frag.spv"
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
       <Copy SourceFiles="@(MaterialTransportProvenanceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')"
-            DestinationFolder="$(OutDir)Shaders"
-            SkipUnchangedFiles="true" />
-
-      <Copy SourceFiles="$(IntermediateOutputPath)Shaders\scene_surface_simple.frag.spv"
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
@@ -214,20 +157,11 @@
         <EmbeddedResource Include="@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv')">
           <LogicalName>Njulf.Shaders.%(Filename)_diagnostics%(Extension)</LogicalName>
         </EmbeddedResource>
-        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque.frag.spv">
-          <LogicalName>Njulf.Shaders.forward_opaque.frag</LogicalName>
-        </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_ddgi.frag.spv">
           <LogicalName>Njulf.Shaders.forward_opaque_ddgi.frag</LogicalName>
         </EmbeddedResource>
-        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple.frag.spv">
-          <LogicalName>Njulf.Shaders.forward_opaque_simple.frag</LogicalName>
-        </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi.frag.spv">
           <LogicalName>Njulf.Shaders.forward_opaque_simple_ddgi.frag</LogicalName>
-        </EmbeddedResource>
-        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input.frag.spv">
-          <LogicalName>Njulf.Shaders.forward_opaque_simple_full_input.frag</LogicalName>
         </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi.frag.spv">
           <LogicalName>Njulf.Shaders.forward_opaque_simple_full_input_ddgi.frag</LogicalName>
@@ -235,38 +169,20 @@
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv">
           <LogicalName>Njulf.Shaders.forward_weighted_oit.frag</LogicalName>
         </EmbeddedResource>
-        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\foliage_forward_ssgi.frag.spv">
-          <LogicalName>Njulf.Shaders.foliage_forward_ssgi.frag</LogicalName>
-        </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\foliage_forward_ddgi.frag.spv">
           <LogicalName>Njulf.Shaders.foliage_forward_ddgi.frag</LogicalName>
-        </EmbeddedResource>
-        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_provenance.frag.spv">
-          <LogicalName>Njulf.Shaders.forward_opaque_provenance.frag</LogicalName>
         </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_ddgi_provenance.frag.spv">
           <LogicalName>Njulf.Shaders.forward_opaque_ddgi_provenance.frag</LogicalName>
         </EmbeddedResource>
-        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple_provenance.frag.spv">
-          <LogicalName>Njulf.Shaders.forward_opaque_simple_provenance.frag</LogicalName>
-        </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi_provenance.frag.spv">
           <LogicalName>Njulf.Shaders.forward_opaque_simple_ddgi_provenance.frag</LogicalName>
-        </EmbeddedResource>
-        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_provenance.frag.spv">
-          <LogicalName>Njulf.Shaders.forward_opaque_simple_full_input_provenance.frag</LogicalName>
         </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi_provenance.frag.spv">
           <LogicalName>Njulf.Shaders.forward_opaque_simple_full_input_ddgi_provenance.frag</LogicalName>
         </EmbeddedResource>
-        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\foliage_forward_ssgi_provenance.frag.spv">
-          <LogicalName>Njulf.Shaders.foliage_forward_ssgi_provenance.frag</LogicalName>
-        </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\foliage_forward_ddgi_provenance.frag.spv">
           <LogicalName>Njulf.Shaders.foliage_forward_ddgi_provenance.frag</LogicalName>
-        </EmbeddedResource>
-        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\scene_surface_simple.frag.spv">
-          <LogicalName>Njulf.Shaders.scene_surface_simple.frag</LogicalName>
         </EmbeddedResource>
         <FileWrites Include="$(IntermediateOutputPath)Shaders\*.spv;$(OutDir)Shaders\*.spv" />
       </ItemGroup>

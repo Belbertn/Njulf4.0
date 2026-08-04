@@ -3,6 +3,7 @@
 #extension GL_EXT_mesh_shader : require
 
 #include "common.glsl"
+#include "ddgi_simple_shared.glsl"
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 126) out;
@@ -88,10 +89,13 @@ void main()
         max(command.WorldCenterRadius.w * 0.35, 0.1),
         command.WorldCenterRadius.z - pc.Push.CameraPositionTime.z),
         vec3(0.0, 1.0, 0.0));
-    vec4 meshletDdgiIrradianceCoverage = SampleDdgiAmbientIrradiance(
+    vec3 meshletViewDirection = SafeNormalize(
+        pc.Push.CameraPositionTime.xyz - command.WorldCenterRadius.xyz,
+        vec3(0.0, 0.0, 1.0));
+    vec4 meshletDdgiIrradianceCoverage = SampleSimpleDdgiIrradianceCoverage(
         command.WorldCenterRadius.xyz,
         clumpNormal,
-        8u);
+        meshletViewDirection);
 
     if (gl_LocalInvocationIndex == 0u)
         SetMeshOutputsEXT(meshlet.LocalVertexCount, meshlet.LocalTriangleCount);

@@ -1,0 +1,35 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_schedule_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    uint lane = gl_GlobalInvocationID.x;
+    if (lane >= SIMPLE_DDGI_SCHEDULER_MAX_LANES)
+        return;
+
+    uint groupCount = SchedulerCandidateGroupCount();
+    uint total = 0u;
+    for (uint group = 0u; group < groupCount; group++)
+    {
+        uint count = SchedulerGroupLaneCount(group, lane);
+        SchedulerWriteGroupLaneValue(group, lane, total);
+        total += count;
+    }
+    SchedulerArenaWrite(pc.LaneCandidateCountsOffsetWords + lane, total);
+    SchedulerArenaWrite(pc.LaneTotalsOffsetWords + lane, total);
+    SchedulerArenaWrite(pc.LanePrefixesOffsetWords + lane, 0u);
+    if (lane == 0u)
+    {
+        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_PREFIX,
+            SchedulerGroupsFor(SIMPLE_DDGI_SCHEDULER_MAX_LANES), 1u, 1u);
+        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_LANE_BASE,
+            SchedulerGroupsFor(SIMPLE_DDGI_SCHEDULER_MAX_LANES), 1u, 1u);
+        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_COMPACT,
+            SchedulerGroupsFor(SchedulerCandidateCapacity()), 1u, 1u);
+    }
+}

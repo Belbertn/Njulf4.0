@@ -67,7 +67,7 @@ namespace Njulf.Rendering.Pipeline
             return _pipeline.Handle != 0 &&
                    _jumpFloodPipeline.Handle != 0 &&
                    _settings.GlobalIllumination.FarFieldClipmapEnabled &&
-                   _settings.GlobalIllumination.EffectiveUseSimpleDdgi &&
+                   _settings.GlobalIllumination.EffectiveUseDdgi &&
                    _manager.BakePending;
         }
 

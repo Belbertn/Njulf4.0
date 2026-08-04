@@ -30,17 +30,17 @@ public static class SampleGlobalIlluminationValidation
         new("emissive-room", SamplePerformanceScenario.GiEmissiveMaterialRoom, "Emissive material bounce convergence", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: false),
         new("moving-rigid-object", SamplePerformanceScenario.GiMovingRigidObject, "Moving rigid object invalidation and recovery", RequiresDynamicActor: true, RequiresDynamicLight: false, RequiresCameraTeleport: false),
         new("moving-local-light", SamplePerformanceScenario.GiMovingPointLight, "Moving local light convergence", RequiresDynamicActor: false, RequiresDynamicLight: true, RequiresCameraTeleport: false),
-        new("camera-teleport-scroll", SamplePerformanceScenario.GiFastTraversalTeleport, "Camera-relative teleport and clipmap scroll recovery", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: true),
+        new("camera-teleport-recenter", SamplePerformanceScenario.GiFastTraversalTeleport, "Camera teleport and Simple DDGI recenter recovery", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: true),
         new("verticality-rings", SamplePerformanceScenario.GiVerticalityRings, "Rings-only tall-world vertical coverage and recenter stability", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: false),
         new("outdoor-foliage-plaza", SamplePerformanceScenario.ForestFoliage, "Outdoor foliage/plaza DDGI fallback and receiving path", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: false)
     ];
 
     public static IReadOnlyList<SampleGiPerformanceTarget> Phase8PerformanceTargets { get; } =
     [
-        new(DdgiQualityTier.DdgiLow, SampleDdgiProductionGate.DdgiLowUpdateP95BudgetMilliseconds, 64UL * 1024UL * 1024UL, ReferenceTier: false),
-        new(DdgiQualityTier.DdgiMedium, SampleDdgiProductionGate.DdgiMediumUpdateP95BudgetMilliseconds, 128UL * 1024UL * 1024UL, ReferenceTier: false),
-        new(DdgiQualityTier.DdgiHigh, SampleDdgiProductionGate.DdgiHighUpdateP95BudgetMilliseconds, 192UL * 1024UL * 1024UL, ReferenceTier: false),
-        new(DdgiQualityTier.DdgiUltra, SampleDdgiProductionGate.DdgiUltraUpdateP95BudgetMilliseconds, 384UL * 1024UL * 1024UL, ReferenceTier: true)
+        new(DdgiQualityTier.DdgiLow, SampleDdgiProductionGate.SimpleDdgiTransportBlendP95BudgetMilliseconds, 64UL * 1024UL * 1024UL, ReferenceTier: false),
+        new(DdgiQualityTier.DdgiMedium, SampleDdgiProductionGate.SimpleDdgiTransportBlendP95BudgetMilliseconds, 128UL * 1024UL * 1024UL, ReferenceTier: false),
+        new(DdgiQualityTier.DdgiHigh, SampleDdgiProductionGate.SimpleDdgiTransportBlendP95BudgetMilliseconds, 192UL * 1024UL * 1024UL, ReferenceTier: false),
+        new(DdgiQualityTier.DdgiUltra, SampleDdgiProductionGate.SimpleDdgiTransportBlendP95BudgetMilliseconds, 384UL * 1024UL * 1024UL, ReferenceTier: true)
     ];
 
     public static IReadOnlyList<SampleGiAccuracyOracle> AccuracyOracles { get; } =
@@ -100,8 +100,8 @@ public static class SampleGlobalIlluminationValidation
         new("environment-fallback-weight", "weight", "Average environment fallback blend weight in DDGI-covered pixels."),
         new("thin-wall-leak-ratio", "relative-luma", "Leakage ratio across thin-wall validation geometry."),
         new("probe-cache-warmup-frames", "frames", "Frames required for the published DDGI cache to reach steady state."),
-        new("ddgi-gpu-p95", "milliseconds", "Total DDGI update P95 across schedule, trace, blend, relocate/classify, and publish."),
-        new("ddgi-memory", "bytes", "DDGI atlas, buffers, scheduler, gather, and ray scratch memory.")
+        new("ddgi-gpu-p95", "milliseconds", "Simple DDGI trace, transport, blend, relocate/classify, and publish P95."),
+        new("ddgi-memory", "bytes", "Simple DDGI atlas, buffers, and ray-scratch memory.")
     ];
 
     public static IReadOnlyList<SampleGiRegressionComparison> Phase9RequiredComparisons { get; } =
@@ -319,15 +319,15 @@ public static class SampleGlobalIlluminationValidation
         new("ddgi-gpu-scheduler-invalid-requests", Maximum: 0.0f, Unit: "requests"),
         new("ddgi-gpu-scheduler-duplicate-requests", Maximum: 0.0f, Unit: "requests"),
         new("ddgi-gpu-scheduler-fallback-active", Maximum: 0.0f, Unit: "boolean"),
-        new("ddgi-gpu-mode-cpu-scheduler-us", Maximum: 300.0f, Unit: "microseconds"),
-        new("ssgi-trace-gpu-us", Maximum: 2200.0f, Unit: "microseconds"),
-        new("ssgi-temporal-gpu-us", Maximum: 900.0f, Unit: "microseconds"),
-        new("ssgi-spatial-gpu-us", Maximum: 1800.0f, Unit: "microseconds")
+        new("ddgi-gpu-mode-cpu-scheduler-us", Maximum: 300.0f, Unit: "microseconds")
     ];
 
     public static bool IsValidationScenario(SamplePerformanceScenario scenario)
     {
         return scenario is SamplePerformanceScenario.GiSponzaRightWallStationary
+            or SamplePerformanceScenario.GiSponzaAnimatedAtmosphere
+            or SamplePerformanceScenario.GiSponzaFreezeAfterAtmosphereStep
+            or SamplePerformanceScenario.GiSponzaReflectionProbeLifecycle
             or SamplePerformanceScenario.GiSimpleDdgiFurnace
             or SamplePerformanceScenario.GiCornellRoom
             or SamplePerformanceScenario.GiQualityInterior
@@ -363,6 +363,12 @@ public static class SampleGlobalIlluminationValidation
             return;
         }
 
+        if (SampleSponzaAtmosphereScenario.IsScenario(scenario))
+        {
+            SampleSponzaAtmosphereScenario.Configure(settings, scenario);
+            return;
+        }
+
         settings.ApplyQualityPreset(RenderQualityPreset.DdgiHigh);
         SampleSponzaGlobalIlluminationProfile.ApplyValidationOverlay(settings);
 
@@ -370,20 +376,14 @@ public static class SampleGlobalIlluminationValidation
         gi.Enabled = true;
         gi.Mode = GlobalIlluminationMode.Ddgi;
         gi.DebugView = GlobalIlluminationDebugView.None;
-        gi.UseSsgi = false;
         gi.UseDdgi = true;
-        gi.DdgiSimpleEnabled = true;
         gi.UseRayQueryBackend = true;
         gi.IndirectIntensity = 1.5f;
         gi.EnvironmentFallbackIntensity = 0.2f;
         gi.MaxBounceDistance = 10.0f;
-        gi.DdgiClipmapBaseSpacing = 0.75f;
         gi.DdgiThinWallPolicyEnabled = true;
-        gi.DdgiRoomSpacingScaledBiasEnabled = true;
         gi.DdgiThinWallLeakClampStrength = 0.9f;
-        gi.DdgiThinWallProxyThickness = 0.12f;
         gi.DdgiSelfShadowBiasScale = 1.0f;
-        gi.DdgiHysteresisResponse = 1.0f;
         gi.SimpleDdgiAuthoredVolumes.Clear();
         gi.SimpleDdgiRingCount = 3;
         gi.SimpleDdgiRingBaseSpacing = 1.25f;
@@ -399,7 +399,6 @@ public static class SampleGlobalIlluminationValidation
         gi.SimpleDdgiFarRingGridSizeZ = 12;
         gi.SimpleDdgiProbeUpdatesPerFrame = 2_048;
         gi.DdgiProbeUpdatePrimaryRayBudget = 262_144;
-        gi.DdgiColdStartPrimaryRayBudget = 524_288;
         gi.SimpleDdgiNearFullRaysPerProbe = 128;
         gi.SimpleDdgiMidFullRaysPerProbe = 64;
         gi.SimpleDdgiFarFullRaysPerProbe = 32;
@@ -484,18 +483,6 @@ public static class SampleGlobalIlluminationValidation
         }
     }
 
-    public static void ConfigureSchedulerMode(RenderSettings settings, DdgiSchedulerMode? schedulerMode)
-    {
-        if (settings == null)
-            throw new ArgumentNullException(nameof(settings));
-        if (!schedulerMode.HasValue)
-            return;
-
-        GlobalIlluminationSettings gi = settings.GlobalIllumination;
-        gi.DdgiSchedulerMode = schedulerMode.Value;
-        if (schedulerMode.Value == DdgiSchedulerMode.CpuGpuCompare)
-            gi.DdgiGpuSchedulerReadbackValidationEnabled = true;
-    }
 }
 
 public sealed record SampleGiValidationPath(
@@ -515,7 +502,7 @@ public sealed record SampleGiProductionScene(
 
 public sealed record SampleGiPerformanceTarget(
     DdgiQualityTier Tier,
-    double UpdateP95BudgetMilliseconds,
+    double TransportBlendP95BudgetMilliseconds,
     ulong AtlasMemoryBudgetBytes,
     bool ReferenceTier);
 

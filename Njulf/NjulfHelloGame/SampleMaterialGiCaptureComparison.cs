@@ -412,7 +412,7 @@ public static class SampleMaterialGiCaptureComparer
         }
         if (renderer.QualityPreset != RenderQualityPreset.DdgiHigh ||
             renderer.ActiveMaterialGiV2Features != MaterialGiV2Feature.All ||
-            renderer.GlobalIlluminationMode != GlobalIlluminationMode.Hybrid)
+            renderer.GlobalIlluminationMode != GlobalIlluminationMode.Ddgi)
         {
             throw new InvalidDataException($"{role} renderer did not use the locked Material-GI V2 profile.");
         }

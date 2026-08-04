@@ -825,5 +825,5 @@ namespace Njulf.Rendering.Resources
         int ForwardOcclusionCulled,
         int ForwardEmitted,
         int ForwardOcclusionTested,
-        int SsgiRejectedHistoryPixels);
+        int ReservedDiagnosticSlot);
 }

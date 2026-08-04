@@ -9,7 +9,6 @@ public enum EditorSelectionKind
     Object,
     Light,
     ReflectionProbe,
-    GiVolume,
     FoliagePrototype,
     FoliagePatch,
     ParticleEffect,

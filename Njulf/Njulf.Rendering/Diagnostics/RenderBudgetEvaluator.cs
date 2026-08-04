@@ -8,8 +8,6 @@ namespace Njulf.Rendering.Diagnostics
     public sealed class RenderBudgetEvaluator
     {
         public const double WarningRatio = 0.85;
-        public const double MaxDefaultSsgiResolutionScale = 0.5;
-        public const int MaxDefaultSsgiRayCount = 8;
         public const string MaterialGiQualificationMetricName =
             "Material GI release qualification";
         public const string MaterialGiActiveV1FallbackMetricName =
@@ -95,10 +93,10 @@ namespace Njulf.Rendering.Diagnostics
             // a release gate. Unique residency is reported from disjoint sources instead.
             ulong globalIlluminationMemoryBytes = giResidency.UniqueResidentBytes;
             ulong ddgiMemoryBytes = diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes;
-            // Full DDGI stores atlases in images. Simple DDGI keeps its canonical
-            // writer in SSBOs and may add a sampled-image mirror. V2 additionally
-            // owns a private Jacobi target and persistent source-ray cache, all
-            // charged against the same hard layout budget.
+            // Simple DDGI keeps its canonical writer in SSBOs and may add a
+            // sampled-image mirror. V2 additionally owns a private Jacobi target
+            // and persistent source-ray cache, all charged against the same hard
+            // layout budget.
             ulong ddgiAtlasMemoryBytes = diagnostics.SimpleDdgiActive != 0
                 ? SaturatingAdd(
                     SaturatingAdd(
@@ -110,10 +108,7 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.SimpleDdgiActive != 0;
             bool hasForwardGiIncrementalTiming = diagnostics.GpuForwardGiIncrementalAttribution is
                 GiTimingAttribution.Exclusive or GiTimingAttribution.PairedEstimate;
-            long globalIlluminationGpuMicroseconds = diagnostics.GpuSsgiTraceMicroseconds +
-                diagnostics.GpuSsgiTemporalMicroseconds +
-                diagnostics.GpuSsgiDenoiseMicroseconds +
-                diagnostics.GpuDdgiUpdateMicroseconds +
+            long globalIlluminationGpuMicroseconds = diagnostics.GpuDdgiUpdateMicroseconds +
                 diagnostics.GpuGiCompositeMicroseconds +
                 diagnostics.GpuFarFieldUpdateMicroseconds +
                 diagnostics.GpuAccelerationStructureBlasMicroseconds +
@@ -305,16 +300,8 @@ namespace Njulf.Rendering.Diagnostics
                     diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.DdgiAtlasMemoryBudgetBytes <= 0 ? RenderBudgetStatus.Unavailable : null),
                 CreateHardLimitMetric("DDGI total memory", ddgiMemoryBytes, diagnostics.DdgiAtlasMemoryBudgetBytes, "bytes",
                     diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.DdgiAtlasMemoryBudgetBytes <= 0 ? RenderBudgetStatus.Unavailable : null),
-                CreateHardLimitMetric("SSGI resolution scale", diagnostics.SsgiResolutionScale, MaxDefaultSsgiResolutionScale, "scale",
-                    diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.SsgiRayCount <= 0 ? RenderBudgetStatus.Unavailable : null),
-                CreateHardLimitMetric("SSGI rays per pixel", diagnostics.SsgiRayCount, MaxDefaultSsgiRayCount, "count",
-                    diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.SsgiRayCount <= 0 ? RenderBudgetStatus.Unavailable : null),
                 CreateHardLimitMetric("DDGI probes updated", diagnostics.DdgiProbesUpdated, ddgiFullUpdateFailureThreshold, "count",
                     diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.DdgiActiveProbeCount <= 0 || diagnostics.DdgiProbesUpdated <= 0 ? RenderBudgetStatus.Unavailable : null),
-                CreateHardLimitMetric("DDGI resource reinitializations", diagnostics.DdgiResourceReinitializationCount, 0, "count",
-                    ShouldEvaluateDdgiCameraMovementReinitialization(diagnostics) ? null : RenderBudgetStatus.Unavailable),
-                CreateHardLimitMetric("DDGI gather fallback tiles", diagnostics.DdgiGatherFallbackTileCount, 0, "count",
-                    diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.DdgiGatherTileCount <= 0 ? RenderBudgetStatus.Unavailable : null),
                 CreateMetric("Transparent objects", diagnostics.TransparentObjectCount, profile.TransparentObjectBudget, "count")
             };
 
@@ -326,15 +313,6 @@ namespace Njulf.Rendering.Diagnostics
             {
                 GiResidency = giResidency
             };
-        }
-
-        private static bool ShouldEvaluateDdgiCameraMovementReinitialization(RendererDiagnostics diagnostics)
-        {
-            return diagnostics.GlobalIlluminationEnabled != 0 &&
-                   diagnostics.DdgiCascadeCount > 0 &&
-                   (diagnostics.DdgiCameraMovementClass is DdgiCameraMovementClass.Normal or
-                       DdgiCameraMovementClass.Fast or
-                       DdgiCameraMovementClass.ViewResetOnly);
         }
 
         private static BudgetMetric CreateMetric(

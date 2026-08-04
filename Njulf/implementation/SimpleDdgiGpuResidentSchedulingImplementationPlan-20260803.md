@@ -89,10 +89,11 @@ solver propagation, convergence retirement, inactive retry, relocation
 retrace, per-volume floors/ceilings, and primary-ray versus ray-free transport
 work. These semantics are part of the quality contract.
 
-The legacy `DdgiSchedulePass` and `ddgi_schedule_*.comp` shaders demonstrate the
-required Vulkan resource, counter, staged-compute, validation-readback, and
-indirect-dispatch patterns. They do not contain the Simple-specific transport
-state machine and must not be wired directly to the Simple queue.
+The retired scheduler prototype demonstrated the Vulkan resource, counter,
+staged-compute, validation-readback, and indirect-dispatch patterns. It did
+not contain the Simple-specific transport state machine and is no longer part
+of the renderer; a future GPU-resident scheduler must be designed directly for
+the Simple queue.
 
 ## 4. Scope
 

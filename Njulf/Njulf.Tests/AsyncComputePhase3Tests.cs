@@ -467,13 +467,13 @@ public sealed class AsyncComputePhase3Tests
             bindings,
             new[]
             {
-                ComputePass("ssgi-trace", AsyncComputePath.SsgiChain, RenderGraphResourceId.SceneSubmissionBuffers, RenderGraphResourceAccess.ReadWrite),
+                ComputePass("simple-ddgi-trace", AsyncComputePath.SimpleDdgiUpdate, RenderGraphResourceId.SceneSubmissionBuffers, RenderGraphResourceAccess.ReadWrite),
                 GraphicsPass("interleaved-graphics", RenderGraphResourceId.LightTiles, RenderGraphResourceAccess.ReadWrite),
-                ComputePass("ssgi-denoise", AsyncComputePath.SsgiChain, RenderGraphResourceId.SceneSubmissionBuffers, RenderGraphResourceAccess.ReadWrite)
+                ComputePass("simple-ddgi-publish", AsyncComputePath.SimpleDdgiUpdate, RenderGraphResourceId.SceneSubmissionBuffers, RenderGraphResourceAccess.ReadWrite)
             },
-            Enabled(AsyncComputePath.SsgiChain));
+            Enabled(AsyncComputePath.SimpleDdgiUpdate));
 
-        AsyncComputePathRuntimeStatus status = plan.Paths.Single(path => path.Path == AsyncComputePath.SsgiChain);
+        AsyncComputePathRuntimeStatus status = plan.Paths.Single(path => path.Path == AsyncComputePath.SimpleDdgiUpdate);
         Assert.Multiple(() =>
         {
             Assert.That(plan.Accepted, Is.False);
@@ -494,15 +494,15 @@ public sealed class AsyncComputePhase3Tests
             bindings,
             new[]
             {
-                ComputePass("ssgi-trace", AsyncComputePath.SsgiChain, RenderGraphResourceId.SceneSubmissionBuffers, RenderGraphResourceAccess.ReadWrite),
+                ComputePass("simple-ddgi-trace", AsyncComputePath.SimpleDdgiUpdate, RenderGraphResourceId.SceneSubmissionBuffers, RenderGraphResourceAccess.ReadWrite),
                 GraphicsPass("feature-isolated", RenderGraphResourceId.LightTiles, RenderGraphResourceAccess.ReadWrite) with
                 {
                     EnabledByFeatureIsolation = false
                 },
-                ComputePass("ssgi-denoise", AsyncComputePath.SsgiChain, RenderGraphResourceId.SceneSubmissionBuffers, RenderGraphResourceAccess.ReadWrite),
+                ComputePass("simple-ddgi-publish", AsyncComputePath.SimpleDdgiUpdate, RenderGraphResourceId.SceneSubmissionBuffers, RenderGraphResourceAccess.ReadWrite),
                 GraphicsPass("consumer", RenderGraphResourceId.SceneSubmissionBuffers, RenderGraphResourceAccess.Read)
             },
-            Enabled(AsyncComputePath.SsgiChain));
+            Enabled(AsyncComputePath.SimpleDdgiUpdate));
 
         Assert.Multiple(() =>
         {
@@ -511,33 +511,33 @@ public sealed class AsyncComputePhase3Tests
             Assert.That(plan.Segments.SelectMany(segment => segment.Passes), Does.Not.Contain("feature-isolated"));
             Assert.That(
                 plan.Segments.Single(segment => segment.Queue == AsyncComputeQueue.Compute).Passes,
-                Is.EqualTo(new[] { "ssgi-trace", "ssgi-denoise" }));
+                Is.EqualTo(new[] { "simple-ddgi-trace", "simple-ddgi-publish" }));
         });
     }
 
     [Test]
-    public void Scheduler_AutoRejectsSsgiWhenCompositeIsItsImmediateGraphicsConsumer()
+    public void Scheduler_AutoAcceptsMeasuredSimpleDdgiWithAnImmediateGraphicsConsumer()
     {
         RenderGraphResourceBindings bindings = CreateBindings(
-            CreateBufferBinding(RenderGraphResourceId.GiFinalDiffuse, "GI final", 119, 0, 1024));
+            CreateBufferBinding(RenderGraphResourceId.SceneSubmissionBuffers, "simple DDGI output", 119, 0, 1024));
 
         AsyncComputeSubmissionPlan plan = Compile(
             bindings,
             new[]
             {
-                ComputePass("ssgi-denoise", AsyncComputePath.SsgiChain, RenderGraphResourceId.GiFinalDiffuse, RenderGraphResourceAccess.Write),
-                GraphicsPass("ssgi-composite", RenderGraphResourceId.GiFinalDiffuse, RenderGraphResourceAccess.Read)
+                ComputePass("simple-ddgi-publish", AsyncComputePath.SimpleDdgiUpdate, RenderGraphResourceId.SceneSubmissionBuffers, RenderGraphResourceAccess.Write),
+                GraphicsPass("forward-consumer", RenderGraphResourceId.SceneSubmissionBuffers, RenderGraphResourceAccess.Read)
             },
-            Enabled(AsyncComputePath.SsgiChain),
+            Enabled(AsyncComputePath.SimpleDdgiUpdate),
             mode: AsyncComputeMode.Auto);
 
-        AsyncComputePathRuntimeStatus status = plan.Paths.Single(path => path.Path == AsyncComputePath.SsgiChain);
+        AsyncComputePathRuntimeStatus status = plan.Paths.Single(path => path.Path == AsyncComputePath.SimpleDdgiUpdate);
         Assert.Multiple(() =>
         {
             Assert.That(plan.Accepted, Is.True, plan.FailureReason);
-            Assert.That(plan.ContainsAsyncCompute, Is.False);
-            Assert.That(status.Status, Is.EqualTo(AsyncComputePathStatus.NoMeasuredBenefit));
-            Assert.That(status.Reason, Does.Contain("immediate graphics consumer"));
+            Assert.That(plan.ContainsAsyncCompute, Is.True);
+            Assert.That(status.Status, Is.EqualTo(AsyncComputePathStatus.Enabled));
+            Assert.That(status.Reason, Does.Contain("measured Auto policy"));
         });
     }
 
@@ -1211,7 +1211,7 @@ public sealed class AsyncComputePhase3Tests
     }
 
     [Test]
-    public void SettingsMigrationAndRoundTrip_PreserveExplicitAsyncPolicy()
+    public void SettingsMigrationAndRoundTrip_PreserveSimpleDdgiAsyncPolicy()
     {
         string legacyPath = Path.GetTempFileName();
         string roundTripPath = Path.GetTempFileName();
@@ -1221,8 +1221,7 @@ public sealed class AsyncComputePhase3Tests
             {
               "Version": 1,
               "AsyncCompute": {
-                "Enabled": true,
-                "DdgiUpdateEnabled": false
+                "Enabled": true
               }
             }
             """);
@@ -1231,9 +1230,7 @@ public sealed class AsyncComputePhase3Tests
             var settings = new RenderSettings();
             settings.AsyncCompute.Mode = AsyncComputeMode.Auto;
             settings.AsyncCompute.SimpleDdgiUpdateEnabled = false;
-            settings.AsyncCompute.FullDdgiUpdateEnabled = true;
             settings.AsyncCompute.FarFieldClipmapBakeEnabled = false;
-            settings.AsyncCompute.SsgiChainEnabled = false;
             settings.AsyncCompute.AutoMinimumSampleCount = 42;
             settings.AsyncCompute.AutoWarmupFrameCount = 12;
             settings.AsyncCompute.AutoMinimumAbsoluteBenefitMilliseconds = 0.4f;
@@ -1245,13 +1242,10 @@ public sealed class AsyncComputePhase3Tests
             Assert.Multiple(() =>
             {
                 Assert.That(legacy.AsyncCompute.Mode, Is.EqualTo(AsyncComputeMode.ForceEnabledForValidation));
-                Assert.That(legacy.AsyncCompute.SimpleDdgiUpdateEnabled, Is.False);
-                Assert.That(legacy.AsyncCompute.FullDdgiUpdateEnabled, Is.False);
+                Assert.That(legacy.AsyncCompute.SimpleDdgiUpdateEnabled, Is.True);
                 Assert.That(roundTrip.AsyncCompute.Mode, Is.EqualTo(AsyncComputeMode.Auto));
                 Assert.That(roundTrip.AsyncCompute.SimpleDdgiUpdateEnabled, Is.False);
-                Assert.That(roundTrip.AsyncCompute.FullDdgiUpdateEnabled, Is.True);
                 Assert.That(roundTrip.AsyncCompute.FarFieldClipmapBakeEnabled, Is.False);
-                Assert.That(roundTrip.AsyncCompute.SsgiChainEnabled, Is.False);
                 Assert.That(roundTrip.AsyncCompute.AutoMinimumSampleCount, Is.EqualTo(42));
                 Assert.That(roundTrip.AsyncCompute.AutoWarmupFrameCount, Is.EqualTo(12));
                 Assert.That(roundTrip.AsyncCompute.AutoMinimumAbsoluteBenefitMilliseconds, Is.EqualTo(0.4f));
@@ -1315,7 +1309,7 @@ public sealed class AsyncComputePhase3Tests
     }
 
     [Test]
-    public void SettingsMigration_CurrentSchemaWithoutSsgiOptionsKeepsSsgiOptIn()
+    public void SettingsMigration_CurrentSchemaDefaultsToSimpleDdgiOnly()
     {
         string settingsPath = Path.GetTempFileName();
         try
@@ -1324,7 +1318,7 @@ public sealed class AsyncComputePhase3Tests
             {
               "Version": 3,
               "GlobalIllumination": {
-                "Mode": "Hybrid",
+                "Mode": "Ddgi",
                 "UseDdgi": true
               },
               "AsyncCompute": {
@@ -1337,12 +1331,8 @@ public sealed class AsyncComputePhase3Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(settings.GlobalIllumination.UseSsgi, Is.False);
-                Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.False);
-                Assert.That(settings.GlobalIllumination.DdgiSimpleEnabled, Is.True);
-                Assert.That(settings.GlobalIllumination.EffectiveUseSimpleDdgi, Is.True);
-                Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.False);
-                Assert.That(settings.AsyncCompute.SsgiChainEnabled, Is.False);
+                Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
+                Assert.That(settings.AsyncCompute.SimpleDdgiUpdateEnabled, Is.True);
             });
         }
         finally

@@ -628,7 +628,6 @@ namespace Njulf.Rendering.Diagnostics
             {
                 CreateGlobalIlluminationState(diagnostics),
                 CreateEmergencyGiFallbackState(diagnostics),
-                CreateSsgiState(diagnostics),
                 CreateDdgiState(diagnostics),
                 CreateSimpleDdgiState(diagnostics),
                 CreateSimpleDdgiTransportState(diagnostics),
@@ -647,7 +646,6 @@ namespace Njulf.Rendering.Diagnostics
             bool active = diagnostics.GlobalIlluminationEnabled != 0;
             bool requested = diagnostics.GlobalIlluminationRequested != 0 ||
                 active ||
-                diagnostics.GlobalIlluminationSsgiActive != 0 ||
                 diagnostics.GlobalIlluminationDdgiActive != 0;
             if (!requested)
             {
@@ -716,19 +714,6 @@ namespace Njulf.Rendering.Diagnostics
                     false,
                     GiFeatureStateStatus.Disabled,
                     "The emergency GI fallback control is not active.");
-        }
-
-        private static GiFeatureState CreateSsgiState(RendererDiagnostics diagnostics)
-        {
-            bool active = diagnostics.GlobalIlluminationSsgiActive != 0;
-            bool requested = diagnostics.GlobalIlluminationSsgiRequested != 0 || active;
-            return CreateDynamicGiPathState(
-                "ssgi",
-                requested,
-                active,
-                diagnostics,
-                "Screen-space GI is active.",
-                "SSGI was requested but is not active.");
         }
 
         private static GiFeatureState CreateDdgiState(RendererDiagnostics diagnostics)
@@ -1147,12 +1132,6 @@ namespace Njulf.Rendering.Diagnostics
                 reason = "DDGI is not in steady state: " + diagnostics.DdgiWarmupState + ".";
                 return true;
             }
-            if (diagnostics.DdgiCameraMovementClass is DdgiCameraMovementClass.Teleport or DdgiCameraMovementClass.ViewResetOnly)
-            {
-                reason = "Camera movement invalidated stable DDGI evidence: " + diagnostics.DdgiCameraMovementClass + ".";
-                return true;
-            }
-
             reason = string.Empty;
             return false;
         }
@@ -1161,8 +1140,8 @@ namespace Njulf.Rendering.Diagnostics
         private static double ClampFraction(double value) => Math.Clamp(value, 0.0, 1.0);
         private static string BuildCameraState(RendererDiagnostics diagnostics) =>
             diagnostics.CaptureCamera.CameraCutSerial == 0
-                ? diagnostics.DdgiCameraMovementClass.ToString()
-                : diagnostics.DdgiCameraMovementClass + "; cut=" + diagnostics.CaptureCamera.CameraCutSerial.ToString(CultureInfo.InvariantCulture);
+                ? "stable"
+                : "cut=" + diagnostics.CaptureCamera.CameraCutSerial.ToString(CultureInfo.InvariantCulture);
     }
 
     public static class GiDiagnosticWarningFactory
@@ -1253,7 +1232,7 @@ namespace Njulf.Rendering.Diagnostics
                     GiMetricFreshness.CurrentFrame,
                     diagnostics.ActiveBudgetProfileName,
                     diagnostics.CaptureRun.Scenario,
-                    diagnostics.DdgiCameraMovementClass.ToString(),
+                    BuildCameraState(diagnostics),
                     diagnostics.CaptureFrame.FrameSerial,
                     diagnostics.CaptureCamera.CameraCutSerial,
                     "Inspect the per-volume layout decisions, preserve receiver-hero priority, and either select a supported tier or explicitly approve the documented degraded layout."));
@@ -1312,7 +1291,7 @@ namespace Njulf.Rendering.Diagnostics
                     GiMetricFreshness.CurrentFrame,
                     diagnostics.ActiveBudgetProfileName,
                     diagnostics.CaptureRun.Scenario,
-                    diagnostics.DdgiCameraMovementClass.ToString(),
+                    BuildCameraState(diagnostics),
                     diagnostics.CaptureFrame.FrameSerial,
                     diagnostics.CaptureCamera.CameraCutSerial,
                     "Increase the resolved AS tier budget or reduce the coherent resident radius; never accept a TLAS with holes among admitted geometry."));
@@ -1413,7 +1392,7 @@ namespace Njulf.Rendering.Diagnostics
                         GiMetricFreshness.CurrentFrame,
                         diagnostics.ActiveBudgetProfileName,
                         diagnostics.CaptureRun.Scenario,
-                        diagnostics.DdgiCameraMovementClass.ToString(),
+                        BuildCameraState(diagnostics),
                         diagnostics.CaptureFrame.FrameSerial,
                         diagnostics.CaptureCamera.CameraCutSerial,
                         "Increase the Simple DDGI update/ray budget, reclaim inactive probes, or explicitly lengthen the authored GI source-sweep target."));
@@ -1438,7 +1417,7 @@ namespace Njulf.Rendering.Diagnostics
                         GiMetricFreshness.DelayedReadback,
                         diagnostics.ActiveBudgetProfileName,
                         diagnostics.CaptureRun.Scenario,
-                        diagnostics.DdgiCameraMovementClass.ToString(),
+                        BuildCameraState(diagnostics),
                         diagnostics.CaptureFrame.FrameSerial,
                         diagnostics.CaptureCamera.CameraCutSerial,
                         "Capture the source-cohort telemetry, then increase refresh throughput or reduce the sun-step rate before qualifying dynamic time of day."));
@@ -1467,7 +1446,7 @@ namespace Njulf.Rendering.Diagnostics
                 GiMetricFreshness.CurrentFrame,
                 diagnostics.ActiveBudgetProfileName,
                 diagnostics.CaptureRun.Scenario,
-                diagnostics.DdgiCameraMovementClass.ToString(),
+                BuildCameraState(diagnostics),
                 diagnostics.CaptureFrame.FrameSerial,
                 diagnostics.CaptureCamera.CameraCutSerial,
                 action));
@@ -1494,11 +1473,16 @@ namespace Njulf.Rendering.Diagnostics
                 GiMetricFreshness.CurrentFrame,
                 diagnostics.ActiveBudgetProfileName,
                 diagnostics.CaptureRun.Scenario,
-                diagnostics.DdgiCameraMovementClass.ToString(),
+                BuildCameraState(diagnostics),
                 diagnostics.CaptureFrame.FrameSerial,
                 diagnostics.CaptureCamera.CameraCutSerial,
                 action);
         }
+
+        private static string BuildCameraState(RendererDiagnostics diagnostics) =>
+            diagnostics.CaptureCamera.CameraCutSerial == 0
+                ? "stable"
+                : "cut=" + diagnostics.CaptureCamera.CameraCutSerial.ToString(CultureInfo.InvariantCulture);
     }
 
     public static class GiResidencyReporter
@@ -1517,7 +1501,7 @@ namespace Njulf.Rendering.Diagnostics
 
             ulong trackedGiBytes = GetCategoryBytes(memory, MemoryBudgetCategory.GlobalIllumination);
             bool hasTrackedGiEntry = HasCategory(memory, MemoryBudgetCategory.GlobalIllumination);
-            ulong uniqueResidentBytes = SaturatingAdd(diagnostics.GlobalIlluminationRenderTargetBytes, trackedGiBytes);
+            ulong uniqueResidentBytes = trackedGiBytes;
             ulong accelerationStructureTransientBytes = ResolveAccelerationStructureTransientBytes(diagnostics);
             ulong accelerationStructureTransientBudgetBytes = diagnostics.AccelerationStructureMemoryBudgetBytes == 0
                 ? 0
@@ -1526,14 +1510,8 @@ namespace Njulf.Rendering.Diagnostics
             bool farFieldConfigured = diagnostics.FarFieldPagedFeatureEnabled != 0 ||
                 diagnostics.FarFieldCacheBytes != 0 ||
                 diagnostics.FarFieldInstanceBufferBytes != 0;
-            var components = new List<GiResidencyComponent>(7)
+            var components = new List<GiResidencyComponent>(6)
             {
-                CreateComponent(
-                    "GI render targets",
-                    diagnostics.GlobalIlluminationRenderTargetBytes,
-                    profile.GlobalIlluminationRenderTargetBudgetBytes,
-                    false,
-                    "Renderer render-target accounting; disjoint from allocation-tracker GI resources and governed by the active tier's explicit render-target cap."),
                 CreateComponent(
                     "DDGI cache",
                     ResolveDdgiCacheBytes(diagnostics),
@@ -1596,9 +1574,9 @@ namespace Njulf.Rendering.Diagnostics
             return new GiResidencySnapshot(
                 uniqueResidentBytes,
                 allActiveComponentBudgetsKnown ? componentBudgets : 0,
-                hasTrackedGiEntry || diagnostics.GlobalIlluminationRenderTargetBytes > 0,
+                hasTrackedGiEntry,
                 true,
-                "GI render-target bytes plus the allocation tracker GlobalIllumination category; manager-facing component values are not summed.",
+                "Allocation-tracker GlobalIllumination category; manager-facing component values are not summed.",
                 components);
         }
 
@@ -1710,12 +1688,6 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "gi.fallbackReason", diagnostics.GlobalIlluminationFallbackReason);
             AddSetting(settings, "gi.indirectIntensity", diagnostics.GlobalIlluminationIndirectIntensity);
             AddSetting(settings, "gi.environmentFallbackIntensity", diagnostics.GlobalIlluminationEnvironmentFallbackIntensity);
-            AddSetting(settings, "gi.ssgi.requested", diagnostics.GlobalIlluminationSsgiRequested);
-            AddSetting(settings, "gi.ssgi.active", diagnostics.GlobalIlluminationSsgiActive);
-            AddSetting(settings, "gi.ssgi.scale", diagnostics.SsgiResolutionScale);
-            AddSetting(settings, "gi.ssgi.width", diagnostics.SsgiWidth);
-            AddSetting(settings, "gi.ssgi.height", diagnostics.SsgiHeight);
-            AddSetting(settings, "gi.ssgi.rays", diagnostics.SsgiRayCount);
             AddSetting(settings, "gi.ddgi.requested", diagnostics.GlobalIlluminationDdgiRequested);
             AddSetting(settings, "gi.ddgi.active", diagnostics.GlobalIlluminationDdgiActive);
             AddSetting(settings, "gi.simpleDdgi.requested", diagnostics.SimpleDdgiRequested);
@@ -1732,7 +1704,6 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "gi.rayQuery.active", diagnostics.GlobalIlluminationRayQueryActive);
 
             AddSetting(settings, "ddgi.quality", diagnostics.DdgiQualityTier.ToString());
-            AddSetting(settings, "ddgi.scheduler", diagnostics.DdgiSchedulerMode.ToString());
             AddSetting(settings, "ddgi.maxActiveProbes", diagnostics.DdgiMaxActiveProbeBudget);
             AddSetting(settings, "ddgi.maxUpdatesPerFrame", diagnostics.DdgiMaxProbeUpdatesPerFrame);
             AddSetting(settings, "ddgi.requestBudget", diagnostics.DdgiProbeUpdateRequestBudget);
@@ -1757,6 +1728,7 @@ namespace Njulf.Rendering.Diagnostics
             AddLightingSettings(settings, diagnostics);
             AddLayoutSettings(settings, diagnostics.SimpleDdgiLayout);
             AddSchedulerSettings(settings, diagnostics.SimpleDdgiScheduling, diagnostics.SimpleDdgiSchedulerPolicy);
+            AddGpuSchedulerSettings(settings, diagnostics);
             AddFeatureStateSettings(settings, diagnostics);
             AddVolumeSettings(settings, diagnostics.DdgiVolumes);
 
@@ -1859,6 +1831,24 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "scheduler.policy.targetGpuMicroseconds", policy.TargetGpuMicroseconds);
             AddSetting(settings, "scheduler.policy.deterministicFixedBudget", policy.DeterministicFixedBudget ? 1 : 0);
             AddSetting(settings, "scheduler.policy.unavailableReason", policy.UnavailableReason);
+        }
+
+        private static void AddGpuSchedulerSettings(
+            List<string> settings,
+            RendererDiagnostics diagnostics)
+        {
+            AddSetting(settings, "scheduler.gpu.mode", diagnostics.SimpleDdgiSchedulerMode.ToString());
+            AddSetting(settings, "scheduler.gpu.ready", diagnostics.SimpleDdgiSchedulerReady);
+            AddSetting(settings, "scheduler.gpu.resourceGeneration", diagnostics.SimpleDdgiSchedulerResourceGeneration);
+            AddSetting(settings, "scheduler.gpu.arenaBytes", diagnostics.SimpleDdgiSchedulerArenaBytes);
+            AddSetting(settings, "scheduler.gpu.feedbackReadbackBytes", diagnostics.SimpleDdgiSchedulerFeedbackReadbackBytes);
+            AddSetting(settings, "scheduler.gpu.retiredBytes", diagnostics.SimpleDdgiSchedulerRetiredBytes);
+            AddSetting(settings, "scheduler.gpu.staleFeedbackCount", diagnostics.SimpleDdgiSchedulerStaleFeedbackCount);
+            AddSetting(settings, "scheduler.gpu.feedbackGenerationRejections", diagnostics.SimpleDdgiSchedulerFeedbackGenerationRejectionCount);
+            AddSetting(settings, "scheduler.gpu.fallbackLatched", diagnostics.SimpleDdgiSchedulerFallbackLatched);
+            AddSetting(settings, "scheduler.gpu.fallbackFreshResetPending", diagnostics.SimpleDdgiSchedulerFallbackFreshResetPending);
+            AddSetting(settings, "scheduler.gpu.fallbackCount", diagnostics.SimpleDdgiSchedulerFallbackCount);
+            AddSetting(settings, "scheduler.gpu.fallbackReason", diagnostics.SimpleDdgiSchedulerFallbackReason);
         }
 
         private static void AddFeatureStateSettings(List<string> settings, RendererDiagnostics diagnostics)

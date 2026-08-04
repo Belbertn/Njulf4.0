@@ -25,13 +25,21 @@ layout(push_constant) uniform SimpleDdgiPublishPushBlock
     uint TransportIrradianceAtlasBufferIndex;
     uint SampledAtlasGroupCount;
     uint SampledAtlasLayersPerTexture;
+    uint SchedulerArenaBufferIndex;
+    uint SchedulerCountersOffsetWords;
 } pc;
 
 void main()
 {
     SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
     uint queueOffset = gl_WorkGroupID.x;
-    if (queueOffset >= params.probesToUpdate || params.probeCount == 0u ||
+    bool gpuScheduler = SimpleDdgiGpuSchedulerActive(pc.SchedulerArenaBufferIndex);
+    uint requestCount = gpuScheduler
+        ? SimpleDdgiSchedulerAcceptedCount(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerCountersOffsetWords)
+        : params.probesToUpdate;
+    if (queueOffset >= requestCount || params.probeCount == 0u ||
         pc.SampledAtlasGroupCount == 0u || pc.SampledAtlasLayersPerTexture == 0u)
         return;
 

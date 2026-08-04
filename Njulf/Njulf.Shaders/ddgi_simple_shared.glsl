@@ -5,10 +5,6 @@
 
 // Only the forward fragment path has a meaningful screen-tile coordinate.
 // Compute, fog, and particle stages retain the canonical bounded table walk.
-#ifndef SIMPLE_DDGI_FORWARD_TILE_CANDIDATES
-#define SIMPLE_DDGI_FORWARD_TILE_CANDIDATES 0
-#endif
-
 // The optional sampled-image mirror is graphics-queue owned. Compute transport
 // must read the canonical SSBO field so it never consumes a stale mirror or
 // requires an image queue-ownership transfer in the DDGI transaction.
@@ -102,19 +98,11 @@ const uint SIMPLE_DDGI_GATHER_REJECTION_COUNTER_BASE = 262u;
 const uint SIMPLE_DDGI_GATHER_ALL_FAILED_COUNTER_BASE =
     SIMPLE_DDGI_GATHER_REJECTION_COUNTER_BASE +
     SIMPLE_DDGI_GATHER_ROLE_COUNT * SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT;
-// The fixed-size Simple-DDGI candidate table reuses the legacy DDGI gather-tile
-// storage binding. Its producer tag prevents a transition frame from treating a
-// legacy table as Simple-DDGI data; an unavailable or untagged tile always
-// takes the existing bounded full-table selector. A projected-candidate
-// overflow remains a heatmap signal, not a reason to discard the two retained
-// highest-priority candidates.
-const uint SIMPLE_DDGI_GATHER_TILE_INVALID_VOLUME_INDEX = 0xffffffffu;
-const uint SIMPLE_DDGI_GATHER_TILE_HEADER_ENABLED_FLAG = 1u << 0u;
-const uint SIMPLE_DDGI_GATHER_TILE_HEADER_SIMPLE_DDGI_FLAG = 1u << 1u;
-const uint SIMPLE_DDGI_GATHER_TILE_PRIMARY_VALID_FLAG = 1u << 0u;
-const uint SIMPLE_DDGI_GATHER_TILE_SECONDARY_VALID_FLAG = 1u << 1u;
-const uint SIMPLE_DDGI_GATHER_TILE_FALLBACK_FLAG = 1u << 3u;
-const uint SIMPLE_DDGI_GATHER_TILE_CANDIDATE_OVERFLOW_FLAG = 1u << 4u;
+// The fixed-size Simple-DDGI candidate table uses its dedicated scheduler arena
+// binding. An unavailable or untagged table takes the bounded full-table
+// selector. A projected-candidate overflow remains a heatmap signal, not a
+// reason to discard the two retained highest-priority candidates.
+const uint SIMPLE_DDGI_INVALID_VOLUME_INDEX = 0xffffffffu;
 const uint SIMPLE_DDGI_VOLUME_KIND_LEGACY = 0u;
 const uint SIMPLE_DDGI_VOLUME_KIND_AUTHORED = 1u;
 const uint SIMPLE_DDGI_VOLUME_KIND_RING = 2u;
@@ -177,6 +165,41 @@ const uint SIMPLE_DDGI_UPDATE_SOURCE_REFRESH = 1u << 13;
 // has been re-exposed for a new world cell.
 const uint SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT = 8u;
 const uint SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK = 0xffffff00u;
+const uint SIMPLE_DDGI_SCHEDULER_INVALID_INDEX = 0xffffffffu;
+const uint SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_STRIDE_WORDS = 4u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED_WORD = 2u;
+
+bool SimpleDdgiGpuSchedulerActive(uint arenaIndex)
+{
+    return arenaIndex != SIMPLE_DDGI_SCHEDULER_INVALID_INDEX;
+}
+
+uint SimpleDdgiSchedulerRead(uint arenaIndex, uint wordOffset)
+{
+    return ReadStorageWordUniform(arenaIndex, wordOffset);
+}
+
+uint SimpleDdgiSchedulerAcceptedCount(uint arenaIndex, uint countersOffsetWords)
+{
+    return SimpleDdgiSchedulerRead(
+        arenaIndex,
+        countersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED_WORD);
+}
+
+void SimpleDdgiResolveSchedulerRayBucket(
+    uint arenaIndex,
+    uint bucketCommandsOffsetWords,
+    uint bucketIndex,
+    out uint queueOffset,
+    out uint probeCount,
+    out uint raysPerProbe)
+{
+    uint base = bucketCommandsOffsetWords +
+        bucketIndex * SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_STRIDE_WORDS;
+    queueOffset = SimpleDdgiSchedulerRead(arenaIndex, base + 1u);
+    probeCount = SimpleDdgiSchedulerRead(arenaIndex, base + 2u);
+    raysPerProbe = max(1u, SimpleDdgiSchedulerRead(arenaIndex, base + 3u));
+}
 
 // A one-sided shell seen from behind is neither a shadeable surface nor sky.
 // Keep it as a distinct ray outcome so visibility/relocation retain the wall
@@ -1322,106 +1345,6 @@ bool FindSimpleDdgiFallbackVolume(
     return false;
 }
 
-#if SIMPLE_DDGI_FORWARD_TILE_CANDIDATES
-struct SimpleDdgiForwardTileCandidates
-{
-    uint primaryVolumeIndex;
-    uint secondaryVolumeIndex;
-    uint flags;
-};
-
-bool ReadSimpleDdgiForwardTileCandidates(out SimpleDdgiForwardTileCandidates candidates)
-{
-    candidates.primaryVolumeIndex = SIMPLE_DDGI_GATHER_TILE_INVALID_VOLUME_INDEX;
-    candidates.secondaryVolumeIndex = SIMPLE_DDGI_GATHER_TILE_INVALID_VOLUME_INDEX;
-    candidates.flags = SIMPLE_DDGI_GATHER_TILE_FALLBACK_FLAG;
-
-    uint headerFlags = ReadStorageWordUniform(uint(DDGI_GATHER_TILE_BUFFER_INDEX), 3u);
-    uint requiredHeaderFlags = SIMPLE_DDGI_GATHER_TILE_HEADER_ENABLED_FLAG |
-        SIMPLE_DDGI_GATHER_TILE_HEADER_SIMPLE_DDGI_FLAG;
-    if ((headerFlags & requiredHeaderFlags) != requiredHeaderFlags)
-        return false;
-
-    uint tileCountX = max(ReadStorageWordUniform(uint(DDGI_GATHER_TILE_BUFFER_INDEX), 0u), 1u);
-    uint tileCountY = max(ReadStorageWordUniform(uint(DDGI_GATHER_TILE_BUFFER_INDEX), 1u), 1u);
-    uint tileSize = max(ReadStorageWordUniform(uint(DDGI_GATHER_TILE_BUFFER_INDEX), 2u), 1u);
-    uvec2 pixel = uvec2(max(gl_FragCoord.xy, vec2(0.0)));
-    uvec2 tileCoord = min(pixel / tileSize, uvec2(tileCountX - 1u, tileCountY - 1u));
-    uint tileIndex = tileCoord.x + tileCoord.y * tileCountX;
-    uint tileBaseWord = uint(SIZEOF_GPU_DDGI_GATHER_TILE_HEADER) / 4u +
-        tileIndex * (uint(SIZEOF_GPU_DDGI_GATHER_TILE) / 4u);
-
-    candidates.primaryVolumeIndex = ReadStorageWordUniform(
-        uint(DDGI_GATHER_TILE_BUFFER_INDEX),
-        tileBaseWord + uint(OFFSET_GPU_DDGI_GATHER_TILE_LOCAL_VOLUME_INDEX) / 4u);
-    candidates.secondaryVolumeIndex = ReadStorageWordUniform(
-        uint(DDGI_GATHER_TILE_BUFFER_INDEX),
-        tileBaseWord + uint(OFFSET_GPU_DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VOLUME_INDEX) / 4u);
-    candidates.flags = ReadStorageWordUniform(
-        uint(DDGI_GATHER_TILE_BUFFER_INDEX),
-        tileBaseWord + uint(OFFSET_GPU_DDGI_GATHER_TILE_FLAGS) / 4u);
-    return true;
-}
-
-bool TrySelectSimpleDdgiTilePrimary(
-    SimpleDdgiParams p,
-    SimpleDdgiForwardTileCandidates candidates,
-    vec3 unbiasedReceiverWorldPosition,
-    out uint selectedVolumeIndex,
-    out SimpleDdgiVolume selectedVolume,
-    out float selectedEdgeWeight)
-{
-    selectedVolumeIndex = 0u;
-    selectedVolume = ReadSimpleDdgiVolume(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX), 0u);
-    selectedEdgeWeight = 0.0;
-    if ((candidates.flags & SIMPLE_DDGI_GATHER_TILE_PRIMARY_VALID_FLAG) == 0u ||
-        candidates.primaryVolumeIndex >= p.volumeCount)
-    {
-        return false;
-    }
-
-    SimpleDdgiVolume candidate = ReadSimpleDdgiVolume(
-        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX),
-        candidates.primaryVolumeIndex);
-    // Candidate ownership is validated in the original receiver domain. Bias
-    // is interpolation-only, so camera direction cannot change tile ownership.
-    if (!SimpleDdgiContains(candidate, unbiasedReceiverWorldPosition))
-        return false;
-
-    selectedVolumeIndex = candidates.primaryVolumeIndex;
-    selectedVolume = candidate;
-    selectedEdgeWeight = SimpleDdgiEdgeWeight(candidate, unbiasedReceiverWorldPosition);
-    return true;
-}
-
-bool TryFindSimpleDdgiTileSecondary(
-    SimpleDdgiParams p,
-    SimpleDdgiForwardTileCandidates candidates,
-    uint selectedVolumeIndex,
-    vec3 unbiasedReceiverWorldPosition,
-    out uint fallbackVolumeIndex,
-    out SimpleDdgiVolume fallbackVolume)
-{
-    fallbackVolumeIndex = 0u;
-    fallbackVolume = ReadSimpleDdgiVolume(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX), 0u);
-    if ((candidates.flags & SIMPLE_DDGI_GATHER_TILE_SECONDARY_VALID_FLAG) == 0u ||
-        candidates.secondaryVolumeIndex >= p.volumeCount ||
-        candidates.secondaryVolumeIndex <= selectedVolumeIndex)
-    {
-        return false;
-    }
-
-    SimpleDdgiVolume candidate = ReadSimpleDdgiVolume(
-        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX),
-        candidates.secondaryVolumeIndex);
-    if (!SimpleDdgiContains(candidate, unbiasedReceiverWorldPosition))
-        return false;
-
-    fallbackVolumeIndex = candidates.secondaryVolumeIndex;
-    fallbackVolume = candidate;
-    return true;
-}
-#endif
 
 struct SimpleDdgiGatherResult
 {
@@ -1467,7 +1390,7 @@ SimpleDdgiGatherResult EmptySimpleDdgiGatherResult()
     result.transportVisibility = 0.0;
     result.ownership = 0.0;
     result.selectedVolume = 0u;
-    result.secondaryVolume = SIMPLE_DDGI_GATHER_TILE_INVALID_VOLUME_INDEX;
+    result.secondaryVolume = SIMPLE_DDGI_INVALID_VOLUME_INDEX;
     result.selectedSpacing = 0.0;
     result.transitionWeight = 1.0;
     result.secondVolumeUsed = 0.0;
@@ -1644,7 +1567,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
 {
     SimpleDdgiGatherResult result = EmptySimpleDdgiGatherResult();
     result.selectedVolume = volumeIndex;
-    result.secondaryVolume = SIMPLE_DDGI_GATHER_TILE_INVALID_VOLUME_INDEX;
+    result.secondaryVolume = SIMPLE_DDGI_INVALID_VOLUME_INDEX;
     result.selectedSpacing = volume.spacing;
     vec3 grid = (biasedWorldPos - volume.origin) / volume.spacing;
     vec3 baseF = floor(grid);
@@ -1990,29 +1913,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
     uint selectedVolumeIndex = 0u;
     SimpleDdgiVolume selectedVolume;
     float edgeWeight = 0.0;
-    bool selectedFromTileCandidates = false;
-#if SIMPLE_DDGI_FORWARD_TILE_CANDIDATES
-    SimpleDdgiForwardTileCandidates tileCandidates;
-    bool tileCandidatesAvailable = ReadSimpleDdgiForwardTileCandidates(tileCandidates);
-    // A missing candidate table or producer mismatch preserves canonical
-    // ownership by using the bounded full-table walk below. A projected-candidate
-    // overflow is not a correctness failure: the table retains deterministic
-    // highest-priority entries and the per-receiver validation below can still
-    // fall back safely when one does not contain the receiver.
-    if (tileCandidatesAvailable &&
-        (tileCandidates.flags & SIMPLE_DDGI_GATHER_TILE_FALLBACK_FLAG) == 0u)
-    {
-        selectedFromTileCandidates = TrySelectSimpleDdgiTilePrimary(
-            p,
-            tileCandidates,
-            worldPos,
-            selectedVolumeIndex,
-            selectedVolume,
-            edgeWeight);
-    }
-#endif
-    if (!selectedFromTileCandidates &&
-        !SelectSimpleDdgiVolume(p, worldPos, selectedVolumeIndex, selectedVolume, edgeWeight))
+    if (!SelectSimpleDdgiVolume(p, worldPos, selectedVolumeIndex, selectedVolume, edgeWeight))
     {
         RecordSimpleDdgiGatherRejectionMask(
             p,
@@ -2078,33 +1979,12 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
 
     uint fallbackVolumeIndex = 0u;
     SimpleDdgiVolume fallbackVolume;
-    bool foundFallback = false;
-#if SIMPLE_DDGI_FORWARD_TILE_CANDIDATES
-    // The secondary tile entry is only authoritative after the primary entry
-    // passed unbiased-world validation. A third projected candidate is lower
-    // priority than these retained entries; if it is actually needed, this
-    // helper rejects the cached secondary and the bounded metadata selector
-    // below finds it without changing ownership semantics.
-    if (selectedFromTileCandidates)
-    {
-        foundFallback = TryFindSimpleDdgiTileSecondary(
-            p,
-            tileCandidates,
-            selectedVolumeIndex,
-            worldPos,
-            fallbackVolumeIndex,
-            fallbackVolume);
-    }
-#endif
-    if (!foundFallback)
-    {
-        foundFallback = FindSimpleDdgiFallbackVolume(
-            p,
-            selectedVolumeIndex,
-            worldPos,
-            fallbackVolumeIndex,
-            fallbackVolume);
-    }
+    bool foundFallback = FindSimpleDdgiFallbackVolume(
+        p,
+        selectedVolumeIndex,
+        worldPos,
+        fallbackVolumeIndex,
+        fallbackVolume);
     if (foundFallback)
     {
         // Select one attribution before gathering. Recovery can replace this
@@ -2497,6 +2377,19 @@ vec3 SampleSimpleDdgiIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir)
 {
     SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
     return SampleSimpleDdgiUnifiedIrradiance(p, worldPos, normal, viewDir, true) * p.indirectIntensity;
+}
+
+// Lightweight consumers such as foliage need the probe-field contribution
+// without the environment complement that the full forward path composes on
+// its own. Keep their estimate and ownership on the Simple DDGI representation.
+vec4 SampleSimpleDdgiIrradianceCoverage(vec3 worldPos, vec3 normal, vec3 viewDir)
+{
+    SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    SimpleDdgiGatherResult gather = SampleSimpleDdgiGather(p, worldPos, normal, viewDir);
+    float ownership = SimpleDdgiRadiometricOwnership(gather) * SimpleDdgiLeakAttenuation(gather, p);
+    return vec4(
+        clamp(gather.irradiance * p.indirectIntensity, vec3(0.0), vec3(64.0)),
+        clamp(ownership, 0.0, 1.0));
 }
 
 #endif

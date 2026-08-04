@@ -103,12 +103,13 @@ namespace Njulf.Rendering
         private PointShadowCubemapArray? _pointShadowCubemapArray;
         private EnvironmentManager? _environmentManager;
         private ReflectionProbeManager? _reflectionProbeManager;
-        private DdgiProbeVolumeManager? _ddgiProbeVolumeManager;
+        private ForwardPlusPass? _forwardPlusPass;
+        private ReflectionProbeCapturePass? _reflectionProbeCapturePass;
+        private ReflectionProbePrefilterPass? _reflectionProbePrefilterPass;
+        private ReflectionProbePublishPass? _reflectionProbePublishPass;
+        private readonly ReflectionProbeCompletionValueProvider _reflectionProbeCompletionValues = new();
         private SimpleDdgiVolumeManager? _simpleDdgiVolumeManager;
         private FarFieldClipmapManager? _farFieldClipmapManager;
-        private DdgiGatherTileManager? _ddgiGatherTileManager;
-        private readonly CameraRelativeDdgiClipmapController _cameraRelativeDdgiClipmaps = new();
-        private readonly DdgiLocalVolumeSlotAllocator _ddgiLocalVolumeSlots = new();
         private AccelerationStructureManager? _accelerationStructureManager;
         private AutoExposureManager? _autoExposureManager;
         private SmaaResources? _smaaResources;
@@ -118,7 +119,6 @@ namespace Njulf.Rendering
         private readonly GPUSpotShadow[] _spotShadowScratch = new GPUSpotShadow[32];
         private readonly GPUPointShadow[] _pointShadowScratch = new GPUPointShadow[4];
         private readonly GPULocalLightShadowIndex[] _localShadowIndexScratch = new GPULocalLightShadowIndex[LightManager.MaxLights];
-        private DdgiFrameLayout _lastDdgiFrameLayout = DdgiFrameLayout.Empty;
         private readonly List<BoundingBox> _ddgiDirtyBoundsScratch = new();
         private readonly List<DdgiDirtyRegion> _ddgiDirtyRegionScratch = new();
         private readonly Dictionary<RenderObject, DdgiTrackedRenderObject> _ddgiTrackedRenderObjects = new();
@@ -146,12 +146,7 @@ namespace Njulf.Rendering
         private double _ddgiEmissiveExcludedImportance;
         private int _ddgiEmissiveRuntimeRecordScanCount;
         private int _ddgiTrackingFrame;
-        private bool _hasLastDdgiCameraPosition;
-        private Vector3 _lastDdgiCameraPosition;
-        private bool _hasLastDdgiProjectionMatrix;
-        private Matrix4x4 _lastDdgiProjectionMatrix;
         private ulong _lastDdgiLightSignature;
-        private ulong _lastDdgiProbeVolumeSignature;
         private Light[] _lastDdgiLights = Array.Empty<Light>();
         private bool _hasDdgiDynamicSignature;
         private bool _hasSimpleDdgiDirtySignature;
@@ -181,15 +176,15 @@ namespace Njulf.Rendering
         private CompositePipeline _compositePipeline = null!;
         private CompositePipeline _ldrCompositePipeline = null!;
         private WeightedOitCompositePipeline _weightedOitCompositePipeline = null!;
-        private SsgiCompositePipeline? _ssgiCompositePipeline;
         private SkyboxPipeline _skyboxPipeline = null!;
         private ParticlePipeline _particlePipeline = null!;
-        private DdgiSchedulePass? _ddgiSchedulePass;
         private SimpleDdgiTracePass? _simpleDdgiTracePass;
+        private SimpleDdgiSchedulePass? _simpleDdgiSchedulePass;
         private SimpleDdgiRelocateClassifyPass? _simpleDdgiRelocateClassifyPass;
         private SimpleDdgiTransportPass? _simpleDdgiTransportPass;
         private SimpleDdgiBlendPass? _simpleDdgiBlendPass;
         private SimpleDdgiPublishPass? _simpleDdgiPublishPass;
+        private SimpleDdgiSchedulerCommitPass? _simpleDdgiSchedulerCommitPass;
         private SkinningPass _skinningPass = null!;
         private GpuParticleResetPass _gpuParticleResetPass = null!;
         private GpuParticleSimulatePass _gpuParticleSimulatePass = null!;
@@ -240,11 +235,6 @@ namespace Njulf.Rendering
         private SceneSubmissionCounterSnapshot _completedSceneSubmissionCounters;
         private SceneSubmissionCounterSnapshot _completedForwardVisibilityCounters;
         private SceneSubmissionValidationSnapshot _completedSceneSubmissionValidation;
-        private bool _ddgiGpuSchedulerFallbackLatched;
-        private string _ddgiGpuSchedulerFallbackReason = string.Empty;
-        private string _ddgiGpuSchedulerLoggedFallbackReason = string.Empty;
-        private int _ddgiGpuSchedulerValidationFailureCount;
-        private int _ddgiGpuSchedulerFallbackStableFrameCount;
         private readonly DdgiDiagnosticWarningTracker _ddgiDiagnosticWarningTracker = new();
         private readonly HiZVisibilityPolicyRuntimeState _hizVisibilityPolicyState = new();
         private Scene? _lastHiZScene;
@@ -278,6 +268,22 @@ namespace Njulf.Rendering
         private AsyncComputeSubmissionPlan? _frameAsyncComputeSubmissionPlan;
         private AsyncComputeResourcePlanGeneration? _asyncComputeResourcePlanGeneration;
         private RenderGraphResourcePlan? _asyncComputeResourcePlan;
+        // The concrete plan includes imported material/environment images in addition to the
+        // render targets and frame-slot buffers. Keep the projection storage fixed and bounded,
+        // but size it for the maximum supported Sponza/validation binding set so a legal async
+        // path is not rejected before queue planning merely because the inactive paths also have
+        // concrete bindings.
+        private readonly AsyncComputeResourceStateProjection _asyncComputeStateProjection =
+            new(4096);
+        private readonly AsyncComputePlanVariantCache _asyncComputePlanVariantCache =
+            new(16);
+        private readonly AsyncComputeValidationLedger _asyncComputeValidationLedger =
+            new(32, 64);
+        private readonly HashSet<string> _asyncComputePassNameScratch =
+            new(StringComparer.Ordinal);
+        // Cached plans use a stable relative timeline domain. The offset is resolved once per
+        // frame so cache hits do not clone segment records or allocate rebased wait lists.
+        private ulong _asyncComputeTimelineOffsetThisFrame;
         private readonly AsyncComputeRecoverablePlanRetryGate _asyncComputeRecoverablePlanRetryGate = new();
         private bool _asyncComputeEmergencyFallbackLatched;
         private string _asyncComputeLastFallbackReason = string.Empty;
@@ -294,9 +300,7 @@ namespace Njulf.Rendering
         private TransparencyMode _lastTransparencyTargetMode = TransparencyMode.SortedAlphaBlend;
         private int _lastBloomTargetMipCount = 6;
         private bool _lastFogTargetEnabled = true;
-        private bool _lastGlobalIlluminationTargetEnabled = true;
         private bool _lastMaterialTransportProvenanceTargetEnabled;
-        private float _lastGlobalIlluminationResolutionScale = 0.5f;
         private Extent2D _lastSceneRenderExtent;
         private float _lastEffectiveResolutionScale = 1.0f;
         private readonly DynamicResolutionScaleController _dynamicResolutionScaleController = new();
@@ -314,14 +318,25 @@ namespace Njulf.Rendering
         {
             get
             {
-                uint completedSourceGeneration = _simpleDdgiVolumeManager is
-                    { SourceCohortTransitionActive: false, SourceStepStaleProbeCount: 0 }
-                        ? _simpleDdgiVolumeManager.SourceLightingGeneration
-                        : 0u;
-                uint convergedGeneration = _simpleDdgiVolumeManager is
-                    { TransportGlobalConvergencePending: false }
-                        ? _simpleDdgiVolumeManager.SourceLightingGeneration
-                        : 0u;
+                SimpleDdgiAtmosphereCohortFeedback? cohort =
+                    _simpleDdgiVolumeManager is { TransportV2Active: true }
+                        ? _simpleDdgiVolumeManager.CreateAtmosphereCohortFeedbackSnapshot()
+                        : null;
+                uint completedSourceGeneration = cohort is { } source &&
+                                                 !source.SourceCohortActive &&
+                                                 source.StaleParticipatingProbeCount == 0 &&
+                                                 source.SourceCohortGeneration ==
+                                                 source.AdmittedSourceCohortGeneration &&
+                                                 source.QuietPeriodComplete
+                    ? source.SourceCohortGeneration
+                    : 0u;
+                uint convergedGeneration = cohort is { } converged &&
+                                           completedSourceGeneration != 0u &&
+                                           converged.MinimumPropagationBoundaryComplete &&
+                                           converged.PropagationGeneration ==
+                                           converged.PublishedPropagationGeneration
+                    ? converged.SourceCohortGeneration
+                    : 0u;
                 return new LightingVersionSnapshot(
                     _environmentManager?.AtmosphereFrame.Revision ?? 0u,
                     _environmentManager?.RequestedSpecularEnvironmentGeneration ?? 0u,
@@ -608,7 +623,6 @@ namespace Njulf.Rendering
             System.Diagnostics.Debug.WriteLine("Initializing VulkanRenderer...");
 
             bool fogTargetEnabled = IsFogTargetEnabled(Settings);
-            bool ssgiTargetEnabled = Settings.GlobalIllumination.EffectiveUseSsgi;
             bool materialTransportProvenanceTargetEnabled =
                 IsMaterialTransportProvenanceTargetEnabled(Settings);
             float sceneResolutionScale = ResolveSceneResolutionScale();
@@ -623,8 +637,6 @@ namespace Njulf.Rendering
                 Settings.Bloom.MipCount,
                 Settings.AmbientOcclusion.Enabled,
                 Settings.AmbientOcclusion.ResolutionScale,
-                ssgiTargetEnabled,
-                Settings.GlobalIllumination.ResolutionScale,
                 Settings.AntiAliasing.EffectiveMode,
                 motionVectorTargetEnabled,
                 fogTargetEnabled,
@@ -638,10 +650,8 @@ namespace Njulf.Rendering
             _lastTransparencyTargetMode = Settings.Transparency.Mode;
             _lastBloomTargetMipCount = Settings.Bloom.MipCount;
             _lastFogTargetEnabled = fogTargetEnabled;
-            _lastGlobalIlluminationTargetEnabled = ssgiTargetEnabled;
             _lastMaterialTransportProvenanceTargetEnabled =
                 materialTransportProvenanceTargetEnabled;
-            _lastGlobalIlluminationResolutionScale = Settings.GlobalIllumination.ResolutionScale;
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = sceneResolutionScale;
             _lastRenderTargetRecreateReason = "Initial render targets";
@@ -651,14 +661,16 @@ namespace Njulf.Rendering
             _spotShadowAtlas = new SpotShadowAtlas(_context, _bufferManager, Settings.Shadows);
             _pointShadowCubemapArray = new PointShadowCubemapArray(_context, _bufferManager, Settings.Shadows);
             _environmentManager = new EnvironmentManager(_context, _bufferManager, _textureManager, Settings);
-            _reflectionProbeManager = new ReflectionProbeManager(_context, _bufferManager, Settings);
-            _ddgiProbeVolumeManager = new DdgiProbeVolumeManager(_context, _bufferManager, Settings);
+            _reflectionProbeManager = new ReflectionProbeManager(
+                _context,
+                _bufferManager,
+                Settings,
+                _swapchain.DepthFormat);
             _simpleDdgiVolumeManager = new SimpleDdgiVolumeManager(
                 _context,
                 _bufferManager,
                 Settings,
                 RecordDeviceWaitIdle);
-            _ddgiGatherTileManager = new DdgiGatherTileManager(_context, _bufferManager);
             _ddgiEmissiveSourceBuffer = CreateDdgiEmissiveSourceBuffer();
             _accelerationStructureManager = new AccelerationStructureManager(_context, _bufferManager, _meshManager, _materialManager);
             _farFieldClipmapManager = new FarFieldClipmapManager(
@@ -712,10 +724,6 @@ namespace Njulf.Rendering
             _compositePipeline = new CompositePipeline(_context, _bindlessHeap, _swapchain.SurfaceFormat);
             _ldrCompositePipeline = new CompositePipeline(_context, _bindlessHeap, RenderTargetManager.LdrSceneColorFormat);
             _weightedOitCompositePipeline = new WeightedOitCompositePipeline(_context, _bindlessHeap, RenderTargetManager.SceneColorFormat);
-            _ssgiCompositePipeline = new SsgiCompositePipeline(
-                _context,
-                _bindlessHeap,
-                RenderTargetManager.SceneColorFormat);
             _skyboxPipeline = new SkyboxPipeline(
                 _context,
                 _bindlessHeap,
@@ -744,8 +752,7 @@ namespace Njulf.Rendering
         {
             System.Diagnostics.Debug.WriteLine("Initializing render graph...");
 
-            bool includeSsgi = Settings.GlobalIllumination.EffectiveUseSsgi;
-            ProductionRenderPipelineDeclaration.Instance.DeclarePassResources(_renderGraph, includeSsgi);
+            ProductionRenderPipelineDeclaration.Instance.DeclarePassResources(_renderGraph);
 
             var passInstances = new Dictionary<string, RenderPassBase>(StringComparer.Ordinal);
             void AddPassInstance(RenderPassBase pass)
@@ -813,19 +820,6 @@ namespace Njulf.Rendering
 
             AddPassInstance(_forwardVisibilityCompactionPass);
 
-            if (includeSsgi)
-            {
-                var sceneSurfacePass = new SceneSurfacePass(
-                    _context,
-                    _swapchain,
-                    _bindlessHeap,
-                    _meshPipeline,
-                    _renderTargets!,
-                    Settings,
-                    _bufferManager);
-                AddPassInstance(sceneSurfacePass);
-            }
-
             var ambientOcclusionPass = new AmbientOcclusionPass(
                 _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
             AddPassInstance(ambientOcclusionPass);
@@ -847,47 +841,45 @@ namespace Njulf.Rendering
 
             // Create forward+ rendering pass
             var forwardPass = new ForwardPlusPass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!, Settings, _foliagePipeline, _bufferManager, _foliageManager);
-            AddPassInstance(forwardPass);
-
-            if (includeSsgi)
-            {
-                var ssgiTracePass = new SsgiTracePass(
-                    _context,
-                    _swapchain,
-                    _bindlessHeap,
-                    _renderTargets!,
-                    Settings);
-                AddPassInstance(ssgiTracePass);
-
-                var ssgiTemporalPass = new SsgiTemporalPass(
-                    _context,
-                    _swapchain,
-                    _bindlessHeap,
-                    _renderTargets!,
-                    Settings);
-                AddPassInstance(ssgiTemporalPass);
-
-                var ssgiDenoisePass = new SsgiDenoisePass(
-                    _context,
-                    _swapchain,
-                    _bindlessHeap,
-                    _renderTargets!,
-                    Settings);
-                AddPassInstance(ssgiDenoisePass);
-
-            }
-
-            // The composite also presents the forward-written provenance
-            // diagnostic in DDGI-only configurations.
-            var ssgiCompositePass = new SsgiCompositePass(
                 _context,
                 _swapchain,
                 _bindlessHeap,
-                _ssgiCompositePipeline!,
+                _meshPipeline,
                 _renderTargets!,
-                Settings);
-            AddPassInstance(ssgiCompositePass);
+                Settings,
+                _foliagePipeline,
+                _bufferManager,
+                _foliageManager,
+                _skyboxPipeline);
+            _forwardPlusPass = forwardPass;
+            AddPassInstance(forwardPass);
+
+            // Reflection work is graphics-only and is recorded after the main graph has consumed
+            // the old published layer. It has its own conditional pass trio because the graph's
+            // fixed production order remains the latency-critical main-view contract.
+            _reflectionProbeCapturePass = new ReflectionProbeCapturePass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _reflectionProbeManager!,
+                Settings.Reflections,
+                new ForwardPlusReflectionProbeCaptureSceneRenderer(forwardPass));
+            _reflectionProbePrefilterPass = new ReflectionProbePrefilterPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _reflectionProbeManager!,
+                Settings.Reflections);
+            _reflectionProbePublishPass = new ReflectionProbePublishPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _reflectionProbeManager!,
+                Settings.Reflections,
+                _reflectionProbeCompletionValues);
+            _reflectionProbeCapturePass.Initialize();
+            _reflectionProbePrefilterPass.Initialize();
+            _reflectionProbePublishPass.Initialize();
 
             var farFieldClipmapBakePass = new FarFieldClipmapBakePass(
                 _context,
@@ -896,6 +888,15 @@ namespace Njulf.Rendering
                 Settings,
                 _farFieldClipmapManager!);
             AddPassInstance(farFieldClipmapBakePass);
+
+            var simpleDdgiSchedulePass = new SimpleDdgiSchedulePass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                Settings,
+                _simpleDdgiVolumeManager!);
+            _simpleDdgiSchedulePass = simpleDdgiSchedulePass;
+            AddPassInstance(simpleDdgiSchedulePass);
 
             var simpleDdgiTracePass = new SimpleDdgiTracePass(
                 _context,
@@ -947,51 +948,14 @@ namespace Njulf.Rendering
             _simpleDdgiPublishPass = simpleDdgiPublishPass;
             AddPassInstance(simpleDdgiPublishPass);
 
-            var ddgiSchedulePass = new DdgiSchedulePass(
+            var simpleDdgiSchedulerCommitPass = new SimpleDdgiSchedulerCommitPass(
                 _context,
                 _swapchain,
                 _bindlessHeap,
                 Settings,
-                _ddgiProbeVolumeManager!,
-                _accelerationStructureManager!);
-            _ddgiSchedulePass = ddgiSchedulePass;
-            AddPassInstance(ddgiSchedulePass);
-
-            var ddgiTracePass = new DdgiTracePass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _ddgiProbeVolumeManager!,
-                _accelerationStructureManager!);
-            AddPassInstance(ddgiTracePass);
-
-            var ddgiBlendPass = new DdgiBlendPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _ddgiProbeVolumeManager!,
-                _accelerationStructureManager!);
-            AddPassInstance(ddgiBlendPass);
-
-            var ddgiRelocateClassifyPass = new DdgiRelocateClassifyPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _ddgiProbeVolumeManager!,
-                _accelerationStructureManager!);
-            AddPassInstance(ddgiRelocateClassifyPass);
-
-            var ddgiPublishPass = new DdgiPublishPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _ddgiProbeVolumeManager!,
-                _accelerationStructureManager!);
-            AddPassInstance(ddgiPublishPass);
+                _simpleDdgiVolumeManager!);
+            _simpleDdgiSchedulerCommitPass = simpleDdgiSchedulerCommitPass;
+            AddPassInstance(simpleDdgiSchedulerCommitPass);
 
             var skyboxPass = new SkyboxPass(
                 _context, _swapchain, _bindlessHeap, _skyboxPipeline, _renderTargets!, Settings);
@@ -1045,7 +1009,7 @@ namespace Njulf.Rendering
                 () => _smaaResources?.IsReady == true);
             AddPassInstance(antiAliasingPass);
             AddPassInstance(new ImGuiRenderPass(_context, _swapchain, _bindlessHeap, _bufferManager, _stagingRing, _overlayDrawData));
-            ProductionRenderPipelineDeclaration.Instance.RegisterPasses(_renderGraph, passInstances, includeSsgi);
+            ProductionRenderPipelineDeclaration.Instance.RegisterPasses(_renderGraph, passInstances);
             foreach (RenderPassBase asyncCandidate in passInstances.Values.Where(pass => pass.SupportsAsyncCompute))
             {
                 if (!AsyncComputePassCatalog.IsProductionCandidate(asyncCandidate.Name))
@@ -1054,7 +1018,7 @@ namespace Njulf.Rendering
                         $"Async-capable pass '{asyncCandidate.Name}' has no production async-compute audit classification.");
                 }
             }
-            ProductionRenderPipelineDeclaration.Instance.ValidatePassOrder(_renderGraph.PassNames, includeSsgi);
+            ProductionRenderPipelineDeclaration.Instance.ValidatePassOrder(_renderGraph.PassNames);
 
             _renderGraph.Initialize();
             System.Diagnostics.Debug.WriteLine("Render graph initialized.");
@@ -1065,8 +1029,7 @@ namespace Njulf.Rendering
             ProductionRenderPipelineDeclaration.Instance.RegisterResources(
                 _renderGraph,
                 _swapchain.DepthFormat,
-                _swapchain.SurfaceFormat,
-                Settings.GlobalIllumination.EffectiveUseSsgi);
+                _swapchain.SurfaceFormat);
         }
 
         private void RegisterSceneBuffers()
@@ -1112,10 +1075,8 @@ namespace Njulf.Rendering
             _environmentManager!.Register(_bindlessHeap);
             _environmentManager.RegisterReflectionProbeFallback(_bindlessHeap);
             _reflectionProbeManager!.Register(_bindlessHeap);
-            _ddgiProbeVolumeManager!.Register(_bindlessHeap);
             _simpleDdgiVolumeManager!.Register(_bindlessHeap);
             _farFieldClipmapManager!.Register(_bindlessHeap);
-            _ddgiGatherTileManager!.Register(_bindlessHeap);
             _accelerationStructureManager!.Register(_bindlessHeap);
 
             System.Diagnostics.Debug.WriteLine("Scene buffers registered.");
@@ -1140,7 +1101,7 @@ namespace Njulf.Rendering
                 return;
 
             _bindlessHeap.RegisterStorageBuffer(
-                BindlessIndex.DdgiEmissiveSourceBuffer,
+                BindlessIndex.SimpleDdgiEmissiveSourceBuffer,
                 _bufferManager.GetBuffer(_ddgiEmissiveSourceBuffer),
                 0,
                 _ddgiEmissiveSourceBufferSize);
@@ -1185,8 +1146,6 @@ namespace Njulf.Rendering
             _diagnosticsBuffer.ReadCompletedFrame(_currentFrame);
             _gpuParticleRuntimeManager.ReadCompletedFrame(_currentFrame);
             _foliageManager.ReadCompletedFrame(_currentFrame);
-            _ddgiProbeVolumeManager?.ReadCompletedGpuSchedulerCounters(_currentFrame);
-            UpdateDdgiGpuSchedulerFallbackStateFromCompletedFrame();
             _sceneOpaqueCompactionPass?.ReadCompletedFrame(_currentFrame);
             _forwardVisibilityCompactionPass?.ReadCompletedFrame(_currentFrame);
             _autoExposureManager?.ReadCompletedFrame(_currentFrame);
@@ -1204,6 +1163,17 @@ namespace Njulf.Rendering
             _completedSceneSubmissionValidation = _sceneOpaqueCompactionPass?.GetLastCompletedValidation(_currentFrame) ?? SceneSubmissionValidationSnapshot.Invalid;
             _gpuTimestamps.ReadCompletedFrame(_currentFrame);
             RecordCompletedAsyncComputeTimingFrame(_currentFrame, _gpuTimestamps.LastCompletedSnapshot);
+            if (_simpleDdgiVolumeManager != null &&
+                _ddgiFrameSerial < ulong.MaxValue)
+            {
+                // The scheduler summary is copied in the previous use of this
+                // frame slot. The strict +1 serial is intentional: it keeps a
+                // fence-complete result frame-late even when the CPU reaches
+                // BeginFrame immediately after submission.
+                _simpleDdgiVolumeManager.TryConsumeGpuSchedulerFeedback(
+                    _currentFrame,
+                    _ddgiFrameSerial + 1UL);
+            }
 
             // Process completed frame deletions
             _deleter.ProcessCompletedFrame(_sync.GetInFlightFence(_currentFrame));
@@ -1255,11 +1225,17 @@ namespace Njulf.Rendering
                     _context.WaitIdle));
 
             _currentCommandBuffer = _cmd.BeginPrimaryGraphicsCommand(_currentFrame);
+            _asyncComputeValidationLedger.BeginFrame(_ddgiFrameSerial);
             RendererValidationMessageSnapshot validationAtBoundary = _context.ValidationMessageSnapshot;
             if (!_asyncComputeEmergencyFallbackLatched &&
                 _asyncComputeSubmittedComputeSegmentsThisFrame > 0 &&
                 validationAtBoundary.ErrorCount > _validationErrorCountAtPreviousFrameBoundary)
             {
+                _asyncComputeValidationLedger.RecordError(
+                    segmentId: -1,
+                    resourceHandle: 0UL,
+                    labelId: 0,
+                    out _);
                 LatchAsyncComputeEmergencyFallback(
                     $"Quarantined after {validationAtBoundary.ErrorCount - _validationErrorCountAtPreviousFrameBoundary} " +
                     "Vulkan validation error(s) were observed while an async segment was active.");
@@ -1277,6 +1253,7 @@ namespace Njulf.Rendering
             _asyncComputeBarrierRecordMicrosecondsThisFrame = 0;
             _asyncComputeTransferredBytesThisFrame = 0;
             _asyncComputeTransferredImageSubresourcesThisFrame = 0;
+            _asyncComputeTimelineOffsetThisFrame = 0UL;
             _frameAsyncComputePlan = null;
             _frameAsyncComputeSubmissionPlan = null;
             _deferredAsyncSubmissions.Clear();
@@ -1570,23 +1547,27 @@ namespace Njulf.Rendering
             if (_environmentManager != null)
             {
                 bool simpleDdgiConsumesAtmosphere =
-                    Settings.GlobalIllumination.EffectiveUseSimpleDdgi &&
+                    Settings.GlobalIllumination.EffectiveUseDdgi &&
                     _simpleDdgiVolumeManager is { TransportV2Active: true };
-                int participatingProbeCount = simpleDdgiConsumesAtmosphere
-                    ? _simpleDdgiVolumeManager!.ProbeCount
-                    : 0;
-                int staleProbeCount = simpleDdgiConsumesAtmosphere
-                    ? _simpleDdgiVolumeManager!.SourceStepStaleProbeCount
-                    : 0;
+                GiAtmosphereCohortFeedback cohort = simpleDdgiConsumesAtmosphere
+                    ? _simpleDdgiVolumeManager!.CreateAtmosphereCohortFeedback()
+                    : new GiAtmosphereCohortFeedback(
+                        ConsumesSteppedAtmosphere: false,
+                        ParticipatingProbeCount: 0,
+                        SourceCohortActive: false,
+                        StaleParticipatingProbeCount: 0);
                 _environmentManager.ApplyGiAtmosphereAdmission(
-                    new GiAtmosphereCohortFeedback(
-                        simpleDdgiConsumesAtmosphere,
-                        participatingProbeCount,
-                        _simpleDdgiVolumeManager?.SourceCohortTransitionActive ?? false,
-                        staleProbeCount,
-                        VisiblePublicationBoundaryComplete: staleProbeCount == 0,
-                        MinimumPropagationBoundaryComplete: staleProbeCount == 0,
-                        AchievableSourceSweepSeconds: Settings.Environment.GiTargetSourceSweepSeconds));
+                    cohort,
+                    hardInvalidation: false,
+                    currentVolumeResourceGeneration: simpleDdgiConsumesAtmosphere
+                        ? _simpleDdgiVolumeManager!.VolumeTableGeneration
+                        : 0U,
+                    currentSourceCohortGeneration: simpleDdgiConsumesAtmosphere
+                        ? _simpleDdgiVolumeManager!.SourceLightingGeneration
+                        : 0U,
+                    currentPropagationGeneration: simpleDdgiConsumesAtmosphere
+                        ? _simpleDdgiVolumeManager!.TransportGeneration
+                        : 0U);
             }
             _lightManager.UploadToGPU(_stagingRing, _currentCommandBuffer);
             ulong lightUploadBytes = _lightManager.LastUploadBytes;
@@ -1831,7 +1812,7 @@ namespace Njulf.Rendering
                 sceneData.FoliageLocalShadowMeshletDrawBudget = 0;
             }
             sceneData.UploadedBytes += sceneData.ParticleInstanceUploadBytes;
-            sceneData.ParticleDdgiSampleCount = Settings.GlobalIllumination.EffectiveUseSimpleDdgi && Settings.GlobalIllumination.SimpleDdgiParticlesEnabled
+            sceneData.ParticleDdgiSampleCount = Settings.GlobalIllumination.EffectiveUseDdgi && Settings.GlobalIllumination.SimpleDdgiParticlesEnabled
                 ? sceneData.GpuParticlesEnabled != 0
                     ? sceneData.GpuParticleEmitterCount
                     : sceneData.ParticleBatchCount
@@ -1966,10 +1947,8 @@ namespace Njulf.Rendering
                 PrepareReflectionProbes(scene, sceneData);
             PrepareAccelerationStructures(scene, sceneData);
             PrepareDdgiProbeVolumes(scene, camera, sceneData, lightSnapshot, hiZDecision.CameraCut);
-            // Transparent shading cannot use the opaque SSGI trace/source
-            // contract. Resolve these receiver policies specifically against
-            // an available DDGI backend after probe preparation has populated
-            // the current-frame counts.
+            // Layered forward receivers resolve their policy after probe
+            // preparation has populated the current-frame DDGI counts.
             bool ddgiAvailableForLayeredReceivers =
                 ForwardPlusPass.ShouldApplyDdgi(sceneData, Settings.GlobalIllumination);
             sceneData.TransparentReceiveGlobalIllumination &=
@@ -2059,6 +2038,8 @@ namespace Njulf.Rendering
                 sceneData.DdgiAsyncComputeEnabled = IsDdgiAsyncComputeActuallyEnabled(frameAsyncComputePlan) ? 1 : 0;
             }
 
+            RecordReflectionProbeWork(sceneData);
+
             // SceneColor still contains the linear, pre-exposure result here.
             // Tone mapping only sampled it; capture before any subsequent
             // client draw can mutate renderer-owned targets.
@@ -2070,7 +2051,6 @@ namespace Njulf.Rendering
                 sceneData,
                 _completedSceneSubmissionCounters,
                 _completedForwardVisibilityCounters);
-            ApplyCompletedSsgiCounters(sceneData, _completedGpuCounters);
             ApplyCompletedDdgiForwardEstimateCounters(sceneData, _completedDdgiForwardEstimateCounters);
             ApplyCompletedDdgiInvestigationCounters(sceneData, _completedDdgiInvestigationCounters);
             ApplyCompletedDirectionalShadowReceiverCounters(sceneData, _completedDirectionalShadowReceiverCounters);
@@ -2110,21 +2090,6 @@ namespace Njulf.Rendering
                     // do not train the production feedback controller on that cost.
                     DeterministicFixedBudget: fixedSimpleDdgiBudget));
             }
-            _ddgiProbeVolumeManager?.ReportCompletedGpuUpdateMicroseconds(
-                sceneData.GpuDdgiUpdateMicroseconds,
-                HasCompletedDdgiGpuTiming(completedGpuTimings),
-                sceneData.GpuDdgiScheduleMicroseconds,
-                HasCompletedGpuTiming(completedGpuTimings, "DdgiSchedulePass"));
-            if (_ddgiProbeVolumeManager != null)
-            {
-                bool gpuDdgiSchedulerActive = Settings.GlobalIllumination.DdgiSchedulerMode == DdgiSchedulerMode.Gpu ||
-                    (Settings.GlobalIllumination.DdgiSchedulerMode == DdgiSchedulerMode.CpuGpuCompare &&
-                     Settings.GlobalIllumination.DdgiCompareModeUseGpuQueueForRendering);
-                sceneData.GpuDdgiScheduleP95Microseconds = _ddgiProbeVolumeManager.GpuScheduleP95Microseconds;
-                sceneData.GpuDdgiScheduleOverBudget = _ddgiProbeVolumeManager.GpuScheduleOverBudget;
-                if (gpuDdgiSchedulerActive && Settings.GlobalIllumination.EffectiveUseDdgi)
-                    sceneData.DdgiSchedulerP95OverBudget = sceneData.GpuDdgiScheduleOverBudget;
-            }
             sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
             UpdateGlobalIlluminationCpuTiming(sceneData);
             CaptureAsyncComputeTimingFrame(frameAsyncComputePlan, sceneData);
@@ -2149,11 +2114,6 @@ namespace Njulf.Rendering
                 return Settings.GlobalIllumination.DebugView switch
                 {
                     GlobalIlluminationDebugView.FinalIndirect => 80u,
-                    GlobalIlluminationDebugView.SsgiRaw => 81u,
-                    GlobalIlluminationDebugView.SsgiFiltered => 82u,
-                    GlobalIlluminationDebugView.SsgiHistory => 83u,
-                    GlobalIlluminationDebugView.SsgiRayHitMask => 84u,
-                    GlobalIlluminationDebugView.SsgiHistoryRejection => 85u,
                     GlobalIlluminationDebugView.DdgiIrradiance => 86u,
                     GlobalIlluminationDebugView.DdgiVisibility => 87u,
                     GlobalIlluminationDebugView.DdgiProbeIndex => 88u,
@@ -2173,7 +2133,6 @@ namespace Njulf.Rendering
                     GlobalIlluminationDebugView.DdgiSuppressionMask => 102u,
                     GlobalIlluminationDebugView.DdgiEffectiveWeight => 103u,
                     GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight => 104u,
-                    GlobalIlluminationDebugView.DdgiRelocationNormalized => 105u,
                     GlobalIlluminationDebugView.DdgiClassificationInvalidScore => 106u,
                     GlobalIlluminationDebugView.DdgiVisibilityMoments => 107u,
                     GlobalIlluminationDebugView.DdgiSpatialCoverage => 108u,
@@ -2202,6 +2161,10 @@ namespace Njulf.Rendering
 
         private float GetParticleDeltaSeconds()
         {
+            float fixedDeltaSeconds = Settings.Particles.FixedSimulationDeltaSeconds;
+            if (fixedDeltaSeconds > 0.0f)
+                return fixedDeltaSeconds;
+
             long now = Stopwatch.GetTimestamp();
             if (_lastParticleTimestamp == 0)
             {
@@ -2328,50 +2291,10 @@ namespace Njulf.Rendering
         {
             const int MaxDetailedProbeMarkersPerFrame = 768;
             _ = scene;
-            IReadOnlyList<GlobalIlluminationProbeVolume> volumes = _lastDdgiFrameLayout.Volumes;
-            int activeProbeStart = 0;
-            int remainingDetailedProbeMarkers = sceneData.DebugOverlayMode == DebugOverlayMode.DdgiProbeVolumes
+            int maxProbeMarkers = sceneData.DebugOverlayMode == DebugOverlayMode.DdgiProbeVolumes
                 ? 0
                 : MaxDetailedProbeMarkersPerFrame;
-            int simpleVolumeCount = Settings.GlobalIllumination.EffectiveUseSimpleDdgi &&
-                _simpleDdgiVolumeManager != null &&
-                _simpleDdgiVolumeManager.ProbeCount > 0
-                    ? _simpleDdgiVolumeManager.LastVolumes.Length
-                    : 0;
-            int remainingMarkerVolumes = volumes.Count + simpleVolumeCount;
-            for (int i = 0; i < volumes.Count; i++)
-            {
-                GlobalIlluminationProbeVolume volume = volumes[i];
-                bool active = volume.Enabled && Settings.GlobalIllumination.EffectiveUseDdgi;
-                int firstProbeIndex = active ? activeProbeStart : -1;
-                Vector4 color = active
-                    ? new Vector4(0.1f, 0.9f, 0.55f, 0.9f)
-                    : new Vector4(0.45f, 0.45f, 0.45f, 0.55f);
-                _debugDraw.Box(volume.Bounds, color, depthMode);
-                DdgiProbeVolumeRuntimeMetadata metadata = i < _lastDdgiFrameLayout.VolumeMetadata.Count
-                    ? _lastDdgiFrameLayout.VolumeMetadata[i]
-                    : DdgiProbeVolumeRuntimeMetadata.Authored;
-                if (remainingDetailedProbeMarkers > 0)
-                {
-                    int volumeMarkerBudget = CalculateDdgiProbeMarkerBudget(
-                        remainingDetailedProbeMarkers,
-                        remainingMarkerVolumes);
-                    remainingDetailedProbeMarkers -= DrawDdgiProbeSamples(
-                        volume,
-                        metadata,
-                        firstProbeIndex,
-                        sceneData.DebugOverlayMode,
-                        depthMode,
-                        volumeMarkerBudget);
-                }
-
-                sceneData.DebugDdgiProbeVolumesDrawn++;
-                if (active)
-                    activeProbeStart += volume.ProbeCount;
-                remainingMarkerVolumes = Math.Max(0, remainingMarkerVolumes - 1);
-            }
-
-            DrawSimpleDdgiProbeVolumeOverlay(sceneData, depthMode, remainingDetailedProbeMarkers);
+            DrawSimpleDdgiProbeVolumeOverlay(sceneData, depthMode, maxProbeMarkers);
         }
 
         private void DrawSimpleDdgiProbeVolumeOverlay(
@@ -2379,7 +2302,7 @@ namespace Njulf.Rendering
             DebugDrawDepthMode depthMode,
             int maxProbeMarkers)
         {
-            if (!Settings.GlobalIllumination.EffectiveUseSimpleDdgi ||
+            if (!Settings.GlobalIllumination.EffectiveUseDdgi ||
                 _simpleDdgiVolumeManager == null ||
                 _simpleDdgiVolumeManager.ProbeCount <= 0)
             {
@@ -2536,88 +2459,6 @@ namespace Njulf.Rendering
             }
         }
 
-        private int DrawDdgiProbeSamples(
-            GlobalIlluminationProbeVolume volume,
-            DdgiProbeVolumeRuntimeMetadata metadata,
-            int firstProbeIndex,
-            DebugOverlayMode overlayMode,
-            DebugDrawDepthMode depthMode,
-            int maxProbeMarkers)
-        {
-            if (maxProbeMarkers <= 0)
-                return 0;
-
-            int probeIndex = 0;
-            int markersDrawn = 0;
-            Vector3 spacing = volume.ProbeSpacing;
-            float markerRadius = MathF.Min(MathF.Min(spacing.X, spacing.Y), spacing.Z) * 0.08f;
-            markerRadius = Math.Clamp(markerRadius, 0.04f, 0.2f);
-            DdgiProbeMarkerSampling markerSampling = CalculateDdgiProbeMarkerSampling(
-                volume.ProbeCountX,
-                volume.ProbeCountY,
-                volume.ProbeCountZ,
-                maxProbeMarkers);
-            DdgiClipmapCascadeState? cascadeState = metadata.Kind == DdgiProbeVolumeKind.CameraClipmap
-                ? FindDdgiClipmapCascade(metadata.CascadeIndex)
-                : null;
-            for (int z = 0; z < volume.ProbeCountZ; z++)
-            {
-                for (int y = 0; y < volume.ProbeCountY; y++)
-                {
-                    for (int x = 0; x < volume.ProbeCountX; x++, probeIndex++)
-                    {
-                        if (markersDrawn >= maxProbeMarkers)
-                            return markersDrawn;
-                        if (!ShouldDrawDdgiProbeMarker(x, y, z, markerSampling))
-                            continue;
-
-                        DdgiClipmapCell logicalCell = metadata.Kind == DdgiProbeVolumeKind.CameraClipmap
-                            ? new DdgiClipmapCell(
-                                metadata.LogicalGridMinX + x,
-                                metadata.LogicalGridMinY + y,
-                                metadata.LogicalGridMinZ + z)
-                            : new DdgiClipmapCell(x, y, z);
-                        int globalProbeIndex = ResolveDdgiDebugProbeIndex(
-                            metadata,
-                            logicalCell,
-                            firstProbeIndex,
-                            probeIndex,
-                            volume.ProbeCountX,
-                            volume.ProbeCountY,
-                            volume.ProbeCountZ);
-                        DdgiClipmapCellState cellState = metadata.Kind == DdgiProbeVolumeKind.CameraClipmap
-                            ? ResolveDdgiDebugCellState(cascadeState, logicalCell, globalProbeIndex)
-                            : new DdgiClipmapCellState(globalProbeIndex >= 0, 0UL, 0UL, globalProbeIndex);
-                        uint updateFlags = ResolveScheduledDdgiProbeUpdateFlags(globalProbeIndex, out uint updatePriority);
-                        if (!TryResolveDdgiProbeMarkerColor(
-                            overlayMode,
-                            volume.Enabled,
-                            globalProbeIndex,
-                            _ddgiProbeVolumeManager?.IsProbeScheduledForUpdate(globalProbeIndex) == true,
-                            updateFlags,
-                            updatePriority,
-                            metadata,
-                            cellState,
-                            firstProbeIndex,
-                            out Vector4 markerColor))
-                        {
-                            continue;
-                        }
-
-                        Vector3 p = metadata.Kind == DdgiProbeVolumeKind.CameraClipmap
-                            ? new Vector3(logicalCell.X * spacing.X, logicalCell.Y * spacing.Y, logicalCell.Z * spacing.Z)
-                            : volume.Origin + new Vector3(spacing.X * x, spacing.Y * y, spacing.Z * z);
-                        _debugDraw.Line(p - Vector3.UnitX * markerRadius, p + Vector3.UnitX * markerRadius, markerColor, depthMode);
-                        _debugDraw.Line(p - Vector3.UnitY * markerRadius, p + Vector3.UnitY * markerRadius, markerColor, depthMode);
-                        _debugDraw.Line(p - Vector3.UnitZ * markerRadius, p + Vector3.UnitZ * markerRadius, markerColor, depthMode);
-                        markersDrawn++;
-                    }
-                }
-            }
-
-            return markersDrawn;
-        }
-
         internal readonly record struct DdgiProbeMarkerSampling(int StepX, int StepY, int StepZ);
 
         internal static int CalculateDdgiProbeMarkerBudget(int remainingMarkers, int remainingVolumes)
@@ -2676,205 +2517,6 @@ namespace Njulf.Rendering
         private static int SampledAxisCount(int count, int step)
         {
             return (Math.Max(1, count) + Math.Max(1, step) - 1) / Math.Max(1, step);
-        }
-
-        private DdgiClipmapCascadeState? FindDdgiClipmapCascade(int cascadeIndex)
-        {
-            IReadOnlyList<DdgiClipmapCascadeState> cascades = _cameraRelativeDdgiClipmaps.Cascades;
-            for (int i = 0; i < cascades.Count; i++)
-            {
-                if (cascades[i].CascadeIndex == cascadeIndex)
-                    return cascades[i];
-            }
-
-            return null;
-        }
-
-        private static int ResolveDdgiDebugProbeIndex(
-            DdgiProbeVolumeRuntimeMetadata metadata,
-            DdgiClipmapCell logicalCell,
-            int firstProbeIndex,
-            int linearProbeIndex,
-            int probeCountX,
-            int probeCountY,
-            int probeCountZ)
-        {
-            if (firstProbeIndex < 0)
-                return -1;
-            if (metadata.Kind != DdgiProbeVolumeKind.CameraClipmap)
-                return firstProbeIndex + linearProbeIndex;
-
-            return DdgiClipmapAddressing.CalculatePhysicalProbeIndex(
-                logicalCell,
-                new DdgiClipmapCell(metadata.LogicalGridMinX, metadata.LogicalGridMinY, metadata.LogicalGridMinZ),
-                new DdgiClipmapCell(metadata.RingOffsetX, metadata.RingOffsetY, metadata.RingOffsetZ),
-                probeCountX,
-                probeCountY,
-                probeCountZ,
-                firstProbeIndex);
-        }
-
-        private static DdgiClipmapCellState ResolveDdgiDebugCellState(
-            DdgiClipmapCascadeState? cascade,
-            DdgiClipmapCell logicalCell,
-            int physicalProbeIndex)
-        {
-            if (cascade == null || !cascade.ContainsLogicalCell(logicalCell))
-                return new DdgiClipmapCellState(false, ulong.MaxValue, 0UL, physicalProbeIndex);
-
-            return cascade.GetCellState(logicalCell);
-        }
-
-        private uint ResolveScheduledDdgiProbeUpdateFlags(int globalProbeIndex, out uint updatePriority)
-        {
-            if (_ddgiProbeVolumeManager != null &&
-                _ddgiProbeVolumeManager.TryGetScheduledProbeUpdateFlags(globalProbeIndex, out uint flags, out updatePriority))
-            {
-                return flags;
-            }
-
-            updatePriority = 0u;
-            return 0u;
-        }
-
-        private static bool TryResolveDdgiProbeMarkerColor(
-            DebugOverlayMode overlayMode,
-            bool volumeEnabled,
-            int globalProbeIndex,
-            bool updated,
-            uint updateFlags,
-            uint updatePriority,
-            DdgiProbeVolumeRuntimeMetadata metadata,
-            DdgiClipmapCellState cellState,
-            int firstProbeIndex,
-            out Vector4 color)
-        {
-            switch (overlayMode)
-            {
-                case DebugOverlayMode.DdgiProbeActivity:
-                    color = volumeEnabled
-                        ? new Vector4(0.2f, 1.0f, 0.35f, 0.95f)
-                        : new Vector4(0.6f, 0.6f, 0.6f, 0.65f);
-                    return true;
-                case DebugOverlayMode.DdgiUpdatedProbes:
-                    color = updated
-                        ? new Vector4(0.15f, 0.65f, 1.0f, 1.0f)
-                        : new Vector4(0.25f, 0.28f, 0.35f, 0.35f);
-                    return updated || volumeEnabled;
-                case DebugOverlayMode.DdgiProbeRelocation:
-                    color = updated
-                        ? new Vector4(1.0f, 0.2f, 0.85f, 1.0f)
-                        : new Vector4(0.3f, 0.2f, 0.35f, 0.35f);
-                    return updated || volumeEnabled;
-                case DebugOverlayMode.DdgiProbeAge:
-                    color = ResolveDdgiProbeAgeColor(volumeEnabled, cellState);
-                    return volumeEnabled;
-                case DebugOverlayMode.DdgiPhysicalSlots:
-                    color = ResolveDdgiPhysicalSlotColor(volumeEnabled, globalProbeIndex, firstProbeIndex);
-                    return volumeEnabled;
-                case DebugOverlayMode.DdgiCascadeBounds:
-                    color = ResolveDdgiCascadeColor(volumeEnabled, metadata.CascadeIndex);
-                    return volumeEnabled;
-                case DebugOverlayMode.DdgiNewlyExposedCells:
-                    color = !cellState.Initialized ||
-                            (updateFlags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonNewCellFlag) != 0
-                        ? new Vector4(1.0f, 0.36f, 0.12f, 1.0f)
-                        : new Vector4(0.24f, 0.28f, 0.34f, 0.25f);
-                    return volumeEnabled;
-                case DebugOverlayMode.DdgiFrustumPriority:
-                    color = (updateFlags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonVisibleFrustumFlag) != 0
-                        ? new Vector4(0.1f, 0.72f, 1.0f, 1.0f)
-                        : new Vector4(0.2f, 0.24f, 0.32f, 0.28f);
-                    return volumeEnabled;
-                case DebugOverlayMode.DdgiSafetyRefresh:
-                    color = (updateFlags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonOutsideFrustumSafetyFlag) != 0
-                        ? new Vector4(0.95f, 0.78f, 0.2f, 1.0f)
-                        : new Vector4(0.22f, 0.22f, 0.28f, 0.28f);
-                    return volumeEnabled;
-                case DebugOverlayMode.DdgiCascadeBlend:
-                    color = ResolveDdgiCascadeBlendColor(volumeEnabled, metadata);
-                    return volumeEnabled;
-                case DebugOverlayMode.DdgiUpdateReasons:
-                    color = ResolveDdgiUpdateReasonColor(volumeEnabled, updateFlags, updatePriority);
-                    return volumeEnabled;
-                default:
-                    color = volumeEnabled
-                        ? new Vector4(0.95f, 0.9f, 0.25f, 0.95f)
-                        : new Vector4(0.55f, 0.55f, 0.55f, 0.55f);
-                    return true;
-            }
-        }
-
-        private static Vector4 ResolveDdgiCascadeColor(bool volumeEnabled, int cascadeIndex)
-        {
-            if (!volumeEnabled)
-                return new Vector4(0.45f, 0.45f, 0.45f, 0.45f);
-
-            uint hash = HashProbeColor(unchecked((uint)(cascadeIndex + 17)));
-            return new Vector4(
-                0.25f + ((hash & 0xffu) / 255.0f) * 0.7f,
-                0.25f + (((hash >> 8) & 0xffu) / 255.0f) * 0.7f,
-                0.25f + (((hash >> 16) & 0xffu) / 255.0f) * 0.7f,
-                0.95f);
-        }
-
-        private static Vector4 ResolveDdgiCascadeBlendColor(bool volumeEnabled, DdgiProbeVolumeRuntimeMetadata metadata)
-        {
-            if (!volumeEnabled)
-                return new Vector4(0.45f, 0.45f, 0.45f, 0.45f);
-
-            float blend = Math.Clamp(metadata.EdgeBlendFraction, 0.0f, 1.0f);
-            return new Vector4(0.18f + blend * 0.82f, 0.85f - blend * 0.45f, 0.95f - blend * 0.7f, 0.95f);
-        }
-
-        private static Vector4 ResolveDdgiUpdateReasonColor(bool volumeEnabled, uint updateFlags, uint updatePriority)
-        {
-            if (!volumeEnabled)
-                return new Vector4(0.45f, 0.45f, 0.45f, 0.45f);
-            if ((updateFlags & (GlobalIlluminationProbeVolumeData.ProbeUpdateReasonGeometryAddedFlag |
-                                GlobalIlluminationProbeVolumeData.ProbeUpdateReasonGeometryRemovedFlag |
-                                GlobalIlluminationProbeVolumeData.ProbeUpdateReasonTransformChangedFlag |
-                                GlobalIlluminationProbeVolumeData.ProbeUpdateReasonStreamInFlag |
-                                GlobalIlluminationProbeVolumeData.ProbeUpdateReasonStreamOutFlag)) != 0)
-                return new Vector4(1.0f, 0.18f, 0.06f, 1.0f);
-            if ((updateFlags & (GlobalIlluminationProbeVolumeData.ProbeUpdateReasonMaterialChangedFlag |
-                                GlobalIlluminationProbeVolumeData.ProbeUpdateReasonEmissiveChangedFlag)) != 0)
-                return new Vector4(0.92f, 0.16f, 0.86f, 1.0f);
-            if ((updateFlags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonLocalLightChangedFlag) != 0)
-                return new Vector4(1.0f, 0.62f, 0.12f, 1.0f);
-            if ((updateFlags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonDirectionalLightChangedFlag) != 0)
-                return new Vector4(1.0f, 0.94f, 0.2f, 1.0f);
-            if ((updateFlags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonNewCellFlag) != 0)
-                return new Vector4(1.0f, 0.3f, 0.08f, 1.0f);
-            if ((updateFlags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonDirtyBoundsFlag) != 0)
-                return new Vector4(0.9f, 0.1f, 0.95f, 1.0f);
-            if ((updateFlags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonVisibleFrustumFlag) != 0)
-                return new Vector4(0.1f, 0.72f, 1.0f, 1.0f);
-            if ((updateFlags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonOutsideFrustumSafetyFlag) != 0)
-                return new Vector4(0.95f, 0.78f, 0.2f, 1.0f);
-            if ((updateFlags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonAgeRefreshFlag) != 0)
-                return new Vector4(0.45f, 0.95f, 0.35f, 1.0f);
-            if (updatePriority > 0u)
-                return ResolveDdgiPhysicalSlotColor(true, unchecked((int)updatePriority), 0);
-
-            return new Vector4(0.2f, 0.24f, 0.32f, 0.25f);
-        }
-
-        private static Vector4 ResolveDdgiProbeAgeColor(bool volumeEnabled, DdgiClipmapCellState cellState)
-        {
-            if (!volumeEnabled)
-                return new Vector4(0.45f, 0.45f, 0.45f, 0.45f);
-            if (!cellState.Initialized)
-                return new Vector4(1.0f, 0.18f, 0.1f, 1.0f);
-
-            float normalizedAge = cellState.AgeFrames == ulong.MaxValue
-                ? 1.0f
-                : Math.Clamp(cellState.AgeFrames / 180.0f, 0.0f, 1.0f);
-            return new Vector4(
-                0.1f + normalizedAge * 0.9f,
-                0.95f - normalizedAge * 0.55f,
-                0.25f + (1.0f - normalizedAge) * 0.55f,
-                0.95f);
         }
 
         private static Vector4 ResolveDdgiPhysicalSlotColor(bool volumeEnabled, int globalProbeIndex, int firstProbeIndex)
@@ -3049,8 +2691,7 @@ namespace Njulf.Rendering
 
         private bool IsDepthPrePassRequiredByNonHiZOcclusionFeatures()
         {
-            return Settings.AmbientOcclusion.Enabled ||
-                Settings.GlobalIllumination.EffectiveUseSsgi;
+            return Settings.AmbientOcclusion.Enabled;
         }
 
         private void UpdatePreviousHiZCameraMotionSuppression(ICamera camera, bool cameraCut)
@@ -3112,7 +2753,6 @@ namespace Njulf.Rendering
                 sceneData.DepthPrePassEnabled &&
                 sceneData.OpaqueMeshletCount > 0;
             bool foliage = Settings.Foliage.HiZCullingEnabled && sceneData.FoliageClusterCount > 0;
-            bool ssgi = Settings.GlobalIllumination.EffectiveUseSsgi;
 
             int count = 0;
             if (forwardVisibilityCurrentHiZ)
@@ -3123,35 +2763,29 @@ namespace Njulf.Rendering
                 count++;
             if (foliage)
                 count++;
-            if (ssgi)
-                count++;
-
             if (count == 0)
                 return HiZConsumerDecision.None;
 
             return new HiZConsumerDecision(
                 count,
-                BuildHiZConsumerSummary(forwardVisibilityCurrentHiZ, sceneSubmissionPreviousHiZ, legacyForwardTask, foliage, ssgi),
+                BuildHiZConsumerSummary(forwardVisibilityCurrentHiZ, sceneSubmissionPreviousHiZ, legacyForwardTask, foliage),
                 forwardVisibilityCurrentHiZ,
                 sceneSubmissionPreviousHiZ,
                 legacyForwardTask,
-                foliage,
-                ssgi);
+                foliage);
         }
 
         private static string BuildHiZConsumerSummary(
             bool forwardVisibilityCurrentHiZ,
             bool sceneSubmissionPreviousHiZ,
             bool legacyForwardTask,
-            bool foliage,
-            bool ssgi)
+            bool foliage)
         {
             string summary = string.Empty;
             AppendHiZConsumer(ref summary, forwardVisibilityCurrentHiZ, "ForwardVisibilityCurrentHiZ");
             AppendHiZConsumer(ref summary, sceneSubmissionPreviousHiZ, "SceneSubmissionPreviousHiZ");
             AppendHiZConsumer(ref summary, legacyForwardTask, "LegacyForwardTask");
             AppendHiZConsumer(ref summary, foliage, "Foliage");
-            AppendHiZConsumer(ref summary, ssgi, "Ssgi");
             return summary.Length == 0 ? "None" : summary;
         }
 
@@ -3256,8 +2890,7 @@ namespace Njulf.Rendering
             bool ForwardVisibilityCurrentHiZ,
             bool SceneSubmissionPreviousHiZ,
             bool LegacyForwardTask,
-            bool Foliage,
-            bool Ssgi)
+            bool Foliage)
         {
             public static HiZConsumerDecision None { get; } = new(
                 0,
@@ -3265,8 +2898,7 @@ namespace Njulf.Rendering
                 ForwardVisibilityCurrentHiZ: false,
                 SceneSubmissionPreviousHiZ: false,
                 LegacyForwardTask: false,
-                Foliage: false,
-                Ssgi: false);
+                Foliage: false);
         }
 
         private CompletedHiZCounterResolution ResolveCompletedHiZCounters()
@@ -3956,7 +3588,7 @@ namespace Njulf.Rendering
         {
             GlobalIlluminationSettings gi = Settings.GlobalIllumination;
             bool active = gi.Enabled &&
-                (gi.EffectiveUseSsgi || gi.EffectiveUseDdgi || gi.EffectiveUseSimpleDdgi);
+                gi.EffectiveUseDdgi;
             if (!active)
             {
                 _globalIlluminationCpuTimingWindow.Clear();
@@ -3966,15 +3598,10 @@ namespace Njulf.Rendering
                 return;
             }
 
-            // Every term is owned by a distinct recorder.  The legacy DDGI
-            // scheduler runs outside its manager upload scope, while the simple
-            // path includes its scheduler in the manager upload time.  The AS
-            // manager reports a total preparation interval, so its detailed
-            // BLAS/TLAS/upload counters are deliberately not added again.
-            long totalMicroseconds = Math.Max(0, sceneData.CpuSsgiRecordMicroseconds) +
-                Math.Max(0, sceneData.CpuDdgiRecordMicroseconds) +
-                Math.Max(0, sceneData.CpuDdgiSchedulerMicroseconds) +
-                Math.Max(0, sceneData.CpuSimpleDdgiRecordMicroseconds) +
+            // Every term is owned by a distinct recorder. The Simple-DDGI
+            // manager includes its scheduler in its upload time, while the AS
+            // manager reports one total preparation interval.
+            long totalMicroseconds = Math.Max(0, sceneData.CpuSimpleDdgiRecordMicroseconds) +
                 Math.Max(0, sceneData.CpuFarFieldRecordMicroseconds) +
                 Math.Max(0, sceneData.CpuAccelerationStructureBuildMicroseconds);
             _globalIlluminationCpuTimingWindow.Add(totalMicroseconds);
@@ -4015,19 +3642,12 @@ namespace Njulf.Rendering
             bool giRayQuerySupported = _context.RayQuerySupported && _accelerationStructureManager?.Supported == true;
             bool giAccelerationStructuresActive = _accelerationStructureManager?.Active == true;
             GlobalIlluminationMode effectiveGiMode = ResolveEffectiveGlobalIlluminationMode(giSettings, giRayQuerySupported);
-            if (effectiveGiMode == GlobalIlluminationMode.RayQueryHybrid && !giAccelerationStructuresActive)
-                effectiveGiMode = GlobalIlluminationMode.Hybrid;
             // Preserve authored intent separately from the live path.  The emergency switch and
             // capability fallbacks must never make a capture look as though a feature was simply
             // not requested.
             bool giRequested = giSettings.Enabled && giSettings.Mode != GlobalIlluminationMode.Disabled;
-            bool modeRequestsSsgi = giSettings.Mode is GlobalIlluminationMode.Ssgi or
-                GlobalIlluminationMode.Hybrid or GlobalIlluminationMode.RayQueryHybrid;
-            bool modeRequestsDdgi = giSettings.Mode is GlobalIlluminationMode.Ddgi or
-                GlobalIlluminationMode.Hybrid or GlobalIlluminationMode.RayQueryHybrid;
-            bool ssgiRequested = giRequested && giSettings.UseSsgi && modeRequestsSsgi;
-            bool ddgiRequested = giRequested && giSettings.UseDdgi && modeRequestsDdgi;
-            bool simpleDdgiRequested = ddgiRequested && giSettings.DdgiSimpleEnabled;
+            bool ddgiRequested = giRequested && giSettings.UseDdgi;
+            bool simpleDdgiRequested = ddgiRequested;
             bool rayQueryGiRequested = ddgiRequested && giSettings.UseRayQueryBackend;
             string globalIlluminationFallbackReason = giSettings.EmergencyGiFallbackEnabled && giRequested
                 ? "Emergency GI fallback is enabled; dynamic GI paths are intentionally suppressed."
@@ -4038,32 +3658,16 @@ namespace Njulf.Rendering
             // untouched so clearing the switch restores the prior configuration.
             bool giEnabled = !giSettings.EmergencyGiFallbackEnabled &&
                 giSettings.Enabled && effectiveGiMode != GlobalIlluminationMode.Disabled;
-            bool giUsesSsgi = giSettings.EffectiveUseSsgi;
-            bool giUsesSimpleDdgi = giSettings.EffectiveUseSimpleDdgi;
-            bool giUsesDdgi = giSettings.EffectiveUseDdgi || giUsesSimpleDdgi;
+            bool giUsesSimpleDdgi = giSettings.EffectiveUseDdgi;
+            bool giUsesDdgi = giUsesSimpleDdgi;
             bool ddgiAsyncComputeActuallyEnabled = giUsesDdgi && IsDdgiAsyncComputeActuallyEnabled(asyncComputePlan);
             IReadOnlyList<string> activeProductionPipelinePasses = productionPipeline.GetActivePasses(
                 sceneData.ActiveFeatureIsolation,
-                sceneData.TransparencyMode,
-                giUsesSsgi);
+                sceneData.TransparencyMode);
             bool giRayQueryActive = giEnabled &&
                                     giSettings.EffectiveUseRayQueryBackend &&
                                     giRayQuerySupported &&
                                     giAccelerationStructuresActive;
-            (uint ssgiWidth, uint ssgiHeight) = CalculateSsgiExtent(sceneData.ScreenWidth, sceneData.ScreenHeight, giSettings.ResolutionScale, giUsesSsgi);
-            int ssgiRayCount = ResolveSsgiRayCount(Settings.QualityPreset, ssgiRequested);
-            ulong globalIlluminationRenderTargetBytes = _renderTargets?.GlobalIlluminationRenderTargetBytes ?? EstimateGlobalIlluminationRenderTargetBytes(
-                sceneData.ScreenWidth,
-                sceneData.ScreenHeight,
-                giSettings.ResolutionScale,
-                giUsesSsgi);
-            ulong ssgiRenderTargetBytes = giUsesSsgi ? globalIlluminationRenderTargetBytes : 0UL;
-            ulong sceneSurfaceRenderTargetBytes = _renderTargets?.SceneSurfaceRenderTargetBytes ?? 0UL;
-            if (_renderTargets != null && giUsesSsgi)
-            {
-                ssgiWidth = _renderTargets.SsgiRaw.Extent.Width;
-                ssgiHeight = _renderTargets.SsgiRaw.Extent.Height;
-            }
             string localShadowGpuCompactionStatus = BuildLocalShadowGpuCompactionStatus(
                 sceneData,
                 spotShadowMeshletLightTests,
@@ -4078,7 +3682,9 @@ namespace Njulf.Rendering
                 : DdgiRuntimeSnapshot.Empty;
             IReadOnlyList<string> ddgiDiagnosticWarnings = _ddgiDiagnosticWarningTracker.Update(
                 ddgiRuntimeSnapshot,
-                giUsesDdgi && sceneData.DdgiSchedulerP95OverBudget != 0);
+                schedulerOverBudget: false);
+            GpuCompletionRetirementSnapshot reflectionRetirement = _reflectionProbeManager?.ResourceRetirementSnapshot ??
+                default;
             MaterialManagerDiagnostics materialDiagnostics = _materialManager.Diagnostics;
             MaterialGiRolloutEvaluation materialGiRollout =
                 giSettings.EvaluateMaterialGiRollout();
@@ -4335,7 +3941,6 @@ namespace Njulf.Rendering
                 GlobalIlluminationRequestedDebugView = giSettings.DebugView,
                 GlobalIlluminationEmergencyFallbackEnabled = giSettings.EmergencyGiFallbackEnabled ? 1 : 0,
                 GlobalIlluminationFallbackReason = globalIlluminationFallbackReason,
-                GlobalIlluminationSsgiRequested = ssgiRequested ? 1 : 0,
                 GlobalIlluminationDdgiRequested = ddgiRequested ? 1 : 0,
                 SimpleDdgiRequested = simpleDdgiRequested ? 1 : 0,
                 GlobalIlluminationRayQueryRequested = rayQueryGiRequested ? 1 : 0,
@@ -4346,7 +3951,6 @@ namespace Njulf.Rendering
                 GlobalIlluminationDebugView = giEnabled ? giSettings.DebugView : GlobalIlluminationDebugView.None,
                 GlobalIlluminationRayQuerySupported = giRayQuerySupported ? 1 : 0,
                 GlobalIlluminationRayQueryActive = giRayQueryActive ? 1 : 0,
-                GlobalIlluminationSsgiActive = giUsesSsgi ? 1 : 0,
                 GlobalIlluminationDdgiActive = giUsesDdgi ? 1 : 0,
                 SimpleDdgiActive = giUsesSimpleDdgi ? sceneData.SimpleDdgiActive : 0,
                 SimpleDdgiStructuredGatherEnabled = giUsesSimpleDdgi &&
@@ -4396,8 +4000,15 @@ namespace Njulf.Rendering
                 SimpleDdgiTransportSourceCacheInvalidationCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceCacheInvalidationCount : 0UL,
                 SimpleDdgiTransportSolverInvalidationCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSolverInvalidationCount : 0,
                 SimpleDdgiTransportSolverInvalidationsPerSourceRefresh = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSolverInvalidationsPerSourceRefresh : 0.0f,
+                SimpleDdgiVolumeResourceGeneration = giUsesSimpleDdgi ? sceneData.SimpleDdgiVolumeResourceGeneration : 0u,
                 SimpleDdgiSourceLightingGeneration = giUsesSimpleDdgi ? sceneData.SimpleDdgiSourceLightingGeneration : 0u,
+                SimpleDdgiAdmittedSourceCohortGeneration = giUsesSimpleDdgi ? sceneData.SimpleDdgiAdmittedSourceCohortGeneration : 0u,
                 SimpleDdgiTransportGeneration = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportGeneration : 0u,
+                SimpleDdgiPublishedPropagationGeneration = giUsesSimpleDdgi ? sceneData.SimpleDdgiPublishedPropagationGeneration : 0u,
+                SimpleDdgiVisiblePriorityParticipatingProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiVisiblePriorityParticipatingProbeCount : 0,
+                SimpleDdgiVisiblePrioritySourceReadyProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiVisiblePrioritySourceReadyProbeCount : 0,
+                SimpleDdgiVisiblePriorityPublishedProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiVisiblePriorityPublishedProbeCount : 0,
+                SimpleDdgiQuietPeriodComplete = giUsesSimpleDdgi ? sceneData.SimpleDdgiQuietPeriodComplete : 0,
                 SimpleDdgiTransportSourceReadyProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceReadyProbeCount : 0,
                 SimpleDdgiTransportSourceStaleProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSourceStaleProbeCount : 0,
                 SimpleDdgiTransportConvergedProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportConvergedProbeCount : 0,
@@ -4604,7 +4215,6 @@ namespace Njulf.Rendering
                 DdgiBlackFrameAfterRecenter = giUsesDdgi ? sceneData.DdgiBlackFrameAfterRecenter : 0,
                 DdgiBlackFrameAfterAtlasClear = giUsesDdgi ? sceneData.DdgiBlackFrameAfterAtlasClear : 0,
                 DdgiBlackFrameDuringFreshAtlas = giUsesDdgi ? sceneData.DdgiBlackFrameDuringFreshAtlas : 0,
-                DdgiBlackFrameMovementClass = giUsesDdgi ? sceneData.DdgiBlackFrameMovementClass : DdgiCameraMovementClass.None,
                 GpuForwardGiGatherMicroseconds = giEnabled ? sceneData.GpuForwardGiGatherMicroseconds : 0,
                 GpuForwardGiGatherTimingCoverage = giEnabled ? sceneData.GpuForwardGiGatherTimingCoverage : 0,
                 GpuForwardGiGatherTimingAttribution = giEnabled && sceneData.GpuForwardGiGatherTimingCoverage != 0
@@ -4620,14 +4230,44 @@ namespace Njulf.Rendering
                 GpuFarFieldUpdateMicroseconds = giUsesSimpleDdgi ? sceneData.GpuFarFieldUpdateMicroseconds : 0,
                 GpuFarFieldUpdateTimingValid = giUsesSimpleDdgi ? sceneData.GpuFarFieldUpdateTimingValid : 0,
                 GpuSimpleDdgiTraceMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiTraceMicroseconds : 0,
+                GpuSimpleDdgiScheduleMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiScheduleMicroseconds : 0,
                 GpuSimpleDdgiTransportMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiTransportMicroseconds : 0,
                 GpuSimpleDdgiBlendMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiBlendMicroseconds : 0,
-                SsgiWidth = ssgiWidth,
-                SsgiHeight = ssgiHeight,
-                SsgiResolutionScale = ssgiRequested ? giSettings.ResolutionScale : 0f,
-                SsgiRayCount = ssgiRayCount,
-                SsgiHistoryValid = giUsesSsgi ? sceneData.SsgiHistoryValid : 0,
-                SsgiRejectedHistoryPixelCount = giUsesSsgi ? sceneData.SsgiRejectedHistoryPixelCount : 0,
+                GpuSimpleDdgiCommitMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiCommitMicroseconds : 0,
+                SimpleDdgiSchedulerMode = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerMode
+                    : SimpleDdgiSchedulerMode.CpuReference,
+                SimpleDdgiSchedulerReady = giUsesSimpleDdgi ? sceneData.SimpleDdgiSchedulerReady : 0,
+                SimpleDdgiSchedulerResourceGeneration = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerResourceGeneration
+                    : 0u,
+                SimpleDdgiSchedulerArenaBytes = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerArenaBytes
+                    : 0UL,
+                SimpleDdgiSchedulerFeedbackReadbackBytes = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerFeedbackReadbackBytes
+                    : 0UL,
+                SimpleDdgiSchedulerRetiredBytes = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerRetiredBytes
+                    : 0UL,
+                SimpleDdgiSchedulerStaleFeedbackCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerStaleFeedbackCount
+                    : 0UL,
+                SimpleDdgiSchedulerFeedbackGenerationRejectionCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerFeedbackGenerationRejectionCount
+                    : 0UL,
+                SimpleDdgiSchedulerFallbackLatched = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerFallbackLatched
+                    : 0,
+                SimpleDdgiSchedulerFallbackFreshResetPending = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerFallbackFreshResetPending
+                    : 0,
+                SimpleDdgiSchedulerFallbackCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerFallbackCount
+                    : 0UL,
+                SimpleDdgiSchedulerFallbackReason = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerFallbackReason
+                    : string.Empty,
                 DdgiProbeVolumeCount = giUsesDdgi ? sceneData.DdgiProbeVolumeCount : 0,
                 DdgiProbeCount = giUsesDdgi ? sceneData.DdgiProbeCount : 0,
                 DdgiActiveProbeCount = giUsesDdgi ? sceneData.DdgiActiveProbeCount : 0,
@@ -4639,21 +4279,6 @@ namespace Njulf.Rendering
                 DdgiProbeUpdatePrimaryRayBudget = giUsesDdgi ? sceneData.DdgiProbeUpdatePrimaryRayBudget : 0,
                 DdgiScheduledRequestBudget = giUsesDdgi ? sceneData.DdgiScheduledRequestBudget : 0,
                 DdgiScheduledPrimaryRayBudget = giUsesDdgi ? sceneData.DdgiScheduledPrimaryRayBudget : 0,
-                DdgiGpuSchedulerPredictedRequestUpperBound = giUsesDdgi ? sceneData.DdgiGpuSchedulerPredictedRequestUpperBound : 0,
-                DdgiGpuSchedulerActualRequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerActualRequestCount : 0u,
-                DdgiGpuSchedulerActualPrimaryRayCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerActualPrimaryRayCount : 0u,
-                DdgiGatherTileCount = giUsesDdgi || giUsesSimpleDdgi ? sceneData.DdgiGatherTileCount : 0,
-                DdgiGatherTileCountX = giUsesDdgi || giUsesSimpleDdgi ? sceneData.DdgiGatherTileCountX : 0,
-                DdgiGatherTileCountY = giUsesDdgi || giUsesSimpleDdgi ? sceneData.DdgiGatherTileCountY : 0,
-                DdgiGatherSelectedLocalTileCount = giUsesDdgi || giUsesSimpleDdgi ? sceneData.DdgiGatherSelectedLocalTileCount : 0,
-                DdgiGatherSelectedClipmapTileCount = giUsesDdgi || giUsesSimpleDdgi ? sceneData.DdgiGatherSelectedClipmapTileCount : 0,
-                DdgiGatherFallbackTileCount = giUsesDdgi || giUsesSimpleDdgi ? sceneData.DdgiGatherFallbackTileCount : 0,
-                DdgiGatherSelectedLocalTileFraction = giUsesDdgi ? sceneData.DdgiGatherSelectedLocalTileFraction : 0.0f,
-                DdgiGatherSelectedClipmapTileFraction = giUsesDdgi ? sceneData.DdgiGatherSelectedClipmapTileFraction : 0.0f,
-                DdgiGatherFallbackTileFraction = giUsesDdgi ? sceneData.DdgiGatherFallbackTileFraction : 0.0f,
-                DdgiForwardGatherFallbackUsed = giUsesDdgi || giUsesSimpleDdgi ? sceneData.DdgiForwardGatherFallbackUsed : 0,
-                DdgiForwardGatherFallbackDisabled = giUsesDdgi ? sceneData.DdgiForwardGatherFallbackDisabled : 0,
-                DdgiForwardGatherTileEmpty = giUsesDdgi ? sceneData.DdgiForwardGatherTileEmpty : 0,
                 DdgiAverageSpatialCoverageEstimate = giUsesDdgi ? sceneData.DdgiAverageSpatialCoverageEstimate : 0.0f,
                 DdgiAverageSupportCoverageEstimate = giUsesDdgi ? sceneData.DdgiAverageSupportCoverageEstimate : 0.0f,
                 DdgiAverageDataConfidenceEstimate = giUsesDdgi ? sceneData.DdgiAverageDataConfidenceEstimate : 0.0f,
@@ -4796,7 +4421,6 @@ namespace Njulf.Rendering
                 SimpleDdgiAverageCloseRatioEstimate = giUsesSimpleDdgi ? sceneData.SimpleDdgiAverageCloseRatioEstimate : 0.0f,
                 SimpleDdgiAverageHardInvalidProbeScoreEstimate = giUsesSimpleDdgi ? sceneData.SimpleDdgiAverageHardInvalidProbeScoreEstimate : 0.0f,
                 DdgiClassifiedInactiveProbeCountEstimate = giUsesDdgi ? sceneData.DdgiClassifiedInactiveProbeCountEstimate : 0,
-                DdgiSchedulerMode = ddgiRequested ? giSettings.DdgiSchedulerMode : DdgiSchedulerMode.CpuReference,
                 DdgiQualityTier = ddgiRequested ? giSettings.DdgiQualityTier : DdgiQualityTier.DdgiHigh,
                 DdgiAdaptiveBudgetScale = giUsesDdgi ? sceneData.DdgiAdaptiveBudgetScale : 1.0f,
                 DdgiAdaptiveBudgetReduced = giUsesDdgi ? sceneData.DdgiAdaptiveBudgetReduced : 0,
@@ -4849,57 +4473,6 @@ namespace Njulf.Rendering
                 DdgiProbeRelocationClassificationBytes = giUsesDdgi ? sceneData.DdgiProbeRelocationClassificationBytes : 0UL,
                 DdgiCurrentIrradianceAtlasBytes = giUsesDdgi ? sceneData.DdgiCurrentIrradianceAtlasBytes : 0UL,
                 DdgiCurrentVisibilityAtlasBytes = giUsesDdgi ? sceneData.DdgiCurrentVisibilityAtlasBytes : 0UL,
-                DdgiGatherTileBufferBytes = giUsesDdgi ? sceneData.DdgiGatherTileBufferBytes : 0UL,
-                DdgiLocalSlotReservedPoolBytes = giUsesDdgi ? sceneData.DdgiLocalSlotReservedPoolBytes : 0UL,
-                DdgiGpuSchedulerBufferBytes = giUsesDdgi ? sceneData.DdgiGpuSchedulerBufferBytes : 0UL,
-                DdgiGpuSchedulerDirtyRegionCapacity = giUsesDdgi ? sceneData.DdgiGpuSchedulerDirtyRegionCapacity : 0,
-                DdgiGpuSchedulerCandidateCapacity = giUsesDdgi ? sceneData.DdgiGpuSchedulerCandidateCapacity : 0,
-                DdgiGpuSchedulerGroupCountCapacity = giUsesDdgi ? sceneData.DdgiGpuSchedulerGroupCountCapacity : 0,
-                DdgiGpuSchedulerPrefixCapacity = giUsesDdgi ? sceneData.DdgiGpuSchedulerPrefixCapacity : 0,
-                DdgiGpuSchedulerDirtyRegionCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerDirtyRegionCount : 0,
-                DdgiGpuSchedulerDirtyRegionOverflowCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerDirtyRegionOverflowCount : 0,
-                DdgiGpuSchedulerResourceReinitializationCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerResourceReinitializationCount : 0,
-                DdgiGpuSchedulerTotalResourceReinitializationCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerTotalResourceReinitializationCount : 0,
-                DdgiGpuSchedulerUploadBytes = giUsesDdgi ? sceneData.DdgiGpuSchedulerUploadBytes : 0UL,
-                DdgiGpuSchedulerReadbackValid = giUsesDdgi ? sceneData.DdgiGpuSchedulerReadbackValid : 0,
-                DdgiGpuSchedulerReadbackLatencyFrames = giUsesDdgi ? sceneData.DdgiGpuSchedulerReadbackLatencyFrames : 0,
-                DdgiGpuSchedulerFallbackActive = giUsesDdgi ? sceneData.DdgiGpuSchedulerFallbackActive : 0,
-                DdgiGpuSchedulerFallbackReason = giUsesDdgi ? sceneData.DdgiGpuSchedulerFallbackReason : string.Empty,
-                DdgiGpuSchedulerConsideredProbeCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerConsideredProbeCount : 0,
-                DdgiGpuSchedulerRequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerRequestCount : 0u,
-                DdgiGpuSchedulerPrimaryRayCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPrimaryRayCount : 0u,
-                DdgiGpuSchedulerCandidateCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerCandidateCount : 0u,
-                DdgiGpuSchedulerOverflowCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerOverflowCount : 0u,
-                DdgiGpuSchedulerCandidateBufferOverflowCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerCandidateBufferOverflowCount : 0u,
-                DdgiGpuSchedulerPerBucketOverflowCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPerBucketOverflowCount : 0u,
-                DdgiGpuSchedulerDuplicateRequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerDuplicateRequestCount : 0u,
-                DdgiGpuSchedulerBudgetRejectedCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerBudgetRejectedCount : 0u,
-                DdgiGpuSchedulerRequestBudgetRejectedCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerRequestBudgetRejectedCount : 0u,
-                DdgiGpuSchedulerPrimaryRayBudgetRejectedCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPrimaryRayBudgetRejectedCount : 0u,
-                DdgiGpuSchedulerInvalidProbeCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerInvalidProbeCount : 0u,
-                DdgiGpuSchedulerCandidateOutputCapacity = giUsesDdgi ? sceneData.DdgiGpuSchedulerCandidateOutputCapacity : 0,
-                DdgiGpuSchedulerFullScan = giUsesDdgi ? sceneData.DdgiGpuSchedulerFullScan : 0,
-                DdgiGpuSchedulerVisibleFrustumCandidateCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerVisibleFrustumCandidateCount : 0u,
-                DdgiGpuSchedulerSafetyShellCandidateCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerSafetyShellCandidateCount : 0u,
-                DdgiGpuSchedulerAgeRefreshCandidateCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerAgeRefreshCandidateCount : 0u,
-                DdgiGpuSchedulerHighVarianceCandidateCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerHighVarianceCandidateCount : 0u,
-                DdgiGpuSchedulerLowConfidenceCandidateCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerLowConfidenceCandidateCount : 0u,
-                DdgiGpuSchedulerStableSkippedCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerStableSkippedCount : 0u,
-                DdgiGpuSchedulerPriority0RequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPriority0RequestCount : 0u,
-                DdgiGpuSchedulerPriority1RequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPriority1RequestCount : 0u,
-                DdgiGpuSchedulerPriority2RequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPriority2RequestCount : 0u,
-                DdgiGpuSchedulerPriority3RequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPriority3RequestCount : 0u,
-                DdgiGpuSchedulerPriorityBucketMismatchSkipCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPriorityBucketMismatchSkipCount : 0u,
-                DdgiGpuSchedulerRequestBudgetSaturated = giUsesDdgi ? sceneData.DdgiGpuSchedulerRequestBudgetSaturated : 0,
-                DdgiGpuSchedulerPrimaryRayBudgetSaturated = giUsesDdgi ? sceneData.DdgiGpuSchedulerPrimaryRayBudgetSaturated : 0,
-                DdgiGpuSchedulerValidationValid = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationValid : 0,
-                DdgiGpuSchedulerValidationStatus = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationStatus : string.Empty,
-                DdgiGpuSchedulerValidationCpuRequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationCpuRequestCount : 0,
-                DdgiGpuSchedulerValidationGpuRequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationGpuRequestCount : 0u,
-                DdgiGpuSchedulerValidationComparedRequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationComparedRequestCount : 0,
-                DdgiGpuSchedulerValidationMismatchCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationMismatchCount : 0,
-                DdgiGpuSchedulerValidationSampleLimit = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationSampleLimit : 0,
-                DdgiGpuSchedulerValidationFirstMismatch = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationFirstMismatch : string.Empty,
                 DdgiTraceDispatchGroupCount = giUsesDdgi ? sceneData.DdgiTraceDispatchGroupCount : 0u,
                 DdgiTraceProbeCount = giUsesDdgi ? sceneData.DdgiTraceProbeCount : 0u,
                 DdgiTraceRayCount = giUsesDdgi ? sceneData.DdgiTraceRayCount : 0u,
@@ -4924,12 +4497,7 @@ namespace Njulf.Rendering
                 DdgiResourceReinitializationCount = giUsesDdgi ? sceneData.DdgiResourceReinitializationCount : 0,
                 DdgiTotalResourceReinitializationCount = giUsesDdgi ? sceneData.DdgiTotalResourceReinitializationCount : 0,
                 DdgiActiveLocalSlotCount = giUsesDdgi ? sceneData.DdgiActiveLocalSlotCount : 0,
-                DdgiLocalSlotGeneration = giUsesDdgi ? sceneData.DdgiLocalSlotGeneration : 0,
-                DdgiLocalSlotInitBytes = giUsesDdgi ? sceneData.DdgiLocalSlotInitBytes : 0UL,
-                DdgiLocalVolumeEvictionReason = giUsesDdgi ? sceneData.DdgiLocalVolumeEvictionReason : string.Empty,
                 DdgiCacheClearReason = giUsesDdgi ? sceneData.DdgiCacheClearReason : string.Empty,
-                DdgiCameraMovementClass = giUsesDdgi ? sceneData.DdgiCameraMovementClass : DdgiCameraMovementClass.None,
-                CpuSsgiRecordMicroseconds = giUsesSsgi ? sceneData.CpuSsgiRecordMicroseconds : 0,
                 CpuDdgiRecordMicroseconds = giUsesDdgi ? sceneData.CpuDdgiRecordMicroseconds : 0,
                 CpuSimpleDdgiRecordMicroseconds = giUsesSimpleDdgi ? sceneData.CpuSimpleDdgiRecordMicroseconds : 0,
                 SimpleDdgiUploadTiming = giUsesSimpleDdgi ? sceneData.SimpleDdgiUploadTiming : default,
@@ -4937,40 +4505,12 @@ namespace Njulf.Rendering
                 CpuGlobalIlluminationRecordMicroseconds = giEnabled ? sceneData.CpuGlobalIlluminationRecordMicroseconds : 0,
                 CpuGlobalIlluminationRecordP95Microseconds = giEnabled ? sceneData.CpuGlobalIlluminationRecordP95Microseconds : 0,
                 GlobalIlluminationCpuTimingSampleCount = giEnabled ? sceneData.GlobalIlluminationCpuTimingSampleCount : 0,
-                CpuDdgiSchedulerMicroseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerMicroseconds : 0,
-                CpuDdgiSchedulerP95Microseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerP95Microseconds : 0,
-                CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds : 0,
-                CpuDdgiSchedulerPhaseDirtyRegionsMicroseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerPhaseDirtyRegionsMicroseconds : 0,
-                CpuDdgiSchedulerPhaseUninitializedMicroseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerPhaseUninitializedMicroseconds : 0,
-                CpuDdgiSchedulerPhaseFrustumMicroseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerPhaseFrustumMicroseconds : 0,
-                CpuDdgiSchedulerPhaseSafetyMicroseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerPhaseSafetyMicroseconds : 0,
-                CpuDdgiSchedulerPhaseRoundRobinMicroseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerPhaseRoundRobinMicroseconds : 0,
-                CpuDdgiSchedulerCandidateInsertCount = giUsesDdgi ? sceneData.CpuDdgiSchedulerCandidateInsertCount : 0,
-                CpuDdgiSchedulerCandidateMaxShiftCount = giUsesDdgi ? sceneData.CpuDdgiSchedulerCandidateMaxShiftCount : 0,
-                DdgiSchedulerTimingSampleCount = giUsesDdgi ? sceneData.DdgiSchedulerTimingSampleCount : 0,
-                DdgiSchedulerP95OverBudget = giUsesDdgi ? sceneData.DdgiSchedulerP95OverBudget : 0,
-                GpuSsgiTraceMicroseconds = giUsesSsgi ? sceneData.GpuSsgiTraceMicroseconds : 0,
-                GpuSsgiTemporalMicroseconds = giUsesSsgi ? sceneData.GpuSsgiTemporalMicroseconds : 0,
-                GpuSsgiDenoiseMicroseconds = giUsesSsgi ? sceneData.GpuSsgiDenoiseMicroseconds : 0,
-                GpuDdgiScheduleMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleMicroseconds : 0,
-                GpuDdgiScheduleP95Microseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleP95Microseconds : 0,
-                GpuDdgiScheduleOverBudget = giUsesDdgi ? sceneData.GpuDdgiScheduleOverBudget : 0,
-                GpuDdgiScheduleResetMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleResetMicroseconds : 0,
-                GpuDdgiScheduleScoreMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleScoreMicroseconds : 0,
-                GpuDdgiSchedulePrefixMicroseconds = giUsesDdgi ? sceneData.GpuDdgiSchedulePrefixMicroseconds : 0,
-                GpuDdgiScheduleCompactMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleCompactMicroseconds : 0,
-                GpuDdgiScheduleFinalizeMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleFinalizeMicroseconds : 0,
-                GpuDdgiScheduleReadbackMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleReadbackMicroseconds : 0,
-                GpuDdgiScheduleBarrierMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleBarrierMicroseconds : 0,
                 GpuDdgiTraceMicroseconds = giUsesDdgi ? sceneData.GpuDdgiTraceMicroseconds : 0,
                 GpuDdgiBlendMicroseconds = giUsesDdgi ? sceneData.GpuDdgiBlendMicroseconds : 0,
                 GpuDdgiRelocateClassifyMicroseconds = giUsesDdgi ? sceneData.GpuDdgiRelocateClassifyMicroseconds : 0,
                 GpuDdgiPublishMicroseconds = giUsesDdgi ? sceneData.GpuDdgiPublishMicroseconds : 0,
                 GpuDdgiUpdateMicroseconds = giUsesDdgi ? sceneData.GpuDdgiUpdateMicroseconds : 0,
                 GpuGiCompositeMicroseconds = giEnabled ? sceneData.GpuGiCompositeMicroseconds : 0,
-                GlobalIlluminationRenderTargetBytes = globalIlluminationRenderTargetBytes,
-                SsgiRenderTargetBytes = ssgiRenderTargetBytes,
-                SceneSurfaceRenderTargetBytes = sceneSurfaceRenderTargetBytes,
                 DdgiTextureBytes = giUsesDdgi ? sceneData.DdgiTextureBytes : 0,
                 DdgiBufferBytes = giUsesDdgi ? sceneData.DdgiBufferBytes : 0,
                 AccelerationStructureBytes = sceneData.AccelerationStructureBytes,
@@ -5581,15 +5121,18 @@ namespace Njulf.Rendering
                         path.Active,
                         path.Status,
                         path.Reason,
-                        path.Passes))
+                        path.Passes,
+                        AsyncComputePassCatalog.GetCertificationEvidenceRevision(path.Path)))
                     .ToArray(),
                 AsyncComputeSegments = asyncComputePlan.SubmissionPlan.Segments
                     .Select(segment => new AsyncComputeSegmentDiagnostic(
                         segment.Id,
                         segment.Queue.ToString(),
                         segment.Passes,
-                        segment.TimelineWaits.Select(wait => wait.Value).ToArray(),
-                        segment.TimelineSignalValue,
+                        segment.TimelineWaits.Select(wait => ResolveAsyncTimelineValue(wait.Value)).ToArray(),
+                        segment.TimelineSignalValue.HasValue
+                            ? ResolveAsyncTimelineValue(segment.TimelineSignalValue.Value)
+                            : null,
                         segment.AcquireTransfers.Count,
                         segment.ReleaseTransfers.Count,
                         segment.AccessesSwapchain,
@@ -5717,10 +5260,22 @@ namespace Njulf.Rendering
                 EnvironmentMapBytes = _environmentManager?.EnvironmentMapBytes ?? 0,
                 IrradianceMapBytes = _environmentManager?.IrradianceMapBytes ?? 0,
                 PrefilteredEnvironmentBytes = _environmentManager?.PrefilteredEnvironmentBytes ?? 0,
-                BrdfLutBytes = _environmentManager?.BrdfLutBytes ?? 0,
-                ReflectionProbeBytes = _reflectionProbeManager?.EstimatedBytes ?? 0,
-                ReflectionProbeCubemapArrayBytes = _reflectionProbeManager?.CubemapArrayBytes ?? 0,
-                ReflectionProbeCaptureBudgetUsed = sceneData.ReflectionProbeCapturesCompleted,
+                 BrdfLutBytes = _environmentManager?.BrdfLutBytes ?? 0,
+                 ReflectionProbeBytes = _reflectionProbeManager?.EstimatedBytes ?? 0,
+                 ReflectionProbeCaptureTargetBytes = (_reflectionProbeManager?.ScratchCaptureBytes ?? 0UL) +
+                     (_reflectionProbeManager?.CaptureDepthBytes ?? 0UL),
+                 ReflectionProbeCubemapArrayBytes = _reflectionProbeManager?.CubemapArrayBytes ?? 0,
+                 ReflectionProbeRetirementActiveCount = reflectionRetirement.ActiveCount,
+                 ReflectionProbeRetirementActiveBytes = reflectionRetirement.ActiveBytes,
+                 ReflectionProbeRetirementOldestAgeFrames = reflectionRetirement.OldestAgeFrames,
+                 ReflectionProbeRetirementPeakCount = reflectionRetirement.PeakCount,
+                 ReflectionProbeRetirementPeakBytes = reflectionRetirement.PeakBytes,
+                 ReflectionProbeRetirementCapacityRejections = reflectionRetirement.CapacityRejectionCount,
+                 ReflectionProbeRetirementMemoryBudgetRejections = reflectionRetirement.MemoryBudgetRejectionCount,
+                 ReflectionProbeRetirementInvalidRecordCount = reflectionRetirement.InvalidRecordCount,
+                 ReflectionProbeRetiredCount = reflectionRetirement.RetiredCount,
+                 ReflectionProbeCaptureBudgetUsed = sceneData.ReflectionProbeCapturesCompleted,
+                 ReflectionProbeCaptureBudgetExceeded = _reflectionProbeManager?.ReflectionCaptureBudgetExceeded ?? 0,
                 StagingBufferAllocatedBytes = _stagingRing.TotalAllocatedBytes,
                 StagingBytesUsedThisFrame = _stagingRing.CurrentFrameBytesUsed,
                 StagingBytesPeakThisSession = _stagingRing.PeakBytesThisSession,
@@ -5792,9 +5347,6 @@ namespace Njulf.Rendering
                     finalDiagnostics.SimpleDdgiAtlasCleared != 0 ? 1 : 0,
                 DdgiBlackFrameDuringFreshAtlas = blackFrameMetrics.LargeAreaBlackout &&
                     finalDiagnostics.SimpleDdgiAtlasFresh != 0 ? 1 : 0,
-                DdgiBlackFrameMovementClass = blackFrameMetrics.LargeAreaBlackout
-                    ? finalDiagnostics.DdgiCameraMovementClass
-                    : DdgiCameraMovementClass.None
             };
         }
 
@@ -5855,7 +5407,7 @@ namespace Njulf.Rendering
             string canonical = string.Join("|", new[]
             {
                 sceneData.SceneContentRevision.ToString(CultureInfo.InvariantCulture),
-                sceneData.SsgiMaterialRevision.ToString(CultureInfo.InvariantCulture),
+                sceneData.GiTransportMaterialRevision.ToString(CultureInfo.InvariantCulture),
                 sceneData.DdgiEmissiveSourceRevision.ToString(CultureInfo.InvariantCulture),
                 sceneData.DrawPacketRevision.ToString(CultureInfo.InvariantCulture),
                 sceneData.DirectionalShadowMeshletDrawSignature.ToString(CultureInfo.InvariantCulture),
@@ -5887,7 +5439,7 @@ namespace Njulf.Rendering
             string canonical = string.Join("|", new[]
             {
                 sceneData.SceneContentRevision.ToString(CultureInfo.InvariantCulture),
-                sceneData.SsgiMaterialRevision.ToString(CultureInfo.InvariantCulture),
+                sceneData.GiTransportMaterialRevision.ToString(CultureInfo.InvariantCulture),
                 sceneData.DdgiEmissiveSourceRevision.ToString(CultureInfo.InvariantCulture),
                 sceneData.ObjectCount.ToString(CultureInfo.InvariantCulture),
                 sceneData.MaterialCount.ToString(CultureInfo.InvariantCulture),
@@ -6414,6 +5966,7 @@ namespace Njulf.Rendering
                 throw new InvalidOperationException("Only an accepted plan with compute segments can be recorded asynchronously.");
             if (plan.ResourcePlanGeneration != _renderGraph.ConcreteResourceBindings.Generation)
             {
+                _asyncComputeStateProjection.Discard();
                 _renderGraph.ConcreteResourceBindings.RecordStalePlanRejection();
                 fallbackReason = "The concrete resource-binding generation changed after plan compilation.";
                 RecordRecoverableAsyncComputePlanFallback(
@@ -6433,10 +5986,19 @@ namespace Njulf.Rendering
                 return false;
             }
 
-            AsyncComputeSubmissionSegment? earlySwapchainSegment = plan.Segments.FirstOrDefault(segment =>
-                segment.AccessesSwapchain && !segment.IsTerminalGraphicsSegment);
+            AsyncComputeSubmissionSegment? earlySwapchainSegment = null;
+            for (int segmentIndex = 0; segmentIndex < plan.Segments.Count; segmentIndex++)
+            {
+                AsyncComputeSubmissionSegment candidate = plan.Segments[segmentIndex];
+                if (candidate.AccessesSwapchain && !candidate.IsTerminalGraphicsSegment)
+                {
+                    earlySwapchainSegment = candidate;
+                    break;
+                }
+            }
             if (earlySwapchainSegment != null)
             {
+                _asyncComputeStateProjection.Discard();
                 fallbackReason =
                     $"Async compute plan segment {earlySwapchainSegment.Id} ({earlySwapchainSegment.Queue}: " +
                     $"{string.Join(", ", earlySwapchainSegment.Passes)}) would access the acquired swapchain image " +
@@ -6488,6 +6050,18 @@ namespace Njulf.Rendering
                         SetViewportAndScissor(commandBuffer);
                     }
 
+                    if (segment.Queue == AsyncComputeQueue.Compute && segment.Passes.Count > 0)
+                    {
+                        AsyncComputePath? path = GetAsyncComputePath(segment.Passes[0]);
+                        if (path.HasValue)
+                        {
+                            _asyncComputeValidationLedger.RegisterSegment(
+                                segment.Id,
+                                path.Value,
+                                (ulong)commandBuffer.Handle);
+                        }
+                    }
+
                     long barrierRecordStart = Stopwatch.GetTimestamp();
                     QueueOwnershipTransferBarrierCounts acquireCounts = QueueOwnershipTransferRecorder.RecordAcquires(
                         _context,
@@ -6501,12 +6075,14 @@ namespace Njulf.Rendering
 
                     if (segment.Passes.Count > 0)
                     {
-                        var passNames = new HashSet<string>(segment.Passes, StringComparer.Ordinal);
+                        _asyncComputePassNameScratch.Clear();
+                        for (int passIndex = 0; passIndex < segment.Passes.Count; passIndex++)
+                            _asyncComputePassNameScratch.Add(segment.Passes[passIndex]);
                         _renderGraph.ExecuteSelected(
                             commandBuffer,
                             _currentFrame,
                             sceneData,
-                            passNames.Contains,
+                            IncludeAsyncComputePass,
                             _gpuTimestamps,
                             _cmd,
                             useSecondaryCommandBuffers: segment.Queue == AsyncComputeQueue.Graphics && Settings.UseSecondaryCommandBuffers,
@@ -6527,7 +6103,8 @@ namespace Njulf.Rendering
                     {
                         _currentCommandBuffer = commandBuffer;
                         _asyncComputeWaitsThisFrame.Clear();
-                        _asyncComputeWaitsThisFrame.AddRange(segment.TimelineWaits);
+                        for (int waitIndex = 0; waitIndex < segment.TimelineWaits.Count; waitIndex++)
+                            _asyncComputeWaitsThisFrame.Add(ResolveAsyncTimelineWait(segment.TimelineWaits[waitIndex]));
                         continue;
                     }
 
@@ -6535,7 +6112,16 @@ namespace Njulf.Rendering
                     _deferredAsyncSubmissions.Add(new DeferredAsyncSubmission(commandBuffer, segment));
                 }
 
-                foreach (QueueOwnershipTransfer transfer in plan.Transfers.OrderBy(transfer => transfer.Id))
+                if (!CommitAsyncComputeProjection(plan.ResourcePlanGeneration, out string projectionCommitFailure))
+                {
+                    MarkFrameSubmissionFault(projectionCommitFailure, Result.ErrorUnknown);
+                    throw new InvalidOperationException(projectionCommitFailure);
+                }
+
+                // The scheduler emits transfer records in monotonically increasing immutable Id
+                // order. Consume that validated order directly; LINQ sorting here would allocate
+                // on every accepted async frame and cannot improve a plan that is already sealed.
+                foreach (QueueOwnershipTransfer transfer in plan.Transfers)
                 {
                     if (!transfer.IsConcurrentResource)
                     {
@@ -6550,10 +6136,14 @@ namespace Njulf.Rendering
                     }
                 }
 
-                ulong maxTimelineValue = plan.Segments
-                    .Select(segment => segment.TimelineSignalValue.GetValueOrDefault())
-                    .DefaultIfEmpty(0UL)
-                    .Max();
+                ulong maxTimelineValue = 0UL;
+                for (int segmentIndex = 0; segmentIndex < plan.Segments.Count; segmentIndex++)
+                {
+                    ulong signal = ResolveAsyncTimelineValue(
+                        plan.Segments[segmentIndex].TimelineSignalValue.GetValueOrDefault());
+                    if (signal > maxTimelineValue)
+                        maxTimelineValue = signal;
+                }
                 if (maxTimelineValue >= _nextAsyncComputeTimelineValue)
                     _nextAsyncComputeTimelineValue = checked(maxTimelineValue + 1UL);
 
@@ -6566,6 +6156,7 @@ namespace Njulf.Rendering
             }
             catch (Exception exception)
             {
+                _asyncComputeStateProjection.Discard();
                 // Some graph work is already appended after the renderer's upload/prelude
                 // commands, so replaying the graphics-only graph here would duplicate work in
                 // the same command buffer. Nothing has been submitted yet; abandon this frame
@@ -6633,13 +6224,13 @@ namespace Njulf.Rendering
                     AsyncComputeTimelineWait wait = segment.TimelineWaits[i];
                     waitSemaphores[i] = _cmd.AsyncComputeTimelineSemaphore;
                     waitStages[i] = ToLegacyPipelineStage(wait.StageMask);
-                    waitValues[i] = wait.Value;
+                    waitValues[i] = ResolveAsyncTimelineValue(wait.Value);
                 }
 
                 if (signalCount > 0)
                 {
                     signalSemaphores[0] = _cmd.AsyncComputeTimelineSemaphore;
-                    signalValues[0] = segment.TimelineSignalValue!.Value;
+                    signalValues[0] = ResolveAsyncTimelineValue(segment.TimelineSignalValue!.Value);
                 }
 
                 TimelineSemaphoreSubmitInfo timelineInfo = default;
@@ -6692,6 +6283,16 @@ namespace Njulf.Rendering
             }
 
             _deferredAsyncSubmissions.Clear();
+        }
+
+        private AsyncComputeTimelineWait ResolveAsyncTimelineWait(in AsyncComputeTimelineWait wait) =>
+            wait with { Value = ResolveAsyncTimelineValue(wait.Value) };
+
+        private ulong ResolveAsyncTimelineValue(ulong relativeValue)
+        {
+            if (relativeValue == 0UL)
+                return 0UL;
+            return checked(relativeValue + _asyncComputeTimelineOffsetThisFrame);
         }
 
         private void RecordSubmittedAsyncComputeSegment(AsyncComputeQueue queue)
@@ -6852,6 +6453,12 @@ namespace Njulf.Rendering
                 ? "Async compute synchronization-plan failure."
                 : reason;
             _asyncComputeValidationFallbackCount++;
+            // A terminal validation fault invalidates both the mutable projected
+            // state and every cached variant derived from it. The next legal
+            // path is graphics-only; retaining either object would allow a
+            // stale ownership/layout claim to be reused after the latch.
+            _asyncComputeStateProjection.Discard();
+            _asyncComputePlanVariantCache.Clear();
         }
 
         /// <summary>
@@ -7031,6 +6638,11 @@ namespace Njulf.Rendering
             // graphics-only path; neither case can legally submit a compute segment.
             if (supported && effectiveMode != AsyncComputeMode.Disabled)
                 EnsureAsyncComputeResourceBindings();
+            bool asyncProjectionReady = effectiveMode != AsyncComputeMode.Disabled &&
+                _asyncComputeStateProjection.Begin(_renderGraph.ConcreteResourceBindings);
+            _asyncComputeTimelineOffsetThisFrame = effectiveMode != AsyncComputeMode.Disabled
+                ? checked(_nextAsyncComputeTimelineValue - 1UL)
+                : 0UL;
             var retryScope = new AsyncComputePlanRetryScope(
                 _renderGraph.ConcreteResourceBindings.Generation,
                 settingsSignature);
@@ -7103,7 +6715,8 @@ namespace Njulf.Rendering
                     IsAutoTimingProbe: isProbe,
                     CorrectnessCertified: AsyncComputePassCatalog.IsCorrectnessCertified(path),
                     ForceValidationAuthorized: effectiveMode == AsyncComputeMode.ForceEnabledForValidation &&
-                        Settings.AsyncCompute.ForceValidationPath == path));
+                        Settings.AsyncCompute.ForceValidationPath == path &&
+                        _asyncComputeValidationLedger.IsAutoTimingAllowed(path)));
             }
 
             var passes = new List<AsyncComputePassRequest>(_renderGraph.PassNames.Count);
@@ -7131,14 +6744,51 @@ namespace Njulf.Rendering
                     sceneData);
             }
 
-            AsyncComputeSubmissionPlan submissionPlan = _asyncComputeScheduler.Compile(new AsyncComputeSchedulerInput(
-                effectiveMode,
+            AsyncComputePlanVariantKey variantKey = CreateAsyncComputePlanVariantKey(
+                settingsSignature,
                 capabilities,
-                _renderGraph.ConcreteResourceBindings,
                 paths,
                 passes,
-                _currentFrame,
-                _nextAsyncComputeTimelineValue));
+                _renderGraph.ConcreteResourceBindings,
+                timelineValueBase: 0UL);
+            AsyncComputeSubmissionPlan? cachedPlan = null;
+            bool cachedVariant = asyncProjectionReady &&
+                _asyncComputePlanVariantCache.TryGet(variantKey, out cachedPlan);
+            AsyncComputeSubmissionPlan submissionPlan = cachedVariant
+                ? cachedPlan!
+                : _asyncComputeScheduler.Compile(new AsyncComputeSchedulerInput(
+                    effectiveMode,
+                    capabilities,
+                    _renderGraph.ConcreteResourceBindings,
+                    paths,
+                    passes,
+                    _currentFrame,
+                    FirstTimelineValue: 1UL));
+            if (submissionPlan.Accepted &&
+                !asyncProjectionReady &&
+                submissionPlan.ContainsAsyncCompute)
+            {
+                submissionPlan = submissionPlan with
+                {
+                    Accepted = false,
+                    FailureReason = "Concrete async resource-state projection capacity was unavailable.",
+                    Segments = Array.Empty<AsyncComputeSubmissionSegment>(),
+                    Transfers = Array.Empty<QueueOwnershipTransfer>()
+                };
+            }
+            if (submissionPlan.Accepted && asyncProjectionReady &&
+                !ProjectAsyncComputeSubmission(submissionPlan, out string projectionFailure))
+            {
+                submissionPlan = submissionPlan with
+                {
+                    Accepted = false,
+                    FailureReason = projectionFailure,
+                    Segments = Array.Empty<AsyncComputeSubmissionSegment>(),
+                    Transfers = Array.Empty<QueueOwnershipTransfer>()
+                };
+            }
+            if (!cachedVariant && submissionPlan.Accepted)
+                _asyncComputePlanVariantCache.Add(variantKey, submissionPlan);
             if (!submissionPlan.Accepted)
             {
                 // The scheduler has not recorded any Vulkan command buffer or committed resource
@@ -7209,6 +6859,166 @@ namespace Njulf.Rendering
                     : "disabled by policy; graphics-only execution is active.");
         }
 
+        private AsyncComputePlanVariantKey CreateAsyncComputePlanVariantKey(
+            ulong settingsSignature,
+            AsyncComputeQueueCapabilities capabilities,
+            IReadOnlyList<AsyncComputePathEligibility> paths,
+            IReadOnlyList<AsyncComputePassRequest> passes,
+            RenderGraphResourceBindings bindings,
+            ulong timelineValueBase)
+        {
+            ulong capabilitySignature = 14695981039346656037UL;
+            capabilitySignature = HashUInt64(capabilitySignature, capabilities.HasIndependentComputeQueue ? 1UL : 0UL);
+            capabilitySignature = HashUInt64(capabilitySignature, capabilities.GraphicsQueueFamily);
+            capabilitySignature = HashUInt64(capabilitySignature, capabilities.ComputeQueueFamily);
+            capabilitySignature = HashUInt64(capabilitySignature, (ulong)capabilities.GraphicsQueueFlags);
+            capabilitySignature = HashUInt64(capabilitySignature, (ulong)capabilities.ComputeQueueFlags);
+
+            ulong pathMask = 0UL;
+            for (int index = 0; index < paths.Count; index++)
+            {
+                AsyncComputePathEligibility path = paths[index];
+                // Five bits per atomic path capture the runtime selection inputs that affect
+                // scheduler output. Requested feature state alone is insufficient: Auto can
+                // switch its isolated timing candidate or promote/demote a path while the
+                // render-graph declarations remain unchanged.
+                int shift = checked((int)path.Path * 5);
+                ulong flags = 0UL;
+                if (path.RequestedByFeature)
+                    flags |= 1UL;
+                if (path.AutoTimingEligible)
+                    flags |= 1UL << 1;
+                if (path.IsAutoTimingProbe)
+                    flags |= 1UL << 2;
+                if (path.CorrectnessCertified)
+                    flags |= 1UL << 3;
+                if (path.ForceValidationAuthorized)
+                    flags |= 1UL << 4;
+                pathMask |= flags << shift;
+            }
+
+            ulong passSignature = 14695981039346656037UL;
+            for (int index = 0; index < passes.Count; index++)
+            {
+                AsyncComputePassRequest pass = passes[index];
+                passSignature = HashString(passSignature, pass.Name);
+                passSignature = HashUInt64(passSignature, pass.Path.HasValue ? (ulong)(int)pass.Path.Value + 1UL : 0UL);
+                passSignature = HashUInt64(passSignature, pass.EnabledByFeatureIsolation ? 1UL : 0UL);
+                passSignature = HashUInt64(passSignature, pass.WillExecute ? 1UL : 0UL);
+            }
+
+            return new AsyncComputePlanVariantKey(
+                bindings.Generation,
+                settingsSignature,
+                capabilitySignature,
+                passSignature,
+                pathMask,
+                bindings.SynchronizationStateGeneration,
+                timelineValueBase);
+        }
+
+        private bool ProjectAsyncComputeSubmission(
+            AsyncComputeSubmissionPlan plan,
+            out string failure)
+        {
+            for (int transferIndex = 0; transferIndex < plan.Transfers.Count; transferIndex++)
+            {
+                QueueOwnershipTransfer transfer = plan.Transfers[transferIndex];
+                IReadOnlyList<RenderGraphConcreteResourceBinding> bindings = transfer.AllBindings;
+                for (int bindingIndex = 0; bindingIndex < bindings.Count; bindingIndex++)
+                {
+                    RenderGraphConcreteResourceBinding binding = bindings[bindingIndex];
+                    if (!_asyncComputeStateProjection.TryTransition(
+                            binding.AllocationIdentity,
+                            plan.ResourcePlanGeneration,
+                            transfer.DestinationQueue,
+                            transfer.DestinationQueueFamily,
+                            transfer.NewLayout,
+                            transfer.DestinationStageMask,
+                            transfer.DestinationAccessMask,
+                            out AsyncComputeProjectionFailure projectionFailure))
+                    {
+                        failure = $"Async projected state rejected transfer {transfer.Id} for '{binding.Name}': {projectionFailure}.";
+                        _asyncComputeStateProjection.Discard();
+                        return false;
+                    }
+                }
+            }
+
+            // Transfers alone do not describe the state left by a pass. Project every concrete
+            // pass usage as well, so a cached plan cannot validate against a stale owner/layout
+            // after a same-family handoff or a pass that writes a different final image layout.
+            foreach (AsyncComputeSubmissionSegment segment in plan.Segments)
+            {
+                AsyncComputeQueue queue = segment.Queue;
+                uint queueFamily = queue == AsyncComputeQueue.Compute
+                    ? _context.ComputeQueueFamilyIndex
+                    : _context.GraphicsQueueFamilyIndex;
+                for (int passIndex = 0; passIndex < segment.Passes.Count; passIndex++)
+                {
+                    IReadOnlyList<RenderGraphResourceUsage> usages =
+                        _renderGraph.GetPassResourceUsages(segment.Passes[passIndex]);
+                    for (int usageIndex = 0; usageIndex < usages.Count; usageIndex++)
+                    {
+                        RenderGraphResourceUsage usage = usages[usageIndex];
+                        IReadOnlyList<RenderGraphConcreteResourceBinding> bindings =
+                            _renderGraph.ConcreteResourceBindings.GetBindings(usage.Resource, _currentFrame);
+                        for (int bindingIndex = 0; bindingIndex < bindings.Count; bindingIndex++)
+                        {
+                            RenderGraphConcreteResourceBinding binding = bindings[bindingIndex];
+                            ImageLayout layout = binding.Kind == RenderGraphConcreteResourceKind.Image
+                                ? usage.FinalImageLayout != ImageLayout.Undefined
+                                    ? usage.FinalImageLayout
+                                    : usage.ImageLayout
+                                : ImageLayout.Undefined;
+                            if (!_asyncComputeStateProjection.TryTransition(
+                                    binding.AllocationIdentity,
+                                    plan.ResourcePlanGeneration,
+                                    queue,
+                                    queueFamily,
+                                    layout,
+                                    usage.StageMask,
+                                    usage.AccessMask,
+                                    out AsyncComputeProjectionFailure projectionFailure))
+                            {
+                                failure =
+                                    $"Async projected state rejected pass '{segment.Passes[passIndex]}' for " +
+                                    $"'{binding.Name}': {projectionFailure}.";
+                                _asyncComputeStateProjection.Discard();
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+
+            failure = string.Empty;
+            return true;
+        }
+
+        private bool CommitAsyncComputeProjection(ulong planGeneration, out string failure)
+        {
+            if (_asyncComputeStateProjection.Commit(planGeneration))
+            {
+                failure = string.Empty;
+                return true;
+            }
+
+            failure = "Async projected state could not commit the validated resource-plan generation.";
+            _asyncComputeStateProjection.Discard();
+            return false;
+        }
+
+        private static ulong HashString(ulong hash, string value)
+        {
+            for (int index = 0; index < value.Length; index++)
+                hash = HashUInt64(hash, value[index]);
+            return HashUInt64(hash, 0UL);
+        }
+
+        private static ulong HashUInt64(ulong hash, ulong value) =>
+            (hash ^ value) * 1099511628211UL;
+
         private AsyncComputePlan CreateGenerationScopedGraphicsFallbackAsyncPlan(
             AsyncComputeMode requestedMode,
             bool supported,
@@ -7265,11 +7075,9 @@ namespace Njulf.Rendering
             signature = MixAsyncComputeSettingsSignature(signature, (ulong)settings.Mode);
             signature = MixAsyncComputeSettingsSignature(signature, settings.HiZBuildEnabled ? 1UL : 0UL);
             signature = MixAsyncComputeSettingsSignature(signature, settings.AmbientOcclusionBlurEnabled ? 1UL : 0UL);
-            signature = MixAsyncComputeSettingsSignature(signature, settings.SsgiChainEnabled ? 1UL : 0UL);
             signature = MixAsyncComputeSettingsSignature(signature, settings.FogEnabled ? 1UL : 0UL);
             signature = MixAsyncComputeSettingsSignature(signature, settings.BloomEnabled ? 1UL : 0UL);
             signature = MixAsyncComputeSettingsSignature(signature, settings.SimpleDdgiUpdateEnabled ? 1UL : 0UL);
-            signature = MixAsyncComputeSettingsSignature(signature, settings.FullDdgiUpdateEnabled ? 1UL : 0UL);
             signature = MixAsyncComputeSettingsSignature(signature, settings.FarFieldClipmapBakeEnabled ? 1UL : 0UL);
             signature = MixAsyncComputeSettingsSignature(signature, settings.GpuParticlesEnabled ? 1UL : 0UL);
             signature = MixAsyncComputeSettingsSignature(signature, unchecked((uint)settings.AutoMinimumSampleCount));
@@ -7332,27 +7140,6 @@ namespace Njulf.Rendering
                     simpleDdgi.ProbeUpdateQueueBuffer,
                     simpleDdgi.RelocationClassificationBuffer);
 
-            DdgiProbeVolumeManager? fullDdgi = _ddgiProbeVolumeManager;
-            var fullDdgiBuffers = fullDdgi == null
-                ? default
-                : new FullDdgiAsyncBufferIdentity(
-                    fullDdgi.VolumeMetadataBuffer,
-                    fullDdgi.ProbeStateBuffer,
-                    fullDdgi.ProbeUpdateQueueBuffer,
-                    fullDdgi.ProbeRelocationClassificationBuffer,
-                    fullDdgi.IrradianceAtlasBuffer,
-                    fullDdgi.VisibilityAtlasBuffer,
-                    fullDdgi.RayResultScratchBuffer,
-                    fullDdgi.SchedulerConstantsBuffer,
-                    fullDdgi.DirtyRegionBuffer,
-                    fullDdgi.ProbeCandidateBuffer,
-                    fullDdgi.SchedulerGroupCountBuffer,
-                    fullDdgi.SchedulerPrefixBuffer,
-                    fullDdgi.SchedulerCounterBuffer,
-                    fullDdgi.TraceIndirectDispatchBuffer,
-                    fullDdgi.GetSchedulerCounterReadbackBuffer(0),
-                    fullDdgi.GetSchedulerCounterReadbackBuffer(1));
-
             return new AsyncComputeResourcePlanGeneration(
                 _renderGraph.ResourceAllocationGeneration,
                 _renderTargets?.ResizeCount ?? 0,
@@ -7368,8 +7155,7 @@ namespace Njulf.Rendering
                 _hizDepthPyramid?.Image.Handle ?? 0,
                 coreBuffers,
                 farFieldBuffers,
-                simpleDdgiBuffers,
-                fullDdgiBuffers);
+                simpleDdgiBuffers);
         }
 
         /// <summary>
@@ -7413,7 +7199,7 @@ namespace Njulf.Rendering
 
             // These two renderer-owned targets are graph imports rather than graph-owned
             // allocations. They are nevertheless concrete Vulkan images and must participate in
-            // a plan before Hi-Z, fog, bloom, or SSGI can be placed on compute.
+            // a plan before Hi-Z, fog, or bloom can be placed on compute.
             if (_renderTargets != null)
             {
                 AddRenderTargetBinding(
@@ -7609,44 +7395,8 @@ namespace Njulf.Rendering
                     _simpleDdgiVolumeManager.ProbeUpdateQueueBuffer, queueFamilies, graphicsFamily);
                 AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiRelocationData, "Simple DDGI relocation classification",
                     _simpleDdgiVolumeManager.RelocationClassificationBuffer, queueFamilies, graphicsFamily);
-            }
-
-            if (_ddgiProbeVolumeManager != null)
-            {
-                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiState, "DDGI volume metadata",
-                    _ddgiProbeVolumeManager.VolumeMetadataBuffer, queueFamilies, graphicsFamily);
-                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiState, "DDGI probe state",
-                    _ddgiProbeVolumeManager.ProbeStateBuffer, queueFamilies, graphicsFamily);
-                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiState, "DDGI probe update queue",
-                    _ddgiProbeVolumeManager.ProbeUpdateQueueBuffer, queueFamilies, graphicsFamily);
-                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiState, "DDGI relocation classification",
-                    _ddgiProbeVolumeManager.ProbeRelocationClassificationBuffer, queueFamilies, graphicsFamily);
-                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiAtlases, "DDGI irradiance atlas",
-                    _ddgiProbeVolumeManager.IrradianceAtlasBuffer, queueFamilies, graphicsFamily);
-                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiAtlases, "DDGI visibility atlas",
-                    _ddgiProbeVolumeManager.VisibilityAtlasBuffer, queueFamilies, graphicsFamily);
-                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiRayResources, "DDGI ray scratch",
-                    _ddgiProbeVolumeManager.RayResultScratchBuffer, queueFamilies, graphicsFamily);
-                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI scheduler constants",
-                    _ddgiProbeVolumeManager.SchedulerConstantsBuffer, queueFamilies, graphicsFamily);
-                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI dirty regions",
-                    _ddgiProbeVolumeManager.DirtyRegionBuffer, queueFamilies, graphicsFamily);
-                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI probe candidates",
-                    _ddgiProbeVolumeManager.ProbeCandidateBuffer, queueFamilies, graphicsFamily);
-                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI scheduler group counts",
-                    _ddgiProbeVolumeManager.SchedulerGroupCountBuffer, queueFamilies, graphicsFamily);
-                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI scheduler prefix",
-                    _ddgiProbeVolumeManager.SchedulerPrefixBuffer, queueFamilies, graphicsFamily);
-                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI scheduler counters",
-                    _ddgiProbeVolumeManager.SchedulerCounterBuffer, queueFamilies, graphicsFamily);
-                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI trace indirect dispatch",
-                    _ddgiProbeVolumeManager.TraceIndirectDispatchBuffer, queueFamilies, graphicsFamily);
-                for (int frameIndex = 0; frameIndex < FramesInFlight; frameIndex++)
-                {
-                    AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.FullDdgiScheduler, "DDGI scheduler counter readback",
-                        _ddgiProbeVolumeManager.GetSchedulerCounterReadbackBuffer(frameIndex), queueFamilies, graphicsFamily,
-                        frameIndex: frameIndex);
-                }
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiScheduler, "Simple DDGI GPU scheduler arena",
+                    _simpleDdgiVolumeManager.GpuSchedulerArenaBuffer, queueFamilies, graphicsFamily);
             }
 
             GpuParticleAsyncResourceSet firstParticleResources =
@@ -7828,32 +7578,22 @@ namespace Njulf.Rendering
                 Settings.Fog.Enabled &&
                 Settings.Fog.Mode != FogMode.Disabled &&
                 !animationDebugActive;
-            bool ssgiChainWillExecute =
-                GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(gi, sceneData.DebugViewMode) &&
-                gi.TemporalEnabled &&
-                sceneData.DepthPrePassEnabled &&
-                sceneData.FoliageDebugView == 0 &&
-                !animationDebugActive;
             return path switch
             {
                 AsyncComputePath.SimpleDdgiUpdate =>
-                    gi.EffectiveUseSimpleDdgi &&
+                    gi.EffectiveUseDdgi &&
                     gi.DdgiAsyncComputeEnabled &&
                     sceneData.SimpleDdgiActive != 0 &&
-                    sceneData.SimpleDdgiProbesUpdated > 0 &&
+                    (sceneData.SimpleDdgiProbesUpdated > 0 ||
+                     (sceneData.SimpleDdgiSchedulerMode.IsGpuMode() &&
+                      sceneData.SimpleDdgiSchedulerReady != 0)) &&
                     // Sampled-atlas images are currently submitted as direct
                     // graphics-queue resources. Keep the whole producer chain
                     // on graphics until the render graph owns their queue
                     // transitions and lifetime declarations.
                     sceneData.SimpleDdgiSampledAtlasActive == 0,
-                AsyncComputePath.FullDdgiUpdate =>
-                    gi.EffectiveUseDdgi &&
-                    !gi.EffectiveUseSimpleDdgi &&
-                    gi.DdgiAsyncComputeEnabled &&
-                    sceneData.GlobalIlluminationDdgiActive != 0 &&
-                    sceneData.DdgiProbesUpdated > 0,
                 AsyncComputePath.FarFieldClipmapBake =>
-                    gi.EffectiveUseSimpleDdgi &&
+                    gi.EffectiveUseDdgi &&
                     gi.FarFieldClipmapEnabled &&
                     _farFieldClipmapManager?.BakePending == true,
                 AsyncComputePath.AmbientOcclusionBlur =>
@@ -7861,7 +7601,6 @@ namespace Njulf.Rendering
                     sceneData.DepthPrePassEnabled &&
                     Settings.AmbientOcclusion.BlurRadius > 0,
                 AsyncComputePath.HiZBuild => sceneData.HiZBuildEnabled,
-                AsyncComputePath.SsgiChain => ssgiChainWillExecute,
                 // Fog samples Simple DDGI. Keep it on graphics whenever the
                 // optional image mirror is live for the same ownership reason.
                 AsyncComputePath.Fog => fogWillExecute && sceneData.SimpleDdgiSampledAtlasActive == 0,
@@ -8007,11 +7746,9 @@ namespace Njulf.Rendering
             return path switch
             {
                 AsyncComputePath.SimpleDdgiUpdate => "Simple DDGI is inactive for this frame.",
-                AsyncComputePath.FullDdgiUpdate => "Full DDGI is inactive for this frame.",
                 AsyncComputePath.FarFieldClipmapBake => "No far-field clipmap bake is pending.",
                 AsyncComputePath.AmbientOcclusionBlur => "Ambient occlusion blur is inactive for this frame.",
                 AsyncComputePath.HiZBuild => "Hi-Z build is inactive for this frame.",
-                AsyncComputePath.SsgiChain => "The complete SSGI chain is inactive for this frame.",
                 AsyncComputePath.Fog => "Fog is disabled for this frame.",
                 AsyncComputePath.Bloom => "Bloom is disabled or has no mip chain.",
                 AsyncComputePath.GpuParticles => "GPU particle emitters are inactive for this frame.",
@@ -8023,17 +7760,15 @@ namespace Njulf.Rendering
         {
             return string.Create(
                 System.Globalization.CultureInfo.InvariantCulture,
-                $"{sceneData.ScreenWidth}x{sceneData.ScreenHeight}|{sceneData.ActiveFeatureIsolation}|{sceneData.ObjectCount}|{sceneData.MeshletCount}|{sceneData.LightCount}|{sceneData.DepthPrePassEnabled}|{sceneData.HiZBuildEnabled}|{sceneData.GpuParticlesEnabled}|{sceneData.GpuParticleEmitterCount}|{sceneData.FoliageClusterCount}|{Settings.GlobalIllumination.Mode}|{Settings.GlobalIllumination.EffectiveUseSsgi}|{Settings.GlobalIllumination.EffectiveUseDdgi}|{Settings.GlobalIllumination.EffectiveUseSimpleDdgi}|{Settings.AmbientOcclusion.Enabled}|{Settings.AmbientOcclusion.BlurRadius}|{Settings.Fog.Enabled}|{Settings.Fog.Mode}|{Settings.Bloom.Enabled}|{Settings.Bloom.MipCount}|{Settings.AntiAliasing.EffectiveMode}");
+                $"{sceneData.ScreenWidth}x{sceneData.ScreenHeight}|{sceneData.ActiveFeatureIsolation}|{sceneData.ObjectCount}|{sceneData.MeshletCount}|{sceneData.LightCount}|{sceneData.DepthPrePassEnabled}|{sceneData.HiZBuildEnabled}|{sceneData.GpuParticlesEnabled}|{sceneData.GpuParticleEmitterCount}|{sceneData.FoliageClusterCount}|{Settings.GlobalIllumination.Mode}|{Settings.GlobalIllumination.EffectiveUseDdgi}|{Settings.GlobalIllumination.SimpleDdgiSchedulerMode}|{sceneData.SimpleDdgiSchedulerMode}|{Settings.AmbientOcclusion.Enabled}|{Settings.AmbientOcclusion.BlurRadius}|{Settings.Fog.Enabled}|{Settings.Fog.Mode}|{Settings.Bloom.Enabled}|{Settings.Bloom.MipCount}|{Settings.AntiAliasing.EffectiveMode}");
         }
 
         private static string GetRepresentativeAsyncPass(AsyncComputePath path) => path switch
         {
-            AsyncComputePath.SimpleDdgiUpdate => "SimpleDdgiTracePass",
-            AsyncComputePath.FullDdgiUpdate => "DdgiTracePass",
+            AsyncComputePath.SimpleDdgiUpdate => "SimpleDdgiSchedulePass",
             AsyncComputePath.FarFieldClipmapBake => "FarFieldClipmapBakePass",
             AsyncComputePath.AmbientOcclusionBlur => "AmbientOcclusionBlurPass",
             AsyncComputePath.HiZBuild => "HiZBuildPass",
-            AsyncComputePath.SsgiChain => "SsgiTracePass",
             AsyncComputePath.Fog => "FogPass",
             AsyncComputePath.Bloom => "BloomPass",
             AsyncComputePath.GpuParticles => "GpuParticleSimulatePass",
@@ -8042,12 +7777,10 @@ namespace Njulf.Rendering
 
         private static AsyncComputePath? GetAsyncComputePath(string passName) => passName switch
         {
-            "SimpleDdgiTracePass" or "SimpleDdgiRelocateClassifyPass" or "SimpleDdgiTransportPass" or "SimpleDdgiBlendPass" or "SimpleDdgiPublishPass" => AsyncComputePath.SimpleDdgiUpdate,
-            "DdgiSchedulePass" or "DdgiTracePass" or "DdgiBlendPass" or "DdgiRelocateClassifyPass" or "DdgiPublishPass" => AsyncComputePath.FullDdgiUpdate,
+            "SimpleDdgiSchedulePass" or "SimpleDdgiTracePass" or "SimpleDdgiRelocateClassifyPass" or "SimpleDdgiTransportPass" or "SimpleDdgiBlendPass" or "SimpleDdgiPublishPass" or "SimpleDdgiSchedulerCommitPass" => AsyncComputePath.SimpleDdgiUpdate,
             "FarFieldClipmapBakePass" => AsyncComputePath.FarFieldClipmapBake,
             "AmbientOcclusionBlurPass" => AsyncComputePath.AmbientOcclusionBlur,
             "HiZBuildPass" => AsyncComputePath.HiZBuild,
-            "SsgiTracePass" or "SsgiTemporalPass" or "SsgiDenoisePass" => AsyncComputePath.SsgiChain,
             "FogPass" => AsyncComputePath.Fog,
             "BloomPass" => AsyncComputePath.Bloom,
             "GpuParticleResetPass" or "GpuParticleSimulatePass" or "GpuParticleSortPass" => AsyncComputePath.GpuParticles,
@@ -8155,7 +7888,7 @@ namespace Njulf.Rendering
         private static bool IsDdgiAsyncComputeActuallyEnabled(AsyncComputeSubmissionPlan plan) =>
             plan.Accepted &&
             plan.ContainsAsyncCompute &&
-            plan.Paths.Any(path => path.Active && path.Path is AsyncComputePath.SimpleDdgiUpdate or AsyncComputePath.FullDdgiUpdate);
+            plan.Paths.Any(path => path.Active && path.Path == AsyncComputePath.SimpleDdgiUpdate);
 
         private readonly record struct AsyncComputeResourcePlanGeneration(
             ulong GraphResourceGeneration,
@@ -8172,8 +7905,7 @@ namespace Njulf.Rendering
             ulong HiZImage,
             AsyncCoreBufferIdentity CoreBuffers,
             FarFieldAsyncBufferIdentity FarFieldBuffers,
-            SimpleDdgiAsyncBufferIdentity SimpleDdgiBuffers,
-            FullDdgiAsyncBufferIdentity FullDdgiBuffers);
+            SimpleDdgiAsyncBufferIdentity SimpleDdgiBuffers);
 
         private readonly record struct AsyncCoreBufferIdentity(
             BufferHandle MeshPositions,
@@ -8209,24 +7941,6 @@ namespace Njulf.Rendering
             BufferHandle ProbeState,
             BufferHandle UpdateQueue,
             BufferHandle RelocationClassification);
-
-        private readonly record struct FullDdgiAsyncBufferIdentity(
-            BufferHandle VolumeMetadata,
-            BufferHandle ProbeState,
-            BufferHandle UpdateQueue,
-            BufferHandle RelocationClassification,
-            BufferHandle IrradianceAtlas,
-            BufferHandle VisibilityAtlas,
-            BufferHandle RayScratch,
-            BufferHandle SchedulerConstants,
-            BufferHandle DirtyRegions,
-            BufferHandle ProbeCandidates,
-            BufferHandle SchedulerGroupCounts,
-            BufferHandle SchedulerPrefix,
-            BufferHandle SchedulerCounters,
-            BufferHandle TraceIndirectDispatch,
-            BufferHandle CounterReadbackFrame0,
-            BufferHandle CounterReadbackFrame1);
 
         private sealed record AsyncComputePlan(
             AsyncComputeMode RequestedMode,
@@ -8418,9 +8132,6 @@ namespace Njulf.Rendering
                 sceneData.GpuAmbientOcclusionBlurMicroseconds +
                 sceneData.GpuAccelerationStructureBlasMicroseconds +
                 sceneData.GpuAccelerationStructureTlasMicroseconds +
-                sceneData.GpuSsgiTraceMicroseconds +
-                sceneData.GpuSsgiTemporalMicroseconds +
-                sceneData.GpuSsgiDenoiseMicroseconds +
                 sceneData.GpuDdgiUpdateMicroseconds +
                 sceneData.GpuGiCompositeMicroseconds +
                 sceneData.GpuLightCullMicroseconds +
@@ -8440,69 +8151,15 @@ namespace Njulf.Rendering
                 sceneData.GpuReflectionProbePrefilterMicroseconds;
         }
 
-        private static (uint Width, uint Height) CalculateSsgiExtent(uint width, uint height, float resolutionScale, bool enabled)
-        {
-            if (!enabled || width == 0 || height == 0)
-                return (0, 0);
-
-            float scale = resolutionScale <= 0.375f ? 0.25f : resolutionScale <= 0.75f ? 0.5f : 1.0f;
-            uint scaledWidth = Math.Max(1u, (uint)Math.Ceiling(width * scale));
-            uint scaledHeight = Math.Max(1u, (uint)Math.Ceiling(height * scale));
-            return (scaledWidth, scaledHeight);
-        }
-
         internal static GlobalIlluminationMode ResolveEffectiveGlobalIlluminationMode(
             GlobalIlluminationSettings settings,
             bool rayQuerySupported)
         {
             if (!settings.Enabled)
                 return GlobalIlluminationMode.Disabled;
-            if (settings.Mode == GlobalIlluminationMode.RayQueryHybrid && !rayQuerySupported)
-                return GlobalIlluminationMode.Hybrid;
-            return settings.Mode;
-        }
-
-        private static int ResolveSsgiRayCount(RenderQualityPreset qualityPreset, bool enabled)
-        {
-            if (!enabled)
-                return 0;
-
-            return qualityPreset switch
-            {
-                RenderQualityPreset.Medium => 4,
-                RenderQualityPreset.Ultra => 8,
-                RenderQualityPreset.Low => 0,
-                _ => 6
-            };
-        }
-
-        private static ulong EstimateGlobalIlluminationRenderTargetBytes(uint width, uint height, float resolutionScale, bool ssgiEnabled)
-        {
-            if (!ssgiEnabled || width == 0 || height == 0)
-                return 0;
-
-            (uint ssgiWidth, uint ssgiHeight) = CalculateSsgiExtent(width, height, resolutionScale, enabled: true);
-            ulong ssgiPixels = (ulong)ssgiWidth * ssgiHeight;
-            ulong fullResolutionPixels = (ulong)width * height;
-            const ulong rgba16FloatBytesPerPixel = 8;
-            const ulong r32FloatBytesPerPixel = 4;
-            const ulong rg16FloatBytesPerPixel = 4;
-            const ulong r16FloatBytesPerPixel = 2;
-            const ulong ssgiColorTargetCount = 4;
-            const ulong ssgiHitDistanceTargetCount = 1;
-            const ulong ssgiDepthHistoryTargetCount = 2;
-            const ulong ssgiNormalHistoryTargetCount = 2;
-            const ulong ssgiMomentTargetCount = 2;
-            const ulong ssgiHistoryLengthTargetCount = 2;
-            const ulong finalDiffuseTargetCount = 1;
-            return checked(
-                (ssgiPixels * rgba16FloatBytesPerPixel * ssgiColorTargetCount) +
-                (ssgiPixels * r16FloatBytesPerPixel * ssgiHitDistanceTargetCount) +
-                (ssgiPixels * r32FloatBytesPerPixel * ssgiDepthHistoryTargetCount) +
-                (ssgiPixels * rgba16FloatBytesPerPixel * ssgiNormalHistoryTargetCount) +
-                (ssgiPixels * rg16FloatBytesPerPixel * ssgiMomentTargetCount) +
-                (ssgiPixels * r16FloatBytesPerPixel * ssgiHistoryLengthTargetCount) +
-                (fullResolutionPixels * rgba16FloatBytesPerPixel * finalDiffuseTargetCount));
+            return settings.Mode == GlobalIlluminationMode.Ddgi
+                ? GlobalIlluminationMode.Ddgi
+                : GlobalIlluminationMode.Disabled;
         }
 
         private string BuildGpuTimingReason()
@@ -8532,21 +8189,18 @@ namespace Njulf.Rendering
 
         private static bool HasCompletedDdgiGpuTiming(FrameTimingSnapshot timings)
         {
-            return HasCompletedGpuTiming(timings, "DdgiSchedulePass") ||
-                HasCompletedGpuTiming(timings, "DdgiTracePass") ||
-                HasCompletedGpuTiming(timings, "DdgiBlendPass") ||
-                HasCompletedGpuTiming(timings, "DdgiRelocateClassifyPass") ||
-                HasCompletedGpuTiming(timings, "DdgiPublishPass") ||
-                HasCompletedSimpleDdgiGpuTiming(timings);
+            return HasCompletedSimpleDdgiGpuTiming(timings);
         }
 
         private static bool HasCompletedSimpleDdgiGpuTiming(FrameTimingSnapshot timings)
         {
-            return HasCompletedGpuTiming(timings, "SimpleDdgiTracePass") ||
+            return HasCompletedGpuTiming(timings, "SimpleDdgiSchedulePass") ||
+                HasCompletedGpuTiming(timings, "SimpleDdgiTracePass") ||
                 HasCompletedGpuTiming(timings, "SimpleDdgiTransportPass") ||
                 HasCompletedGpuTiming(timings, "SimpleDdgiBlendPass") ||
                 HasCompletedGpuTiming(timings, "SimpleDdgiPublishPass") ||
-                HasCompletedGpuTiming(timings, "SimpleDdgiRelocateClassifyPass");
+                HasCompletedGpuTiming(timings, "SimpleDdgiRelocateClassifyPass") ||
+                HasCompletedGpuTiming(timings, "SimpleDdgiSchedulerCommitPass");
         }
 
         private static bool HasCompletedGpuTiming(FrameTimingSnapshot timings, string passName)
@@ -8560,6 +8214,10 @@ namespace Njulf.Rendering
             sceneData.GpuDirectionalShadowMicroseconds = timings.GetGpuMicrosecondsOrZero("DirectionalShadowPass");
             sceneData.GpuSpotShadowMicroseconds = timings.GetGpuMicrosecondsOrZero("SpotShadowPass");
             sceneData.GpuPointShadowMicroseconds = timings.GetGpuMicrosecondsOrZero("PointShadowPass");
+            sceneData.GpuReflectionProbeCaptureMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("ReflectionProbeCapturePass");
+            sceneData.GpuReflectionProbePrefilterMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("ReflectionProbePrefilterPass");
             sceneData.GpuDepthPrePassMicroseconds = timings.GetGpuMicrosecondsOrZero("DepthPrePass");
             sceneData.GpuMotionVectorMicroseconds = timings.GetGpuMicrosecondsOrZero("MotionVectorPass");
             sceneData.GpuHiZBuildMicroseconds = timings.GetGpuMicrosecondsOrZero("HiZBuildPass");
@@ -8567,60 +8225,24 @@ namespace Njulf.Rendering
             sceneData.GpuAmbientOcclusionBlurMicroseconds = timings.GetGpuMicrosecondsOrZero("AmbientOcclusionBlurPass");
             sceneData.GpuAccelerationStructureBlasMicroseconds = timings.GetGpuMicrosecondsOrZero("AccelerationStructureBlasPass");
             sceneData.GpuAccelerationStructureTlasMicroseconds = timings.GetGpuMicrosecondsOrZero("AccelerationStructureTlasPass");
-            sceneData.GpuSsgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiTracePass");
-            sceneData.GpuSsgiTemporalMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiTemporalPass");
-            sceneData.GpuSsgiDenoiseMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiDenoisePass");
-            sceneData.GpuDdgiScheduleMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiSchedulePass");
-            sceneData.GpuDdgiScheduleResetMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiScheduleReset");
-            sceneData.GpuDdgiScheduleScoreMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiScheduleScore");
-            sceneData.GpuDdgiSchedulePrefixMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiSchedulePrefix");
-            sceneData.GpuDdgiScheduleCompactMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiScheduleCompact");
-            sceneData.GpuDdgiScheduleFinalizeMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiScheduleFinalize");
-            sceneData.GpuDdgiScheduleReadbackMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiScheduleReadback");
-            sceneData.GpuDdgiScheduleBarrierMicroseconds =
-                timings.GetGpuMicrosecondsOrZero("DdgiScheduleBarrierReset") +
-                timings.GetGpuMicrosecondsOrZero("DdgiScheduleBarrierScore") +
-                timings.GetGpuMicrosecondsOrZero("DdgiScheduleBarrierPrefix") +
-                timings.GetGpuMicrosecondsOrZero("DdgiScheduleBarrierCompact") +
-                timings.GetGpuMicrosecondsOrZero("DdgiScheduleTraceBarrier");
-            sceneData.GpuDdgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiTracePass");
-            sceneData.GpuDdgiBlendMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiBlendPass");
-            sceneData.GpuDdgiRelocateClassifyMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiRelocateClassifyPass");
-            sceneData.GpuDdgiPublishMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiPublishPass");
+            sceneData.GpuSimpleDdgiScheduleMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiSchedulePass");
             sceneData.GpuSimpleDdgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiTracePass");
             sceneData.GpuSimpleDdgiTransportMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiTransportPass");
             sceneData.GpuSimpleDdgiBlendMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiBlendPass");
             long gpuSimpleDdgiPublishMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiPublishPass");
+            sceneData.GpuSimpleDdgiCommitMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiSchedulerCommitPass");
             sceneData.GpuFarFieldUpdateMicroseconds = timings.GetGpuMicrosecondsOrZero("FarFieldClipmapBakePass");
             sceneData.GpuFarFieldUpdateTimingValid = HasCompletedGpuTiming(timings, "FarFieldClipmapBakePass") ? 1 : 0;
             long gpuSimpleDdgiRelocateClassifyMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiRelocateClassifyPass");
-            if (sceneData.GpuSimpleDdgiTraceMicroseconds > 0 ||
-                gpuSimpleDdgiRelocateClassifyMicroseconds > 0 ||
-                sceneData.GpuSimpleDdgiTransportMicroseconds > 0 ||
-                sceneData.GpuSimpleDdgiBlendMicroseconds > 0 ||
-                gpuSimpleDdgiPublishMicroseconds > 0)
-            {
-                sceneData.GpuDdgiScheduleMicroseconds = 0;
-                sceneData.GpuDdgiScheduleResetMicroseconds = 0;
-                sceneData.GpuDdgiScheduleScoreMicroseconds = 0;
-                sceneData.GpuDdgiSchedulePrefixMicroseconds = 0;
-                sceneData.GpuDdgiScheduleCompactMicroseconds = 0;
-                sceneData.GpuDdgiScheduleFinalizeMicroseconds = 0;
-                sceneData.GpuDdgiScheduleReadbackMicroseconds = 0;
-                sceneData.GpuDdgiScheduleBarrierMicroseconds = 0;
-                sceneData.GpuDdgiTraceMicroseconds = sceneData.GpuSimpleDdgiTraceMicroseconds;
-                sceneData.GpuDdgiBlendMicroseconds = sceneData.GpuSimpleDdgiTransportMicroseconds +
-                    sceneData.GpuSimpleDdgiBlendMicroseconds;
-                sceneData.GpuDdgiRelocateClassifyMicroseconds = gpuSimpleDdgiRelocateClassifyMicroseconds;
-                sceneData.GpuDdgiPublishMicroseconds = gpuSimpleDdgiPublishMicroseconds;
-            }
             sceneData.GpuDdgiUpdateMicroseconds =
-                sceneData.GpuDdgiScheduleMicroseconds +
-                sceneData.GpuDdgiTraceMicroseconds +
-                sceneData.GpuDdgiBlendMicroseconds +
-                sceneData.GpuDdgiRelocateClassifyMicroseconds +
-                sceneData.GpuDdgiPublishMicroseconds;
-            sceneData.GpuGiCompositeMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiCompositePass");
+                sceneData.GpuSimpleDdgiScheduleMicroseconds +
+                sceneData.GpuSimpleDdgiTraceMicroseconds +
+                sceneData.GpuSimpleDdgiTransportMicroseconds +
+                sceneData.GpuSimpleDdgiBlendMicroseconds +
+                gpuSimpleDdgiRelocateClassifyMicroseconds +
+                gpuSimpleDdgiPublishMicroseconds +
+                sceneData.GpuSimpleDdgiCommitMicroseconds;
+            sceneData.GpuGiCompositeMicroseconds = 0;
             sceneData.GpuLightCullMicroseconds = timings.GetGpuMicrosecondsOrZero("TiledLightCullingPass");
             sceneData.GpuFoliageCullMicroseconds = timings.GetGpuMicrosecondsOrZero("FoliageCullPass");
             sceneData.GpuFoliageShadowMicroseconds = sceneData.FoliageCastShadows && sceneData.FoliageClusterCount > 0
@@ -8809,6 +8431,18 @@ namespace Njulf.Rendering
             if (_reflectionProbeManager == null)
                 return;
 
+            _reflectionProbeCompletionValues.SetFrameSerial(_ddgiFrameSerial);
+            _reflectionProbeManager.BeginFrameResourceRetirement(
+                _ddgiFrameSerial,
+                _ddgiFrameSerial);
+            _reflectionProbeManager.PollCaptureCompletions(_ddgiFrameSerial);
+            FrameTimingSnapshot completedReflectionTimings = _gpuTimestamps.LastCompletedSnapshot;
+            _reflectionProbeManager.UpdateCaptureGpuTimingHistory(
+                completedReflectionTimings.GetGpuMicrosecondsOrZero("ReflectionProbeCapturePass"),
+                completedReflectionTimings.GetGpuMicrosecondsOrZero("ReflectionProbePrefilterPass"),
+                completedReflectionTimings.GetGpuMicrosecondsOrZero("ReflectionProbePublishPass"));
+            LightingVersionSnapshot lightingVersions = LightingVersions;
+            _reflectionProbeManager.UpdateCaptureVersions(lightingVersions);
             _reflectionProbeManager.Upload(
                 scene.ReflectionProbes,
                 _stagingRing,
@@ -8834,43 +8468,57 @@ namespace Njulf.Rendering
             sceneData.CpuReflectionProbeUploadMicroseconds = _reflectionProbeManager.LastUploadMicroseconds;
         }
 
-        private DdgiGatherTileManager.DdgiGatherSupportReadiness ResolveDdgiGatherSupportReadiness()
+        private void RecordReflectionProbeWork(SceneRenderingData sceneData)
         {
-            if (_ddgiProbeVolumeManager == null)
-                return default;
+            if (_reflectionProbeManager == null)
+                return;
 
-            const float readyFraction = 0.80f;
-            float localReadiness = ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastWarmedLocalProbeFraction);
-            float cascade0Readiness = ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastWarmedCascade0ProbeFraction);
-            float visibleReadiness = ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastWarmedVisibleProbeFraction);
-            if (_ddgiProbeVolumeManager.WarmupState == DdgiRuntimeWarmupState.SteadyState &&
-                localReadiness >= readyFraction &&
-                cascade0Readiness >= readyFraction &&
-                visibleReadiness >= readyFraction)
+            if (_reflectionProbeCapturePass?.ShouldExecute(_currentFrame, sceneData) == true)
             {
-                return DdgiGatherTileManager.DdgiGatherSupportReadiness.Steady;
+                long start = Stopwatch.GetTimestamp();
+                _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "ReflectionProbeCapturePass");
+                try
+                {
+                    _reflectionProbeCapturePass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+                }
+                finally
+                {
+                    _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
+                    sceneData.CpuReflectionProbeCaptureRecordMicroseconds += ElapsedMicroseconds(start);
+                }
             }
 
-            float publishedCacheReadiness = _ddgiProbeVolumeManager.PublishedCacheGeneration > 0u ? 0.05f : 0.0f;
-            float publishedProbeConfidence = _ddgiProbeVolumeManager.PublishedCacheGeneration > 0u
-                ? ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastAverageProbeConfidence)
-                : 0.0f;
-            float clipmapReadiness = Math.Max(
-                Math.Min(cascade0Readiness, visibleReadiness),
-                Math.Max(publishedProbeConfidence, publishedCacheReadiness));
-            return new DdgiGatherTileManager.DdgiGatherSupportReadiness(
-                localReadiness,
-                clipmapReadiness,
-                clipmapReadiness);
+            if (_reflectionProbePrefilterPass?.ShouldExecute(_currentFrame, sceneData) == true)
+            {
+                long start = Stopwatch.GetTimestamp();
+                _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "ReflectionProbePrefilterPass");
+                try
+                {
+                    _reflectionProbePrefilterPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+                }
+                finally
+                {
+                    _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
+                    sceneData.CpuReflectionProbePrefilterRecordMicroseconds += ElapsedMicroseconds(start);
+                }
+            }
+
+            if (_reflectionProbePublishPass?.ShouldExecute(_currentFrame, sceneData) == true)
+            {
+                _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "ReflectionProbePublishPass");
+                try
+                {
+                    _reflectionProbePublishPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+                }
+                finally
+                {
+                    _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
+                }
+            }
         }
 
-        private static float ResolveDdgiGatherReadinessHint(float warmedProbeFraction)
-        {
-            if (!float.IsFinite(warmedProbeFraction))
-                return 0.0f;
-
-            return Math.Clamp(warmedProbeFraction, 0.0f, 1.0f);
-        }
+        private bool IncludeAsyncComputePass(string passName) =>
+            _asyncComputePassNameScratch.Contains(passName);
 
         private void PrepareDdgiProbeVolumes(
             Scene scene,
@@ -8879,400 +8527,87 @@ namespace Njulf.Rendering
             LightFrameSnapshot lightSnapshot,
             bool cameraCut)
         {
-            if (_ddgiProbeVolumeManager == null)
+            bool simpleDdgiActive =
+                Settings.GlobalIllumination.EffectiveUseDdgi &&
+                _simpleDdgiVolumeManager != null &&
+                _farFieldClipmapManager != null;
+            bool simpleDdgiRayUpdateActive =
+                simpleDdgiActive &&
+                Settings.GlobalIllumination.EffectiveUseRayQueryBackend &&
+                _context.RayQuerySupported &&
+                _accelerationStructureManager?.Active == true;
+
+            if (!simpleDdgiActive)
             {
-                _lastDdgiFrameLayout = DdgiFrameLayout.Empty;
-                _hasLastDdgiCameraPosition = false;
-                _hasLastDdgiProjectionMatrix = false;
-                PopulateDdgiPassExecutionDiagnostics(sceneData);
+                _simpleDdgiVolumeManager?.EnsureDisabled(_stagingRing, _currentCommandBuffer);
+                ResetDdgiDynamicTracking();
+                UploadDdgiEmissiveSources(scene, sceneData, ddgiRayUpdateActive: false);
+                ScheduleReflectionProbeRecapturesFromGi(sceneData, simpleDdgiActive: false);
                 return;
             }
 
-            bool ddgiActive = Settings.GlobalIllumination.EffectiveUseDdgi;
-            bool simpleDdgiActive = Settings.GlobalIllumination.EffectiveUseSimpleDdgi &&
-                                    _simpleDdgiVolumeManager != null &&
-                                    _farFieldClipmapManager != null;
-            bool simpleDdgiStructuredGatherAvailable = simpleDdgiActive &&
-                                                         Settings.GlobalIllumination.EffectiveUseRayQueryBackend &&
-                                                         _context.RayQuerySupported &&
-                                                         _accelerationStructureManager?.Active == true;
-            bool ddgiRayUpdateActive = ddgiActive &&
-                                       Settings.GlobalIllumination.EffectiveUseRayQueryBackend &&
-                                       _accelerationStructureManager?.Active == true;
-            bool simpleDdgiRayUpdateActive = simpleDdgiActive &&
-                                             Settings.GlobalIllumination.EffectiveUseRayQueryBackend &&
-                                             _accelerationStructureManager?.Active == true;
-
-            DdgiFrameLayout layout = BuildDdgiFrameLayout(scene, camera, lightSnapshot, sceneData, cameraCut);
-            _lastDdgiFrameLayout = layout;
-            // Full and simple DDGI have separate state/atlas owners. Do not run
-            // the inactive owner's upload path and then overwrite a shared
-            // gather table later in the frame; only the selected backend may
-            // mutate its resources.
-            if (ddgiActive)
-            {
-                _ddgiProbeVolumeManager.Upload(layout, _stagingRing, _currentCommandBuffer);
-                _ddgiGatherTileManager?.Upload(
-                    layout,
-                    sceneData.ViewProjectionMatrix,
-                    sceneData.ScreenWidth,
-                    sceneData.ScreenHeight,
-                    _stagingRing,
-                    _currentCommandBuffer,
-                    ResolveDdgiGatherSupportReadiness());
-            }
-            else
-            {
-                // Control headers are the only inactive-owner writes. They are
-                // required once at startup and on a backend transition so forward
-                // shading can never observe a stale legacy enabled bit.
-                _ddgiProbeVolumeManager.EnsureDisabled(_stagingRing, _currentCommandBuffer);
-            }
-
-            // Build and upload the current emissive payload before calculating
-            // the simple-DDGI dirty signature. This makes the revision consumed
-            // by scheduling describe the data traced in this same frame.
-            UploadDdgiEmissiveSources(scene, sceneData, ddgiRayUpdateActive || simpleDdgiRayUpdateActive);
-            if (simpleDdgiActive)
-            {
-                _farFieldClipmapManager!.Upload(
-                    scene,
-                    camera.Position,
-                    _stagingRing,
-                    _currentCommandBuffer,
-                    sceneData.SceneContentRevision);
-                sceneData.FarFieldPagedMode = _farFieldClipmapManager.PagedMode ? 1 : 0;
-                sceneData.FarFieldPagePoolCapacity = _farFieldClipmapManager.PagePoolCapacity;
-                sceneData.FarFieldResidentPageCount = _farFieldClipmapManager.ResidentPageCount;
-                sceneData.FarFieldPendingPageCount = _farFieldClipmapManager.PendingPageCount;
-                sceneData.FarFieldPageRequestCount = _farFieldClipmapManager.PageRequestCount;
-                sceneData.FarFieldPageMissCount = _farFieldClipmapManager.PageMissCount;
-                sceneData.FarFieldPageRebuildCount = _farFieldClipmapManager.PageRebuildCount;
-                sceneData.FarFieldPageEvictionCount = _farFieldClipmapManager.PageEvictionsThisFrame;
-                sceneData.FarFieldScheduledPageBakeCount = _farFieldClipmapManager.ScheduledPageBakeCount;
-                sceneData.FarFieldCacheBytes = _farFieldClipmapManager.PageCacheBytes;
-                sceneData.FarFieldMemoryBudgetBytes = Settings.GlobalIllumination.FarFieldMemoryBudgetBytes;
-                sceneData.FarFieldInstanceBufferBytes = _farFieldClipmapManager.InstanceBufferBytes;
-                sceneData.FarFieldPageTableBytes = _farFieldClipmapManager.PageTableBufferBytes;
-            }
-            bool farFieldCoverageAvailable = simpleDdgiActive &&
-                                             _farFieldClipmapManager!.CoverageReady;
-            if (simpleDdgiActive)
-            {
-                SimpleDdgiDirtySignature simpleDdgiDirtySignature = CreateSimpleDdgiDirtySignature(
-                    scene,
-                    lightSnapshot,
-                    _ddgiEmissiveSourceRevision,
-                    farFieldCoverageAvailable);
-                _simpleDdgiVolumeManager!.Upload(
-                    scene,
-                    camera.Position,
-                    _stagingRing,
-                    _currentCommandBuffer,
-                    _currentFrame,
-                    simpleDdgiDirtySignature.Signature,
-                    simpleDdgiDirtySignature.ReasonFlags,
-                    simpleDdgiStructuredGatherAvailable,
-                    farFieldCoverageAvailable,
-                    layout.DirtyRegions,
-                    simpleDdgiDirtySignature.CohortTransition);
-                // The gather table has one active producer. In simple mode it is
-                // populated directly from the simple volume table; no legacy
-                // payload is uploaded first.
-                _ddgiGatherTileManager?.UploadSimple(
-                    _simpleDdgiVolumeManager!.LastVolumes,
-                    sceneData.ViewProjectionMatrix,
-                    sceneData.ScreenWidth,
-                    sceneData.ScreenHeight,
-                    _stagingRing,
-                    _currentCommandBuffer);
-            }
-            else
-            {
-                // As above, disable only the control header. The inactive simple
-                // scheduler, atlases, passes, and gather producer remain dormant.
-                _simpleDdgiVolumeManager?.EnsureDisabled(_stagingRing, _currentCommandBuffer);
-            }
-            bool ddgiCompareMode = Settings.GlobalIllumination.DdgiSchedulerMode == DdgiSchedulerMode.CpuGpuCompare;
-            bool gpuSchedulerRequested = Settings.GlobalIllumination.DdgiSchedulerMode != DdgiSchedulerMode.CpuReference;
-            bool gpuSchedulerQueueRequested = Settings.GlobalIllumination.DdgiSchedulerMode == DdgiSchedulerMode.Gpu ||
-                                              (ddgiCompareMode && Settings.GlobalIllumination.DdgiCompareModeUseGpuQueueForRendering);
-            int frameRingIndex = _currentFrame;
-            ulong frameSerial = sceneData.DdgiFrameSerial;
-            if (ddgiActive)
-                AdvanceDdgiGpuSchedulerFallbackRetry(ddgiRayUpdateActive);
-            string gpuSchedulerFallbackReason = ddgiActive
-                ? ResolveDdgiGpuSchedulerFallbackReason(
-                    ddgiRayUpdateActive,
-                    ddgiCompareMode,
-                    Settings.GlobalIllumination.DdgiCompareModeUseGpuQueueForRendering)
-                : string.Empty;
-            bool gpuSchedulerActive = ddgiRayUpdateActive &&
-                                       gpuSchedulerQueueRequested &&
-                                       string.IsNullOrEmpty(gpuSchedulerFallbackReason);
-            int scheduledProbeUpdates = 0;
-            if (!ddgiActive)
-            {
-                _ddgiProbeVolumeManager.ClearGpuSchedulerValidationExpectedFrame(frameRingIndex);
-            }
-            else if (ddgiCompareMode && ddgiRayUpdateActive)
-            {
-                int cpuReferenceScheduledProbeUpdates = _ddgiProbeVolumeManager.ScheduleProbeUpdates(
-                    enabled: true,
-                    layout,
-                    frameSerial);
-                _ddgiProbeVolumeManager.CaptureGpuSchedulerValidationExpectedFrame(frameRingIndex, cpuReferenceScheduledProbeUpdates);
-                if (gpuSchedulerActive)
-                {
-                    try
-                    {
-                        scheduledProbeUpdates = _ddgiProbeVolumeManager.PrepareGpuScheduleInputs(
-                            layout,
-                            sceneData,
-                            _stagingRing,
-                            _currentCommandBuffer,
-                            preserveCpuSchedulerDiagnostics: true);
-                    }
-                    catch (Exception ex)
-                    {
-                        gpuSchedulerFallbackReason = LatchDdgiGpuSchedulerFallback($"gpu-scheduler-input-prep-failed:{ex.GetType().Name}");
-                        gpuSchedulerActive = false;
-                        scheduledProbeUpdates = cpuReferenceScheduledProbeUpdates;
-                        _ddgiProbeVolumeManager.UploadScheduledProbeUpdateQueue(_stagingRing, _currentCommandBuffer);
-                    }
-                }
-                else
-                {
-                    scheduledProbeUpdates = cpuReferenceScheduledProbeUpdates;
-                    _ddgiProbeVolumeManager.UploadScheduledProbeUpdateQueue(_stagingRing, _currentCommandBuffer);
-                }
-            }
-            else if (gpuSchedulerActive)
-            {
-                try
-                {
-                    scheduledProbeUpdates = _ddgiProbeVolumeManager.PrepareGpuScheduleInputs(
-                        layout,
-                        sceneData,
-                        _stagingRing,
-                        _currentCommandBuffer);
-                }
-                catch (Exception ex)
-                {
-                    gpuSchedulerFallbackReason = LatchDdgiGpuSchedulerFallback($"gpu-scheduler-input-prep-failed:{ex.GetType().Name}");
-                    gpuSchedulerActive = false;
-                    _ddgiProbeVolumeManager.ClearGpuSchedulerValidationExpectedFrame(frameRingIndex);
-                    scheduledProbeUpdates = _ddgiProbeVolumeManager.ScheduleProbeUpdates(ddgiRayUpdateActive, layout, frameSerial);
-                    _ddgiProbeVolumeManager.UploadScheduledProbeUpdateQueue(_stagingRing, _currentCommandBuffer);
-                }
-            }
-            else
-            {
-                _ddgiProbeVolumeManager.ClearGpuSchedulerValidationExpectedFrame(frameRingIndex);
-                scheduledProbeUpdates = _ddgiProbeVolumeManager.ScheduleProbeUpdates(ddgiRayUpdateActive, layout, frameSerial);
-                _ddgiProbeVolumeManager.UploadScheduledProbeUpdateQueue(_stagingRing, _currentCommandBuffer);
-            }
-
-            sceneData.DdgiProbeVolumeCount = ddgiActive ? _ddgiProbeVolumeManager.VolumeCount : 0;
-            sceneData.DdgiProbeCount = ddgiActive ? _ddgiProbeVolumeManager.ProbeCount : 0;
-            sceneData.DdgiActiveProbeCount = ddgiActive ? _ddgiProbeVolumeManager.ActiveProbeCount : 0;
-            sceneData.DdgiRaysPerProbe = ddgiActive ? _ddgiProbeVolumeManager.RaysPerProbe : 0;
-            sceneData.DdgiProbesUpdated = ddgiActive ? scheduledProbeUpdates : 0;
-            sceneData.DdgiMaxActiveProbeBudget = ddgiActive ? GlobalIlluminationProbeVolumeData.CalculateActiveProbeBudget(Settings.GlobalIllumination) : 0;
-            sceneData.DdgiMaxProbeUpdatesPerFrame = ddgiActive ? _ddgiProbeVolumeManager.MaxProbeUpdatesPerFrame : 0;
-            sceneData.DdgiProbeUpdateRequestBudget = ddgiActive ? _ddgiProbeVolumeManager.LastProbeUpdateRequestBudget : 0;
-            sceneData.DdgiProbeUpdatePrimaryRayBudget = ddgiActive ? _ddgiProbeVolumeManager.LastProbeUpdatePrimaryRayBudget : 0;
-            sceneData.DdgiScheduledRequestBudget = sceneData.DdgiProbeUpdateRequestBudget;
-            sceneData.DdgiScheduledPrimaryRayBudget = sceneData.DdgiProbeUpdatePrimaryRayBudget;
-            sceneData.DdgiGpuSchedulerPredictedRequestUpperBound = ddgiActive && gpuSchedulerActive ? scheduledProbeUpdates : 0;
-            bool anyDdgiActive = ddgiActive || simpleDdgiActive;
-            sceneData.DdgiGatherTileCount = anyDdgiActive ? _ddgiGatherTileManager?.LastTileCount ?? 0 : 0;
-            sceneData.DdgiGatherTileCountX = anyDdgiActive ? _ddgiGatherTileManager?.LastTileCountX ?? 0 : 0;
-            sceneData.DdgiGatherTileCountY = anyDdgiActive ? _ddgiGatherTileManager?.LastTileCountY ?? 0 : 0;
-            sceneData.DdgiGatherSelectedLocalTileCount = anyDdgiActive ? _ddgiGatherTileManager?.LastSelectedLocalTileCount ?? 0 : 0;
-            sceneData.DdgiGatherSelectedClipmapTileCount = anyDdgiActive ? _ddgiGatherTileManager?.LastSelectedClipmapTileCount ?? 0 : 0;
-            int ddgiGatherFallbackTileCount = anyDdgiActive ? _ddgiGatherTileManager?.LastFallbackTileCount ?? 0 : 0;
-            bool ddgiExhaustiveGatherFallbackEnabled = anyDdgiActive && Settings.GlobalIllumination.DdgiExhaustiveGatherFallbackEnabled;
-            sceneData.DdgiGatherFallbackTileCount = ddgiGatherFallbackTileCount;
-            sceneData.DdgiForwardGatherTileEmpty = ddgiGatherFallbackTileCount;
-            sceneData.DdgiForwardGatherFallbackUsed = ddgiExhaustiveGatherFallbackEnabled ? ddgiGatherFallbackTileCount : 0;
-            sceneData.DdgiForwardGatherFallbackDisabled = ddgiExhaustiveGatherFallbackEnabled ? 0 : ddgiGatherFallbackTileCount;
-            sceneData.DdgiQualityTier = ddgiActive ? Settings.GlobalIllumination.DdgiQualityTier : DdgiQualityTier.DdgiHigh;
-            sceneData.DdgiAdaptiveBudgetScale = ddgiActive ? _ddgiProbeVolumeManager.LastAdaptiveBudgetScale : 1.0f;
-            sceneData.DdgiAdaptiveBudgetReduced = ddgiActive ? _ddgiProbeVolumeManager.LastAdaptiveBudgetReduced : 0;
-            sceneData.DdgiEmergencyDegradeActive = ddgiActive ? _ddgiProbeVolumeManager.LastEmergencyDegradeActive : 0;
-            sceneData.DdgiEffectiveMaxShadedLights = ddgiActive ? _ddgiProbeVolumeManager.LastEffectiveMaxShadedLights : 0;
-            sceneData.DdgiAdaptiveBudgetReason = ddgiActive ? _ddgiProbeVolumeManager.LastAdaptiveBudgetReason : string.Empty;
-            // The graph scheduler owns the runtime async state.  Configuration only expresses
-            // a request; complete concrete bindings and an accepted submission plan are also
-            // required before this becomes true.
-            sceneData.DdgiAsyncComputeEnabled = 0;
-            sceneData.DdgiAtlasMemoryBudgetBytes = ddgiActive ? Settings.GlobalIllumination.DdgiAtlasMemoryBudgetBytes : 0UL;
-            sceneData.DdgiProbeRelocationCount = ddgiRayUpdateActive && Settings.GlobalIllumination.DdgiProbeRelocationEnabled ? scheduledProbeUpdates : 0;
-            sceneData.DdgiProbeClassificationCount = ddgiRayUpdateActive && Settings.GlobalIllumination.DdgiProbeClassificationEnabled ? scheduledProbeUpdates : 0;
-            PopulateDdgiLightSelectionMetadata(
-                sceneData,
+            // Simple DDGI owns its own camera-relative rings.  Only the scene-change
+            // regions are shared with the scheduler, so the retired full-DDGI
+            // clipmap layout is no longer built or uploaded.
+            IReadOnlyList<DdgiDirtyRegion> dirtyRegions = CollectDdgiDirtyRegions(
+                scene,
                 lightSnapshot,
-                ddgiRayUpdateActive || simpleDdgiRayUpdateActive);
-            PopulateDdgiDiagnostics(sceneData, layout, ddgiActive);
-            PopulateDdgiCoverageDiagnostics(sceneData);
-            sceneData.DdgiTextureBytes = ddgiActive ? _ddgiProbeVolumeManager.TextureBytes : 0;
-            sceneData.DdgiBufferBytes = ddgiActive
-                ? _ddgiProbeVolumeManager.BufferBytes + (_ddgiGatherTileManager?.CurrentBufferBytes ?? 0UL)
-                : 0;
-            if (simpleDdgiActive)
-            {
-                sceneData.DdgiBufferBytes =
-                    (_simpleDdgiVolumeManager?.BufferBytes ?? 0UL) +
-                    (_ddgiGatherTileManager?.CurrentBufferBytes ?? 0UL);
-            }
-            sceneData.DdgiProbeVolumeBufferBytes = ddgiActive ? _ddgiProbeVolumeManager.ProbeVolumeBufferBytes : 0UL;
-            sceneData.DdgiProbeStateBufferBytes = ddgiActive ? _ddgiProbeVolumeManager.ProbeStateBufferBytes : 0UL;
-            sceneData.DdgiProbeUpdateQueueBytes = ddgiActive ? _ddgiProbeVolumeManager.ProbeUpdateQueueBytes : 0UL;
-            sceneData.DdgiProbeRelocationClassificationBytes = ddgiActive ? _ddgiProbeVolumeManager.ProbeRelocationClassificationBytes : 0UL;
-            sceneData.DdgiCurrentIrradianceAtlasBytes = ddgiActive ? _ddgiProbeVolumeManager.CurrentIrradianceAtlasBytes : 0UL;
-            sceneData.DdgiCurrentVisibilityAtlasBytes = ddgiActive ? _ddgiProbeVolumeManager.CurrentVisibilityAtlasBytes : 0UL;
-            sceneData.DdgiGatherTileBufferBytes = ddgiActive ? (_ddgiGatherTileManager?.CurrentBufferBytes ?? 0UL) : 0UL;
-            if (simpleDdgiActive)
-                sceneData.DdgiGatherTileBufferBytes = _ddgiGatherTileManager?.CurrentBufferBytes ?? 0UL;
-            sceneData.DdgiLocalSlotReservedPoolBytes = ddgiActive ? _ddgiProbeVolumeManager.LocalSlotReservedPoolBytes : 0UL;
-            sceneData.DdgiGpuSchedulerBufferBytes = ddgiActive ? _ddgiProbeVolumeManager.GpuSchedulerBufferBytes : 0UL;
-            sceneData.DdgiGpuSchedulerDirtyRegionCapacity = ddgiActive ? _ddgiProbeVolumeManager.GpuSchedulerDirtyRegionCapacity : 0;
-            sceneData.DdgiGpuSchedulerCandidateCapacity = ddgiActive ? _ddgiProbeVolumeManager.GpuSchedulerCandidateCapacity : 0;
-            sceneData.DdgiGpuSchedulerGroupCountCapacity = ddgiActive ? _ddgiProbeVolumeManager.GpuSchedulerGroupCountCapacity : 0;
-            sceneData.DdgiGpuSchedulerPrefixCapacity = ddgiActive ? _ddgiProbeVolumeManager.GpuSchedulerPrefixCapacity : 0;
-            sceneData.DdgiGpuSchedulerDirtyRegionCount = ddgiActive ? _ddgiProbeVolumeManager.LastGpuSchedulerDirtyRegionCount : 0;
-            sceneData.DdgiGpuSchedulerDirtyRegionOverflowCount = ddgiActive ? _ddgiProbeVolumeManager.LastGpuSchedulerDirtyRegionOverflowCount : 0;
-            sceneData.DdgiGpuSchedulerResourceReinitializationCount = ddgiActive ? _ddgiProbeVolumeManager.LastGpuSchedulerResourceReinitializationCount : 0;
-            sceneData.DdgiGpuSchedulerTotalResourceReinitializationCount = ddgiActive ? _ddgiProbeVolumeManager.TotalGpuSchedulerResourceReinitializationCount : 0;
-            sceneData.DdgiGpuSchedulerUploadBytes = ddgiActive ? _ddgiProbeVolumeManager.LastGpuSchedulerUploadBytes : 0UL;
-            GPUDdgiSchedulerCounters completedSchedulerCounters = _ddgiProbeVolumeManager.LastCompletedGpuSchedulerCounters;
-            sceneData.DdgiGpuSchedulerReadbackValid = gpuSchedulerActive ? _ddgiProbeVolumeManager.LastCompletedGpuSchedulerCountersValid : 0;
-            sceneData.DdgiGpuSchedulerReadbackLatencyFrames = sceneData.DdgiGpuSchedulerReadbackValid != 0
-                ? _ddgiProbeVolumeManager.LastCompletedGpuSchedulerReadbackLatencyFrames
-                : 0;
-            sceneData.DdgiGpuSchedulerFallbackActive = ddgiActive && gpuSchedulerRequested && !gpuSchedulerActive ? 1 : 0;
-            sceneData.DdgiGpuSchedulerFallbackReason = sceneData.DdgiGpuSchedulerFallbackActive != 0
-                ? gpuSchedulerFallbackReason
-                : string.Empty;
-            sceneData.DdgiGpuSchedulerConsideredProbeCount = gpuSchedulerActive ? _ddgiProbeVolumeManager.LastGpuSchedulerScanProbeCount : 0;
-            sceneData.DdgiGpuSchedulerRequestCount = gpuSchedulerActive ? completedSchedulerCounters.RequestCount : 0u;
-            sceneData.DdgiGpuSchedulerPrimaryRayCount = gpuSchedulerActive ? completedSchedulerCounters.PrimaryRayCount : 0u;
-            sceneData.DdgiGpuSchedulerActualRequestCount =
-                gpuSchedulerActive && sceneData.DdgiGpuSchedulerReadbackValid != 0 ? completedSchedulerCounters.RequestCount : 0u;
-            sceneData.DdgiGpuSchedulerActualPrimaryRayCount =
-                gpuSchedulerActive && sceneData.DdgiGpuSchedulerReadbackValid != 0 ? completedSchedulerCounters.PrimaryRayCount : 0u;
-            sceneData.DdgiGpuSchedulerCandidateCount = gpuSchedulerActive ? completedSchedulerCounters.CandidateCount : 0u;
-            sceneData.DdgiGpuSchedulerOverflowCount = gpuSchedulerActive ? completedSchedulerCounters.OverflowCount : 0u;
-            sceneData.DdgiGpuSchedulerCandidateBufferOverflowCount = gpuSchedulerActive ? completedSchedulerCounters.CandidateBufferOverflowCount : 0u;
-            sceneData.DdgiGpuSchedulerPerBucketOverflowCount = gpuSchedulerActive ? completedSchedulerCounters.PerBucketOverflowCount : 0u;
-            sceneData.DdgiGpuSchedulerDuplicateRequestCount = gpuSchedulerActive ? completedSchedulerCounters.DuplicateRequestCount : 0u;
-            sceneData.DdgiGpuSchedulerBudgetRejectedCount = gpuSchedulerActive ? completedSchedulerCounters.BudgetRejectedCount : 0u;
-            sceneData.DdgiGpuSchedulerRequestBudgetRejectedCount = gpuSchedulerActive ? completedSchedulerCounters.RequestBudgetRejectedCount : 0u;
-            sceneData.DdgiGpuSchedulerPrimaryRayBudgetRejectedCount = gpuSchedulerActive ? completedSchedulerCounters.PrimaryRayBudgetRejectedCount : 0u;
-            sceneData.DdgiGpuSchedulerInvalidProbeCount = gpuSchedulerActive ? completedSchedulerCounters.InvalidProbeCount : 0u;
-            sceneData.DdgiGpuSchedulerCandidateOutputCapacity = gpuSchedulerActive ? _ddgiProbeVolumeManager.LastGpuSchedulerCandidateOutputCapacity : 0;
-            sceneData.DdgiGpuSchedulerFullScan = gpuSchedulerActive ? _ddgiProbeVolumeManager.LastGpuSchedulerFullScan : 0;
-            sceneData.DdgiGpuSchedulerVisibleFrustumCandidateCount = gpuSchedulerActive ? completedSchedulerCounters.VisibleFrustumCount : 0u;
-            sceneData.DdgiGpuSchedulerSafetyShellCandidateCount = gpuSchedulerActive ? completedSchedulerCounters.SafetyShellCount : 0u;
-            sceneData.DdgiGpuSchedulerAgeRefreshCandidateCount = gpuSchedulerActive ? completedSchedulerCounters.AgeRefreshCount : 0u;
-            sceneData.DdgiGpuSchedulerHighVarianceCandidateCount = gpuSchedulerActive ? completedSchedulerCounters.HighVarianceCount : 0u;
-            sceneData.DdgiGpuSchedulerLowConfidenceCandidateCount = gpuSchedulerActive ? completedSchedulerCounters.LowConfidenceCount : 0u;
-            sceneData.DdgiGpuSchedulerStableSkippedCount = gpuSchedulerActive ? completedSchedulerCounters.StableSkippedCount : 0u;
-            sceneData.DdgiGpuSchedulerPriority0RequestCount = gpuSchedulerActive ? completedSchedulerCounters.Priority0RequestCount : 0u;
-            sceneData.DdgiGpuSchedulerPriority1RequestCount = gpuSchedulerActive ? completedSchedulerCounters.Priority1RequestCount : 0u;
-            sceneData.DdgiGpuSchedulerPriority2RequestCount = gpuSchedulerActive ? completedSchedulerCounters.Priority2RequestCount : 0u;
-            sceneData.DdgiGpuSchedulerPriority3RequestCount = gpuSchedulerActive ? completedSchedulerCounters.Priority3RequestCount : 0u;
-            sceneData.DdgiGpuSchedulerPriorityBucketMismatchSkipCount = gpuSchedulerActive ? completedSchedulerCounters.PriorityBucketMismatchSkipCount : 0u;
-            sceneData.DdgiGpuSchedulerRequestBudgetSaturated =
-                sceneData.DdgiGpuSchedulerReadbackValid != 0 &&
-                _ddgiProbeVolumeManager.LastCompletedGpuSchedulerRequestBudget > 0 &&
-                completedSchedulerCounters.RequestCount >= (uint)_ddgiProbeVolumeManager.LastCompletedGpuSchedulerRequestBudget ? 1 : 0;
-            sceneData.DdgiGpuSchedulerPrimaryRayBudgetSaturated =
-                sceneData.DdgiGpuSchedulerReadbackValid != 0 &&
-                _ddgiProbeVolumeManager.LastCompletedGpuSchedulerPrimaryRayBudget > 0 &&
-                completedSchedulerCounters.PrimaryRayCount >= (uint)_ddgiProbeVolumeManager.LastCompletedGpuSchedulerPrimaryRayBudget ? 1 : 0;
-            DdgiGpuSchedulerValidationSnapshot schedulerValidation = _ddgiProbeVolumeManager.LastCompletedGpuSchedulerValidation;
-            sceneData.DdgiGpuSchedulerValidationValid = gpuSchedulerActive ? schedulerValidation.Valid : 0;
-            sceneData.DdgiGpuSchedulerValidationStatus = gpuSchedulerActive ? schedulerValidation.Status : string.Empty;
-            sceneData.DdgiGpuSchedulerValidationCpuRequestCount = gpuSchedulerActive ? schedulerValidation.CpuRequestCount : 0;
-            sceneData.DdgiGpuSchedulerValidationGpuRequestCount = gpuSchedulerActive ? schedulerValidation.GpuRequestCount : 0u;
-            sceneData.DdgiGpuSchedulerValidationComparedRequestCount = gpuSchedulerActive ? schedulerValidation.ComparedRequestCount : 0;
-            sceneData.DdgiGpuSchedulerValidationMismatchCount = gpuSchedulerActive ? schedulerValidation.MismatchCount : 0;
-            sceneData.DdgiGpuSchedulerValidationSampleLimit = gpuSchedulerActive ? schedulerValidation.SampleLimit : 0;
-            sceneData.DdgiGpuSchedulerValidationFirstMismatch = gpuSchedulerActive ? schedulerValidation.FirstMismatch : string.Empty;
-            uint knownUpdateProbeCount = ddgiActive
-                ? gpuSchedulerActive
-                    ? sceneData.DdgiGpuSchedulerActualRequestCount
-                    : (uint)Math.Max(0, sceneData.DdgiProbesUpdated)
-                : 0u;
-            uint knownUpdateRayCount = ddgiActive
-                ? gpuSchedulerActive
-                    ? sceneData.DdgiGpuSchedulerActualPrimaryRayCount
-                    : (uint)Math.Min((ulong)uint.MaxValue, _ddgiProbeVolumeManager.LastScheduledPrimaryRayCount)
-                : 0u;
-            sceneData.DdgiTraceDispatchGroupCount = knownUpdateProbeCount;
-            sceneData.DdgiTraceProbeCount = knownUpdateProbeCount;
-            sceneData.DdgiTraceRayCount = knownUpdateRayCount;
-            sceneData.DdgiBlendProbeCount = knownUpdateProbeCount;
-            sceneData.DdgiRelocateClassifyProbeCount = knownUpdateProbeCount;
-            sceneData.DdgiPublishProbeCount = knownUpdateProbeCount;
-            sceneData.DdgiRayScratchBytes = ddgiActive ? _ddgiProbeVolumeManager.LastRayScratchBytes : 0UL;
-            sceneData.DdgiUpdatedAtlasBytes = ddgiActive ? _ddgiProbeVolumeManager.LastUpdatedAtlasBytes : 0UL;
-            sceneData.DdgiPublishedCacheLatencyFrames = ddgiActive ? _ddgiProbeVolumeManager.LastPublishedCacheLatencyFrames : 0;
-            sceneData.DdgiCacheGeneration = ddgiActive ? _ddgiProbeVolumeManager.PublishedCacheGeneration : 0u;
-            sceneData.DdgiLastUpdatedFrameSerial = ddgiActive ? _ddgiProbeVolumeManager.PublishedCacheLastUpdatedFrameSerial : 0UL;
-            sceneData.DdgiCacheWarmupState = ddgiActive ? _ddgiProbeVolumeManager.WarmupState : DdgiRuntimeWarmupState.Disabled;
-            sceneData.DdgiWarmupState = ddgiActive ? _ddgiProbeVolumeManager.WarmupState : DdgiRuntimeWarmupState.Disabled;
-            sceneData.DdgiWarmedVisibleProbeFraction = ddgiActive ? _ddgiProbeVolumeManager.LastWarmedVisibleProbeFraction : 0.0f;
-            sceneData.DdgiWarmedLocalProbeFraction = ddgiActive ? _ddgiProbeVolumeManager.LastWarmedLocalProbeFraction : 0.0f;
-            sceneData.DdgiWarmedCascade0ProbeFraction = ddgiActive ? _ddgiProbeVolumeManager.LastWarmedCascade0ProbeFraction : 0.0f;
-            PopulateDdgiPassExecutionDiagnostics(sceneData);
-            sceneData.CpuDdgiRecordMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.LastUploadMicroseconds : 0;
-            sceneData.CpuSimpleDdgiRecordMicroseconds = simpleDdgiActive
-                ? _simpleDdgiVolumeManager?.LastUploadMicroseconds ?? 0
-                : 0;
-            sceneData.SimpleDdgiUploadTiming = simpleDdgiActive
-                ? _simpleDdgiVolumeManager?.LastUploadTiming ?? default
-                : default;
-            sceneData.CpuFarFieldRecordMicroseconds = simpleDdgiActive
-                ? _farFieldClipmapManager?.LastUploadMicroseconds ?? 0
-                : 0;
-            sceneData.CpuDdgiSchedulerMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.LastSchedulerMicroseconds : 0;
-            sceneData.CpuDdgiSchedulerP95Microseconds = ddgiActive ? _ddgiProbeVolumeManager.SchedulerP95Microseconds : 0;
-            sceneData.CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.CpuSchedulerPhaseClipmapDirtyMicroseconds : 0;
-            sceneData.CpuDdgiSchedulerPhaseDirtyRegionsMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.CpuSchedulerPhaseDirtyRegionsMicroseconds : 0;
-            sceneData.CpuDdgiSchedulerPhaseUninitializedMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.CpuSchedulerPhaseUninitializedMicroseconds : 0;
-            sceneData.CpuDdgiSchedulerPhaseFrustumMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.CpuSchedulerPhaseFrustumMicroseconds : 0;
-            sceneData.CpuDdgiSchedulerPhaseSafetyMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.CpuSchedulerPhaseSafetyMicroseconds : 0;
-            sceneData.CpuDdgiSchedulerPhaseRoundRobinMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.CpuSchedulerPhaseRoundRobinMicroseconds : 0;
-            sceneData.CpuDdgiSchedulerCandidateInsertCount = ddgiActive ? _ddgiProbeVolumeManager.CpuSchedulerCandidateInsertCount : 0;
-            sceneData.CpuDdgiSchedulerCandidateMaxShiftCount = ddgiActive ? _ddgiProbeVolumeManager.CpuSchedulerCandidateMaxShiftCount : 0;
-            sceneData.DdgiSchedulerTimingSampleCount = ddgiActive ? _ddgiProbeVolumeManager.SchedulerTimingSampleCount : 0;
-            sceneData.GpuDdgiScheduleP95Microseconds = ddgiActive ? _ddgiProbeVolumeManager.GpuScheduleP95Microseconds : 0;
-            sceneData.GpuDdgiScheduleOverBudget = ddgiActive ? _ddgiProbeVolumeManager.GpuScheduleOverBudget : 0;
-            sceneData.DdgiSchedulerP95OverBudget = gpuSchedulerActive
-                ? sceneData.GpuDdgiScheduleOverBudget
-                : sceneData.CpuDdgiSchedulerP95Microseconds > 250 ? 1 : 0;
-            if (simpleDdgiActive)
-            {
-                PopulateSimpleDdgiFrameData(sceneData, simpleDdgiRayUpdateActive);
-                // The canonical simple-DDGI atlases are SSBOs. Only the optional
-                // sampled mirror belongs in texture accounting; keeping the two
-                // categories separate makes the hard memory budget meaningful.
-                sceneData.DdgiTextureBytes = _simpleDdgiVolumeManager?.SampledAtlasImageBytes ?? 0UL;
-                // Paged far-field has its own independently enforced memory
-                // budget. Charging it to DDGI as well creates a false atlas
-                // budget overrun.
-                sceneData.DdgiBufferBytes = _simpleDdgiVolumeManager?.BufferBytes ?? 0UL;
-                sceneData.DdgiGpuSchedulerFallbackActive = 0;
-                sceneData.DdgiGpuSchedulerFallbackReason = string.Empty;
-                sceneData.DdgiSchedulerP95OverBudget = 0;
-            }
-            ScheduleReflectionProbeRecapturesFromGi(sceneData, ddgiActive, simpleDdgiActive);
+                sceneData);
+
+            UploadDdgiEmissiveSources(scene, sceneData, simpleDdgiRayUpdateActive);
+
+            _farFieldClipmapManager!.Upload(
+                scene,
+                camera.Position,
+                _stagingRing,
+                _currentCommandBuffer,
+                sceneData.SceneContentRevision);
+            sceneData.FarFieldPagedMode = _farFieldClipmapManager.PagedMode ? 1 : 0;
+            sceneData.FarFieldPagePoolCapacity = _farFieldClipmapManager.PagePoolCapacity;
+            sceneData.FarFieldResidentPageCount = _farFieldClipmapManager.ResidentPageCount;
+            sceneData.FarFieldPendingPageCount = _farFieldClipmapManager.PendingPageCount;
+            sceneData.FarFieldPageRequestCount = _farFieldClipmapManager.PageRequestCount;
+            sceneData.FarFieldPageMissCount = _farFieldClipmapManager.PageMissCount;
+            sceneData.FarFieldPageRebuildCount = _farFieldClipmapManager.PageRebuildCount;
+            sceneData.FarFieldPageEvictionCount = _farFieldClipmapManager.PageEvictionsThisFrame;
+            sceneData.FarFieldScheduledPageBakeCount = _farFieldClipmapManager.ScheduledPageBakeCount;
+            sceneData.FarFieldCacheBytes = _farFieldClipmapManager.PageCacheBytes;
+            sceneData.FarFieldMemoryBudgetBytes = Settings.GlobalIllumination.FarFieldMemoryBudgetBytes;
+            sceneData.FarFieldInstanceBufferBytes = _farFieldClipmapManager.InstanceBufferBytes;
+            sceneData.FarFieldPageTableBytes = _farFieldClipmapManager.PageTableBufferBytes;
+
+            bool farFieldCoverageAvailable = _farFieldClipmapManager.CoverageReady;
+            bool structuredGatherAvailable =
+                simpleDdgiRayUpdateActive &&
+                Settings.GlobalIllumination.SimpleDdgiStructuredGatherEnabled;
+            SimpleDdgiDirtySignature dirtySignature = CreateSimpleDdgiDirtySignature(
+                scene,
+                lightSnapshot,
+                _ddgiEmissiveSourceRevision,
+                farFieldCoverageAvailable);
+            _simpleDdgiVolumeManager!.Upload(
+                scene,
+                camera.Position,
+                _stagingRing,
+                _currentCommandBuffer,
+                _currentFrame,
+                dirtySignature.Signature,
+                dirtySignature.ReasonFlags,
+                structuredGatherAvailable,
+                farFieldCoverageAvailable,
+                dirtyRegions,
+                dirtySignature.CohortTransition);
+
+            PopulateSimpleDdgiFrameData(sceneData, simpleDdgiRayUpdateActive);
+            sceneData.CpuDdgiRecordMicroseconds = 0;
+            sceneData.CpuSimpleDdgiRecordMicroseconds = _simpleDdgiVolumeManager.LastUploadMicroseconds;
+            sceneData.SimpleDdgiUploadTiming = _simpleDdgiVolumeManager.LastUploadTiming;
+            sceneData.CpuFarFieldRecordMicroseconds = _farFieldClipmapManager.LastUploadMicroseconds;
+            ScheduleReflectionProbeRecapturesFromGi(sceneData, simpleDdgiActive: true);
         }
 
-        private void ScheduleReflectionProbeRecapturesFromGi(SceneRenderingData sceneData, bool ddgiActive, bool simpleDdgiActive)
+
+        private void ScheduleReflectionProbeRecapturesFromGi(SceneRenderingData sceneData, bool simpleDdgiActive)
         {
             if (_reflectionProbeManager == null ||
                 !Settings.Reflections.Enabled ||
@@ -9284,21 +8619,36 @@ namespace Njulf.Rendering
                 return;
             }
 
+            SimpleDdgiAtmosphereCohortFeedback simpleCohort =
+                simpleDdgiActive && _simpleDdgiVolumeManager is { TransportV2Active: true }
+                    ? _simpleDdgiVolumeManager.CreateAtmosphereCohortFeedbackSnapshot()
+                    : default;
+            bool simpleCohortReady = simpleDdgiActive &&
+                                     _simpleDdgiVolumeManager is { TransportV2Active: true } &&
+                                     simpleCohort.ParticipatingProbeCount > 0 &&
+                                     simpleCohort.StaleParticipatingProbeCount == 0 &&
+                                     !simpleCohort.SourceCohortActive &&
+                                     simpleCohort.SourceCohortGeneration ==
+                                     simpleCohort.AdmittedSourceCohortGeneration &&
+                                     simpleCohort.VisiblePublicationBoundaryComplete &&
+                                     simpleCohort.MinimumPropagationBoundaryComplete &&
+                                     simpleCohort.QuietPeriodComplete &&
+                                     simpleCohort.PropagationGeneration ==
+                                     simpleCohort.PublishedPropagationGeneration;
             bool giReady = simpleDdgiActive
-                ? sceneData.SimpleDdgiActive != 0 &&
-                  sceneData.SimpleDdgiProbeCount > 0 &&
-                  sceneData.SimpleDdgiAtlasFresh == 0 &&
-                  sceneData.SimpleDdgiFramesSinceLastClear > 0
-                : ddgiActive && sceneData.DdgiWarmupState == DdgiRuntimeWarmupState.SteadyState;
+                ? simpleCohortReady ||
+                  (_simpleDdgiVolumeManager is { TransportV2Active: false } &&
+                   sceneData.SimpleDdgiActive != 0 &&
+                   sceneData.SimpleDdgiProbeCount > 0 &&
+                   sceneData.SimpleDdgiAtlasFresh == 0 &&
+                   sceneData.SimpleDdgiFramesSinceLastClear > 0)
+                : false;
             if (giReady && !_lastReflectionProbeGiReady)
                 _reflectionProbeManager.RequestRecaptureAll("ddgi-ready");
 
             uint dirtyReasonFlags = simpleDdgiActive ? sceneData.SimpleDdgiDirtyReasonFlags : 0u;
             if (dirtyReasonFlags != 0u && dirtyReasonFlags != _lastReflectionProbeSimpleDirtyReasonFlags)
                 _reflectionProbeManager.RequestRecaptureAll("simple-ddgi-dirty");
-            if (ddgiActive && sceneData.DdgiNewlyInvalidatedProbeCount > 0)
-                _reflectionProbeManager.RequestRecaptureAll("ddgi-dirty");
-
             sceneData.ReflectionProbeCapturesQueued = _reflectionProbeManager.CapturesQueued;
             sceneData.ReflectionProbeCapturesCompleted = _reflectionProbeManager.CapturesCompleted;
             _lastReflectionProbeGiReady = giReady;
@@ -9325,6 +8675,26 @@ namespace Njulf.Rendering
             sceneData.DdgiRaysPerProbe = _simpleDdgiVolumeManager.RaysPerProbe;
             sceneData.DdgiProbesUpdated = probesToUpdate;
             sceneData.SimpleDdgiActive = _simpleDdgiVolumeManager.ProbeCount > 0 ? 1 : 0;
+            sceneData.SimpleDdgiSchedulerMode = _simpleDdgiVolumeManager.SchedulerMode;
+            sceneData.SimpleDdgiSchedulerReady = _simpleDdgiVolumeManager.GpuScheduler.IsReady ? 1 : 0;
+            sceneData.SimpleDdgiSchedulerResourceGeneration =
+                _simpleDdgiVolumeManager.GpuScheduler.ResourceGeneration;
+            sceneData.SimpleDdgiSchedulerArenaBytes = _simpleDdgiVolumeManager.GpuSchedulerArenaBytes;
+            sceneData.SimpleDdgiSchedulerFeedbackReadbackBytes =
+                _simpleDdgiVolumeManager.GpuSchedulerFeedbackReadbackBytes;
+            sceneData.SimpleDdgiSchedulerRetiredBytes = _simpleDdgiVolumeManager.GpuSchedulerRetiredBytes;
+            sceneData.SimpleDdgiSchedulerStaleFeedbackCount =
+                _simpleDdgiVolumeManager.GpuScheduler.StaleFeedbackCount;
+            sceneData.SimpleDdgiSchedulerFeedbackGenerationRejectionCount =
+                _simpleDdgiVolumeManager.GpuSchedulerFeedbackGenerationRejectionCount;
+            sceneData.SimpleDdgiSchedulerFallbackLatched =
+                _simpleDdgiVolumeManager.GpuSchedulerFallbackLatched ? 1 : 0;
+            sceneData.SimpleDdgiSchedulerFallbackFreshResetPending =
+                _simpleDdgiVolumeManager.GpuSchedulerFallbackFreshResetPending ? 1 : 0;
+            sceneData.SimpleDdgiSchedulerFallbackCount =
+                _simpleDdgiVolumeManager.GpuSchedulerFallbackCount;
+            sceneData.SimpleDdgiSchedulerFallbackReason =
+                _simpleDdgiVolumeManager.GpuSchedulerFallbackReason;
             sceneData.SimpleDdgiProbeCount = _simpleDdgiVolumeManager.ProbeCount;
             sceneData.SimpleDdgiProbesUpdated = probesToUpdate;
             sceneData.SimpleDdgiRaysPerFrame = primaryRayCount;
@@ -9365,8 +8735,22 @@ namespace Njulf.Rendering
                 _simpleDdgiVolumeManager.SourceRefreshTransportInvalidationCount;
             sceneData.SimpleDdgiTransportSolverInvalidationsPerSourceRefresh =
                 _simpleDdgiVolumeManager.SourceRefreshTransportInvalidationsPerRefresh;
-            sceneData.SimpleDdgiSourceLightingGeneration = _simpleDdgiVolumeManager.SourceLightingGeneration;
-            sceneData.SimpleDdgiTransportGeneration = _simpleDdgiVolumeManager.TransportGeneration;
+            SimpleDdgiAtmosphereCohortFeedback cohort =
+                _simpleDdgiVolumeManager.CreateAtmosphereCohortFeedbackSnapshot();
+            sceneData.SimpleDdgiVolumeResourceGeneration = cohort.VolumeResourceGeneration;
+            sceneData.SimpleDdgiSourceLightingGeneration = cohort.SourceCohortGeneration;
+            sceneData.SimpleDdgiAdmittedSourceCohortGeneration =
+                cohort.AdmittedSourceCohortGeneration;
+            sceneData.SimpleDdgiTransportGeneration = cohort.PropagationGeneration;
+            sceneData.SimpleDdgiPublishedPropagationGeneration =
+                cohort.PublishedPropagationGeneration;
+            sceneData.SimpleDdgiVisiblePriorityParticipatingProbeCount =
+                cohort.VisiblePriorityParticipatingProbeCount;
+            sceneData.SimpleDdgiVisiblePrioritySourceReadyProbeCount =
+                cohort.VisiblePrioritySourceReadyProbeCount;
+            sceneData.SimpleDdgiVisiblePriorityPublishedProbeCount =
+                cohort.VisiblePriorityPublishedProbeCount;
+            sceneData.SimpleDdgiQuietPeriodComplete = cohort.QuietPeriodComplete ? 1 : 0;
             _simpleDdgiVolumeManager.GetTransportProgress(
                 out int sourceReadyProbeCount,
                 out int sourceStaleProbeCount,
@@ -9554,74 +8938,6 @@ namespace Njulf.Rendering
             sceneData.DdgiPublishSkipReason = string.Empty;
         }
 
-        private void PopulateDdgiPassExecutionDiagnostics(SceneRenderingData sceneData)
-        {
-            bool accelerationStructureActive = _accelerationStructureManager?.Active == true;
-            sceneData.DdgiUpdateExecuted = 0;
-            sceneData.DdgiPublishExecuted = 0;
-            sceneData.DdgiUpdateSkipReason = DdgiPassExecutionDiagnostics.ResolveUpdateSkipReason(
-                true,
-                Settings.GlobalIllumination,
-                accelerationStructureActive,
-                sceneData);
-            sceneData.DdgiPublishSkipReason = DdgiPassExecutionDiagnostics.ResolvePublishSkipReason(
-                Settings.GlobalIllumination,
-                accelerationStructureActive,
-                sceneData);
-        }
-
-        private static void PopulateDdgiCoverageDiagnostics(SceneRenderingData sceneData)
-        {
-            int tileCount = Math.Max(sceneData.DdgiGatherTileCount, 0);
-            if (tileCount <= 0)
-            {
-                sceneData.DdgiGatherSelectedLocalTileFraction = 0.0f;
-                sceneData.DdgiGatherSelectedClipmapTileFraction = 0.0f;
-                sceneData.DdgiGatherFallbackTileFraction = 0.0f;
-                sceneData.DdgiAverageSpatialCoverageEstimate = 0.0f;
-                sceneData.DdgiAverageSupportCoverageEstimate = 0.0f;
-                sceneData.DdgiAverageDataConfidenceEstimate = 0.0f;
-                sceneData.DdgiAverageVisibilityConfidenceEstimate = 0.0f;
-                sceneData.DdgiAverageLeakAttenuationEstimate = 0.0f;
-                sceneData.DdgiAverageEffectiveContributionEstimate = 0.0f;
-                sceneData.DdgiAverageOwnershipConsumedEstimate = 0.0f;
-                sceneData.DdgiAverageRelocationFractionEstimate = 0.0f;
-                sceneData.DdgiRelocatedProbeFractionEstimate = 0.0f;
-                sceneData.DdgiAverageRelocationDisplacementFractionEstimate = 0.0f;
-                sceneData.DdgiClassifiedInactiveProbeCountEstimate = 0;
-                return;
-            }
-
-            float invTileCount = 1.0f / tileCount;
-            int fallbackTiles = Math.Clamp(sceneData.DdgiGatherFallbackTileCount, 0, tileCount);
-            int coveredTiles = Math.Max(0, tileCount - fallbackTiles);
-            float coverage = Math.Clamp(coveredTiles * invTileCount, 0.0f, 1.0f);
-            float visibleSupport = Math.Clamp(sceneData.DdgiAverageProbeConfidence, 0.0f, 1.0f);
-
-            sceneData.DdgiGatherSelectedLocalTileFraction = Math.Clamp(sceneData.DdgiGatherSelectedLocalTileCount * invTileCount, 0.0f, 1.0f);
-            sceneData.DdgiGatherSelectedClipmapTileFraction = Math.Clamp(sceneData.DdgiGatherSelectedClipmapTileCount * invTileCount, 0.0f, 1.0f);
-            sceneData.DdgiGatherFallbackTileFraction = Math.Clamp(fallbackTiles * invTileCount, 0.0f, 1.0f);
-            sceneData.DdgiAverageSpatialCoverageEstimate = coverage;
-            sceneData.DdgiAverageSupportCoverageEstimate = visibleSupport;
-            sceneData.DdgiAverageDataConfidenceEstimate = visibleSupport;
-            sceneData.DdgiAverageVisibilityConfidenceEstimate = visibleSupport;
-            sceneData.DdgiAverageLeakAttenuationEstimate = visibleSupport > 0.0f ? 1.0f : 0.0f;
-            sceneData.DdgiAverageEffectiveContributionEstimate = Math.Clamp(coverage * visibleSupport, 0.0f, 1.0f);
-            sceneData.DdgiAverageOwnershipConsumedEstimate = sceneData.DdgiAverageEffectiveContributionEstimate;
-
-            int activeProbes = Math.Max(sceneData.DdgiActiveProbeCount, 0);
-            sceneData.DdgiRelocatedProbeFractionEstimate = activeProbes > 0
-                ? Math.Clamp(sceneData.DdgiProbeRelocationCount / (float)activeProbes, 0.0f, 1.0f)
-                : 0.0f;
-            sceneData.DdgiAverageRelocationFractionEstimate =
-                sceneData.DdgiRelocatedProbeFractionEstimate;
-            sceneData.DdgiAverageRelocationDisplacementFractionEstimate = 0.0f;
-            sceneData.DdgiClassifiedInactiveProbeCountEstimate = Math.Clamp(
-                sceneData.DdgiLowConfidenceProbeUpdateCount,
-                0,
-                Math.Max(sceneData.DdgiProbeClassificationCount, 0));
-        }
-
         private static DdgiRuntimeSnapshot CreateDdgiRuntimeSnapshot(SceneRenderingData sceneData)
         {
             return new DdgiRuntimeSnapshot(
@@ -9632,11 +8948,11 @@ namespace Njulf.Rendering
                 WarmedVisibleProbeFraction: sceneData.DdgiWarmedVisibleProbeFraction,
                 WarmedLocalProbeFraction: sceneData.DdgiWarmedLocalProbeFraction,
                 WarmedCascade0ProbeFraction: sceneData.DdgiWarmedCascade0ProbeFraction,
-                SchedulerCandidateCount: ClampUIntToInt(sceneData.DdgiGpuSchedulerCandidateCount),
-                SchedulerRequestCount: ClampUIntToInt(sceneData.DdgiGpuSchedulerRequestCount),
-                SchedulerBudgetRejectedCount: ClampUIntToInt(sceneData.DdgiGpuSchedulerBudgetRejectedCount),
-                SchedulerGpuMicroseconds: sceneData.GpuDdgiScheduleMicroseconds,
-                SchedulerGpuP95Microseconds: sceneData.GpuDdgiScheduleP95Microseconds,
+                SchedulerCandidateCount: 0,
+                SchedulerRequestCount: 0,
+                SchedulerBudgetRejectedCount: 0,
+                SchedulerGpuMicroseconds: 0,
+                SchedulerGpuP95Microseconds: 0,
                 EstimateSpatialCoverage: sceneData.DdgiAverageSpatialCoverageEstimate,
                 EstimateSupportCoverage: sceneData.DdgiAverageSupportCoverageEstimate,
                 EstimateDataConfidence: sceneData.DdgiAverageDataConfidenceEstimate,
@@ -9646,10 +8962,10 @@ namespace Njulf.Rendering
                 EstimateOwnershipConsumed: sceneData.DdgiAverageOwnershipConsumedEstimate,
                 EstimateRelocationMagnitude: sceneData.DdgiAverageRelocationDisplacementFractionEstimate,
                 EstimateInactiveProbeCount: sceneData.DdgiClassifiedInactiveProbeCountEstimate,
-                GatherFallbackTileCount: sceneData.DdgiGatherFallbackTileCount,
-                EmptyGatherTileCount: sceneData.DdgiForwardGatherTileEmpty,
-                SelectedLocalTileCount: sceneData.DdgiGatherSelectedLocalTileCount,
-                SelectedClipmapTileCount: sceneData.DdgiGatherSelectedClipmapTileCount,
+                GatherFallbackTileCount: 0,
+                EmptyGatherTileCount: 0,
+                SelectedLocalTileCount: 0,
+                SelectedClipmapTileCount: 0,
                 SimpleGatherPrimaryRejectionCounts: sceneData.SimpleDdgiGatherPrimaryRejectionCounts,
                 SimpleGatherFallbackRejectionCounts: sceneData.SimpleDdgiGatherFallbackRejectionCounts,
                 SimpleGatherRecoveryRejectionCounts: sceneData.SimpleDdgiGatherRecoveryRejectionCounts,
@@ -9676,258 +8992,6 @@ namespace Njulf.Rendering
                 SimpleAverageBackfaceRatio: sceneData.SimpleDdgiAverageBackfaceRatioEstimate,
                 SimpleAverageCloseRatio: sceneData.SimpleDdgiAverageCloseRatioEstimate,
                 SimpleAverageHardInvalidProbeScore: sceneData.SimpleDdgiAverageHardInvalidProbeScoreEstimate);
-        }
-
-        private void PopulateDdgiDiagnostics(SceneRenderingData sceneData, DdgiFrameLayout layout, bool ddgiActive)
-        {
-            if (!ddgiActive || _ddgiProbeVolumeManager == null)
-            {
-                sceneData.DdgiCascadeCount = 0;
-                sceneData.DdgiScrollCount = 0;
-                sceneData.DdgiNewProbeCount = 0;
-                sceneData.DdgiDirtyBoundsProbeUpdateCount = 0;
-                sceneData.DdgiVisibleFrustumProbeUpdateCount = 0;
-                sceneData.DdgiOutsideFrustumSafetyProbeUpdateCount = 0;
-                sceneData.DdgiAgeRefreshProbeUpdateCount = 0;
-                sceneData.DdgiHighVarianceProbeUpdateCount = 0;
-                sceneData.DdgiLowConfidenceProbeUpdateCount = 0;
-                sceneData.DdgiStableProbeUpdateCount = 0;
-                sceneData.DdgiAverageProbeVariability = 0.0f;
-                sceneData.DdgiAverageProbeConfidence = 0.0f;
-                sceneData.DdgiScheduledPrimaryRayCount = 0;
-                sceneData.DdgiEstimatedShadowRayUpperBound = 0;
-                sceneData.DdgiSelectedDirectionalHitCount = 0;
-                sceneData.DdgiSelectedLocalHitCount = 0;
-                sceneData.DdgiVisibilityRayCount = 0;
-                sceneData.DdgiSkippedLocalLightCount = 0;
-                sceneData.DdgiLightSelectionMode = string.Empty;
-                sceneData.DdgiPrimaryDirectionalLightIndex = -1;
-                sceneData.DdgiSelectedLocalLightIndex = -1;
-                sceneData.DdgiSelectedLocalLightEnergyScale = 1.0f;
-                sceneData.DdgiQualityTier = DdgiQualityTier.DdgiHigh;
-                sceneData.DdgiAdaptiveBudgetScale = 1.0f;
-                sceneData.DdgiAdaptiveBudgetReduced = 0;
-                sceneData.DdgiEmergencyDegradeActive = 0;
-                sceneData.DdgiEffectiveMaxShadedLights = 0;
-                sceneData.DdgiAdaptiveBudgetReason = string.Empty;
-                sceneData.DdgiVolumeDiagnostics.Clear();
-                sceneData.DdgiCacheGeneration = 0u;
-                sceneData.DdgiLastUpdatedFrameSerial = 0UL;
-                sceneData.DdgiCacheWarmupState = DdgiRuntimeWarmupState.Disabled;
-                sceneData.DdgiStaleProbeCount = 0;
-                sceneData.DdgiAverageProbeAge = 0.0f;
-                sceneData.DdgiMaxProbeAge = 0UL;
-                sceneData.DdgiFrustumUpdatePercentage = 0.0f;
-                sceneData.DdgiOutsideFrustumUpdatePercentage = 0.0f;
-                sceneData.DdgiResourceReinitializationCount = 0;
-                sceneData.DdgiTotalResourceReinitializationCount = 0;
-                sceneData.DdgiActiveLocalSlotCount = 0;
-                sceneData.DdgiLocalSlotGeneration = 0;
-                sceneData.DdgiLocalSlotInitBytes = 0UL;
-                sceneData.DdgiLocalVolumeEvictionReason = string.Empty;
-                sceneData.DdgiCacheClearReason = string.Empty;
-                sceneData.DdgiCameraMovementClass = DdgiCameraMovementClass.None;
-                return;
-            }
-
-            sceneData.DdgiCascadeCount = layout.CameraRelativeCascadeCount;
-            sceneData.DdgiScrollCount = CountDdgiScrolledCascades(layout.CameraRelativeCascades);
-            sceneData.DdgiNewProbeCount = _ddgiProbeVolumeManager.LastNewProbeUpdateCount;
-            sceneData.DdgiDirtyBoundsProbeUpdateCount = _ddgiProbeVolumeManager.LastDirtyBoundsProbeUpdateCount;
-            sceneData.DdgiVisibleFrustumProbeUpdateCount = _ddgiProbeVolumeManager.LastFrustumProbeUpdateCount;
-            sceneData.DdgiOutsideFrustumSafetyProbeUpdateCount = _ddgiProbeVolumeManager.LastOutsideFrustumProbeUpdateCount;
-            sceneData.DdgiAgeRefreshProbeUpdateCount = _ddgiProbeVolumeManager.LastAgeRefreshProbeUpdateCount;
-            sceneData.DdgiHighVarianceProbeUpdateCount = _ddgiProbeVolumeManager.LastHighVarianceProbeUpdateCount;
-            sceneData.DdgiLowConfidenceProbeUpdateCount = _ddgiProbeVolumeManager.LastLowConfidenceProbeUpdateCount;
-            sceneData.DdgiStableProbeUpdateCount = _ddgiProbeVolumeManager.LastStableProbeUpdateCount;
-            sceneData.DdgiAverageProbeVariability = _ddgiProbeVolumeManager.LastAverageProbeVariability;
-            sceneData.DdgiAverageProbeConfidence = _ddgiProbeVolumeManager.LastAverageProbeConfidence;
-            sceneData.DdgiScheduledPrimaryRayCount = _ddgiProbeVolumeManager.LastScheduledPrimaryRayCount;
-            sceneData.DdgiEstimatedShadowRayUpperBound = EstimateDdgiShadowRayUpperBound(
-                sceneData.DdgiScheduledPrimaryRayCount,
-                sceneData.DirectionalLightCount,
-                sceneData.LocalLightCount,
-                sceneData.DdgiEffectiveMaxShadedLights > 0
-                    ? sceneData.DdgiEffectiveMaxShadedLights
-                    : Settings.GlobalIllumination.DdgiMaxShadedLights);
-            PopulateDdgiLightSelectionDiagnostics(
-                sceneData,
-                sceneData.DdgiScheduledPrimaryRayCount,
-                sceneData.DdgiPrimaryDirectionalLightIndex,
-                sceneData.DdgiSelectedLocalLightIndex,
-                sceneData.LocalLightCount,
-                sceneData.DdgiEffectiveMaxShadedLights > 0
-                    ? sceneData.DdgiEffectiveMaxShadedLights
-                    : Settings.GlobalIllumination.DdgiMaxShadedLights);
-            sceneData.DdgiVolumeDiagnostics.Clear();
-            sceneData.DdgiVolumeDiagnostics.AddRange(_ddgiProbeVolumeManager.GetVolumeDiagnostics());
-            sceneData.DdgiFrustumUpdatePercentage = Percentage(_ddgiProbeVolumeManager.LastFrustumProbeUpdateCount, sceneData.DdgiProbesUpdated);
-            sceneData.DdgiOutsideFrustumUpdatePercentage = Percentage(_ddgiProbeVolumeManager.LastOutsideFrustumProbeUpdateCount, sceneData.DdgiProbesUpdated);
-            sceneData.DdgiResourceReinitializationCount = _ddgiProbeVolumeManager.LastResourceReinitializationCount;
-            sceneData.DdgiTotalResourceReinitializationCount = _ddgiProbeVolumeManager.TotalResourceReinitializationCount;
-            sceneData.DdgiActiveLocalSlotCount = _ddgiProbeVolumeManager.LastActiveLocalSlotCount;
-            sceneData.DdgiLocalSlotGeneration = _ddgiProbeVolumeManager.LastLocalSlotGeneration;
-            sceneData.DdgiLocalSlotInitBytes = _ddgiProbeVolumeManager.LastLocalSlotInitBytes;
-            sceneData.DdgiLocalVolumeEvictionReason = _ddgiProbeVolumeManager.LastLocalVolumeEvictionReason;
-            sceneData.DdgiCacheClearReason = _ddgiProbeVolumeManager.LastCacheClearReason;
-            sceneData.DdgiCameraMovementClass = layout.MovementClass;
-            PopulateDdgiAgeDiagnostics(sceneData, layout.CameraRelativeCascades);
-        }
-
-        private void UpdateDdgiGpuSchedulerFallbackStateFromCompletedFrame()
-        {
-            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
-            if (gi.DdgiSchedulerMode == DdgiSchedulerMode.CpuReference)
-            {
-                ClearDdgiGpuSchedulerFallback();
-                return;
-            }
-
-            if (_ddgiProbeVolumeManager == null || gi.DdgiGpuSchedulerForceCpuFallback)
-                return;
-
-            if (_ddgiProbeVolumeManager.LastCompletedGpuSchedulerCountersValid != 0)
-            {
-                string counterFailureReason = ResolveDdgiGpuSchedulerCounterFailureReason(
-                    _ddgiProbeVolumeManager.LastCompletedGpuSchedulerCounters,
-                    _ddgiProbeVolumeManager.LastCompletedGpuSchedulerRequestBudget,
-                    _ddgiProbeVolumeManager.LastCompletedGpuSchedulerPrimaryRayBudget,
-                    _ddgiProbeVolumeManager.LastCompletedGpuSchedulerQueueCapacity);
-                if (!string.IsNullOrEmpty(counterFailureReason))
-                {
-                    LatchDdgiGpuSchedulerFallback(counterFailureReason);
-                    return;
-                }
-            }
-
-            DdgiGpuSchedulerValidationSnapshot validation = _ddgiProbeVolumeManager.LastCompletedGpuSchedulerValidation;
-            if (gi.DdgiGpuSchedulerFallbackOnValidationFailure && validation.Valid != 0)
-            {
-                if (string.Equals(validation.Status, "ok", StringComparison.Ordinal))
-                {
-                    _ddgiGpuSchedulerValidationFailureCount = 0;
-                }
-                else if (validation.MismatchCount > 0)
-                {
-                    _ddgiGpuSchedulerValidationFailureCount++;
-                    if (_ddgiGpuSchedulerValidationFailureCount >= gi.DdgiGpuSchedulerValidationFailureThreshold)
-                        LatchDdgiGpuSchedulerFallback($"validation-{validation.Status}");
-                }
-            }
-        }
-
-        private void AdvanceDdgiGpuSchedulerFallbackRetry(bool ddgiRayUpdateActive)
-        {
-            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
-            if (!_ddgiGpuSchedulerFallbackLatched)
-            {
-                _ddgiGpuSchedulerFallbackStableFrameCount = 0;
-                return;
-            }
-
-            if (!gi.DdgiGpuSchedulerAutoRetryAfterFallback ||
-                gi.DdgiGpuSchedulerForceCpuFallback ||
-                !ddgiRayUpdateActive)
-            {
-                return;
-            }
-
-            _ddgiGpuSchedulerFallbackStableFrameCount++;
-            if (_ddgiGpuSchedulerFallbackStableFrameCount >= gi.DdgiGpuSchedulerFallbackRetryStableFrames)
-                ClearDdgiGpuSchedulerFallback();
-        }
-
-        private string ResolveDdgiGpuSchedulerFallbackReason(
-            bool ddgiRayUpdateActive,
-            bool ddgiCompareMode,
-            bool compareModeUseGpuQueueForRendering)
-        {
-            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
-            if (gi.DdgiSchedulerMode == DdgiSchedulerMode.CpuReference)
-                return string.Empty;
-            if (gi.DdgiGpuSchedulerForceCpuFallback)
-                return LogDdgiGpuSchedulerFallbackOnce("forced-cpu-fallback");
-            if (!ddgiRayUpdateActive)
-                return LogDdgiGpuSchedulerFallbackOnce("ddgi-ray-update-inactive");
-            if (ddgiCompareMode && !compareModeUseGpuQueueForRendering)
-                return "compare-mode-cpu-queue";
-            if (_ddgiSchedulePass?.IsAvailable != true)
-            {
-                string reason = string.IsNullOrEmpty(_ddgiSchedulePass?.InitializationFailureReason)
-                    ? "schedule-pipeline-unavailable"
-                    : _ddgiSchedulePass.InitializationFailureReason;
-                return LatchDdgiGpuSchedulerFallback(reason);
-            }
-            return _ddgiGpuSchedulerFallbackLatched ? _ddgiGpuSchedulerFallbackReason : string.Empty;
-        }
-
-        internal static string ResolveDdgiGpuSchedulerCounterFailureReason(
-            GPUDdgiSchedulerCounters counters,
-            int requestBudget,
-            int primaryRayBudget,
-            int queueCapacity)
-        {
-            if (queueCapacity > 0 && counters.RequestCount > (uint)queueCapacity)
-                return "counter-request-count-exceeds-queue-capacity";
-            if (requestBudget > 0 && counters.RequestCount > (uint)requestBudget)
-                return "counter-request-count-exceeds-budget";
-            if (primaryRayBudget > 0 && counters.PrimaryRayCount > (uint)primaryRayBudget)
-                return "counter-primary-ray-count-exceeds-budget";
-            if (counters.DuplicateRequestCount > 0u)
-                return "counter-duplicate-request";
-            if (counters.InvalidProbeCount > 0u)
-                return "counter-invalid-probe";
-            return string.Empty;
-        }
-
-        private string LatchDdgiGpuSchedulerFallback(string reason)
-        {
-            if (string.IsNullOrWhiteSpace(reason))
-                reason = "unknown";
-
-            _ddgiGpuSchedulerFallbackLatched = true;
-            _ddgiGpuSchedulerFallbackReason = LogDdgiGpuSchedulerFallbackOnce(reason);
-            _ddgiGpuSchedulerFallbackStableFrameCount = 0;
-            return _ddgiGpuSchedulerFallbackReason;
-        }
-
-        private string LogDdgiGpuSchedulerFallbackOnce(string reason)
-        {
-            if (!string.Equals(_ddgiGpuSchedulerLoggedFallbackReason, reason, StringComparison.Ordinal))
-            {
-                System.Diagnostics.Debug.WriteLine($"DDGI GPU scheduler fallback: {reason}");
-                _ddgiGpuSchedulerLoggedFallbackReason = reason;
-            }
-
-            return reason;
-        }
-
-        private void ClearDdgiGpuSchedulerFallback()
-        {
-            _ddgiGpuSchedulerFallbackLatched = false;
-            _ddgiGpuSchedulerFallbackReason = string.Empty;
-            _ddgiGpuSchedulerValidationFailureCount = 0;
-            _ddgiGpuSchedulerFallbackStableFrameCount = 0;
-        }
-
-        private static void PopulateDdgiLightSelectionMetadata(
-            SceneRenderingData sceneData,
-            LightFrameSnapshot lightSnapshot,
-            bool ddgiRayUpdateActive)
-        {
-            if (!ddgiRayUpdateActive || lightSnapshot.Count == 0)
-            {
-                sceneData.DdgiPrimaryDirectionalLightIndex = -1;
-                sceneData.DdgiSelectedLocalLightIndex = -1;
-                sceneData.DdgiSelectedLocalLightEnergyScale = 1.0f;
-                return;
-            }
-
-            sceneData.DdgiPrimaryDirectionalLightIndex = SelectPrimaryDdgiDirectionalLight(lightSnapshot);
-            sceneData.DdgiSelectedLocalLightIndex = SelectPrimaryDdgiLocalLight(lightSnapshot, out float selectedLocalWeight, out float totalLocalWeight);
-            sceneData.DdgiSelectedLocalLightEnergyScale = selectedLocalWeight > 0.0f
-                ? Math.Clamp(totalLocalWeight / selectedLocalWeight, 1.0f, 64.0f)
-                : 1.0f;
         }
 
         internal static int SelectPrimaryDdgiDirectionalLight(LightFrameSnapshot lightSnapshot)
@@ -9993,85 +9057,6 @@ namespace Njulf.Rendering
             return Math.Max(0.0f, 0.2126f * light.Color.X + 0.7152f * light.Color.Y + 0.0722f * light.Color.Z);
         }
 
-        private static int CountDdgiScrolledCascades(IReadOnlyList<DdgiClipmapCascadeState> cascades)
-        {
-            int count = 0;
-            for (int i = 0; i < cascades.Count; i++)
-            {
-                if (cascades[i].ScrollDelta != DdgiClipmapCell.Zero)
-                    count++;
-            }
-
-            return count;
-        }
-
-        private static void PopulateDdgiAgeDiagnostics(SceneRenderingData sceneData, IReadOnlyList<DdgiClipmapCascadeState> cascades)
-        {
-            if (cascades.Count == 0)
-            {
-                sceneData.DdgiStaleProbeCount = 0;
-                sceneData.DdgiAverageProbeAge = 0.0f;
-                sceneData.DdgiMaxProbeAge = 0UL;
-                return;
-            }
-
-            ulong ageSum = 0UL;
-            ulong maxAge = 0UL;
-            int sampled = 0;
-            int stale = 0;
-            int staleThreshold = Math.Max(120, sceneData.DdgiActiveProbeCount / Math.Max(1, sceneData.DdgiProbesUpdated));
-            for (int i = 0; i < cascades.Count; i++)
-            {
-                DdgiClipmapCascadeState cascade = cascades[i];
-                for (int z = 0; z < cascade.ProbeCountZ; z++)
-                {
-                    for (int y = 0; y < cascade.ProbeCountY; y++)
-                    {
-                        for (int x = 0; x < cascade.ProbeCountX; x++)
-                        {
-                            DdgiClipmapCell cell = new(
-                                cascade.LogicalGridMinCell.X + x,
-                                cascade.LogicalGridMinCell.Y + y,
-                                cascade.LogicalGridMinCell.Z + z);
-                            DdgiClipmapCellState state = cascade.GetCellState(cell);
-                            ulong age = state.Initialized ? state.AgeFrames : (ulong)staleThreshold + 1UL;
-                            if (age == ulong.MaxValue)
-                                age = (ulong)staleThreshold + 1UL;
-
-                            ageSum += age;
-                            maxAge = Math.Max(maxAge, age);
-                            sampled++;
-                            if (!state.Initialized || age > (ulong)staleThreshold)
-                                stale++;
-                        }
-                    }
-                }
-            }
-
-            sceneData.DdgiStaleProbeCount = stale;
-            sceneData.DdgiAverageProbeAge = sampled > 0 ? ageSum / (float)sampled : 0.0f;
-            sceneData.DdgiMaxProbeAge = maxAge;
-        }
-
-        private static float Percentage(int numerator, int denominator)
-        {
-            if (denominator <= 0)
-                return 0.0f;
-            return Math.Clamp(numerator / (float)denominator, 0.0f, 1.0f) * 100.0f;
-        }
-
-        internal static ulong EstimateDdgiShadowRayUpperBound(
-            ulong primaryRayCount,
-            int directionalLightCount,
-            int localLightCount,
-            int maxShadedLights)
-        {
-            if (primaryRayCount == 0 || maxShadedLights <= 0)
-                return 0;
-
-            return primaryRayCount * (ulong)CountSelectedDdgiHitLights(directionalLightCount, localLightCount, maxShadedLights);
-        }
-
         internal static ulong EstimateSimpleDdgiShadowRayUpperBound(
             ulong primaryRayCount,
             int directionalLightCount,
@@ -10108,84 +9093,6 @@ namespace Njulf.Rendering
             sceneData.DdgiLightSelectionMode = primaryRayCount > 0 && capacity > 0
                 ? "simple-per-hit-top-n"
                 : "disabled";
-        }
-
-        private static void PopulateDdgiLightSelectionDiagnostics(
-            SceneRenderingData sceneData,
-            ulong primaryRayCount,
-            int selectedDirectionalLightIndex,
-            int selectedLocalLightIndex,
-            int localLightCount,
-            int maxShadedLights)
-        {
-            int capacity = Math.Min(maxShadedLights, 2);
-            int selectedDirectionalLights = selectedDirectionalLightIndex >= 0 && capacity > 0 ? 1 : 0;
-            int selectedLocalLights = selectedLocalLightIndex >= 0 && selectedDirectionalLights < capacity ? 1 : 0;
-            ulong selectedDirectionalHits = primaryRayCount * (ulong)selectedDirectionalLights;
-            ulong selectedLocalHits = primaryRayCount * (ulong)selectedLocalLights;
-
-            sceneData.DdgiSelectedDirectionalHitCount = selectedDirectionalHits;
-            sceneData.DdgiSelectedLocalHitCount = selectedLocalHits;
-            sceneData.DdgiVisibilityRayCount = selectedDirectionalHits + selectedLocalHits;
-            sceneData.DdgiSkippedLocalLightCount = primaryRayCount * (ulong)Math.Max(0, localLightCount - selectedLocalLights);
-            sceneData.DdgiLightSelectionMode = primaryRayCount > 0 && maxShadedLights > 0
-                ? "bounded-directional-local"
-                : "disabled";
-        }
-
-        private static int CountSelectedDdgiHitLights(int directionalLightCount, int localLightCount, int maxShadedLights)
-        {
-            int capacity = Math.Min(maxShadedLights, 2);
-            int selected = 0;
-            if (directionalLightCount > 0 && selected < capacity)
-                selected++;
-            if (localLightCount > 0 && selected < capacity)
-                selected++;
-            return selected;
-        }
-
-        private DdgiFrameLayout BuildDdgiFrameLayout(
-            Scene scene,
-            ICamera camera,
-            LightFrameSnapshot lightSnapshot,
-            SceneRenderingData sceneData,
-            bool cameraCut)
-        {
-            bool viewPriorityHistoryReset = DetectDdgiViewPriorityHistoryReset(camera, cameraCut);
-            ulong frameSerial = sceneData.DdgiFrameSerial;
-            DdgiFrameLayout layout = DdgiFrameLayoutBuilder.Build(
-                scene,
-                camera,
-                Settings.GlobalIllumination,
-                _cameraRelativeDdgiClipmaps,
-                frameSerial,
-                viewPriorityHistoryReset,
-                ResolveDdgiCameraVelocity(camera, viewPriorityHistoryReset),
-                _ddgiLocalVolumeSlots);
-            IReadOnlyList<DdgiDirtyRegion> dirtyRegions = CollectDdgiDirtyRegions(scene, lightSnapshot, layout.Volumes, sceneData);
-            return layout.WithDirtyRegions(dirtyRegions);
-        }
-
-        private bool DetectDdgiViewPriorityHistoryReset(ICamera camera, bool cameraCut)
-        {
-            Matrix4x4 projection = camera.ProjectionMatrix;
-            bool projectionChanged = _hasLastDdgiProjectionMatrix &&
-                !ApproximatelyEqualProjection(projection, _lastDdgiProjectionMatrix, 0.0005f);
-
-            _lastDdgiProjectionMatrix = projection;
-            _hasLastDdgiProjectionMatrix = true;
-            return cameraCut || projectionChanged;
-        }
-
-        private Vector3 ResolveDdgiCameraVelocity(ICamera camera, bool viewPriorityHistoryReset)
-        {
-            Vector3 velocity = Vector3.Zero;
-            if (_hasLastDdgiCameraPosition && !viewPriorityHistoryReset)
-                velocity = camera.Position - _lastDdgiCameraPosition;
-
-            _lastDdgiCameraPosition = camera.Position;
-            _hasLastDdgiCameraPosition = true;
-            return velocity;
         }
 
         private void UploadDdgiEmissiveSources(Scene scene, SceneRenderingData sceneData, bool ddgiRayUpdateActive)
@@ -10980,7 +9887,6 @@ namespace Njulf.Rendering
         private IReadOnlyList<DdgiDirtyRegion> CollectDdgiDirtyRegions(
             Scene scene,
             LightFrameSnapshot lightSnapshot,
-            IReadOnlyList<GlobalIlluminationProbeVolume> volumes,
             SceneRenderingData sceneData)
         {
             _ddgiDirtyBoundsScratch.Clear();
@@ -10988,7 +9894,7 @@ namespace Njulf.Rendering
             sceneData.VfxDdgiDirtyProbeEventCount = 0;
 
             if (!Settings.GlobalIllumination.EffectiveUseDdgi &&
-                !Settings.GlobalIllumination.EffectiveUseSimpleDdgi)
+                !Settings.GlobalIllumination.EffectiveUseDdgi)
             {
                 ResetDdgiDynamicTracking();
                 return _ddgiDirtyRegionScratch;
@@ -10996,14 +9902,10 @@ namespace Njulf.Rendering
 
             _ddgiTrackingFrame++;
             ulong lightSignature = CreateDdgiLightSignature(lightSnapshot);
-            ulong volumeSignature = CreateDdgiProbeVolumeSignature(volumes);
             bool hasPreviousSignature = _hasDdgiDynamicSignature;
 
             if (hasPreviousSignature)
             {
-                if (volumeSignature != _lastDdgiProbeVolumeSignature)
-                    AddDdgiDirtyRegion(EstimateSceneProbeBounds(scene), 4.0f, DdgiDirtyReason.StreamIn);
-
                 if (lightSignature != _lastDdgiLightSignature)
                     AddDdgiDirtyRegionsForLightChanges(scene, lightSnapshot);
             }
@@ -11043,7 +9945,6 @@ namespace Njulf.Rendering
             AddDdgiDirtyRegionsForSustainedVfx(scene, hasPreviousSignature, sceneData);
 
             _lastDdgiLightSignature = lightSignature;
-            _lastDdgiProbeVolumeSignature = volumeSignature;
             StoreLastDdgiLights(lightSnapshot);
             _hasDdgiDynamicSignature = true;
             return _ddgiDirtyRegionScratch;
@@ -11382,7 +10283,7 @@ namespace Njulf.Rendering
                 NewWorldBounds = bounds,
                 InfluenceBounds = expanded,
                 ReasonFlags = 1u << (int)reason,
-                Priority = DdgiDirtyReasonPolicy.ResolvePriority(reason)
+                Priority = 0
             });
         }
 
@@ -11732,38 +10633,6 @@ namespace Njulf.Rendering
             return (int)quantized;
         }
 
-        private static ulong CreateDdgiProbeVolumeSignature(IReadOnlyList<GlobalIlluminationProbeVolume> volumes)
-        {
-            ulong hash = HashStart;
-            hash = HashAdd(hash, volumes.Count);
-            for (int i = 0; i < volumes.Count; i++)
-            {
-                GlobalIlluminationProbeVolume? volume = volumes[i];
-                if (volume == null)
-                {
-                    hash = HashAdd(hash, 0);
-                    continue;
-                }
-
-                hash = HashAdd(hash, volume.Enabled);
-                hash = HashAdd(hash, volume.Origin);
-                hash = HashAdd(hash, volume.Size);
-                hash = HashAdd(hash, volume.ProbeCountX);
-                hash = HashAdd(hash, volume.ProbeCountY);
-                hash = HashAdd(hash, volume.ProbeCountZ);
-                hash = HashAdd(hash, volume.NormalBias);
-                hash = HashAdd(hash, volume.ViewBias);
-                hash = HashAdd(hash, volume.MaxRayDistance);
-                hash = HashAdd(hash, volume.Intensity);
-                hash = HashAdd(hash, volume.Hysteresis);
-                hash = HashAdd(hash, volume.RaysPerProbe);
-                hash = HashAdd(hash, volume.DirtyRaysPerProbe);
-                hash = HashAdd(hash, volume.MaxProbeUpdatesPerFrame);
-            }
-
-            return hash;
-        }
-
         private static BoundingBox Union(BoundingBox left, BoundingBox right) =>
             new(Vector3.Min(left.Min, right.Min), Vector3.Max(left.Max, right.Max));
 
@@ -11772,7 +10641,7 @@ namespace Njulf.Rendering
 
         private static BoundingBox EstimateSceneProbeBounds(Scene scene)
         {
-            return DdgiFrameLayoutBuilder.EstimateSceneProbeBounds(scene);
+            return SimpleDdgiSceneBounds.Estimate(scene);
         }
 
         private static void ApplyCompletedGpuCounters(SceneRenderingData sceneData, GpuMeshletCounters counters)
@@ -11826,11 +10695,6 @@ namespace Njulf.Rendering
             sceneData.ForwardTaskInvocations = submittedMeshWorkgroups;
             sceneData.ForwardFrustumCulledMeshletsGpu = 0;
             sceneData.ForwardEmittedMeshletsGpu = submittedMeshWorkgroups;
-        }
-
-        private static void ApplyCompletedSsgiCounters(SceneRenderingData sceneData, GpuMeshletCounters counters)
-        {
-            sceneData.SsgiRejectedHistoryPixelCount = counters.SsgiRejectedHistoryPixels;
         }
 
         private static void ApplyCompletedDdgiForwardEstimateCounters(
@@ -12044,13 +10908,6 @@ namespace Njulf.Rendering
                 Math.Max(counters.DecalReceiverIrradianceLuminanceAverage, 0.0f);
             sceneData.DdgiDecalReceiverFinalLuminanceAverage =
                 Math.Max(counters.DecalReceiverFinalLuminanceAverage, 0.0f);
-            sceneData.DdgiForwardGatherFallbackUsed = Math.Max(sceneData.DdgiForwardGatherFallbackUsed, checked((int)Math.Min(int.MaxValue, counters.ShaderGatherFallbackAttemptCount)));
-            if (counters.FastGatherAttemptCount > counters.FastGatherAcceptedCount &&
-                counters.ShaderGatherFallbackAttemptCount == 0)
-            {
-                uint disabledCount = counters.FastGatherAttemptCount - counters.FastGatherAcceptedCount;
-                sceneData.DdgiForwardGatherFallbackDisabled = Math.Max(sceneData.DdgiForwardGatherFallbackDisabled, checked((int)Math.Min(int.MaxValue, disabledCount)));
-            }
             sceneData.DdgiVisibilityMomentMeanAverage = Math.Max(counters.VisibilityMomentMeanAverage, 0.0f);
             sceneData.DdgiVisibilityMomentVarianceAverage = Math.Max(counters.VisibilityMomentVarianceAverage, 0.0f);
             sceneData.DdgiVisibilityProbeDistanceAverage = Math.Max(counters.VisibilityProbeDistanceAverage, 0.0f);
@@ -12125,7 +10982,6 @@ namespace Njulf.Rendering
                 sceneData.DdgiBlackFrameAfterRecenter = 0;
                 sceneData.DdgiBlackFrameAfterAtlasClear = 0;
                 sceneData.DdgiBlackFrameDuringFreshAtlas = 0;
-                sceneData.DdgiBlackFrameMovementClass = DdgiCameraMovementClass.None;
                 ApplySimpleDdgiVolumeGatherCounters(sceneData, counters);
                 return;
             }
@@ -12199,7 +11055,6 @@ namespace Njulf.Rendering
             sceneData.DdgiBlackFrameAfterRecenter = 0;
             sceneData.DdgiBlackFrameAfterAtlasClear = 0;
             sceneData.DdgiBlackFrameDuringFreshAtlas = 0;
-            sceneData.DdgiBlackFrameMovementClass = DdgiCameraMovementClass.None;
         }
 
         private static void ApplyCompletedDirectionalShadowReceiverCounters(
@@ -12773,14 +11628,11 @@ namespace Njulf.Rendering
             int bloomMipCount = Settings.Bloom.MipCount;
             bool fogTargetEnabled = IsFogTargetEnabled(Settings);
             bool weightedOitTargetEnabled = IsWeightedOitTargetEnabled(Settings);
-            bool globalIlluminationTargetEnabled = Settings.GlobalIllumination.EffectiveUseSsgi;
             bool materialTransportProvenanceTargetEnabled =
                 IsMaterialTransportProvenanceTargetEnabled(Settings);
             bool forwardAttachmentProfileChanged =
-                _lastGlobalIlluminationTargetEnabled != globalIlluminationTargetEnabled ||
                 _lastMaterialTransportProvenanceTargetEnabled !=
                 materialTransportProvenanceTargetEnabled;
-            float globalIlluminationResolutionScale = Settings.GlobalIllumination.ResolutionScale;
             DynamicResolutionScaleDecision scaleDecision = ResolveSceneResolutionScaleDecision();
             float effectiveResolutionScale = scaleDecision.CommittedScale;
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, effectiveResolutionScale);
@@ -12792,10 +11644,8 @@ namespace Njulf.Rendering
                 _lastTransparencyTargetMode != Settings.Transparency.Mode ||
                 _lastBloomTargetMipCount != bloomMipCount ||
                 _lastFogTargetEnabled != fogTargetEnabled ||
-                _lastGlobalIlluminationTargetEnabled != globalIlluminationTargetEnabled ||
                 _lastMaterialTransportProvenanceTargetEnabled !=
-                    materialTransportProvenanceTargetEnabled ||
-                MathF.Abs(_lastGlobalIlluminationResolutionScale - globalIlluminationResolutionScale) > 0.0001f;
+                    materialTransportProvenanceTargetEnabled;
             bool sceneExtentChanged =
                 _lastSceneRenderExtent.Width != sceneRenderExtent.Width ||
                 _lastSceneRenderExtent.Height != sceneRenderExtent.Height ||
@@ -12820,10 +11670,8 @@ namespace Njulf.Rendering
                 sceneRenderExtent,
                 _swapchain.Extent,
                 ambientOcclusionResolutionScale,
-                globalIlluminationResolutionScale,
                 bloomMipCount,
                 aoEnabled,
-                globalIlluminationTargetEnabled,
                 aaMode,
                 motionVectorTargetEnabled,
                 fogTargetEnabled,
@@ -12857,10 +11705,8 @@ namespace Njulf.Rendering
             _lastTransparencyTargetMode = Settings.Transparency.Mode;
             _lastBloomTargetMipCount = bloomMipCount;
             _lastFogTargetEnabled = fogTargetEnabled;
-            _lastGlobalIlluminationTargetEnabled = globalIlluminationTargetEnabled;
             _lastMaterialTransportProvenanceTargetEnabled =
                 materialTransportProvenanceTargetEnabled;
-            _lastGlobalIlluminationResolutionScale = globalIlluminationResolutionScale;
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = effectiveResolutionScale;
             _lastRenderTargetRecreateReason = recreateReason;
@@ -13008,10 +11854,8 @@ namespace Njulf.Rendering
                 sceneRenderExtent,
                 _swapchain.Extent,
                 Settings.AmbientOcclusion.ResolutionScale,
-                Settings.GlobalIllumination.ResolutionScale,
                 Settings.Bloom.MipCount,
                 Settings.AmbientOcclusion.Enabled,
-                Settings.GlobalIllumination.EffectiveUseSsgi,
                 Settings.AntiAliasing.EffectiveMode,
                 NeedsMotionVectors(Settings),
                 IsFogTargetEnabled(Settings),
@@ -13035,10 +11879,8 @@ namespace Njulf.Rendering
             _lastTransparencyTargetMode = Settings.Transparency.Mode;
             _lastBloomTargetMipCount = Settings.Bloom.MipCount;
             _lastFogTargetEnabled = IsFogTargetEnabled(Settings);
-            _lastGlobalIlluminationTargetEnabled = Settings.GlobalIllumination.EffectiveUseSsgi;
             _lastMaterialTransportProvenanceTargetEnabled =
                 IsMaterialTransportProvenanceTargetEnabled(Settings);
-            _lastGlobalIlluminationResolutionScale = Settings.GlobalIllumination.ResolutionScale;
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = sceneResolutionScale;
             _lastRenderTargetRecreateReason = "Swapchain resize";
@@ -13047,7 +11889,6 @@ namespace Njulf.Rendering
             _compositePipeline?.Recreate(_swapchain.SurfaceFormat);
             _ldrCompositePipeline?.Recreate(RenderTargetManager.LdrSceneColorFormat);
             _weightedOitCompositePipeline?.Recreate(RenderTargetManager.SceneColorFormat);
-            _ssgiCompositePipeline?.Recreate(RenderTargetManager.SceneColorFormat);
             _skyboxPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
             _directionalShadowResources?.Register(_bindlessHeap, _swapchain.DepthImageView);
             _spotShadowAtlas?.Register(_bindlessHeap, _swapchain.DepthImageView);
@@ -13055,9 +11896,7 @@ namespace Njulf.Rendering
             _environmentManager?.Register(_bindlessHeap);
             _environmentManager?.RegisterReflectionProbeFallback(_bindlessHeap);
             _reflectionProbeManager?.Register(_bindlessHeap);
-            _ddgiProbeVolumeManager?.Register(_bindlessHeap);
             _simpleDdgiVolumeManager?.Register(_bindlessHeap);
-            _ddgiGatherTileManager?.Register(_bindlessHeap);
             _renderGraph.OnSwapchainRecreated();
             _asyncComputeTimingPolicy.Clear();
             Array.Clear(_asyncComputeTimingFrames);
@@ -13140,9 +11979,7 @@ namespace Njulf.Rendering
 
         private static bool NeedsMotionVectors(RenderSettings settings)
         {
-            return settings.AntiAliasing.EffectiveMode == AntiAliasingMode.Taa ||
-                   (settings.GlobalIllumination.EffectiveUseSsgi &&
-                    settings.GlobalIllumination.TemporalEnabled);
+            return settings.AntiAliasing.EffectiveMode == AntiAliasingMode.Taa;
         }
 
         private void RegisterBloomTextures()
@@ -13250,113 +12087,6 @@ namespace Njulf.Rendering
                 _renderTargets.MaterialTransportProvenance.View,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-
-            if (!Settings.GlobalIllumination.EffectiveUseSsgi && _textureManager.DefaultBlackTexture.IsValid)
-            {
-                ImageView blackView = _textureManager.GetTextureView(_textureManager.DefaultBlackTexture);
-                RegisterGlobalIlluminationFallbackTextures(blackView);
-                return;
-            }
-
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.SceneNormalTexture,
-                _renderTargets.SceneNormal.View,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.SceneMaterialTexture,
-                _renderTargets.SceneMaterial.View,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.SsgiTraceSourceTexture,
-                _renderTargets.SsgiTraceSource.View,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.SsgiRawTexture,
-                _renderTargets.SsgiRaw.View,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.SsgiHitDistanceTexture,
-                _renderTargets.SsgiHitDistance.View,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.SsgiFilteredTexture,
-                _renderTargets.SsgiFiltered.View,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.SsgiHistoryTexture,
-                _renderTargets.SsgiHistoryA.View,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.SsgiPreviousDepthTexture,
-                _renderTargets.SsgiDepthHistoryA.View,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.SsgiPreviousNormalTexture,
-                _renderTargets.SsgiNormalHistoryA.View,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.SsgiMomentsTexture,
-                _renderTargets.SsgiMomentsA.View,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.SsgiHistoryLengthTexture,
-                _renderTargets.SsgiHistoryLengthA.View,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.GiFinalDiffuseTexture,
-                _renderTargets.GiFinalDiffuse.View,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-        }
-
-        private void RegisterGlobalIlluminationFallbackTextures(ImageView fallbackView)
-        {
-            int[] indices =
-            [
-                BindlessIndex.SceneNormalTexture,
-                BindlessIndex.SceneMaterialTexture,
-                BindlessIndex.SsgiTraceSourceTexture,
-                BindlessIndex.SsgiRawTexture,
-                BindlessIndex.SsgiHitDistanceTexture,
-                BindlessIndex.SsgiFilteredTexture,
-                BindlessIndex.SsgiHistoryTexture,
-                BindlessIndex.SsgiPreviousDepthTexture,
-                BindlessIndex.SsgiPreviousNormalTexture,
-                BindlessIndex.SsgiMomentsTexture,
-                BindlessIndex.SsgiHistoryLengthTexture,
-                BindlessIndex.GiFinalDiffuseTexture
-            ];
-
-            for (int i = 0; i < indices.Length; i++)
-            {
-                _bindlessHeap.RegisterTexture(
-                    indices[i],
-                    fallbackView,
-                    _bindlessHeap.ScreenSampler,
-                    imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-            }
         }
 
         private void RegisterAntiAliasingTextures()
@@ -13413,6 +12143,22 @@ namespace Njulf.Rendering
             ulong Signature,
             BoundingBox Bounds,
             int LastSeenFrame);
+
+        private sealed class ReflectionProbeCompletionValueProvider :
+            IReflectionProbeCompletionValueProvider
+        {
+            private ulong _completionValue;
+
+            public void SetFrameSerial(ulong frameSerial)
+            {
+                _completionValue = frameSerial > ulong.MaxValue -
+                    (ulong)FramesInFlight - 1UL
+                    ? ulong.MaxValue
+                    : frameSerial + (ulong)FramesInFlight + 1UL;
+            }
+
+            public ulong GetCompletionValue(int frameIndex) => _completionValue;
+        }
 
         private readonly record struct SimpleDdgiDirtySignature(
             ulong Signature,
@@ -13516,6 +12262,18 @@ namespace Njulf.Rendering
                 "linear-hdr-capture-resolution");
 
             AddResourceStage(
+                "reflection-probe-passes",
+                () =>
+                {
+                    _reflectionProbePublishPass?.Dispose();
+                    _reflectionProbePrefilterPass?.Dispose();
+                    _reflectionProbeCapturePass?.Dispose();
+                    _reflectionProbePublishPass = null;
+                    _reflectionProbePrefilterPass = null;
+                    _reflectionProbeCapturePass = null;
+                });
+
+            AddResourceStage(
                 "render-graph",
                 _renderGraph.Cleanup);
             AddResourceStage(
@@ -13557,11 +12315,6 @@ namespace Njulf.Rendering
                 "ddgi-emissive-source-buffer",
                 DestroyDdgiEmissiveSourceBuffer);
             AddResourceStage(
-                "ddgi-probe-volume-manager",
-                () =>
-                    _ddgiProbeVolumeManager
-                        ?.Dispose());
-            AddResourceStage(
                 "simple-ddgi-volume-manager",
                 () =>
                     _simpleDdgiVolumeManager
@@ -13570,11 +12323,6 @@ namespace Njulf.Rendering
                 "far-field-clipmap-manager",
                 () =>
                     _farFieldClipmapManager
-                        ?.Dispose());
-            AddResourceStage(
-                "ddgi-gather-tile-manager",
-                () =>
-                    _ddgiGatherTileManager
                         ?.Dispose());
             AddResourceStage(
                 "acceleration-structure-manager",
@@ -13650,10 +12398,6 @@ namespace Njulf.Rendering
                 () =>
                     _weightedOitCompositePipeline
                         ?.Dispose());
-            AddResourceStage(
-                "ssgi-composite-pipeline",
-                () =>
-                    _ssgiCompositePipeline?.Dispose());
             AddResourceStage(
                 "skybox-pipeline",
                 () => _skyboxPipeline?.Dispose());

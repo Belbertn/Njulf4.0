@@ -1,0 +1,188 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_schedule_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    if (gl_GlobalInvocationID.x != 0u)
+        return;
+
+    uint considered = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_CONSIDERED);
+    uint eligible = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE);
+    uint accepted = min(
+        SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
+        SchedulerRequestCapacity());
+    uint committed = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_COMMITTED);
+    uint rejected = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_REJECTED);
+    uint primaryUsed = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_PRIMARY_USED);
+    uint sourceUsed = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_SOURCE_USED);
+    uint targetSource = SchedulerSourceTargetRays();
+
+    // Reduce resident lifecycle state on the GPU. Only this bounded summary is
+    // copied to the host; no shipping probe-state readback is required.
+    uint pendingFresh = 0u;
+    uint pendingExposed = 0u;
+    uint pendingRelocation = 0u;
+    uint pendingSource = 0u;
+    uint pendingSolver = 0u;
+    uint converged = 0u;
+    uint maximumFreshAge = 0u;
+    uint maximumExposedAge = 0u;
+    uint maximumRelocationAge = 0u;
+    uint maximumUnpublishedAge = 0u;
+    uint maximumVisibleUnsupportedAge = 0u;
+    uint visibleParticipants = 0u;
+    uint visibleSourceReady = 0u;
+    uint visiblePublished = 0u;
+    uint activeProbeCount = min(SchedulerActiveProbeCount(), 32768u);
+    for (uint probeIndex = 0u; probeIndex < activeProbeCount; probeIndex++)
+    {
+        uint publicBase = probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+        uint flags = ReadStorageWordUniform(pc.ProbeStateBufferIndex, publicBase + 4u);
+        uint age = ReadStorageWordUniform(pc.ProbeStateBufferIndex, publicBase + 5u);
+        uint privateBase = pc.SchedulerProbeStateOffsetWords +
+            probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+        uint metadata = SchedulerArenaRead(privateBase + 5u);
+        uint packedLifecycle = SchedulerArenaRead(privateBase + 7u);
+        uint sourceRays = packedLifecycle & SIMPLE_DDGI_SCHEDULER_SOURCE_RAY_MASK;
+        uint completedTransportGeneration =
+            (packedLifecycle & SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_MASK) >>
+            SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_SHIFT;
+        uint stableUpdates =
+            (packedLifecycle & SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_MASK) >>
+            SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_SHIFT;
+        uint sourceGeneration = SchedulerArenaRead(privateBase + 2u);
+        bool visible = (metadata & SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBLE) != 0u;
+        bool published = (metadata & SIMPLE_DDGI_SCHEDULER_PROBE_META_PUBLISHED) != 0u;
+        bool inactive = (flags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u ||
+            uintBitsToFloat(ReadStorageWordUniform(pc.ProbeStateBufferIndex, publicBase + 3u)) <= 0.001;
+        bool participating = !inactive;
+        bool sourceReady = SchedulerTransportV2() && sourceRays != 0u &&
+            sourceGeneration == SchedulerSourceGeneration() &&
+            (flags & SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID) == 0u;
+        bool solverReady = sourceReady &&
+            completedTransportGeneration == (SchedulerTransportGeneration() & 0xffu) &&
+            stableUpdates >= max(SchedulerFrame(30u), 1u);
+        bool hasFresh = (flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u;
+        bool hasExposed = (flags & SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED) != 0u;
+        bool hasRelocation = (flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u;
+        bool hasUnpublished = visible && participating && !published;
+
+        pendingFresh += hasFresh ? 1u : 0u;
+        pendingExposed += hasExposed ? 1u : 0u;
+        pendingRelocation += hasRelocation ? 1u : 0u;
+        pendingSource += SchedulerTransportV2() && participating && !sourceReady ? 1u : 0u;
+        pendingSolver += SchedulerTransportV2() && participating && sourceReady && !solverReady ? 1u : 0u;
+        maximumFreshAge = max(maximumFreshAge, hasFresh ? age : 0u);
+        maximumExposedAge = max(maximumExposedAge, hasExposed ? age : 0u);
+        maximumRelocationAge = max(maximumRelocationAge, hasRelocation ? age : 0u);
+        maximumUnpublishedAge = max(maximumUnpublishedAge, hasUnpublished ? age : 0u);
+        maximumVisibleUnsupportedAge = max(
+            maximumVisibleUnsupportedAge,
+            visible && (flags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u ? age : 0u);
+        if (visible && participating)
+        {
+            visibleParticipants++;
+            visibleSourceReady += sourceReady ? 1u : 0u;
+            visiblePublished += published && !hasFresh && !hasExposed &&
+                !hasRelocation ? 1u : 0u;
+        }
+        if (solverReady && !hasFresh && !hasExposed && !hasRelocation)
+            converged++;
+    }
+    bool sourceCohortIncomplete = SchedulerTransportV2() && pendingSource != 0u;
+    uint staticConvergedGeneration =
+        !sourceCohortIncomplete && pendingSolver == 0u
+            ? SchedulerSourceGeneration()
+            : 0u;
+
+    uint base = pc.FeedbackOffsetWords;
+    SchedulerArenaWrite(base + 0u, SchedulerFrame(12u));
+    SchedulerArenaWrite(base + 1u, SchedulerFrame(13u));
+    SchedulerArenaWrite(base + 2u, SchedulerVolumeGeneration());
+    SchedulerArenaWrite(base + 3u, SchedulerResourceGeneration());
+    SchedulerArenaWrite(base + 4u, SchedulerQueueGeneration());
+    SchedulerArenaWrite(base + 5u, SchedulerSourceGeneration());
+    SchedulerArenaWrite(base + 6u, SchedulerTransportGeneration());
+    uint status = 0u;
+    if (SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_OVERFLOW) != 0u)
+        status |= 1u;
+    if (SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_INVALID_GENERATION) != 0u)
+        status |= 2u;
+    SchedulerArenaWrite(base + 7u, status);
+    SchedulerArenaWrite(base + 8u, considered);
+    SchedulerArenaWrite(base + 9u, eligible);
+    SchedulerArenaWrite(base + 10u, accepted);
+    SchedulerArenaWrite(base + 11u, committed);
+    SchedulerArenaWrite(base + 12u, rejected);
+    SchedulerArenaWrite(base + 13u, SchedulerRequestBudget());
+    SchedulerArenaWrite(base + 14u, accepted);
+    SchedulerArenaWrite(base + 15u, SchedulerPrimaryRayBudget());
+    SchedulerArenaWrite(base + 16u, primaryUsed);
+    SchedulerArenaWrite(base + 17u, targetSource);
+    SchedulerArenaWrite(base + 18u, sourceUsed);
+    SchedulerArenaWrite(base + 19u, targetSource > sourceUsed ? targetSource - sourceUsed : 0u);
+    SchedulerArenaWrite(base + 20u,
+        SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_INVALID_GENERATION));
+    SchedulerArenaWrite(base + 21u, 0u);
+    SchedulerArenaWrite(base + 22u,
+        SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_OVERFLOW));
+    SchedulerArenaWrite(base + 23u,
+        SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_INVALID_GENERATION));
+    SchedulerArenaWrite(base + 24u, pendingFresh);
+    SchedulerArenaWrite(base + 25u, pendingExposed);
+    SchedulerArenaWrite(base + 26u, pendingRelocation);
+    SchedulerArenaWrite(base + 27u, pendingSource);
+    SchedulerArenaWrite(base + 28u, pendingSolver);
+    SchedulerArenaWrite(base + 29u, converged);
+    SchedulerArenaWrite(base + 30u, maximumFreshAge);
+    SchedulerArenaWrite(base + 31u, maximumExposedAge);
+    SchedulerArenaWrite(base + 32u, maximumRelocationAge);
+    SchedulerArenaWrite(base + 33u, maximumUnpublishedAge);
+    SchedulerArenaWrite(base + 34u, maximumVisibleUnsupportedAge);
+    SchedulerArenaWrite(base + 35u, sourceCohortIncomplete ? SchedulerFrameIndex() : 0u);
+    SchedulerArenaWrite(base + 36u, sourceCohortIncomplete ? 0u : SchedulerFrameIndex());
+    SchedulerArenaWrite(base + 37u, sourceCohortIncomplete ? targetSource : 0u);
+    SchedulerArenaWrite(base + 38u, sourceCohortIncomplete ? 0u : sourceUsed);
+    SchedulerArenaWrite(base + 39u, SchedulerTransportGeneration());
+    SchedulerArenaWrite(base + 40u,
+        pendingSolver == 0u ? SchedulerTransportGeneration() : 0u);
+    SchedulerArenaWrite(base + 41u, staticConvergedGeneration);
+    SchedulerArenaWrite(base + 42u, sourceCohortIncomplete || pendingSolver != 0u ? 1u : 0u);
+    SchedulerArenaWrite(base + 43u, 0u);
+    SchedulerArenaWrite(base + 44u, 0u);
+    SchedulerArenaWrite(base + 45u, 0u);
+    SchedulerArenaWrite(base + 46u, 0u);
+    SchedulerArenaWrite(base + 47u, 0u);
+    for (uint bucket = 0u; bucket < 6u; bucket++)
+        SchedulerArenaWrite(base + 48u + bucket,
+            SchedulerArenaRead(pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_BUCKET_BASE + bucket));
+    uint dispatchedLanes = 0u;
+    uint noOpLanes = 0u;
+    uint activeLanes = min(
+        SchedulerActiveVolumeCount() * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES *
+            SIMPLE_DDGI_SCHEDULER_TRANSPORT_CATEGORIES * SIMPLE_DDGI_SCHEDULER_RAY_TIERS,
+        SIMPLE_DDGI_SCHEDULER_MAX_LANES);
+    for (uint lane = 0u; lane < activeLanes; lane++)
+    {
+        uint total = SchedulerArenaRead(pc.LaneTotalsOffsetWords + lane);
+        uint admission = SchedulerArenaRead(pc.LaneAdmissionOffsetWords + lane);
+        dispatchedLanes += total != 0u ? 1u : 0u;
+        noOpLanes += total != 0u && admission == 0u ? 1u : 0u;
+    }
+    SchedulerArenaWrite(base + 54u, dispatchedLanes);
+    SchedulerArenaWrite(base + 55u, noOpLanes);
+    SchedulerArenaWrite(base + 56u, visibleParticipants);
+    SchedulerArenaWrite(base + 57u, visibleSourceReady);
+    SchedulerArenaWrite(base + 58u, visiblePublished);
+    SchedulerArenaWrite(base + 59u, 0u);
+    SchedulerArenaWrite(base + 60u, 0u);
+    SchedulerArenaWrite(base + 61u, 0u);
+    SchedulerArenaWrite(base + 62u, 0u);
+    SchedulerArenaWrite(base + 63u, 0u);
+}

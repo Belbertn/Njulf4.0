@@ -47,7 +47,11 @@ namespace Njulf.Rendering.Pipeline
             CreatePipeline();
         }
 
-        public void Execute(CommandBuffer commandBuffer, int frameIndex, SceneRenderingData sceneData)
+        public void Execute(
+            CommandBuffer commandBuffer,
+            int frameIndex,
+            SceneRenderingData sceneData,
+            bool isComputeQueue = false)
         {
             if (sceneData.GpuParticlesEnabled == 0 || sceneData.GpuParticleResetRequired == 0)
                 return;
@@ -104,26 +108,34 @@ namespace Njulf.Rendering.Pipeline
             uint groupCountX = Math.Max(1u, (dispatchCount + WorkgroupSize - 1u) / WorkgroupSize);
             _context.Api.CmdDispatch(commandBuffer, groupCountX, 1, 1);
 
-            RecordResetBarriers(commandBuffer, frameIndex);
+            RecordResetBarriers(commandBuffer, frameIndex, isComputeQueue);
             _runtimeManager.MarkResetRecorded();
             sceneData.GpuParticleResetRequired = 0;
             sceneData.CpuGpuParticleResetRecordMicroseconds = Stopwatch.GetElapsedTime(start).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
         }
 
-        private void RecordResetBarriers(CommandBuffer commandBuffer, int frameIndex)
+        private void RecordResetBarriers(CommandBuffer commandBuffer, int frameIndex, bool isComputeQueue)
         {
             GpuParticleRuntimeBuffers buffers = _runtimeManager.GetBuffers(frameIndex);
             Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[8];
             int count = 0;
 
-            AddBarrier(barriers, ref count, buffers.StateBuffer, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
-            AddBarrier(barriers, ref count, buffers.AliveIndexBuffer, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
-            AddBarrier(barriers, ref count, buffers.DeadIndexBuffer, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
-            AddBarrier(barriers, ref count, buffers.CounterBuffer, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
-            AddBarrier(barriers, ref count, buffers.UnsortedRenderInstanceBuffer, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
-            AddBarrier(barriers, ref count, buffers.RenderInstanceBuffer, AccessFlags2.ShaderStorageReadBit);
-            AddBarrier(barriers, ref count, buffers.IndirectDrawBuffer, AccessFlags2.IndirectCommandReadBit | AccessFlags2.ShaderStorageReadBit);
-            AddBarrier(barriers, ref count, buffers.SortKeyBuffer, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+            PipelineStageFlags2 consumerStages = isComputeQueue
+                ? PipelineStageFlags2.ComputeShaderBit
+                : PipelineStageFlags2.ComputeShaderBit |
+                  PipelineStageFlags2.VertexShaderBit |
+                  PipelineStageFlags2.DrawIndirectBit;
+            AccessFlags2 indirectConsumerAccess = isComputeQueue
+                ? AccessFlags2.ShaderStorageReadBit
+                : AccessFlags2.IndirectCommandReadBit | AccessFlags2.ShaderStorageReadBit;
+            AddBarrier(barriers, ref count, buffers.StateBuffer, consumerStages, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+            AddBarrier(barriers, ref count, buffers.AliveIndexBuffer, consumerStages, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+            AddBarrier(barriers, ref count, buffers.DeadIndexBuffer, consumerStages, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+            AddBarrier(barriers, ref count, buffers.CounterBuffer, consumerStages, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+            AddBarrier(barriers, ref count, buffers.UnsortedRenderInstanceBuffer, consumerStages, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+            AddBarrier(barriers, ref count, buffers.RenderInstanceBuffer, consumerStages, AccessFlags2.ShaderStorageReadBit);
+            AddBarrier(barriers, ref count, buffers.IndirectDrawBuffer, consumerStages, indirectConsumerAccess);
+            AddBarrier(barriers, ref count, buffers.SortKeyBuffer, consumerStages, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
 
             if (count == 0)
                 return;
@@ -145,6 +157,7 @@ namespace Njulf.Rendering.Pipeline
             Span<BufferMemoryBarrier2> barriers,
             ref int count,
             BufferHandle handle,
+            PipelineStageFlags2 destinationStages,
             AccessFlags2 destinationAccess)
         {
             if (!handle.IsValid)
@@ -154,7 +167,7 @@ namespace Njulf.Rendering.Pipeline
                 _bufferManager.GetBuffer(handle),
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.VertexShaderBit | PipelineStageFlags2.DrawIndirectBit,
+                destinationStages,
                 destinationAccess);
         }
 

@@ -85,13 +85,22 @@ public sealed class ReflectionProbeCaptureScheduler
     private ulong _startedTotal;
     private ulong _publishedTotal;
     private ulong _failedTotal;
+    private ulong _queueCapacityRejections;
+    private ulong _staleCompletionRejections;
+    private ulong _retryExhaustedTotal;
+    private ulong _deferredChangingSceneTotal;
+    private int _completionCount;
+    private int _retryLimit;
 
-    public ReflectionProbeCaptureScheduler(int capacity)
+    public ReflectionProbeCaptureScheduler(int capacity, int retryLimit = 3)
     {
         if (capacity <= 0)
             throw new ArgumentOutOfRangeException(nameof(capacity));
+        if (retryLimit < 0)
+            throw new ArgumentOutOfRangeException(nameof(retryLimit));
         _entries = new Entry[capacity];
         _queue = new int[capacity];
+        _retryLimit = retryLimit;
     }
 
     public int Capacity => _entries.Length;
@@ -100,6 +109,22 @@ public sealed class ReflectionProbeCaptureScheduler
     public ulong CapturesStartedTotal => _startedTotal;
     public ulong CapturesPublishedTotal => _publishedTotal;
     public ulong CapturesFailedTotal => _failedTotal;
+    public ulong QueueCapacityRejections => _queueCapacityRejections;
+    public ulong StaleCompletionRejections => _staleCompletionRejections;
+    public ulong RetryExhaustedTotal => _retryExhaustedTotal;
+    public ulong DeferredChangingSceneTotal => _deferredChangingSceneTotal;
+    public int RetainedCompletionCount => _completionCount;
+
+    public int RetryLimit
+    {
+        get => _retryLimit;
+        set
+        {
+            if (value < 0)
+                throw new ArgumentOutOfRangeException(nameof(value));
+            _retryLimit = value;
+        }
+    }
 
     public void Register(int layer, Guid probeId, bool hasPublishedCapture, ReflectionCaptureVersion publishedVersion = default)
     {
@@ -109,6 +134,11 @@ public sealed class ReflectionProbeCaptureScheduler
         ref Entry entry = ref _entries[layer];
         if (entry.Registered && entry.ProbeId == probeId)
             return;
+        if (entry.CompletionValue != 0UL)
+        {
+            throw new InvalidOperationException(
+                $"Reflection layer {layer} is still pinned by an in-flight GPU completion.");
+        }
         bool queued = entry.Queued;
         if (_activeLayer == layer)
         {
@@ -134,6 +164,18 @@ public sealed class ReflectionProbeCaptureScheduler
         ref Entry entry = ref _entries[layer];
         if (!entry.Registered || entry.ProbeId != probeId)
             return;
+        if (entry.CompletionValue != 0UL)
+        {
+            // The published layer remains pinned until the renderer observes the copy's
+            // completion.  It is deliberately not recycled or reset here.
+            entry.Registered = false;
+            entry.HasPendingRequest = false;
+            entry.RequestedReasons = ReflectionCaptureReason.None;
+            entry.State = ReflectionProbeCaptureState.AwaitingGpuCompletion;
+            if (_activeLayer == layer)
+                _activeLayer = -1;
+            return;
+        }
         bool queued = entry.Queued;
         if (_activeLayer == layer)
         {
@@ -157,24 +199,57 @@ public sealed class ReflectionProbeCaptureScheduler
         ref Entry entry = ref _entries[layer];
         if (!entry.Registered || entry.ProbeId != probeId)
             Register(layer, probeId, hasPublishedCapture: false);
+        bool versionChanged = !entry.HasPendingRequest || entry.RequestedVersion != version;
         entry.RequestedVersion = version;
         entry.RequestedReasons |= reasons;
         entry.RequestedSnapshot = snapshot;
         entry.RequestedResourceGeneration = resourceGeneration;
         entry.RequestedSceneRevision = sceneRevision;
         entry.HasPendingRequest = true;
+        if (versionChanged)
+        {
+            entry.RetryCount = 0;
+            entry.RetryAfterFrame = 0UL;
+            entry.Deferred = false;
+        }
 
-        if (_activeLayer == layer && entry.State < ReflectionProbeCaptureState.CopyReady)
+        // A copy is the commit boundary.  Until it has a completion token, a newer
+        // generation can still invalidate the entire private scratch transaction,
+        // including a ticket that has reached CopyReady.  Restarting from the latest
+        // request prevents a stale scene/resource snapshot from being copied into the
+        // stable layer.  Once the copy is in flight, retain the old ticket and queue the
+        // newer version behind its completion instead.
+        if (_activeLayer == layer && entry.CompletionValue == 0UL &&
+            entry.State <= ReflectionProbeCaptureState.CopyReady)
             entry.SupersededBeforeCommit = true;
-        if (_activeLayer != layer)
+        if (_activeLayer == layer && entry.CompletionValue != 0UL)
+        {
+            // A recapture request arriving while the previous copy is in flight is retained
+            // behind the completion boundary; the published layer is never overwritten early.
+        }
+        else if (_activeLayer != layer)
             Enqueue(layer, ref entry);
     }
 
-    public bool TryAcquireWork(int mipCount, int maxFaces, int maxMips, out ReflectionProbeWork work)
+    public bool TryAcquireWork(
+        int mipCount,
+        int maxFaces,
+        int maxMips,
+        out ReflectionProbeWork work,
+        ReflectionProbeWorkKind requiredKind = ReflectionProbeWorkKind.None,
+        ulong currentFrame = 0UL)
     {
         if (mipCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(mipCount));
-        if (_activeLayer < 0 && !TryStartNext(out _activeLayer))
+        // One scheduler scratch image is shared by the capture transaction.  Do not start a new
+        // transaction until the previous copy has retired, even when its owner was removed.
+        if (_completionCount != 0)
+        {
+            work = default;
+            return false;
+        }
+
+        if (_activeLayer < 0 && !TryStartNext(currentFrame, out _activeLayer))
         {
             work = default;
             return false;
@@ -183,30 +258,84 @@ public sealed class ReflectionProbeCaptureScheduler
         ref Entry entry = ref _entries[_activeLayer];
         if (entry.SupersededBeforeCommit)
         {
+            if (requiredKind is not (ReflectionProbeWorkKind.None or ReflectionProbeWorkKind.CaptureFace))
+            {
+                work = default;
+                return false;
+            }
             RestartFromLatest(ref entry);
         }
 
         ReflectionProbeCaptureTicket ticket = CreateTicket(_activeLayer, entry);
         if (entry.NextFace < 6 && maxFaces > 0)
         {
+            if (requiredKind is not (ReflectionProbeWorkKind.None or ReflectionProbeWorkKind.CaptureFace))
+            {
+                work = default;
+                return false;
+            }
             entry.State = ReflectionProbeCaptureState.CapturingFaces;
             work = new ReflectionProbeWork(ReflectionProbeWorkKind.CaptureFace, ticket, entry.NextFace, 0);
             return true;
         }
         if (entry.NextMip < mipCount && maxMips > 0)
         {
+            if (requiredKind is not (ReflectionProbeWorkKind.None or ReflectionProbeWorkKind.PrefilterMip))
+            {
+                work = default;
+                return false;
+            }
             entry.State = ReflectionProbeCaptureState.PrefilteringMips;
             work = new ReflectionProbeWork(ReflectionProbeWorkKind.PrefilterMip, ticket, -1, entry.NextMip);
             return true;
         }
         if (entry.NextFace >= 6 && entry.NextMip >= mipCount)
         {
+            if (requiredKind is not (ReflectionProbeWorkKind.None or ReflectionProbeWorkKind.PublishCopy))
+            {
+                work = default;
+                return false;
+            }
             entry.State = ReflectionProbeCaptureState.CopyReady;
             work = new ReflectionProbeWork(ReflectionProbeWorkKind.PublishCopy, CreateTicket(_activeLayer, entry), -1, -1);
             return true;
         }
 
         work = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Non-mutating work-kind probe used by conditional render-pass declarations. It inspects the
+    /// active ticket first and otherwise only the bounded scheduler ring; it never starts a ticket,
+    /// advances progress, or allocates.
+    /// </summary>
+    public bool HasWork(
+        int mipCount,
+        ReflectionProbeWorkKind requiredKind,
+        ulong currentFrame = 0UL)
+    {
+        if (mipCount <= 0 || _completionCount != 0)
+            return false;
+
+        if (_activeLayer >= 0)
+            return EntryHasWork(_entries[_activeLayer], mipCount, requiredKind, currentFrame);
+
+        int candidates = _queueCount;
+        int queueIndex = _queueHead;
+        while (candidates-- > 0)
+        {
+            int layer = _queue[queueIndex];
+            queueIndex = (queueIndex + 1) % _queue.Length;
+            ref Entry entry = ref _entries[layer];
+            if (entry.Registered && entry.HasPendingRequest &&
+                entry.RetryAfterFrame <= currentFrame &&
+                EntryHasWork(entry, mipCount, requiredKind, currentFrame))
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
@@ -233,40 +362,132 @@ public sealed class ReflectionProbeCaptureScheduler
         if (work.Kind != ReflectionProbeWorkKind.PublishCopy || completionValue == 0UL)
             throw new ArgumentException("A publish copy requires a nonzero completion token.", nameof(work));
         ref Entry entry = ref ValidateActive(work.Ticket);
+        if (entry.State != ReflectionProbeCaptureState.CopyReady || entry.CompletionValue != 0UL)
+            throw new InvalidOperationException("The reflection publish copy was already submitted or is not ready.");
         entry.State = ReflectionProbeCaptureState.AwaitingGpuCompletion;
         entry.CompletionValue = completionValue;
         entry.CopyCommitted = true;
+        _completionCount++;
+    }
+
+    /// <summary>
+    /// Keeps the latest ticket request but removes the active work item from the hot queue for a
+    /// bounded cooling period. This is used when an authored scene is changing faster than a
+    /// six-face capture can be made coherent; it prevents repeated record/fail/requeue spins.
+    /// </summary>
+    public void DeferActive(in ReflectionProbeWork work, ulong currentFrame, ulong deferFrames)
+    {
+        ref Entry entry = ref ValidateActive(work.Ticket);
+        if (work.Kind == ReflectionProbeWorkKind.PublishCopy)
+            throw new InvalidOperationException("A copy-committed reflection ticket cannot be deferred.");
+
+        int layer = _activeLayer;
+        _activeLayer = -1;
+        PreserveActiveRequest(ref entry);
+        entry.Deferred = true;
+        entry.RetryAfterFrame = AddSaturating(currentFrame, deferFrames);
+        entry.State = ReflectionProbeCaptureState.DeferredChangingScene;
+        _deferredChangingSceneTotal++;
+        Enqueue(layer, ref entry);
     }
 
     public bool TryPublishCompleted(ulong completedValue, out ReflectionProbeCaptureTicket ticket)
     {
-        if (_activeLayer < 0)
+        bool retired = TryRetireCompleted(completedValue, 0U, out ticket, out bool published);
+        return retired && published;
+    }
+
+    /// <summary>
+    /// Consumes the completion boundary for the copy.  A nonzero current resource generation
+    /// rejects a completion recorded against an older cubemap allocation and releases the pin
+    /// without publishing stale pixels.
+    /// </summary>
+    public bool TryPublishCompleted(
+        ulong completedValue,
+        uint currentResourceGeneration,
+        out ReflectionProbeCaptureTicket ticket)
+    {
+        bool retired = TryRetireCompleted(
+            completedValue,
+            currentResourceGeneration,
+            out ticket,
+            out bool published);
+        return retired && published;
+    }
+
+    /// <summary>
+    /// Retires a completed copy even when its owner was removed or its resource generation is
+    /// stale. <paramref name="published"/> distinguishes a valid publication from a discarded
+    /// completion, allowing the manager to reclaim an orphaned layer without exposing old pixels.
+    /// </summary>
+    public bool TryRetireCompleted(
+        ulong completedValue,
+        uint currentResourceGeneration,
+        out ReflectionProbeCaptureTicket ticket,
+        out bool published)
+    {
+        for (int layer = 0; layer < _entries.Length; layer++)
         {
-            ticket = default;
-            return false;
-        }
-        ref Entry entry = ref _entries[_activeLayer];
-        if (entry.State != ReflectionProbeCaptureState.AwaitingGpuCompletion || entry.CompletionValue > completedValue)
-        {
-            ticket = default;
-            return false;
+            ref Entry entry = ref _entries[layer];
+            if (entry.CompletionValue == 0UL || entry.CompletionValue > completedValue)
+                continue;
+
+            _completionCount--;
+            ticket = CreateTicket(layer, entry);
+            entry.CompletionValue = 0UL;
+            entry.CopyCommitted = false;
+            if (!entry.Registered ||
+                (currentResourceGeneration != 0U && entry.TicketResourceGeneration != currentResourceGeneration))
+            {
+                _staleCompletionRejections++;
+                bool retainRequest = entry.Registered && entry.HasPendingRequest;
+                if (retainRequest)
+                {
+                    entry.HasPublished = false;
+                    entry.State = ReflectionProbeCaptureState.RetryPending;
+                    entry.CopyCommitted = false;
+                    entry.Serial = 0UL;
+                    Enqueue(layer, ref entry);
+                }
+                else
+                {
+                    entry = default;
+                }
+                if (_activeLayer == layer)
+                    _activeLayer = -1;
+                published = false;
+                return true;
+            }
+
+            entry.HasPublished = true;
+            entry.PublishedVersion = entry.TicketVersion;
+            entry.State = ReflectionProbeCaptureState.Published;
+            _publishedTotal++;
+            if (_activeLayer == layer)
+                _activeLayer = -1;
+            if (entry.HasPendingRequest &&
+                (entry.RequestedVersion != entry.PublishedVersion ||
+                 entry.RequestedReasons != ReflectionCaptureReason.None))
+                Enqueue(layer, ref entry);
+            published = true;
+            return true;
         }
 
-        ticket = CreateTicket(_activeLayer, entry);
-        entry.HasPublished = true;
-        entry.PublishedVersion = entry.TicketVersion;
-        entry.State = ReflectionProbeCaptureState.Published;
-        entry.CopyCommitted = false;
-        entry.CompletionValue = 0UL;
-        _publishedTotal++;
-        int completedLayer = _activeLayer;
-        _activeLayer = -1;
-        if (entry.HasPendingRequest && entry.RequestedVersion != entry.PublishedVersion)
-            Enqueue(completedLayer, ref entry);
-        return true;
+        ticket = default;
+        published = false;
+        return false;
     }
 
     public void FailActive(in ReflectionProbeCaptureTicket ticket, bool retry)
+    {
+        FailActive(ticket, retry, 0UL, 0UL);
+    }
+
+    public void FailActive(
+        in ReflectionProbeCaptureTicket ticket,
+        bool retry,
+        ulong currentFrame,
+        ulong retryBackoffFrames)
     {
         ref Entry entry = ref ValidateActive(ticket);
         _failedTotal++;
@@ -274,18 +495,51 @@ public sealed class ReflectionProbeCaptureScheduler
         _activeLayer = -1;
         if (retry)
         {
-            entry.HasPendingRequest = true;
-            entry.RequestedVersion = entry.TicketVersion;
-            entry.RequestedReasons |= entry.TicketReasons;
-            entry.RequestedSnapshot = entry.TicketSnapshot;
-            entry.RequestedResourceGeneration = entry.TicketResourceGeneration;
-            entry.RequestedSceneRevision = entry.TicketSceneRevision;
+            if (entry.RetryCount >= _retryLimit)
+            {
+                if (entry.HasPendingRequest)
+                {
+                    // A newer request arrived while this ticket was active. The exhausted
+                    // retry budget belongs to the old ticket; keep the latest request alive.
+                    PreserveActiveRequest(ref entry);
+                    entry.RetryCount = 0;
+                    entry.RetryAfterFrame = AddSaturating(currentFrame, retryBackoffFrames);
+                    entry.Deferred = false;
+                    entry.State = ReflectionProbeCaptureState.RetryPending;
+                    Enqueue(layer, ref entry);
+                }
+                else
+                {
+                    entry.State = ReflectionProbeCaptureState.Failed;
+                    _retryExhaustedTotal++;
+                }
+                return;
+            }
+
+            entry.RetryCount++;
+            PreserveActiveRequest(ref entry);
+            entry.RetryAfterFrame = AddSaturating(currentFrame, retryBackoffFrames);
+            entry.Deferred = false;
             entry.State = ReflectionProbeCaptureState.RetryPending;
             Enqueue(layer, ref entry);
         }
         else
         {
-            entry.State = ReflectionProbeCaptureState.Failed;
+            if (entry.HasPendingRequest)
+            {
+                // Non-retry failures still must not discard a request that superseded the
+                // failed transaction while it was recording.
+                PreserveActiveRequest(ref entry);
+                entry.RetryCount = 0;
+                entry.RetryAfterFrame = AddSaturating(currentFrame, retryBackoffFrames);
+                entry.Deferred = false;
+                entry.State = ReflectionProbeCaptureState.RetryPending;
+                Enqueue(layer, ref entry);
+            }
+            else
+            {
+                entry.State = ReflectionProbeCaptureState.Failed;
+            }
         }
     }
 
@@ -296,9 +550,26 @@ public sealed class ReflectionProbeCaptureScheduler
         return entry.Registered && entry.ProbeId == probeId && entry.HasPublished;
     }
 
-    private bool TryStartNext(out int layer)
+    /// <summary>Returns true while a resource generation cannot safely reuse this layer.</summary>
+    public bool IsLayerPinned(int layer)
     {
-        while (_queueCount > 0)
+        ValidateLayer(layer);
+        return _entries[layer].CompletionValue != 0UL;
+    }
+
+    public ReflectionProbeCaptureState GetState(int layer, Guid probeId)
+    {
+        ValidateLayer(layer);
+        ref Entry entry = ref _entries[layer];
+        return entry.Registered && entry.ProbeId == probeId
+            ? entry.State
+            : ReflectionProbeCaptureState.Unregistered;
+    }
+
+    private bool TryStartNext(ulong currentFrame, out int layer)
+    {
+        int candidates = _queueCount;
+        while (candidates-- > 0)
         {
             layer = _queue[_queueHead];
             _queueHead = (_queueHead + 1) % _queue.Length;
@@ -307,6 +578,11 @@ public sealed class ReflectionProbeCaptureScheduler
             entry.Queued = false;
             if (!entry.Registered || !entry.HasPendingRequest)
                 continue;
+            if (entry.RetryAfterFrame > currentFrame)
+            {
+                Enqueue(layer, ref entry);
+                continue;
+            }
             entry.Serial = NextSerial();
             entry.TicketVersion = entry.RequestedVersion;
             entry.TicketReasons = entry.RequestedReasons;
@@ -319,11 +595,29 @@ public sealed class ReflectionProbeCaptureScheduler
             entry.NextMip = 1;
             entry.State = ReflectionProbeCaptureState.CapturingFaces;
             entry.SupersededBeforeCommit = false;
+            entry.Deferred = false;
             _startedTotal++;
             return true;
         }
         layer = -1;
         return false;
+    }
+
+    private static bool EntryHasWork(
+        in Entry entry,
+        int mipCount,
+        ReflectionProbeWorkKind requiredKind,
+        ulong currentFrame)
+    {
+        if (!entry.Registered || entry.RetryAfterFrame > currentFrame)
+            return false;
+        if (entry.SupersededBeforeCommit)
+            return requiredKind is ReflectionProbeWorkKind.None or ReflectionProbeWorkKind.CaptureFace;
+        if (entry.NextFace < 6)
+            return requiredKind is ReflectionProbeWorkKind.None or ReflectionProbeWorkKind.CaptureFace;
+        if (entry.NextMip < mipCount)
+            return requiredKind is ReflectionProbeWorkKind.None or ReflectionProbeWorkKind.PrefilterMip;
+        return requiredKind is ReflectionProbeWorkKind.None or ReflectionProbeWorkKind.PublishCopy;
     }
 
     private void RestartFromLatest(ref Entry entry)
@@ -340,7 +634,21 @@ public sealed class ReflectionProbeCaptureScheduler
         entry.NextMip = 1;
         entry.State = ReflectionProbeCaptureState.CapturingFaces;
         entry.SupersededBeforeCommit = false;
+        entry.Deferred = false;
         _startedTotal++;
+    }
+
+    private static void PreserveActiveRequest(ref Entry entry)
+    {
+        if (!entry.HasPendingRequest)
+        {
+            entry.HasPendingRequest = true;
+            entry.RequestedVersion = entry.TicketVersion;
+            entry.RequestedSnapshot = entry.TicketSnapshot;
+            entry.RequestedResourceGeneration = entry.TicketResourceGeneration;
+            entry.RequestedSceneRevision = entry.TicketSceneRevision;
+        }
+        entry.RequestedReasons |= entry.TicketReasons;
     }
 
     private void Enqueue(int layer, ref Entry entry)
@@ -348,7 +656,11 @@ public sealed class ReflectionProbeCaptureScheduler
         if (entry.Queued)
             return;
         if (_queueCount == _queue.Length)
-            throw new InvalidOperationException("Reflection capture queue capacity was exceeded.");
+        {
+            _queueCapacityRejections++;
+            entry.State = ReflectionProbeCaptureState.RetryPending;
+            return;
+        }
         _queue[_queueTail] = layer;
         _queueTail = (_queueTail + 1) % _queue.Length;
         _queueCount++;
@@ -379,6 +691,9 @@ public sealed class ReflectionProbeCaptureScheduler
         return serial;
     }
 
+    private static ulong AddSaturating(ulong value, ulong increment) =>
+        increment > ulong.MaxValue - value ? ulong.MaxValue : value + increment;
+
     private void ValidateLayer(int layer)
     {
         if ((uint)layer >= (uint)_entries.Length)
@@ -394,7 +709,9 @@ public sealed class ReflectionProbeCaptureScheduler
         public ReflectionCaptureReason RequestedReasons, TicketReasons;
         public ReflectionProbeCaptureSnapshot RequestedSnapshot, TicketSnapshot;
         public uint RequestedResourceGeneration, RequestedSceneRevision, TicketResourceGeneration, TicketSceneRevision;
-        public ulong Serial, CompletionValue;
+        public ulong Serial, CompletionValue, RetryAfterFrame;
+        public int RetryCount;
         public int NextFace, NextMip;
+        public bool Deferred;
     }
 }

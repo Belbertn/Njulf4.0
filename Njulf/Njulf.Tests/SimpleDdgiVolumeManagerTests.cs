@@ -636,7 +636,7 @@ public sealed class SimpleDdgiVolumeManagerTests
     }
 
     [Test]
-    public void Renderer_PreparesOnlyTheSelectedDdgiBackendAndPublishesCurrentEmissiveRevision()
+    public void Renderer_PreparesSimpleDdgiAndPublishesCurrentEmissiveRevision()
     {
         string renderer = File.ReadAllText(FindSourceFile(
             "Njulf.Rendering",
@@ -653,10 +653,7 @@ public sealed class SimpleDdgiVolumeManagerTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(method, Does.Contain("if (ddgiActive)\n            {\n                _ddgiProbeVolumeManager.Upload("));
-            Assert.That(method, Does.Contain("if (simpleDdgiActive)\n            {\n                SimpleDdgiDirtySignature"));
-            Assert.That(method, Does.Contain("if (!ddgiActive)\n            {\n                _ddgiProbeVolumeManager.ClearGpuSchedulerValidationExpectedFrame"));
-            Assert.That(method, Does.Not.Contain("legacy DDGI upload above is intentionally overwritten"));
+            Assert.That(method, Does.Contain("bool simpleDdgiActive ="));
             Assert.That(emissiveUpload, Is.GreaterThanOrEqualTo(0));
             Assert.That(simpleDirtySignature, Is.GreaterThan(emissiveUpload));
         });

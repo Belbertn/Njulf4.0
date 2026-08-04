@@ -1,6 +1,6 @@
 # Simple-DDGI-Only Forward Shader and Compact Gather Data Implementation Plan
 
-- Status: Planned
+- Status: Superseded by the Simple-DDGI-only cleanup (2026-08-04)
 - Date: 2026-08-03
 - Primary target: ShippingPerformance, 1080p, NVIDIA RTX 3060 Laptop GPU
 - Scope owner: forward receiver path and the receiver-visible Simple-DDGI ABI
@@ -8,6 +8,10 @@
   - [GPU-Resident Simple-DDGI Scheduling Implementation Plan](SimpleDdgiGpuResidentSchedulingImplementationPlan-20260803.md)
   - [Sun/Sky, DDGI, Async Compute, and Reflection Remaining Implementation Plan](SunSkyDdgiAsyncReflectionRemainingImplementationPlan-20260803.md)
 - Baseline evidence: [Nsight DDGI Performance Pass Implementation Status](Complete/NsightDdgiPerformancePassImplementationStatus-20260802.md)
+
+> **Superseded:** Legacy/full DDGI and the original SSGI pipeline have now
+> been deleted. The runtime has one Simple-DDGI path, so statements below about
+> retaining, selecting, or testing a second backend are historical context only.
 
 ## 1. Required outcome
 
@@ -1319,4 +1323,3 @@ The implementation is complete only when all boxes are true:
       production artifacts are removed.
 - [ ] The final implementation status records hashes, captures, metrics, known
       limitations, and any deferred follow-up supported by evidence.
-

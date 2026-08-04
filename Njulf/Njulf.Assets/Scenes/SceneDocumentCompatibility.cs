@@ -36,7 +36,6 @@ internal static class SceneDocumentCompatibility
             Objects = source.Objects.Select(MaterializeObject).ToList(),
             Lights = source.Lights.ToList(),
             ReflectionProbes = source.ReflectionProbes.ToList(),
-            GiProbeVolumes = source.GiProbeVolumes.ToList(),
             InstanceBatches = source.InstanceBatches.ToList(),
             FoliagePrototypes = source.FoliagePrototypes.ToList(),
             FoliagePatches = source.FoliagePatches.ToList(),

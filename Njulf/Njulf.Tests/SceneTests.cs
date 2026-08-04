@@ -171,20 +171,6 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void Scene_AddAndRemoveGlobalIlluminationProbeVolume_TracksVolume()
-        {
-            var scene = new Scene();
-            var volume = new GlobalIlluminationProbeVolume();
-
-            scene.Add(volume);
-            Assert.That(scene.GlobalIlluminationProbeVolumes, Is.EquivalentTo(new[] { volume }));
-
-            scene.Remove(volume);
-
-            Assert.That(scene.GlobalIlluminationProbeVolumes, Is.Empty);
-        }
-
-        [Test]
         public void StaticInstanceBatch_RejectsNullTransformCollection()
         {
             Assert.Throws<System.ArgumentNullException>(() => new StaticInstanceBatch(null!));

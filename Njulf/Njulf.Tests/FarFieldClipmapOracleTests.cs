@@ -122,7 +122,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiProbeState>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiProbeUpdate>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiRelocationClassification>(), Is.EqualTo(48));
-                Assert.That(Marshal.SizeOf<GPUSimpleDdgiPushConstants>(), Is.EqualTo(104));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiPushConstants>(), Is.EqualTo(120));
                 Assert.That(Marshal.SizeOf<GPUFarFieldClipmapParams>(), Is.EqualTo(160));
                 Assert.That(Marshal.SizeOf<GPUFarFieldPageTableEntry>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUFarFieldInstance>(), Is.EqualTo(96));
@@ -1278,11 +1278,11 @@ namespace Njulf.Tests
             {
                 Assert.That(renderer, Does.Contain("_farFieldClipmapManager!.Upload("));
                 Assert.That(renderer, Does.Contain("sceneData.SceneContentRevision);"));
-                Assert.That(renderer, Does.Contain("SimpleDdgiDirtySignature simpleDdgiDirtySignature = CreateSimpleDdgiDirtySignature("));
+                Assert.That(renderer, Does.Contain("SimpleDdgiDirtySignature dirtySignature = CreateSimpleDdgiDirtySignature("));
                 Assert.That(renderer, Does.Contain("_ddgiEmissiveSourceRevision,"));
                 Assert.That(renderer, Does.Contain("farFieldCoverageAvailable);"));
-                Assert.That(renderer, Does.Contain("simpleDdgiDirtySignature.Signature"));
-                Assert.That(renderer, Does.Contain("simpleDdgiDirtySignature.ReasonFlags"));
+                Assert.That(renderer, Does.Contain("dirtySignature.Signature"));
+                Assert.That(renderer, Does.Contain("dirtySignature.ReasonFlags"));
                 Assert.That(pageCacheBytesDefinition, Does.Contain("_bakeVoxelBufferBytes"),
                     "Legacy double-buffered voxel storage must be included in far-field cache telemetry.");
                 Assert.That(farFieldBudgetPublication, Does.Not.Contain("FarFieldPagedEnabled"),

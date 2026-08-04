@@ -1838,7 +1838,7 @@ namespace Njulf.Rendering.Resources
                 return;
 
             _registeredBindlessHeap.RegisterStorageBuffer(
-                BindlessIndex.DdgiRayQueryInstanceBuffer,
+                BindlessIndex.SimpleDdgiRayQueryInstanceBuffer,
                 _bufferManager.GetBuffer(_rayQueryInstanceBuffer),
                 0,
                 _rayQueryInstanceBufferSize);

@@ -551,6 +551,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly Dictionary<RenderGraphAllocationIdentity, ImageLayout> _layouts = new();
         private RenderGraphResourcePlan _currentPlan;
         private ulong _nextGeneration;
+        private ulong _synchronizationStateGeneration;
         private int _stalePlanRejectionCount;
 
         public RenderGraphResourceBindings()
@@ -562,6 +563,7 @@ namespace Njulf.Rendering.Pipeline
         }
 
         public ulong Generation => _currentPlan.Generation;
+        public ulong SynchronizationStateGeneration => _synchronizationStateGeneration;
         public int StalePlanRejectionCount => _stalePlanRejectionCount;
         public int BindingCount => _currentPlan.BindingCount;
         public RenderGraphResourcePlan CurrentPlan => _currentPlan;
@@ -623,11 +625,17 @@ namespace Njulf.Rendering.Pipeline
                 throw new InvalidOperationException("A concrete resource plan can only be activated by the binding catalog that created it.");
 
             _currentPlan = plan;
+            _synchronizationStateGeneration = _synchronizationStateGeneration == ulong.MaxValue
+                ? 1UL
+                : _synchronizationStateGeneration + 1UL;
             if (!resetState)
                 return;
 
             _owners.Clear();
             _layouts.Clear();
+            _synchronizationStateGeneration = _synchronizationStateGeneration == ulong.MaxValue
+                ? 1UL
+                : _synchronizationStateGeneration + 1UL;
         }
 
         public void Replace(IEnumerable<RenderGraphConcreteResourceBinding> bindings)
@@ -649,6 +657,9 @@ namespace Njulf.Rendering.Pipeline
                 Array.Empty<RenderGraphConcreteResourceBinding>());
             _owners.Clear();
             _layouts.Clear();
+            _synchronizationStateGeneration = _synchronizationStateGeneration == ulong.MaxValue
+                ? 1UL
+                : _synchronizationStateGeneration + 1UL;
         }
 
         public void RecordStalePlanRejection() => _stalePlanRejectionCount++;
@@ -668,7 +679,14 @@ namespace Njulf.Rendering.Pipeline
             if (!binding.PermittedQueueFamilies.Contains(ownerQueueFamily))
                 throw new InvalidOperationException($"Queue family {ownerQueueFamily} is not permitted for binding '{binding.Name}'.");
 
-            _owners[binding.AllocationIdentity] = ownerQueueFamily;
+            if (!_owners.TryGetValue(binding.AllocationIdentity, out uint priorOwner) ||
+                priorOwner != ownerQueueFamily)
+            {
+                _owners[binding.AllocationIdentity] = ownerQueueFamily;
+                _synchronizationStateGeneration = _synchronizationStateGeneration == ulong.MaxValue
+                    ? 1UL
+                    : _synchronizationStateGeneration + 1UL;
+            }
         }
 
         public void CommitLayout(RenderGraphConcreteResourceBinding binding, ImageLayout layout)
@@ -684,7 +702,14 @@ namespace Njulf.Rendering.Pipeline
             if (binding.Kind != RenderGraphConcreteResourceKind.Image)
                 throw new InvalidOperationException($"Buffer binding '{binding.Name}' cannot commit an image layout.");
 
-            _layouts[binding.AllocationIdentity] = layout;
+            if (!_layouts.TryGetValue(binding.AllocationIdentity, out ImageLayout priorLayout) ||
+                priorLayout != layout)
+            {
+                _layouts[binding.AllocationIdentity] = layout;
+                _synchronizationStateGeneration = _synchronizationStateGeneration == ulong.MaxValue
+                    ? 1UL
+                    : _synchronizationStateGeneration + 1UL;
+            }
         }
     }
 }

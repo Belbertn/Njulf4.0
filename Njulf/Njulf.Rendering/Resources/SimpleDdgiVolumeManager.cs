@@ -97,10 +97,83 @@ namespace Njulf.Rendering.Resources
     /// Passing <see cref="DeterministicFixedBudget"/> keeps validation scheduling
     /// exactly at its authored request cap.
     /// </summary>
-    public readonly record struct SimpleDdgiSchedulingFeedback(
+public readonly record struct SimpleDdgiSchedulingFeedback(
         ulong CompletedGpuMicroseconds,
         ulong TargetGpuMicroseconds,
-        bool DeterministicFixedBudget);
+    bool DeterministicFixedBudget);
+
+/// <summary>
+/// O(1) atmosphere-cohort feedback exported by the DDGI scheduler.  All counts are maintained
+/// incrementally as probe state changes; a capture/admission caller never scans the probe pool.
+/// </summary>
+public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
+    uint VolumeResourceGeneration,
+    uint SourceCohortGeneration,
+    uint AdmittedSourceCohortGeneration,
+    uint PropagationGeneration,
+    uint PublishedPropagationGeneration,
+    int ParticipatingProbeCount,
+    int StaleParticipatingProbeCount,
+    int VisiblePriorityParticipatingProbeCount,
+    int VisiblePrioritySourceReadyProbeCount,
+    int VisiblePriorityPublishedProbeCount,
+    bool SourceCohortActive,
+    bool VisiblePublicationBoundaryComplete,
+    bool MinimumPropagationBoundaryComplete,
+    bool QuietPeriodComplete,
+    float AchievableSourceSweepSeconds,
+    uint SourceCohortStartFrame = 0U,
+    uint SourceCohortCompletionFrame = 0U,
+    ulong SourceCohortStartCount = 0UL,
+    ulong SourceCohortCompletionCount = 0UL,
+    int TargetSourceProbeCount = 0,
+    int AdmittedSourceProbeCount = 0,
+    int ScheduledSourceProbeCount = 0,
+    ulong TargetSourceRayCount = 0UL,
+    ulong AdmittedSourceRayCount = 0UL,
+    ulong ScheduledSourceRayCount = 0UL,
+    int SourceCapacityShortfall = 0,
+    ulong SourceRayCapacityShortfall = 0UL,
+    uint StaticConvergedGeneration = 0U,
+    bool StaticConvergencePending = false,
+    ulong StaleReadbackRejectionCount = 0UL,
+    ulong ResourceGenerationRejectionCount = 0UL)
+{
+    public GiAtmosphereCohortFeedback ToAdmissionFeedback() => new(
+        ConsumesSteppedAtmosphere: true,
+        ParticipatingProbeCount,
+        SourceCohortActive,
+        StaleParticipatingProbeCount,
+        VisiblePublicationBoundaryComplete,
+        MinimumPropagationBoundaryComplete,
+        AchievableSourceSweepSeconds,
+        VolumeResourceGeneration,
+        SourceCohortGeneration,
+        AdmittedSourceCohortGeneration,
+        PropagationGeneration,
+        PublishedPropagationGeneration,
+        VisiblePriorityParticipatingProbeCount,
+        VisiblePrioritySourceReadyProbeCount,
+        VisiblePriorityPublishedProbeCount,
+        QuietPeriodComplete,
+        CandidateStreamActive: false,
+        SourceCohortStartFrame,
+        SourceCohortCompletionFrame,
+        SourceCohortStartCount,
+        SourceCohortCompletionCount,
+        TargetSourceProbeCount,
+        AdmittedSourceProbeCount,
+        ScheduledSourceProbeCount,
+        TargetSourceRayCount,
+        AdmittedSourceRayCount,
+        ScheduledSourceRayCount,
+        SourceCapacityShortfall,
+        SourceRayCapacityShortfall,
+        StaticConvergedGeneration,
+        StaticConvergencePending,
+        StaleReadbackRejectionCount,
+        ResourceGenerationRejectionCount);
+}
 
     /// <summary>
     /// A contiguous update-queue range whose probes all use the same active ray
@@ -199,6 +272,10 @@ namespace Njulf.Rendering.Resources
         private const byte ProbeSchedulingScrollExposedFlag = 1 << 0;
         private const byte ProbeSchedulingRegionalDirtyFlag = 1 << 1;
         private const byte ProbeSchedulingVisibleFlag = 1 << 2;
+        private const byte AtmosphereParticipantFlag = 1 << 0;
+        private const byte AtmosphereVisibleFlag = 1 << 1;
+        private const byte AtmosphereSourceReadyFlag = 1 << 2;
+        private const byte AtmospherePublishedFlag = 1 << 3;
         private const byte SchedulerTransportParticipantFlag = 1 << 0;
         private const byte SchedulerTransportSourceRepairFlag = 1 << 1;
         private const byte SchedulerTransportPendingConvergenceFlag = 1 << 2;
@@ -241,11 +318,13 @@ namespace Njulf.Rendering.Resources
         // target at the capped 240 Hz observation rate; overflow still fails
         // conservatively to the measured maximum without render-thread allocation.
         private const int DirtyLatencyBucketCount = 4_096;
+        private const int SourceCohortQuietFrameCount = 4;
 
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
         private readonly RenderSettings _settings;
         private readonly Action<RuntimeStallReason, string, Action> _recordRuntimeStall;
+        private readonly SimpleDdgiGpuScheduler _gpuScheduler;
         private readonly List<RetiredBufferResource> _retiredBuffers = new();
         private ulong _retiredBufferBytes;
         private readonly List<VolumeCandidate> _volumeCandidates = new(GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount + 3);
@@ -253,6 +332,12 @@ namespace Njulf.Rendering.Resources
         private readonly GPUSimpleDdgiVolume[] _previousVolumeScratch = new GPUSimpleDdgiVolume[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
         private readonly SimpleDdgiVolumePurpose[] _volumePurposes = new SimpleDdgiVolumePurpose[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
         private readonly int[] _volumePriorities = new int[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
+        private readonly GPUSimpleDdgiSchedulerVolumePolicy[] _gpuVolumePolicyScratch =
+            new GPUSimpleDdgiSchedulerVolumePolicy[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
+        private readonly GPUSimpleDdgiSchedulerVolumePolicy[] _gpuPreviousVolumePolicyScratch =
+            new GPUSimpleDdgiSchedulerVolumePolicy[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
+        private readonly GPUSimpleDdgiSchedulerDirtyRegion[] _gpuDirtyRegionScratch =
+            new GPUSimpleDdgiSchedulerDirtyRegion[SimpleDdgiGpuSchedulerLayout.MaxDirtyRegionCapacity];
         private readonly GPUSimpleDdgiProbeUpdate[] _updateQueueScratch = new GPUSimpleDdgiProbeUpdate[GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount];
         private readonly GPUSimpleDdgiProbeUpdate[] _rayDispatchSortScratch = new GPUSimpleDdgiProbeUpdate[GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount];
         private readonly byte[] _rayDispatchWorkClassSortScratch = new byte[GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount];
@@ -342,6 +427,7 @@ namespace Njulf.Rendering.Resources
         private readonly ulong[] _volumeScheduledTransportRayCounts =
             new ulong[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
         private byte[] _probeSchedulerLifecycleStates = Array.Empty<byte>();
+        private byte[] _probeAtmosphereCohortFlags = Array.Empty<byte>();
         private uint[] _probeSchedulerTrackedLastUpdatedFrames = Array.Empty<uint>();
         private uint[] _probeSchedulerTrackedSourceRefreshFrames = Array.Empty<uint>();
         private readonly SimpleDdgiSchedulerWakeHeap _schedulerFreshAgeHeap = new();
@@ -374,6 +460,13 @@ namespace Njulf.Rendering.Resources
         private int _schedulerRoutineSourceRepairProbeCount;
         private int _schedulerRoutineMaintenancePendingProbeCount;
         private int _schedulerPendingConvergenceProbeCount;
+        private int _schedulerAtmosphereVisibleParticipatingProbeCount;
+        private int _schedulerAtmosphereVisibleSourceReadyProbeCount;
+        private int _schedulerAtmosphereVisiblePublishedProbeCount;
+        private readonly int[] _volumeAtmosphereParticipatingProbeCounts =
+            new int[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
+        private readonly int[] _volumeAtmosphereRayCounts =
+            new int[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
         private int _schedulerRoutineWakeRefreshBudget = 1;
         private int _schedulerInactiveDeferredProbeCount;
         private ulong _schedulerInactiveDeferredSavedPrimaryRayCount;
@@ -601,8 +694,14 @@ namespace Njulf.Rendering.Resources
         private bool _sourceCohortTransitionActive;
         private uint _sourceCohortTransitionStartFrame;
         private ulong _sourceCohortTransitionCount;
+        private ulong _sourceCohortCompletionCount;
+        private uint _sourceCohortCompletedFrame;
+        private int _sourceCohortQuietFrames = SourceCohortQuietFrameCount;
         private int _sourceRefreshTargetProbeCount;
         private int _sourceRefreshCapacityShortfall;
+        private ulong _sourceRefreshTargetRayCount;
+        private ulong _sourceRefreshRayCapacityShortfall;
+        private float _sourceRefreshMinimumSweepSeconds;
         private int _sourceStepStaleProbeCount;
         private int _sourceStepAgeP95Frames;
         private int _sourceStepAgeMaximumFrames;
@@ -610,6 +709,16 @@ namespace Njulf.Rendering.Resources
             GiSourceSweepNominalFramesPerSecond;
         private long _sourceSweepLastTimestamp;
         private uint _transportGeneration;
+        // These are publication-boundary generations, not aliases for the
+        // currently requested generations. A source generation advances as
+        // soon as a new lighting signature is accepted by the DDGI scheduler;
+        // the admitted value catches up only after the source cohort has no
+        // stale participants. Propagation can likewise advance while a global
+        // solve is pending, so its published value is latched at convergence.
+        private uint _admittedSourceCohortGeneration;
+        private uint _publishedPropagationGeneration;
+        private ulong _staleReadbackRejectionCount;
+        private ulong _resourceGenerationRejectionCount;
         // A local residual alone cannot prove that multi-bounce transport has
         // reached a probe whose neighbors are still warming. Global source
         // changes therefore retain every active probe until the whole field is
@@ -703,6 +812,18 @@ namespace Njulf.Rendering.Resources
         private HashSet<int>? _cachedAcceptedSourceOrdinals;
         private ulong _cachedLayoutFingerprint;
         private bool _disposed;
+        private SimpleDdgiSchedulerMode _schedulerMode = SimpleDdgiSchedulerMode.CpuReference;
+        private bool _gpuResidentProbeStateBootstrapped;
+        private GPUSimpleDdgiSchedulerFeedback _lastGpuSchedulerFeedback;
+        private bool _gpuSchedulerFeedbackValid;
+        private ulong _gpuSchedulerFeedbackFrameSerial;
+        private ulong _gpuSchedulerFeedbackGenerationRejectionCount;
+        private bool _gpuSchedulerFallbackLatched;
+        private bool _gpuSchedulerFallbackFreshResetPending;
+        private ulong _gpuSchedulerFallbackCount;
+        private int _gpuSchedulerGenerationMismatchStreak;
+        private string _gpuSchedulerFallbackReason = string.Empty;
+        private bool _gpuSchedulerFrameExecutionAvailable = true;
 
         public SimpleDdgiVolumeManager(
             VulkanContext context,
@@ -715,6 +836,7 @@ namespace Njulf.Rendering.Resources
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _recordRuntimeStall = recordRuntimeStall ??
                 throw new ArgumentNullException(nameof(recordRuntimeStall));
+            _gpuScheduler = new SimpleDdgiGpuScheduler(_context, _bufferManager);
 
             int schedulerQueueCount =
                 GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount * SchedulerWorkClassCount;
@@ -744,6 +866,25 @@ namespace Njulf.Rendering.Resources
         public int RaysPerProbe => _raysPerProbe;
         public int UpdateStartProbe => _updateStartProbe;
         public int ProbesToUpdate => _probesToUpdate;
+        public SimpleDdgiSchedulerMode SchedulerMode => _schedulerMode;
+        public ulong FrameSerial => _frameSerial;
+        public SimpleDdgiGpuScheduler GpuScheduler => _gpuScheduler;
+        public BufferHandle GpuSchedulerArenaBuffer => _gpuScheduler.ArenaBuffer;
+        public ulong GpuSchedulerArenaBytes => _gpuScheduler.ArenaBytes;
+        public ulong GpuSchedulerFeedbackReadbackBytes => _gpuScheduler.FeedbackReadbackBytes;
+        public ulong GpuSchedulerRetiredBytes => _gpuScheduler.RetiredBytes;
+        public GPUSimpleDdgiSchedulerFeedback LastGpuSchedulerFeedback => _lastGpuSchedulerFeedback;
+        public bool GpuSchedulerFeedbackValid => _gpuSchedulerFeedbackValid;
+        public ulong GpuSchedulerFeedbackFrameSerial => _gpuSchedulerFeedbackFrameSerial;
+        public ulong GpuSchedulerFeedbackGenerationRejectionCount =>
+            _gpuSchedulerFeedbackGenerationRejectionCount;
+        public bool GpuSchedulerFallbackLatched => _gpuSchedulerFallbackLatched;
+        public bool GpuSchedulerFallbackFreshResetPending =>
+            _gpuSchedulerFallbackFreshResetPending;
+        public ulong GpuSchedulerFallbackCount => _gpuSchedulerFallbackCount;
+        public string GpuSchedulerFallbackReason => _gpuSchedulerFallbackReason;
+        public bool GpuSchedulerFrameExecutionAvailable =>
+            _gpuSchedulerFrameExecutionAvailable;
         public ReadOnlySpan<SimpleDdgiRayDispatchBatch> RayDispatchBatches =>
             new(_rayDispatchBatches, 0, _rayDispatchBatchCount);
         public long LastUploadMicroseconds => _lastUploadMicroseconds;
@@ -854,15 +995,11 @@ namespace Njulf.Rendering.Resources
                     _settings.GlobalIllumination.SimpleDdgiStableMaintenanceUpdateCount);
         public int SourceRefreshTargetProbeCount => _sourceRefreshTargetProbeCount;
         public int SourceRefreshCapacityShortfall => _sourceRefreshCapacityShortfall;
-        public ulong SourceRefreshTargetRayCount => checked(
-            (ulong)Math.Max(_sourceRefreshTargetProbeCount, 0) *
-            (ulong)Math.Max(_transportSourceCacheRayCapacity, 1));
-        public ulong SourceRefreshRayCapacityShortfall =>
-            SourceRefreshTargetRayCount > (ulong)Math.Max(
-                _settings.GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget, 0)
-                ? SourceRefreshTargetRayCount - (ulong)Math.Max(
-                    _settings.GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget, 0)
-                : 0UL;
+        /// <summary>Exact mixed-tier source-ray target, not a probe-count proxy.</summary>
+        public ulong SourceRefreshTargetRayCount => _sourceRefreshTargetRayCount;
+        public ulong SourceRefreshRayCapacityShortfall => _sourceRefreshRayCapacityShortfall;
+        public float SourceRefreshMinimumAchievableSweepSeconds =>
+            _sourceRefreshMinimumSweepSeconds;
         public SimpleDdgiTrackingState TrackingState => ResolveTrackingState();
         public bool SourceCohortTransitionActive =>
             TransportV2Active && _sourceCohortTransitionActive;
@@ -875,6 +1012,9 @@ namespace Njulf.Rendering.Resources
         public int SourceStepStaleProbeCount => _sourceStepStaleProbeCount;
         public int SourceStepAgeP95Frames => _sourceStepAgeP95Frames;
         public int SourceStepAgeMaximumFrames => _sourceStepAgeMaximumFrames;
+        public ulong SourceCohortCompletionCount => _sourceCohortCompletionCount;
+        public uint SourceCohortCompletedFrame => _sourceCohortCompletedFrame;
+        public int SourceCohortQuietFrames => _sourceCohortQuietFrames;
         public float SourceStepAgeP95Seconds =>
             _sourceStepAgeP95Frames / MathF.Max(_sourceSweepFramesPerSecond, 1.0f);
         public float SourceStepAgeMaximumSeconds =>
@@ -897,7 +1037,266 @@ namespace Njulf.Rendering.Resources
                     (float)_completedSourceRefreshProbeCount
                 : 0.0f;
         public uint SourceLightingGeneration => _sourceLightingGeneration;
+        public uint AdmittedSourceCohortGeneration => _admittedSourceCohortGeneration;
         public uint TransportGeneration => _transportGeneration;
+        public uint PublishedPropagationGeneration => _publishedPropagationGeneration;
+        public uint VolumeTableGeneration => _volumeTableGeneration;
+        public ulong StaleReadbackRejectionCount => _staleReadbackRejectionCount;
+        public ulong ResourceGenerationRejectionCount => _resourceGenerationRejectionCount;
+
+        /// <summary>
+        /// Returns the scheduler's atmosphere contract without reading probe state back from the
+        /// GPU. The method is intentionally a value snapshot so callers cannot retain mutable
+        /// manager state across an admission transaction.
+        /// </summary>
+        public SimpleDdgiAtmosphereCohortFeedback CreateAtmosphereCohortFeedbackSnapshot()
+        {
+            if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
+                return CreateGpuResidentAtmosphereCohortFeedbackSnapshot();
+
+            int participants = TransportV2Active ? _schedulerParticipatingProbeCount : 0;
+            int stale = TransportV2Active ? _schedulerSourceRepairProbeCount : 0;
+            int visibleParticipants = TransportV2Active
+                ? _schedulerAtmosphereVisibleParticipatingProbeCount
+                : 0;
+            int visibleReady = TransportV2Active
+                ? _schedulerAtmosphereVisibleSourceReadyProbeCount
+                : 0;
+            int visiblePublished = TransportV2Active
+                ? _schedulerAtmosphereVisiblePublishedProbeCount
+                : 0;
+            bool visibleComplete = visibleReady >= visibleParticipants &&
+                                   visiblePublished >= visibleParticipants;
+            bool propagationComplete = !TransportGlobalConvergencePending &&
+                                       _schedulerPendingConvergenceProbeCount == 0;
+            bool quietComplete = _sourceCohortQuietFrames >= SourceCohortQuietFrameCount;
+            bool staticConverged = propagationComplete &&
+                                   quietComplete &&
+                                   _sourceStepStaleProbeCount == 0 &&
+                                   _admittedSourceCohortGeneration == _sourceLightingGeneration;
+            int admittedSourceProbeCount = Math.Max(
+                0,
+                _sourceRefreshTargetProbeCount - _sourceRefreshCapacityShortfall);
+            return new SimpleDdgiAtmosphereCohortFeedback(
+                _volumeTableGeneration,
+                _sourceLightingGeneration,
+                _admittedSourceCohortGeneration,
+                _transportGeneration,
+                _publishedPropagationGeneration,
+                participants,
+                stale,
+                visibleParticipants,
+                visibleReady,
+                visiblePublished,
+                SourceCohortTransitionActive,
+                visibleComplete,
+                propagationComplete,
+                quietComplete,
+                _sourceRefreshMinimumSweepSeconds,
+                _sourceCohortTransitionStartFrame,
+                _sourceCohortCompletedFrame,
+                _sourceCohortTransitionCount,
+                _sourceCohortCompletionCount,
+                _sourceRefreshTargetProbeCount,
+                admittedSourceProbeCount,
+                _sourceRefreshProbeCount,
+                _sourceRefreshTargetRayCount,
+                AdmittedSourceRayCount: (ulong)Math.Max(
+                    _settings.GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget,
+                    0),
+                _scheduledSourceRayCount,
+                _sourceRefreshCapacityShortfall,
+                _sourceRefreshRayCapacityShortfall,
+                staticConverged ? _sourceLightingGeneration : 0U,
+                TransportGlobalConvergencePending,
+                _staleReadbackRejectionCount,
+                _resourceGenerationRejectionCount);
+        }
+
+        /// <summary>
+        /// Accepts one fence-complete GPU summary. The summary is deliberately
+        /// validated against the manager's current volume/source/transport
+        /// generations before it can affect any CPU-visible policy. A missing
+        /// or stale record remains a conservative hold rather than becoming a
+        /// speculative completion signal.
+        /// </summary>
+        public bool TryConsumeGpuSchedulerFeedback(int frameIndex, ulong completedFrameSerial)
+        {
+            if (!_schedulerMode.IsGpuMode())
+                return false;
+
+            if (!_gpuScheduler.TryReadCompletedFeedback(
+                    frameIndex,
+                    completedFrameSerial,
+                    out GPUSimpleDdgiSchedulerFeedback feedback))
+            {
+                return false;
+            }
+
+            if (feedback.VolumeTableGeneration != _volumeTableGeneration ||
+                feedback.SourceLightingGeneration != _sourceLightingGeneration ||
+                feedback.TransportGeneration != _transportGeneration)
+            {
+                _gpuSchedulerFeedbackGenerationRejectionCount =
+                    SaturatingAdd(_gpuSchedulerFeedbackGenerationRejectionCount, 1UL);
+                _gpuSchedulerGenerationMismatchStreak =
+                    Math.Min(int.MaxValue, _gpuSchedulerGenerationMismatchStreak + 1);
+                _gpuSchedulerFeedbackValid = false;
+                if (_gpuSchedulerGenerationMismatchStreak >= 3)
+                {
+                    RequestGpuSchedulerFallback(
+                        "repeated delayed scheduler feedback generation mismatch");
+                }
+                return false;
+            }
+
+            _gpuSchedulerGenerationMismatchStreak = 0;
+            if (feedback.StatusFlags != 0u)
+            {
+                _gpuSchedulerFeedbackValid = false;
+                RequestGpuSchedulerFallback(
+                    (feedback.StatusFlags & 1u) != 0u
+                        ? "resident scheduler overflow"
+                        : "resident scheduler invalid generation");
+                return false;
+            }
+
+            _lastGpuSchedulerFeedback = feedback;
+            _gpuSchedulerFeedbackFrameSerial =
+                ((ulong)feedback.FrameSerialHigh << 32) | feedback.FrameSerialLow;
+            _gpuSchedulerFeedbackValid = true;
+
+            // These are delayed observations only. They are useful to the
+            // control plane and diagnostics, but never rebuild the resident
+            // queue or mutate per-probe CPU mirrors.
+            _schedulerDeferredRequestCount = Math.Max(
+                0,
+                checked((int)Math.Min(
+                    int.MaxValue,
+                    (ulong)feedback.ConsideredCount -
+                    Math.Min((ulong)feedback.ConsideredCount, feedback.AcceptedCount))));
+            _sourceRefreshRayCapacityShortfall = feedback.SourceCapacityShortfall;
+            return true;
+        }
+
+        /// <summary>
+        /// Records an initialization-time scheduler failure without allowing a
+        /// GPU-mode request to escape into a partially initialized graph. The
+        /// CPU reference path remains usable; a fresh reset is only required if
+        /// the resident path had already become authoritative.
+        /// </summary>
+        public void ReportGpuSchedulerUnavailable(string reason)
+        {
+            if (!_settings.GlobalIllumination.SimpleDdgiSchedulerMode.IsGpuMode())
+                return;
+
+            RequestGpuSchedulerFallback(
+                string.IsNullOrWhiteSpace(reason)
+                    ? "GPU scheduler pipeline unavailable"
+                    : reason,
+                requiresFreshReset: _schedulerMode == SimpleDdgiSchedulerMode.GpuResident);
+        }
+
+        private SimpleDdgiAtmosphereCohortFeedback CreateGpuResidentAtmosphereCohortFeedbackSnapshot()
+        {
+            if (!_gpuSchedulerFeedbackValid)
+            {
+                // A resident scheduler without a completed matching summary
+                // cannot authorize a new atmosphere cohort. Keep all current
+                // participants stale until the normal delayed ring catches up.
+                int gpuParticipants = TransportV2Active ? _probeCount : 0;
+                return new SimpleDdgiAtmosphereCohortFeedback(
+                    _volumeTableGeneration,
+                    _sourceLightingGeneration,
+                    0u,
+                    _transportGeneration,
+                    0u,
+                    gpuParticipants,
+                    gpuParticipants,
+                    gpuParticipants,
+                    0,
+                    0,
+                    SourceCohortActive: gpuParticipants > 0,
+                    VisiblePublicationBoundaryComplete: false,
+                    MinimumPropagationBoundaryComplete: false,
+                    QuietPeriodComplete: false,
+                    AchievableSourceSweepSeconds: _sourceRefreshMinimumSweepSeconds,
+                    TargetSourceProbeCount: _sourceRefreshTargetProbeCount,
+                    TargetSourceRayCount: _sourceRefreshTargetRayCount,
+                    SourceCapacityShortfall: _sourceRefreshCapacityShortfall,
+                    SourceRayCapacityShortfall: _sourceRefreshRayCapacityShortfall,
+                    StaticConvergencePending: true,
+                    StaleReadbackRejectionCount: _staleReadbackRejectionCount +
+                        _gpuScheduler.StaleFeedbackCount,
+                    ResourceGenerationRejectionCount: _resourceGenerationRejectionCount +
+                        _gpuSchedulerFeedbackGenerationRejectionCount);
+            }
+
+            GPUSimpleDdgiSchedulerFeedback feedback = _lastGpuSchedulerFeedback;
+            int participants = TransportV2Active ? _probeCount : 0;
+            int visibleParticipants = checked((int)Math.Min(
+                int.MaxValue,
+                feedback.VisiblePriorityParticipatingProbeCount));
+            int visibleReady = checked((int)Math.Min(
+                int.MaxValue,
+                feedback.VisiblePrioritySourceReadyProbeCount));
+            int visiblePublished = checked((int)Math.Min(
+                int.MaxValue,
+                feedback.VisiblePriorityPublishedProbeCount));
+            bool sourceCohortActive =
+                feedback.StaticConvergencePending != 0u ||
+                feedback.PendingSourceCount != 0u ||
+                feedback.SourceCapacityShortfall != 0u ||
+                feedback.SourceAchievedRays < feedback.SourceTargetRays ||
+                feedback.StaticConvergedGeneration != feedback.SourceLightingGeneration;
+            bool propagationComplete =
+                feedback.StaticConvergencePending == 0u &&
+                feedback.PublishedPropagationGeneration == feedback.PropagationGeneration;
+            bool quietComplete = !sourceCohortActive &&
+                feedback.SourceCohortCompletionFrame != 0u;
+            bool staticConverged = !sourceCohortActive &&
+                propagationComplete &&
+                feedback.StaticConvergedGeneration == feedback.SourceLightingGeneration;
+
+            return new SimpleDdgiAtmosphereCohortFeedback(
+                feedback.VolumeTableGeneration,
+                feedback.SourceLightingGeneration,
+                staticConverged ? feedback.StaticConvergedGeneration : 0u,
+                feedback.PropagationGeneration,
+                feedback.PublishedPropagationGeneration,
+                participants,
+                checked((int)Math.Min(int.MaxValue, feedback.PendingSourceCount)),
+                visibleParticipants,
+                visibleReady,
+                visiblePublished,
+                sourceCohortActive,
+                visibleReady >= visibleParticipants &&
+                    visiblePublished >= visibleParticipants,
+                propagationComplete,
+                quietComplete,
+                _sourceRefreshMinimumSweepSeconds,
+                feedback.SourceCohortStartFrame,
+                feedback.SourceCohortCompletionFrame,
+                feedback.SourceCohortStartCount,
+                feedback.SourceCohortCompletionCount,
+                _sourceRefreshTargetProbeCount,
+                checked((int)Math.Min(int.MaxValue, feedback.AcceptedCount)),
+                checked((int)Math.Min(int.MaxValue, feedback.AcceptedCount)),
+                _sourceRefreshTargetRayCount,
+                feedback.SourceAchievedRays,
+                feedback.SourceAchievedRays,
+                _sourceRefreshCapacityShortfall,
+                feedback.SourceCapacityShortfall,
+                staticConverged ? feedback.StaticConvergedGeneration : 0u,
+                !staticConverged,
+                _staleReadbackRejectionCount + feedback.StaleReadbackRejectionCount,
+                _resourceGenerationRejectionCount +
+                    feedback.ResourceGenerationRejectionCount +
+                    _gpuSchedulerFeedbackGenerationRejectionCount);
+        }
+
+        public GiAtmosphereCohortFeedback CreateAtmosphereCohortFeedback() =>
+            CreateAtmosphereCohortFeedbackSnapshot().ToAdmissionFeedback();
         public bool TransportV2Active => _settings.GlobalIllumination.SimpleDdgiTransportV2Enabled;
         /// <summary>
         /// True while a global source or layout change is still receiving its
@@ -1441,9 +1840,9 @@ namespace Njulf.Rendering.Resources
                 Vector3 size = new(Math.Max(countX - 1, 1) * spacing, Math.Max(countY - 1, 1) * spacing, Math.Max(countZ - 1, 1) * spacing);
                 int scheduledUpdates = Math.Max(0, (int)MathF.Round(volume.UpdateStartAndCount.Y));
                 SimpleDdgiRingQuality quality = ResolveVolumeQuality(i);
-                DdgiProbeVolumeKind kind = Kind(volume) == VolumeKindAuthored
-                    ? DdgiProbeVolumeKind.Authored
-                    : DdgiProbeVolumeKind.CameraClipmap;
+                SimpleDdgiVolumeKind kind = Kind(volume) == VolumeKindAuthored
+                    ? SimpleDdgiVolumeKind.Authored
+                    : SimpleDdgiVolumeKind.CameraRing;
                 int cascadeIndex = Kind(volume) == VolumeKindRing
                     ? Math.Clamp(SourceOrdinal(volume) - 10_000, 0, 2)
                     : 0;
@@ -1666,6 +2065,8 @@ namespace Njulf.Rendering.Resources
 
             bool heapChanged = !ReferenceEquals(_registeredBindlessHeap, bindlessHeap);
             _registeredBindlessHeap = bindlessHeap;
+            SetGpuSchedulerMode(_settings.GlobalIllumination.SimpleDdgiSchedulerMode);
+            _gpuScheduler.Register(bindlessHeap);
             if (heapChanged)
                 _capacityKeyValid = false;
             RegisterBuffers(bindlessHeap);
@@ -1735,7 +2136,16 @@ namespace Njulf.Rendering.Resources
                 UpdateSourceSweepFrameRateEstimate();
 
                 GlobalIlluminationSettings gi = _settings.GlobalIllumination;
-                bool enabled = gi.EffectiveUseSimpleDdgi;
+                SetGpuSchedulerMode(gi.SimpleDdgiSchedulerMode);
+                // The manager receives the live per-frame capability result from
+                // VulkanRenderer. A resident arena may remain allocated while a
+                // frame lacks an active ray-query/structured-gather producer,
+                // but no scheduler or indirect consumer may run against stale
+                // commands in that case.
+                _gpuSchedulerFrameExecutionAvailable =
+                    !_schedulerMode.IsGpuMode() || structuredGatherAvailable;
+                _gpuScheduler.CollectRetired(_frameSerial);
+                bool enabled = gi.EffectiveUseDdgi;
                 layoutMicroseconds += ElapsedMicroseconds(phaseStart);
                 if (!enabled)
                 {
@@ -1746,7 +2156,7 @@ namespace Njulf.Rendering.Resources
                 }
 
                 phaseStart = Stopwatch.GetTimestamp();
-                BoundingBox sceneBounds = ExpandBounds(DdgiFrameLayoutBuilder.EstimateSceneProbeBounds(scene), gi.SimpleDdgiRingBaseSpacing * 1.5f);
+                BoundingBox sceneBounds = ExpandBounds(SimpleDdgiSceneBounds.Estimate(scene), gi.SimpleDdgiRingBaseSpacing * 1.5f);
                 int previousProbeCount = _probeCount;
                 int previousVolumeCount = _volumeCount;
                 CapturePreviousVolumes();
@@ -1754,18 +2164,32 @@ namespace Njulf.Rendering.Resources
                 layoutMicroseconds += ElapsedMicroseconds(phaseStart);
 
                 phaseStart = Stopwatch.GetTimestamp();
-                EnsureCpuProbeStateCapacity(_probeCount);
-                long cpuStateCapacityMicroseconds = ElapsedMicroseconds(phaseStart);
-                capacityMicroseconds += cpuStateCapacityMicroseconds;
-                _uploadCapacityCpuProbeStateMicroseconds += cpuStateCapacityMicroseconds;
-
-                phaseStart = Stopwatch.GetTimestamp();
-                if (VolumeTableRemapped(previousProbeCount, previousVolumeCount))
+                bool volumeTableRemapped = VolumeTableRemapped(previousProbeCount, previousVolumeCount);
+                if (volumeTableRemapped)
                     AdvanceVolumeTableGenerationAndDropPendingReadbacks();
                 invalidationMicroseconds += ElapsedMicroseconds(phaseStart);
 
                 phaseStart = Stopwatch.GetTimestamp();
-                ReadCompletedProbeStateReadback(frameIndex);
+                bool residentBootstrap = _schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+                    (!_gpuResidentProbeStateBootstrapped || volumeTableRemapped);
+                if (_schedulerMode != SimpleDdgiSchedulerMode.GpuResident || residentBootstrap)
+                    EnsureCpuProbeStateCapacity(_probeCount);
+                long cpuStateCapacityMicroseconds = ElapsedMicroseconds(phaseStart);
+                capacityMicroseconds += cpuStateCapacityMicroseconds;
+                _uploadCapacityCpuProbeStateMicroseconds += cpuStateCapacityMicroseconds;
+
+                bool cpuFallbackFreshReset =
+                    _schedulerMode == SimpleDdgiSchedulerMode.CpuReference &&
+                    _gpuSchedulerFallbackFreshResetPending;
+                if (cpuFallbackFreshReset)
+                {
+                    PrepareCpuFreshResetFallback();
+                    _gpuSchedulerFallbackFreshResetPending = false;
+                }
+
+                phaseStart = Stopwatch.GetTimestamp();
+                if (_schedulerMode != SimpleDdgiSchedulerMode.GpuResident)
+                    ReadCompletedProbeStateReadback(frameIndex);
                 readbackMicroseconds += ElapsedMicroseconds(phaseStart);
 
                 phaseStart = Stopwatch.GetTimestamp();
@@ -1815,7 +2239,37 @@ namespace Njulf.Rendering.Resources
                     _raysPerProbe,
                     _schedulerConfiguredRequestBudget,
                     commandBuffer);
+                if (_schedulerMode.IsGpuMode() && _probeCount > 0)
+                {
+                    _gpuScheduler.EnsureCapacity(
+                        _probeCount,
+                        Math.Clamp(_schedulerConfiguredRequestBudget, 0, _probeCount),
+                        _volumeCount,
+                        SimpleDdgiGpuSchedulerLayout.MaxDirtyRegionCapacity,
+                        _context.ValidationSettings.Mode != RendererValidationMode.Off,
+                        _frameSerial);
+                }
                 capacityMicroseconds += ElapsedMicroseconds(phaseStart);
+
+                if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
+                {
+                    phaseStart = Stopwatch.GetTimestamp();
+                    UploadGpuResidentFrame(
+                        gi,
+                        cameraPosition,
+                        dirtyRegions,
+                        dirtyReasonFlags,
+                        structuredGatherAvailable,
+                        farFieldCoverageAvailable,
+                        cohortLightingTransition,
+                        stagingRing,
+                        commandBuffer,
+                        residentBootstrap,
+                        volumeTableRemapped);
+                    gpuUploadMicroseconds += ElapsedMicroseconds(phaseStart);
+                    _frameIndex++;
+                    return;
+                }
 
                 phaseStart = Stopwatch.GetTimestamp();
                 _schedulerCameraPosition = cameraPosition;
@@ -1974,11 +2428,47 @@ namespace Njulf.Rendering.Resources
                         gi.SimpleDdgiTransportMaximumSolverGenerations)
                 };
 
+                if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
+                {
+                    // GPU admission owns the current transaction. The legacy
+                    // params header must not retain a previous CPU queue range
+                    // that a consumer could accidentally dispatch.
+                    _lastParams.ProbeUpdateRange = new Vector4(
+                        0.0f,
+                        0.0f,
+                        _volumeCount,
+                        gi.EnvironmentFallbackIntensity);
+                    for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
+                    {
+                        GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
+                        volume.UpdateStartAndCount = Vector4.Zero;
+                        _volumeScratch[volumeIndex] = volume;
+                    }
+                }
+
                 UploadParams(stagingRing, commandBuffer);
                 _controlHeaderInitialized = true;
                 _wasSimpleDdgiEnabled = true;
-                UploadProbeState(stagingRing, commandBuffer);
-                UploadProbeUpdateQueue(stagingRing, commandBuffer);
+                bool residentStateNeedsUpload = _schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+                    (!_gpuResidentProbeStateBootstrapped || _probeStateUploadRequired || _probeStateDirtySlots.Count > 0);
+                if (_schedulerMode != SimpleDdgiSchedulerMode.GpuResident || residentStateNeedsUpload)
+                {
+                    UploadProbeState(stagingRing, commandBuffer);
+                    if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
+                        _gpuResidentProbeStateBootstrapped = true;
+                }
+                if (_schedulerMode != SimpleDdgiSchedulerMode.GpuResident)
+                    UploadProbeUpdateQueue(stagingRing, commandBuffer);
+                UploadGpuSchedulerFrame(
+                    gi,
+                    cameraPosition,
+                    dirtyRegions,
+                    dirtyReasonFlags,
+                    structuredGatherAvailable,
+                    farFieldCoverageAvailable,
+                    cohortLightingTransition,
+                    stagingRing,
+                    commandBuffer);
                 gpuUploadMicroseconds += ElapsedMicroseconds(phaseStart);
                 if (_atlasClearedThisFrame)
                 {
@@ -2077,6 +2567,11 @@ namespace Njulf.Rendering.Resources
             StagingRing stagingRing,
             CommandBuffer commandBuffer)
         {
+            // Disabled DDGI owns no scheduler arena or feedback readback. Keep
+            // the serialized mode intact; Upload will re-enter it on the first
+            // enabled frame after the bounded bootstrap.
+            SetGpuSchedulerMode(SimpleDdgiSchedulerMode.CpuReference);
+            _gpuScheduler.CollectRetired(_frameSerial);
             _volumeCount = 0;
             _probeCount = 0;
             _lastLayoutReport = null;
@@ -2110,6 +2605,7 @@ namespace Njulf.Rendering.Resources
             Array.Clear(_probeDirtyLatencyStates);
             Array.Clear(_probeDirtyLatencyStartFrames);
             Array.Clear(_probeSchedulingFlags);
+            Array.Clear(_probeAtmosphereCohortFlags);
             Array.Clear(_probeDirtyReasons);
             Array.Clear(_probeRoutineMaintenancePending);
             Array.Clear(_probeVisibilityImportance);
@@ -2132,11 +2628,17 @@ namespace Njulf.Rendering.Resources
             _schedulerVisiblePendingAgeHistogram.Clear(_frameSerial);
             _schedulerGenerationStaleAgeHistogram.Clear(_frameSerial);
             Array.Clear(_probeSchedulerTransportStates);
+            Array.Clear(_probeAtmosphereCohortFlags);
             Array.Fill(_probeSchedulerVolumeIndices, byte.MaxValue);
             Array.Clear(_probeSchedulerLifecycleStates);
             Array.Clear(_probeSchedulerTrackedLastUpdatedFrames);
             Array.Clear(_probeSchedulerTrackedSourceRefreshFrames);
             _schedulerParticipatingProbeCount = 0;
+            _schedulerAtmosphereVisibleParticipatingProbeCount = 0;
+            _schedulerAtmosphereVisibleSourceReadyProbeCount = 0;
+            _schedulerAtmosphereVisiblePublishedProbeCount = 0;
+            Array.Clear(_volumeAtmosphereParticipatingProbeCounts);
+            Array.Clear(_volumeAtmosphereRayCounts);
             _schedulerSourceRepairProbeCount = 0;
             _schedulerRoutineSourceRepairProbeCount = 0;
             _schedulerRoutineMaintenancePendingProbeCount = 0;
@@ -2177,6 +2679,12 @@ namespace Njulf.Rendering.Resources
                     (ulong)_probesToUpdate);
                 _transportGeneration = AdvanceSourceLightingGeneration(_transportGeneration);
             }
+
+            // A propagation generation becomes externally visible only after
+            // its update transaction reaches the GPU publication point. Keep
+            // an in-flight global solve out of the atmosphere admission view.
+            if (TransportV2Active && !TransportGlobalConvergencePending)
+                _publishedPropagationGeneration = _transportGeneration;
 
             if (_probesToUpdate > 0)
             {
@@ -2523,6 +3031,7 @@ namespace Njulf.Rendering.Resources
             uint[] previousSourceEpochs = _probeSourceEpochs;
             ushort[] previousSourceRayCounts = _probeSourceRayCounts;
             byte[] previousTransportGenerationCounts = _probeTransportGenerationCounts;
+            byte[] previousAtmosphereCohortFlags = _probeAtmosphereCohortFlags;
             uint[] previousGenerations = _probeGenerations;
             Vector3[] previousRelocations = _probeRelocations;
             float[] previousActiveWeights = _probeActiveWeights;
@@ -2550,6 +3059,7 @@ namespace Njulf.Rendering.Resources
             _probeSourceEpochs = new uint[Math.Max(0, probeCount)];
             _probeSourceRayCounts = new ushort[Math.Max(0, probeCount)];
             _probeTransportGenerationCounts = new byte[Math.Max(0, probeCount)];
+            _probeAtmosphereCohortFlags = new byte[Math.Max(0, probeCount)];
             _probeDirtyLatencyStates = new byte[Math.Max(0, probeCount)];
             _probeDirtyLatencyStartFrames = new uint[Math.Max(0, probeCount)];
             int copyCount = Math.Min(probeCount, previousFresh.Length);
@@ -2574,6 +3084,7 @@ namespace Njulf.Rendering.Resources
             Array.Copy(previousSourceEpochs, _probeSourceEpochs, Math.Min(copyCount, previousSourceEpochs.Length));
             Array.Copy(previousSourceRayCounts, _probeSourceRayCounts, Math.Min(copyCount, previousSourceRayCounts.Length));
             Array.Copy(previousTransportGenerationCounts, _probeTransportGenerationCounts, Math.Min(copyCount, previousTransportGenerationCounts.Length));
+            Array.Copy(previousAtmosphereCohortFlags, _probeAtmosphereCohortFlags, Math.Min(copyCount, previousAtmosphereCohortFlags.Length));
             Array.Copy(previousGenerations, _probeGenerations, Math.Min(copyCount, previousGenerations.Length));
             Array.Copy(previousRelocations, _probeRelocations, Math.Min(copyCount, previousRelocations.Length));
             Array.Copy(previousActiveWeights, _probeActiveWeights, Math.Min(copyCount, previousActiveWeights.Length));
@@ -2621,6 +3132,7 @@ namespace Njulf.Rendering.Resources
                 : 0.0f;
             RecomputeDirtyLatencyOutstandingCount();
             EnsurePersistentSchedulerCapacity(probeCount);
+            RebuildAtmosphereCohortCounters();
             _probeStateUploadRequired = true;
         }
 
@@ -2816,7 +3328,13 @@ namespace Njulf.Rendering.Resources
             Array.Clear(_probeSchedulerTrackedLastUpdatedFrames);
             Array.Clear(_probeSchedulerTrackedSourceRefreshFrames);
             Array.Clear(_pendingWorkClassCounts);
+            Array.Clear(_probeAtmosphereCohortFlags);
             _schedulerParticipatingProbeCount = 0;
+            _schedulerAtmosphereVisibleParticipatingProbeCount = 0;
+            _schedulerAtmosphereVisibleSourceReadyProbeCount = 0;
+            _schedulerAtmosphereVisiblePublishedProbeCount = 0;
+            Array.Clear(_volumeAtmosphereParticipatingProbeCounts);
+            Array.Clear(_volumeAtmosphereRayCounts);
             _schedulerSourceRepairProbeCount = 0;
             _schedulerRoutineSourceRepairProbeCount = 0;
             _schedulerRoutineMaintenancePendingProbeCount = 0;
@@ -2954,7 +3472,14 @@ namespace Njulf.Rendering.Resources
                 nextState |= SchedulerInactiveDeferredFlag;
             RefreshTransportConvergenceTelemetry(probeIndex, volumeIndex);
             if (nextState == previousState)
+            {
+                RefreshAtmosphereCohortCounters(
+                    probeIndex,
+                    volumeIndex,
+                    participant,
+                    sourceRepair);
                 return;
+            }
 
             AdjustSchedulerCounter(
                 previousState,
@@ -3009,6 +3534,123 @@ namespace Njulf.Rendering.Resources
             }
 
             _probeSchedulerTransportStates[probeIndex] = nextState;
+            RefreshAtmosphereCohortCounters(
+                probeIndex,
+                volumeIndex,
+                participant,
+                sourceRepair);
+        }
+
+        private void RefreshAtmosphereCohortCounters(
+            int probeIndex,
+            int volumeIndex,
+            bool participant,
+            bool sourceRepair)
+        {
+            if ((uint)probeIndex >= (uint)_probeAtmosphereCohortFlags.Length)
+                return;
+
+            byte previous = _probeAtmosphereCohortFlags[probeIndex];
+            bool visible = participant &&
+                (uint)probeIndex < (uint)_probeSchedulingFlags.Length &&
+                (_probeSchedulingFlags[probeIndex] & ProbeSchedulingVisibleFlag) != 0;
+            bool sourceReady = participant && !sourceRepair;
+            bool published = sourceReady &&
+                (uint)probeIndex < (uint)_probeFresh.Length &&
+                _probeFresh[probeIndex] == 0 &&
+                (uint)probeIndex < (uint)_probeSourceLightingGenerations.Length &&
+                _probeSourceLightingGenerations[probeIndex] == _sourceLightingGeneration &&
+                (uint)probeIndex < (uint)_probeSourceRayCounts.Length &&
+                _probeSourceRayCounts[probeIndex] > 0;
+            byte next = 0;
+            if (participant)
+                next |= AtmosphereParticipantFlag;
+            if (visible)
+                next |= AtmosphereVisibleFlag;
+            if (sourceReady)
+                next |= AtmosphereSourceReadyFlag;
+            if (published)
+                next |= AtmospherePublishedFlag;
+
+            AdjustAtmosphereCounter(
+                previous,
+                next,
+                AtmosphereParticipantFlag,
+                ref _schedulerAtmosphereVisibleParticipatingProbeCount,
+                visibleOnly: true);
+            AdjustAtmosphereCounter(
+                previous,
+                next,
+                AtmosphereSourceReadyFlag,
+                ref _schedulerAtmosphereVisibleSourceReadyProbeCount,
+                visibleOnly: true,
+                requiredFlag: AtmosphereVisibleFlag);
+            AdjustAtmosphereCounter(
+                previous,
+                next,
+                AtmospherePublishedFlag,
+                ref _schedulerAtmosphereVisiblePublishedProbeCount,
+                visibleOnly: true,
+                requiredFlag: AtmosphereVisibleFlag);
+
+            bool previousParticipant = (previous & AtmosphereParticipantFlag) != 0;
+            bool nextParticipant = (next & AtmosphereParticipantFlag) != 0;
+            if (previousParticipant != nextParticipant &&
+                (uint)volumeIndex < (uint)_volumeCount)
+            {
+                _volumeAtmosphereParticipatingProbeCounts[volumeIndex] = Math.Max(
+                    0,
+                    _volumeAtmosphereParticipatingProbeCounts[volumeIndex] +
+                        (nextParticipant ? 1 : -1));
+                int rays = Math.Max(1, ResolveVolumeQuality(volumeIndex).FullRays);
+                _volumeAtmosphereRayCounts[volumeIndex] = Math.Max(
+                    0,
+                    _volumeAtmosphereRayCounts[volumeIndex] +
+                        (nextParticipant ? rays : -rays));
+            }
+
+            _probeAtmosphereCohortFlags[probeIndex] = next;
+        }
+
+        private static void AdjustAtmosphereCounter(
+            byte previous,
+            byte next,
+            byte flag,
+            ref int counter,
+            bool visibleOnly,
+            byte requiredFlag = 0)
+        {
+            bool wasSet = (previous & flag) != 0 &&
+                          (!visibleOnly || (previous & AtmosphereVisibleFlag) != 0) &&
+                          (requiredFlag == 0 || (previous & requiredFlag) != 0);
+            bool isSet = (next & flag) != 0 &&
+                         (!visibleOnly || (next & AtmosphereVisibleFlag) != 0) &&
+                         (requiredFlag == 0 || (next & requiredFlag) != 0);
+            if (wasSet == isSet)
+                return;
+            counter = Math.Max(0, counter + (isSet ? 1 : -1));
+        }
+
+        private void RebuildAtmosphereCohortCounters()
+        {
+            Array.Clear(_probeAtmosphereCohortFlags);
+            _schedulerAtmosphereVisibleParticipatingProbeCount = 0;
+            _schedulerAtmosphereVisibleSourceReadyProbeCount = 0;
+            _schedulerAtmosphereVisiblePublishedProbeCount = 0;
+            Array.Clear(_volumeAtmosphereParticipatingProbeCounts);
+            Array.Clear(_volumeAtmosphereRayCounts);
+            for (int probeIndex = 0; probeIndex < _probeCount; probeIndex++)
+            {
+                int volumeIndex = ResolveSchedulerVolumeIndex(probeIndex);
+                bool participant = TransportV2Active &&
+                    (uint)probeIndex < (uint)_probeInactive.Length &&
+                    ShouldParticipateInTransportConvergence(_probeInactive[probeIndex] != 0);
+                RefreshAtmosphereCohortCounters(
+                    probeIndex,
+                    volumeIndex,
+                    participant,
+                    participant && NeedsSourceRefresh(probeIndex));
+            }
         }
 
         private void RefreshTransportConvergenceTelemetry(
@@ -3572,7 +4214,13 @@ namespace Njulf.Rendering.Resources
             _volumeTableGeneration++;
             BeginTransportGlobalConvergence(forceFieldEvidenceReset: true);
             for (int i = 0; i < _probeStateReadbackRecorded.Length; i++)
+            {
+                if (_probeStateReadbackRecorded[i])
+                    _resourceGenerationRejectionCount = SaturatingAdd(
+                        _resourceGenerationRejectionCount,
+                        1UL);
                 DropProbeStateReadbackSlot(i);
+            }
             Array.Clear(_probeDirtyLatencyStates);
             Array.Clear(_probeDirtyLatencyStartFrames);
             Array.Clear(_probeSchedulingFlags);
@@ -3606,6 +4254,7 @@ namespace Njulf.Rendering.Resources
             {
                 _lastLightingSignature = lightingSignature;
                 _sourceLightingGeneration = AdvanceSourceLightingGeneration(_sourceLightingGeneration);
+                _sourceCohortQuietFrames = 0;
                 bool useCohortTransition =
                     cohortLightingTransition &&
                     TransportV2Active &&
@@ -3892,6 +4541,7 @@ namespace Njulf.Rendering.Resources
             // it can converge without forcing already-stable probes to dispatch.
             _transportGlobalConvergencePending = false;
             _transportPeriodicSourceRefreshWavePending = false;
+            _publishedPropagationGeneration = _transportGeneration;
             RequirePersistentSchedulerRebuild();
         }
 
@@ -4737,6 +5387,49 @@ namespace Njulf.Rendering.Resources
             _sourceRefreshCapacityShortfall = Math.Max(
                 0,
                 _sourceRefreshTargetProbeCount - Math.Max(updateBudget, 0));
+
+            ulong admittedRayBudget = (ulong)Math.Max(
+                _settings.GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget,
+                0);
+            Span<SimpleDdgiRayTier> tiers = stackalloc SimpleDdgiRayTier[
+                GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
+            int tierCount = 0;
+            if (TransportV2Active)
+            {
+                for (int volumeIndex = 0;
+                     volumeIndex < _volumeCount && tierCount < tiers.Length;
+                     volumeIndex++)
+                {
+                    int volumeParticipants = _volumeAtmosphereParticipatingProbeCounts[volumeIndex];
+                    if (volumeParticipants <= 0)
+                        continue;
+                    tiers[tierCount++] = new SimpleDdgiRayTier(
+                        volumeParticipants,
+                        Math.Max(1, ResolveVolumeQuality(volumeIndex).FullRays));
+                }
+            }
+
+            // During bootstrap/rebuild the per-volume counters may not yet have been populated.
+            // The fallback remains exact for a uniform cache and is removed as soon as the
+            // incremental volume counters become authoritative.
+            if (tierCount == 0 && participatingProbeCount > 0)
+            {
+                tiers[0] = new SimpleDdgiRayTier(
+                    participatingProbeCount,
+                    Math.Max(1, _transportSourceCacheRayCapacity));
+                tierCount = 1;
+            }
+
+            SimpleDdgiRayCapacityResult result = SimpleDdgiRayCapacityPlanner.Evaluate(
+                tiers[..tierCount],
+                targetFrames,
+                admittedRayBudget,
+                ResolveSourceSweepFramesPerSecond(
+                    _schedulerDeterministicFixedBudget,
+                    _sourceSweepFramesPerSecond));
+            _sourceRefreshTargetRayCount = result.TargetRaysPerFrame;
+            _sourceRefreshRayCapacityShortfall = result.CapacityShortfall;
+            _sourceRefreshMinimumSweepSeconds = result.MinimumAchievableSweepSeconds;
         }
 
         private void RefreshSourceStepAgeTelemetry()
@@ -4769,7 +5462,28 @@ namespace Njulf.Rendering.Resources
             }
 
             if (staleCount == 0)
-                _sourceCohortTransitionActive = false;
+            {
+                _admittedSourceCohortGeneration = _sourceLightingGeneration;
+                if (_sourceCohortTransitionActive)
+                {
+                    _sourceCohortTransitionActive = false;
+                    _sourceCohortCompletionCount = SaturatingAdd(
+                        _sourceCohortCompletionCount,
+                        1UL);
+                    _sourceCohortCompletedFrame = _frameIndex;
+                    _sourceCohortQuietFrames = 0;
+                }
+                else
+                {
+                    _sourceCohortQuietFrames = Math.Min(
+                        SourceCohortQuietFrameCount,
+                        _sourceCohortQuietFrames + 1);
+                }
+            }
+            else
+            {
+                _sourceCohortQuietFrames = 0;
+            }
         }
 
         private SimpleDdgiTrackingState ResolveTrackingState()
@@ -4782,6 +5496,8 @@ namespace Njulf.Rendering.Resources
                 return SimpleDdgiTrackingState.TrackingSourceCohort;
             if (TransportGlobalConvergencePending)
                 return SimpleDdgiTrackingState.TrackingPropagation;
+            if (_sourceCohortQuietFrames < SourceCohortQuietFrameCount)
+                return SimpleDdgiTrackingState.TrackingBounded;
             return SimpleDdgiTrackingState.StaticConverged;
         }
 
@@ -7298,6 +8014,512 @@ namespace Njulf.Rendering.Resources
                 barrierDescription: new UploadBarrierDescription(PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit, AccessFlags2.ShaderStorageReadBit));
         }
 
+        private void UploadGpuResidentFrame(
+            GlobalIlluminationSettings gi,
+            Vector3 cameraPosition,
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions,
+            uint dirtyReasonFlags,
+            bool structuredGatherAvailable,
+            bool farFieldCoverageAvailable,
+            bool cohortLightingTransition,
+            StagingRing stagingRing,
+            CommandBuffer commandBuffer,
+            bool residentBootstrap,
+            bool volumeTableRemapped)
+        {
+            // A resident transition is a transaction boundary.  The CPU keeps
+            // the current topology/policy state, but it never creates a queue
+            // or walks the probe pool to decide what the GPU should do.
+            if (_recenteredThisFrame && !gi.SimpleDdgiToroidalScrollingEnabled)
+            {
+                _atlasClearRequired = true;
+                _atlasFresh = true;
+            }
+
+            PreserveToroidalAtlasData();
+            ClearAtlasBuffersIfRequired(commandBuffer);
+            SynchronizeSampledAtlasIfRequired(commandBuffer);
+
+            int configuredBudget = Math.Clamp(_schedulerConfiguredRequestBudget, 0, _probeCount);
+            int effectiveBudget = configuredBudget;
+            if (!_schedulerDeterministicFixedBudget && _schedulerFeedbackRequestBudgetCap > 0)
+                effectiveBudget = Math.Min(effectiveBudget, _schedulerFeedbackRequestBudgetCap);
+            _schedulerEffectiveRequestBudget = effectiveBudget;
+            _schedulerPressureReason = SimpleDdgiSchedulerPressureReason.None;
+            ResolveGpuResidentSourceThroughputTarget();
+
+            BeginUpdateTransaction(hasWork: false);
+            _updateStartProbe = 0;
+            _probesToUpdate = 0;
+            _rayDispatchBatchCount = 0;
+
+            float environmentIntensity = _settings.Environment.Enabled
+                ? _settings.Environment.SkyIntensity
+                : 0.0f;
+            float hysteresis = gi.SimpleDdgiTransportV2Enabled
+                ? 1.0f - gi.SimpleDdgiTransportSolverRelaxation
+                : gi.SimpleDdgiHysteresis;
+            GPUSimpleDdgiVolume firstVolume = _volumeCount > 0 ? _volumeScratch[0] : default;
+            _lastParams = new GPUSimpleDdgiParams
+            {
+                GridOriginAndSpacing = firstVolume.OriginAndSpacing,
+                GridCountsAndProbeCount = new Vector4(
+                    firstVolume.GridCountsAndFirstProbe.X,
+                    firstVolume.GridCountsAndFirstProbe.Y,
+                    firstVolume.GridCountsAndFirstProbe.Z,
+                    _probeCount),
+                AtlasTexelsAndRayCount = new Vector4(
+                    IrradianceTexelsPerProbe,
+                    VisibilityTexelsPerProbe,
+                    _raysPerProbe,
+                    gi.FarFieldClipmapResolution),
+                HysteresisFrameAndFlags = new Vector4(
+                    hysteresis,
+                    PackHeaderWord(_frameIndex),
+                    PackHeaderWord(BuildFlags(
+                        gi,
+                        gi.EffectiveUseDdgi,
+                        structuredGatherAvailable,
+                        farFieldCoverageAvailable)),
+                    gi.FarFieldStartDistance),
+                EnvironmentRadianceAndIntensity = new Vector4(
+                    _settings.Environment.TransportFallbackRadiance.X,
+                    _settings.Environment.TransportFallbackRadiance.Y,
+                    _settings.Environment.TransportFallbackRadiance.Z,
+                    environmentIntensity),
+                // A zero range is deliberate.  GPU consumers use the resident
+                // queue/bucket ABI and must not observe a prior CPU range.
+                ProbeUpdateRange = new Vector4(
+                    0.0f,
+                    0.0f,
+                    _volumeCount,
+                    gi.EnvironmentFallbackIntensity),
+                DebugAndBias = new Vector4(
+                    ResolveSimpleDdgiDebugViewMode(gi.DebugView),
+                    gi.DdgiSelfShadowBiasScale,
+                    gi.IndirectIntensity,
+                    gi.FarFieldMaxTraceSteps),
+                RotationQuaternion = BuildFrameRotation(_frameIndex),
+                BiasAndPadding = new Vector4(
+                    gi.SimpleDdgiNormalBias,
+                    gi.SimpleDdgiViewBias,
+                    gi.SimpleDdgiHysteresisChangeThreshold,
+                    gi.SimpleDdgiHysteresisStepThreshold),
+                Reserved0 = new Vector4(
+                    _volumeCount,
+                    SampledAtlasActive ? _sampledAtlas!.LayersPerTexture : 0,
+                    SampledAtlasActive ? _sampledAtlas!.GroupCount : 0,
+                    SampledAtlasActive ? 1.0f : 0.0f),
+                BiasLimitsAndPadding = new Vector4(
+                    gi.SimpleDdgiMaximumWorldBiasMeters,
+                    gi.SimpleDdgiArchitecturalThicknessMeters,
+                    gi.DdgiThinWallPolicyEnabled
+                        ? gi.DdgiThinWallLeakClampStrength
+                        : 0.0f,
+                    0.0f),
+                TransportAndAtlasIndices = new Vector4(
+                    PackHeaderWord((uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),
+                    PackHeaderWord(gi.SimpleDdgiTransportV2Enabled
+                        ? (uint)BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer
+                        : (uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer),
+                    PackHeaderWord(gi.SimpleDdgiTransportV2Enabled
+                        ? (uint)BindlessIndex.SimpleDdgiTransportSourceCacheBuffer
+                        : 0u),
+                    PackHeaderWord(_transportGeneration)),
+                TransportControls = new Vector4(
+                    gi.SimpleDdgiTransportSolverRelaxation,
+                    gi.SimpleDdgiTransportAlbedoClamp,
+                    gi.SimpleDdgiTransportResidualThreshold,
+                    gi.SimpleDdgiTransportMaximumSolverGenerations)
+            };
+            for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
+            {
+                GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
+                volume.UpdateStartAndCount = Vector4.Zero;
+                _volumeScratch[volumeIndex] = volume;
+            }
+
+            UploadParams(stagingRing, commandBuffer);
+            _controlHeaderInitialized = true;
+            _wasSimpleDdgiEnabled = true;
+            bool uploadBootstrapState = residentBootstrap ||
+                volumeTableRemapped && _probeStateUploadRequired;
+            if (uploadBootstrapState || _probeStateUploadRequired)
+            {
+                UploadProbeState(stagingRing, commandBuffer);
+                _gpuResidentProbeStateBootstrapped = true;
+            }
+            else if (!_gpuResidentProbeStateBootstrapped)
+            {
+                // This is only reachable after an external owner restored an
+                // already resident buffer.  Keep the activation fail-closed.
+                _gpuResidentProbeStateBootstrapped = true;
+            }
+
+            UploadGpuSchedulerFrame(
+                gi,
+                cameraPosition,
+                dirtyRegions,
+                dirtyReasonFlags,
+                structuredGatherAvailable,
+                farFieldCoverageAvailable,
+                cohortLightingTransition,
+                stagingRing,
+                commandBuffer);
+
+            if (_atlasClearedThisFrame)
+            {
+                _totalAtlasClearCount++;
+                _framesSinceLastClear = 0;
+            }
+            else if (_framesSinceLastClear != int.MaxValue)
+            {
+                _framesSinceLastClear++;
+            }
+            if (!_recenteredThisFrame && _framesSinceLastRecenter != int.MaxValue)
+                _framesSinceLastRecenter++;
+        }
+
+        private void ResolveGpuResidentSourceThroughputTarget()
+        {
+            if (!TransportV2Active || _probeCount <= 0)
+            {
+                _sourceRefreshTargetProbeCount = 0;
+                _sourceRefreshCapacityShortfall = 0;
+                _sourceRefreshTargetRayCount = 0;
+                _sourceRefreshRayCapacityShortfall = 0;
+                return;
+            }
+
+            int targetFrames = Math.Max(1, EffectiveTransportSourceRefreshFrames);
+            int participatingProbeCount = _probeCount;
+            _sourceRefreshTargetProbeCount = (int)Math.Min(
+                int.MaxValue,
+                ((long)participatingProbeCount + targetFrames - 1L) / targetFrames);
+            _sourceRefreshCapacityShortfall = Math.Max(
+                0,
+                _sourceRefreshTargetProbeCount - Math.Max(_schedulerEffectiveRequestBudget, 0));
+
+            Span<SimpleDdgiRayTier> tiers = stackalloc SimpleDdgiRayTier[
+                GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
+            int tierCount = 0;
+            for (int volumeIndex = 0;
+                 volumeIndex < _volumeCount && tierCount < tiers.Length;
+                 volumeIndex++)
+            {
+                int volumeProbeCount = VolumeProbeCount(_volumeScratch[volumeIndex]);
+                if (volumeProbeCount <= 0)
+                    continue;
+                tiers[tierCount++] = new SimpleDdgiRayTier(
+                    volumeProbeCount,
+                    Math.Max(1, ResolveVolumeQuality(volumeIndex).FullRays));
+            }
+
+            ulong admittedRayBudget = (ulong)Math.Max(
+                _settings.GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget,
+                0);
+            SimpleDdgiRayCapacityResult result = SimpleDdgiRayCapacityPlanner.Evaluate(
+                tiers[..tierCount],
+                targetFrames,
+                admittedRayBudget,
+                ResolveSourceSweepFramesPerSecond(
+                    _schedulerDeterministicFixedBudget,
+                    _sourceSweepFramesPerSecond));
+            _sourceRefreshTargetRayCount = result.TargetRaysPerFrame;
+            _sourceRefreshRayCapacityShortfall = result.CapacityShortfall;
+            _sourceRefreshMinimumSweepSeconds = result.MinimumAchievableSweepSeconds;
+        }
+
+        private void UploadGpuSchedulerFrame(
+            GlobalIlluminationSettings gi,
+            Vector3 cameraPosition,
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions,
+            uint dirtyReasonFlags,
+            bool structuredGatherAvailable,
+            bool farFieldCoverageAvailable,
+            bool cohortLightingTransition,
+            StagingRing stagingRing,
+            CommandBuffer commandBuffer)
+        {
+            if (!_schedulerMode.IsGpuMode() || !_gpuScheduler.IsReady || _gpuScheduler.Layout == null)
+                return;
+
+            SimpleDdgiGpuSchedulerLayout layout = _gpuScheduler.Layout;
+            int dirtyCount = BuildGpuDirtyRegions(dirtyRegions);
+            bool dirtyOverflow = dirtyRegions != null && dirtyRegions.Count > dirtyCount;
+            uint featureFlags = 0u;
+            if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
+                featureFlags |= SimpleDdgiSchedulerAbi.SchedulerFeatureGpuResident;
+            else
+                featureFlags |= SimpleDdgiSchedulerAbi.SchedulerFeatureGpuMirror;
+            if (TransportV2Active)
+                featureFlags |= SimpleDdgiSchedulerAbi.SchedulerFeatureTransportV2;
+            if (gi.SimpleDdgiToroidalScrollingEnabled)
+                featureFlags |= SimpleDdgiSchedulerAbi.SchedulerFeatureToroidalScrolling;
+            if (_atlasFresh)
+                featureFlags |= SimpleDdgiSchedulerAbi.SchedulerFeatureAtlasFresh;
+            if (TransportGlobalConvergencePending)
+                featureFlags |= SimpleDdgiSchedulerAbi.SchedulerFeatureGlobalConvergence;
+            if (dirtyOverflow)
+                featureFlags |= SimpleDdgiSchedulerAbi.SchedulerFeatureDirtyOverflow;
+            if (gi.SimpleDdgiClassificationSchedulingEnabled)
+                featureFlags |= SimpleDdgiSchedulerAbi.SchedulerFeatureClassification;
+
+            Span<uint> rayBuckets = stackalloc uint[SimpleDdgiSchedulerAbi.MaxRayBucketCount];
+            int rayBucketCount = 0;
+            for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
+            {
+                SimpleDdgiRingQuality quality = ResolveVolumeQuality(volumeIndex);
+                rayBucketCount = AddGpuRayBucket(rayBuckets, rayBucketCount, quality.FullRays);
+                rayBucketCount = AddGpuRayBucket(rayBuckets, rayBucketCount, quality.MaintenanceRays);
+            }
+            if (rayBucketCount == 0)
+                rayBucketCount = AddGpuRayBucket(rayBuckets, rayBucketCount, Math.Max(1, _raysPerProbe));
+            for (int bucket = rayBucketCount; bucket < rayBuckets.Length; bucket++)
+                rayBuckets[bucket] = 0u;
+
+            int requestedBudget = layout.RequestCapacity;
+            uint configuredBudget = ClampToUint(_schedulerConfiguredRequestBudget);
+            uint effectiveBudget = ClampToUint(Math.Clamp(_schedulerEffectiveRequestBudget, 0, requestedBudget));
+            if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
+            {
+                // The CPU reference queue is not the resident authority. Keep
+                // the authored cap as a hard ceiling, but preserve the delayed
+                // timing-feedback cap computed for the resident scheduler. A
+                // resident frame must never silently recover to the authored
+                // cap just because no CPU queue was built.
+                effectiveBudget = Math.Min(
+                    effectiveBudget,
+                    configuredBudget > (uint)requestedBudget
+                        ? (uint)requestedBudget
+                        : configuredBudget);
+            }
+
+            uint sourceTargetRays = ClampToUint(_sourceRefreshTargetRayCount);
+            uint dirtyReasons = dirtyReasonFlags | _activeDirtyReasonFlags | _regionalDirtyReasonFlags;
+            if (dirtyOverflow)
+                dirtyReasons |= uint.MaxValue;
+            GPUSimpleDdgiSchedulerFrame frame = new()
+            {
+                ActiveProbeCount = ClampToUint(_probeCount),
+                ActiveVolumeCount = ClampToUint(_volumeCount),
+                CandidateCapacity = ClampToUint(layout.ActiveProbeCount),
+                RequestCapacity = ClampToUint(requestedBudget),
+                ConfiguredRequestBudget = configuredBudget,
+                EffectiveRequestBudget = effectiveBudget,
+                PrimaryRayBudget = ClampToUint(Math.Max(0, gi.DdgiProbeUpdatePrimaryRayBudget)),
+                SourceThroughputProbeTarget = ClampToUint(_sourceRefreshTargetProbeCount),
+                SourceThroughputRayTarget = sourceTargetRays,
+                SourceThroughputRayCapacity = ClampToUint(SaturatingAdd(
+                    _sourceRefreshTargetRayCount,
+                    _sourceRefreshRayCapacityShortfall)),
+                FrameIndex = _frameIndex,
+                DeterministicFlags = _schedulerDeterministicFixedBudget ? 1u : 0u,
+                FrameSerialLow = ClampToUint(_frameSerial),
+                FrameSerialHigh = ClampToUint(_frameSerial >> 32),
+                VolumeTableGeneration = _volumeTableGeneration,
+                SchedulerResourceGeneration = _gpuScheduler.ResourceGeneration,
+                QueueTransactionGeneration = _updateTransactionSerial,
+                SourceLightingGeneration = _sourceLightingGeneration,
+                TransportGeneration = _transportGeneration,
+                GlobalConvergenceGeneration = _transportGlobalConvergenceSourceGeneration,
+                CameraPositionAndNearProximity = new Vector4(
+                    cameraPosition.X,
+                    cameraPosition.Y,
+                    cameraPosition.Z,
+                    Math.Max(0.0f, gi.SimpleDdgiRingBaseSpacing * 2.0f)),
+                DirtyRegionCount = ClampToUint(dirtyCount),
+                DirtyRegionCapacity = ClampToUint(layout.DirtyRegionCapacity),
+                DirtyReasonFlags = dirtyReasons,
+                FeatureFlags = featureFlags,
+                ClassificationRetryFrames = InactiveProbeRetryFrames,
+                SourceRefreshIntervalFrames = ClampToUint(EffectiveTransportSourceRefreshFrames),
+                StableGenerationRequirement = ClampToUint(gi.SimpleDdgiStableMaintenanceUpdateCount),
+                SourceEpoch = _sourceLightingGeneration,
+                RayBucket0 = rayBuckets[0],
+                RayBucket1 = rayBuckets[1],
+                RayBucket2 = rayBuckets[2],
+                RayBucket3 = rayBuckets[3],
+                RayBucket4 = rayBuckets[4],
+                RayBucket5 = rayBuckets[5],
+                InvalidationMarkerGeneration = _currentProbeInvalidationMarkerSerial
+            };
+
+            BuildGpuVolumePolicies(_gpuVolumePolicyScratch, _gpuPreviousVolumePolicyScratch);
+            _gpuScheduler.UploadFrame(
+                stagingRing,
+                commandBuffer,
+                frame,
+                new ReadOnlySpan<GPUSimpleDdgiSchedulerVolumePolicy>(
+                    _gpuVolumePolicyScratch, 0, GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount),
+                new ReadOnlySpan<GPUSimpleDdgiSchedulerVolumePolicy>(
+                    _gpuPreviousVolumePolicyScratch, 0, GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount),
+                new ReadOnlySpan<GPUSimpleDdgiSchedulerDirtyRegion>(
+                    _gpuDirtyRegionScratch, 0, dirtyCount));
+        }
+
+        private int BuildGpuDirtyRegions(IReadOnlyList<DdgiDirtyRegion>? dirtyRegions)
+        {
+            if (dirtyRegions == null || dirtyRegions.Count == 0)
+                return 0;
+
+            int count = Math.Min(dirtyRegions.Count, _gpuDirtyRegionScratch.Length);
+            for (int i = 0; i < count; i++)
+            {
+                DdgiDirtyRegion dirty = dirtyRegions[i];
+                BoundingBox bounds = dirty.InfluenceBounds;
+                Vector3 minimum = bounds.Min;
+                Vector3 maximum = bounds.Max;
+                if (!IsFinite(minimum) || !IsFinite(maximum))
+                {
+                    bounds = dirty.Bounds;
+                    minimum = bounds.Min;
+                    maximum = bounds.Max;
+                }
+                _gpuDirtyRegionScratch[i] = new GPUSimpleDdgiSchedulerDirtyRegion
+                {
+                    Minimum = new Vector4(
+                        MathF.Min(minimum.X, maximum.X),
+                        MathF.Min(minimum.Y, maximum.Y),
+                        MathF.Min(minimum.Z, maximum.Z),
+                        0.0f),
+                    Maximum = new Vector4(
+                        MathF.Max(minimum.X, maximum.X),
+                        MathF.Max(minimum.Y, maximum.Y),
+                        MathF.Max(minimum.Z, maximum.Z),
+                        0.0f),
+                    ReasonFlags = dirty.ReasonFlags == 0u
+                        ? 1u << (int)dirty.Reason
+                        : dirty.ReasonFlags,
+                    Generation = _volumeTableGeneration,
+                    Reserved0 = 0u,
+                    Reserved1 = 0u
+                };
+            }
+            return count;
+        }
+
+        private void BuildGpuVolumePolicies(
+            GPUSimpleDdgiSchedulerVolumePolicy[] currentPolicies,
+            GPUSimpleDdgiSchedulerVolumePolicy[] previousPolicies)
+        {
+            Array.Clear(currentPolicies);
+            Array.Clear(previousPolicies);
+            for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
+            {
+                GPUSimpleDdgiVolume current = _volumeScratch[volumeIndex];
+                SimpleDdgiRingQuality quality = ResolveVolumeQuality(volumeIndex);
+                bool hasPrevious = TryGetPreviousMatchingVolume(
+                    volumeIndex,
+                    current,
+                    out GPUSimpleDdgiVolume previous);
+                if (!hasPrevious)
+                    previous = current;
+                _gpuVolumePolicyScratch[volumeIndex] = CreateGpuVolumePolicy(
+                    current,
+                    previous,
+                    quality,
+                    hasPrevious,
+                    volumeIndex);
+                _gpuPreviousVolumePolicyScratch[volumeIndex] = CreateGpuVolumePolicy(
+                    previous,
+                    previous,
+                    quality,
+                    hasPrevious,
+                    volumeIndex);
+            }
+        }
+
+        private GPUSimpleDdgiSchedulerVolumePolicy CreateGpuVolumePolicy(
+            GPUSimpleDdgiVolume current,
+            GPUSimpleDdgiVolume previous,
+            SimpleDdgiRingQuality quality,
+            bool hasPrevious,
+            int volumeIndex)
+        {
+            int countX = CountX(current);
+            int countY = CountY(current);
+            int countZ = CountZ(current);
+            int previousCountX = CountX(previous);
+            int previousCountY = CountY(previous);
+            int previousCountZ = CountZ(previous);
+            int deltaX = 0;
+            int deltaY = 0;
+            int deltaZ = 0;
+            bool cellAligned = hasPrevious && TryResolveCellDelta(
+                previous,
+                current,
+                out deltaX,
+                out deltaY,
+                out deltaZ);
+            int probeCount = VolumeProbeCount(current);
+            return new GPUSimpleDdgiSchedulerVolumePolicy
+            {
+                FirstProbe = ClampToUint(FirstProbe(current)),
+                ProbeCount = ClampToUint(probeCount),
+                VolumeKind = Kind(current),
+                RingIndex = ClampToUint(quality.RingIndex),
+                SourceOrdinal = ClampToUint(SourceOrdinal(current)),
+                Purpose = ClampToUint((uint)_volumePurposes[volumeIndex]),
+                LayoutGeneration = _volumeTableGeneration,
+                PreviousLayoutGeneration = hasPrevious && _volumeTableGeneration > 0u
+                    ? _volumeTableGeneration - 1u
+                    : 0u,
+                CurrentOriginAndSpacing = current.OriginAndSpacing,
+                PreviousOriginAndSpacing = previous.OriginAndSpacing,
+                CurrentCountX = ClampToUint(countX),
+                CurrentCountY = ClampToUint(countY),
+                CurrentCountZ = ClampToUint(countZ),
+                PreviousCountX = ClampToUint(previousCountX),
+                PreviousCountY = ClampToUint(previousCountY),
+                PreviousCountZ = ClampToUint(previousCountZ),
+                PhysicalOffsetX = ClampToUint(PhysicalOffsetX(current)),
+                PhysicalOffsetY = ClampToUint(PhysicalOffsetY(current)),
+                PhysicalOffsetZ = ClampToUint(PhysicalOffsetZ(current)),
+                LayoutFlags = (hasPrevious ? 1u : 0u) | (cellAligned ? 2u : 0u),
+                MinimumQuota = ClampToUint(Math.Min(quality.MinimumUpdateQuota, probeCount)),
+                PreferredMaximumQuota = ClampToUint(Math.Min(
+                    Math.Max(quality.MaximumUpdateQuota, quality.MinimumUpdateQuota), probeCount)),
+                SchedulingWeight = ClampToUint(ResolveVolumeSchedulingWeight(volumeIndex, quality.RingIndex)),
+                Priority = ClampToUint(Math.Max(0, _volumePriorities[volumeIndex])),
+                FullRaysPerProbe = ClampToUint(quality.FullRays),
+                MaintenanceRaysPerProbe = ClampToUint(quality.MaintenanceRays),
+                MaterialTextureMaxCascade = quality.MaterialTextureMaxCascade < 0
+                    ? uint.MaxValue
+                    : ClampToUint(quality.MaterialTextureMaxCascade),
+                MaxShadedLights = ClampToUint(quality.MaxShadedLights),
+                SequenceStride = ClampToUint(ResolveProbeUpdateStride(probeCount)),
+                LaneCursorGeneration = _volumeTableGeneration,
+                CellDeltaX = deltaX,
+                CellDeltaY = deltaY,
+                CellDeltaZ = deltaZ,
+                DirtyGeneration = _currentProbeInvalidationMarkerSerial
+            };
+        }
+
+        private static int AddGpuRayBucket(Span<uint> buckets, int count, int rayCount)
+        {
+            uint value = ClampToUint(Math.Clamp(rayCount, 1, GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe));
+            for (int i = 0; i < count; i++)
+            {
+                if (buckets[i] == value)
+                    return count;
+            }
+            if (count >= buckets.Length)
+                return count;
+            buckets[count] = value;
+            return count + 1;
+        }
+
+        private static uint ClampToUint(ulong value) =>
+            value > uint.MaxValue ? uint.MaxValue : (uint)value;
+
+        private static uint ClampToUint(long value) =>
+            value <= 0L ? 0u : value >= uint.MaxValue ? uint.MaxValue : (uint)value;
+
+        private static bool IsFinite(Vector3 value) =>
+            float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
+
         private void UploadProbeState(StagingRing stagingRing, CommandBuffer commandBuffer)
         {
             if (_probeCount <= 0 || !_probeStateBuffer.IsValid ||
@@ -7425,7 +8647,8 @@ namespace Njulf.Rendering.Resources
 
         private void EnsureCapacity(int probeCount, int raysPerProbe, int probesToUpdate, CommandBuffer commandBuffer = default)
         {
-            bool readbackRequired = probeCount > 0 &&
+            bool readbackRequired = _schedulerMode != SimpleDdgiSchedulerMode.GpuResident &&
+                probeCount > 0 &&
                 RequiresProbeStateReadback(
                     _settings.GlobalIllumination.SimpleDdgiClassificationReadbackEnabled,
                     _settings.GlobalIllumination.SimpleDdgiTransportV2Enabled);
@@ -7679,7 +8902,7 @@ namespace Njulf.Rendering.Resources
                     _context.ShaderStorageImageArrayNonUniformIndexingSupported,
                 gi.DdgiAtlasMemoryBudgetBytes,
                 gi.SimpleDdgiTransportV2Enabled,
-                probes > 0 && gi.EffectiveUseSimpleDdgi);
+                probes > 0 && gi.EffectiveUseDdgi);
         }
 
         private ulong ComputeCapacityTopologyFingerprint(int probeCount)
@@ -8283,6 +9506,21 @@ namespace Njulf.Rendering.Resources
 
         private void InvalidateTransportSourceCacheMetadata(bool recordInvalidation = true)
         {
+            if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
+            {
+                // The resident arena is the source-age/epoch authority.  The
+                // CPU mirrors are deliberately not cleared or walked here;
+                // classify observes the new source generation and commit moves
+                // the GPU state forward after a matching transaction.
+                BeginTransportGlobalConvergence(forceFieldEvidenceReset: true);
+                if (recordInvalidation)
+                {
+                    _sourceCacheInvalidationCount = SaturatingAdd(
+                        _sourceCacheInvalidationCount,
+                        (ulong)Math.Max(_probeCount, 0));
+                }
+                return;
+            }
             if (_probeSourceLightingGenerations.Length > 0)
                 Array.Clear(_probeSourceLightingGenerations);
             if (_probeLastSourceRefreshFrames.Length > 0)
@@ -9068,6 +10306,9 @@ namespace Njulf.Rendering.Resources
 
             if (_probeStateReadbackGenerations[frameIndex] != _volumeTableGeneration)
             {
+                _resourceGenerationRejectionCount = SaturatingAdd(
+                    _resourceGenerationRejectionCount,
+                    1UL);
                 DropProbeStateReadbackSlot(frameIndex);
                 _probeStateReadbackValid = 0;
                 _probeConvergenceReadbackValid = 0;
@@ -9174,7 +10415,12 @@ namespace Njulf.Rendering.Resources
                         expectedSourceEpochs[probeIndex],
                         _probeSourceEpochs[probeIndex]);
                 if (!readbackGenerationCurrent)
+                {
+                    _staleReadbackRejectionCount = SaturatingAdd(
+                        _staleReadbackRejectionCount,
+                        1UL);
                     continue;
+                }
 
                 _uploadReadbackProbeCount++;
 
@@ -9529,6 +10775,115 @@ namespace Njulf.Rendering.Resources
             _uploadCapacityRetiredResourceDestructionCount += destroyed;
         }
 
+        private void PrepareCpuFreshResetFallback()
+        {
+            // The resident path intentionally keeps the CPU lifecycle mirror
+            // stale.  If a delayed summary proves that GPU ownership is no
+            // longer trustworthy, importing that mirror would mix generations.
+            // Preserve the last complete atlas and re-enter through a clean CPU
+            // transaction instead.  This is bounded fallback work, never part
+            // of a stable resident frame.
+            int probeCount = Math.Min(_probeCount, _probeFresh.Length);
+            for (int probeIndex = 0; probeIndex < probeCount; probeIndex++)
+            {
+                _probeFresh[probeIndex] = 1;
+                _probeInactive[probeIndex] = 0;
+                _probeRelocationPending[probeIndex] = 0;
+                _probeSchedulingFlags[probeIndex] = 0;
+                _probeDirtyReasons[probeIndex] = 0;
+                _probeRoutineMaintenancePending[probeIndex] = 0;
+                _probeVisibilityImportance[probeIndex] = 0;
+                _probeGenerations[probeIndex] = AdvanceProbeGeneration(
+                    _probeGenerations[probeIndex]);
+                _probeInvalidationMarkers[probeIndex] = 0;
+                _probeRelocations[probeIndex] = Vector3.Zero;
+                _probeActiveWeights[probeIndex] = 1.0f;
+                _probeClassifications[probeIndex] = 0u;
+                _probeStableUpdateCounts[probeIndex] = 0;
+                _probeLuminanceChangeEma[probeIndex] = 0.0f;
+                _probeLastUpdatedFrames[probeIndex] = unchecked(_frameIndex - 1u);
+                _probeSourceLightingGenerations[probeIndex] = 0u;
+                _probeLastSourceRefreshFrames[probeIndex] = 0u;
+                _probeSourceEpochs[probeIndex] = AdvanceSourceEpoch(
+                    _probeSourceEpochs[probeIndex]);
+                _probeSourceRayCounts[probeIndex] = 0;
+                _probeTransportGenerationCounts[probeIndex] = 0;
+                _probeAtmosphereCohortFlags[probeIndex] = 0;
+                _probeDirtyLatencyStates[probeIndex] = 0;
+                _probeDirtyLatencyStartFrames[probeIndex] = 0u;
+            }
+
+            Array.Clear(_probeQueued);
+            Array.Clear(_probeSchedulerDirty);
+            _probeSchedulerDirtyCount = 0;
+            _probeStateReadbackValid = 0;
+            _probeConvergenceReadbackValid = 0;
+            _probeStateUploadRequired = true;
+            _atlasFresh = true;
+            _newlyInvalidatedProbeCount = probeCount;
+            _schedulerRebuildRequired = true;
+            _schedulerVisibilityFullRefreshRequired = true;
+            _schedulerGlobalStateValid = false;
+            BeginTransportGlobalConvergence(forceFieldEvidenceReset: true);
+        }
+
+        private void RequestGpuSchedulerFallback(
+            string reason,
+            bool requiresFreshReset = true)
+        {
+            if (_gpuSchedulerFallbackLatched)
+                return;
+
+            _gpuSchedulerFallbackLatched = true;
+            _gpuSchedulerFallbackFreshResetPending = requiresFreshReset;
+            _gpuSchedulerFallbackCount = SaturatingAdd(
+                _gpuSchedulerFallbackCount,
+                1UL);
+            _gpuSchedulerFallbackReason = string.IsNullOrWhiteSpace(reason)
+                ? "resident scheduler validation failure"
+                : reason;
+        }
+
+        private void SetGpuSchedulerMode(SimpleDdgiSchedulerMode requestedMode)
+        {
+            SimpleDdgiSchedulerMode nextMode = requestedMode.Sanitize();
+            if (!nextMode.IsGpuMode())
+            {
+                // An explicit CPU selection is the operator's acknowledgement
+                // of a resident fallback and permits a later explicit GPU
+                // re-entry. A resident setting remains held at CPU until that
+                // acknowledgement, so the renderer cannot oscillate modes.
+                _gpuSchedulerFallbackLatched = false;
+                _gpuSchedulerFallbackReason = string.Empty;
+            }
+            else if (_gpuSchedulerFallbackLatched)
+            {
+                nextMode = SimpleDdgiSchedulerMode.CpuReference;
+            }
+            if (nextMode == _schedulerMode)
+                return;
+
+            if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident ||
+                nextMode == SimpleDdgiSchedulerMode.GpuResident)
+            {
+                // A resident transition invalidates CPU readback evidence. The
+                // GPU scheduler owns lifecycle state in this mode, and stale
+                // CPU records must not be allowed to overwrite it later.
+                for (int frameIndex = 0; frameIndex < _probeStateReadbackRecorded.Length; frameIndex++)
+                    DropProbeStateReadbackSlot(frameIndex);
+                AbortUpdateTransaction();
+                _probeStateUploadRequired = true;
+                _gpuResidentProbeStateBootstrapped = false;
+            }
+
+            _schedulerMode = nextMode;
+            _gpuScheduler.SetMode(nextMode, _frameSerial);
+            _gpuSchedulerFrameExecutionAvailable = true;
+            _gpuSchedulerFeedbackValid = false;
+            _lastGpuSchedulerFeedback = default;
+            _gpuSchedulerFeedbackFrameSerial = 0;
+        }
+
         private void RetireBufferResource(BufferHandle buffer, ulong bytes)
         {
             if (!buffer.IsValid)
@@ -9590,6 +10945,7 @@ namespace Njulf.Rendering.Resources
                 _bufferManager.DestroyBuffer(_probeUpdateQueueBuffer);
             if (_relocationClassificationBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_relocationClassificationBuffer);
+            _gpuScheduler.Dispose();
             for (int i = 0; i < _probeStateReadbackBuffers.Length; i++)
             {
                 if (_probeStateReadbackBuffers[i].IsValid)

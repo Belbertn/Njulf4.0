@@ -11,26 +11,16 @@ layout(early_fragment_tests) in;
 #include "common.glsl"
 #include "gi_material_transport.glsl"
 #include "material_coverage.glsl"
-#define SIMPLE_DDGI_FORWARD_TILE_CANDIDATES 1
 // Detailed captures need representative gather counts, not one globally
 // contended atomic per shaded fragment.  Preserve an estimated full-resolution
 // count while sampling one pixel from each 16x16 screen tile.
 #define SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT ((((uint(gl_FragCoord.x) & 15u) == 0u) && ((uint(gl_FragCoord.y) & 15u) == 0u)) ? 256u : 0u)
 #include "ddgi_simple_shared.glsl"
 #undef SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT
-#undef SIMPLE_DDGI_FORWARD_TILE_CANDIDATES
 #include "farfield_clipmap.glsl"
 
 #ifndef FORWARD_SIMPLE_VERTEX_INPUT
 #define FORWARD_SIMPLE_VERTEX_INPUT 0
-#endif
-
-#ifndef NJULF_SSGI_TRACE_OUTPUT
-#define NJULF_SSGI_TRACE_OUTPUT 0
-#endif
-
-#ifndef FORWARD_SSGI_TRACE_SOURCE_OUTPUT
-#define FORWARD_SSGI_TRACE_SOURCE_OUTPUT NJULF_SSGI_TRACE_OUTPUT
 #endif
 
 #ifndef NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
@@ -64,19 +54,8 @@ layout(location = 0) out vec4 outOitAccumulation;
 layout(location = 1) out vec4 outOitRevealage;
 #else
 layout(location = 0) out vec4 outColor;
-#if FORWARD_SSGI_TRACE_SOURCE_OUTPUT
-layout(location = 1) out vec4 outSsgiTraceSource;
-// GiFinalDiffuse is phase-reused as the forward DDGI/environment baseline while
-// SSGI traces. The denoiser later phase-reuses the trace-source image for the
-// full-resolution SSGI estimate, so hybrid composition needs no extra HDR image.
-layout(location = 2) out vec4 outGiCompositionBaseline;
-#if NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
-layout(location = 3) out float outMaterialTransportProvenance;
-#endif
-#else
 #if NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
 layout(location = 1) out float outMaterialTransportProvenance;
-#endif
 #endif
 #endif
 
@@ -157,11 +136,6 @@ const uint MATERIAL_DEBUG_MATERIAL_REVISIONS = 63u;
 const uint MATERIAL_CAPTURE_LINEAR_DIRECT_DIFFUSE = 71u;
 const uint MATERIAL_CAPTURE_LINEAR_DIRECT_SPECULAR = 72u;
 const uint GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT = 80u;
-const uint GLOBAL_ILLUMINATION_DEBUG_SSGI_RAW = 81u;
-const uint GLOBAL_ILLUMINATION_DEBUG_SSGI_FILTERED = 82u;
-const uint GLOBAL_ILLUMINATION_DEBUG_SSGI_HISTORY = 83u;
-const uint GLOBAL_ILLUMINATION_DEBUG_SSGI_RAY_HIT_MASK = 84u;
-const uint GLOBAL_ILLUMINATION_DEBUG_SSGI_HISTORY_REJECTION = 85u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE = 86u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY = 87u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_INDEX = 88u;
@@ -220,24 +194,6 @@ const uint REFLECTION_DEBUG_GLOBAL_FALLBACK_ONLY = 10u;
 const uint REFLECTION_ENABLED_FLAG = 1u << 0u;
 const uint REFLECTION_BOX_PROJECTION_ENABLED_FLAG = 1u << 1u;
 const uint REFLECTION_PROBE_BLENDING_ENABLED_FLAG = 1u << 2u;
-const uint DDGI_ENABLED_FLAG = 1u << 0u;
-const uint DDGI_EXHAUSTIVE_GATHER_FALLBACK_ENABLED_FLAG = 1u << 3u;
-const uint DDGI_RAW_ATLAS_RADIANCE_CONVENTION_ENABLED_FLAG = 1u << 4u;
-const uint DDGI_DEBUG_FORCE_PROBE_ACTIVE_FLAG = 1u << 5u;
-const uint DDGI_WARMUP_STATE_DISABLED = 0u;
-const uint DDGI_WARMUP_STATE_COLD_START = 1u;
-const uint DDGI_WARMUP_STATE_LOCAL_VOLUME = 2u;
-const uint DDGI_WARMUP_STATE_NEAR_CASCADE = 3u;
-const uint DDGI_WARMUP_STATE_STEADY = 4u;
-const uint DDGI_WARMUP_STATE_RECOVERY = 5u;
-const uint DDGI_VOLUME_KIND_AUTHORED = 0u;
-const uint DDGI_VOLUME_KIND_CAMERA_CLIPMAP = 1u;
-const uint DDGI_GATHER_INVALID_VOLUME_INDEX = 0xffffffffu;
-const uint DDGI_GATHER_HEADER_ENABLED_FLAG = 1u << 0u;
-const uint DDGI_GATHER_TILE_LOCAL_VOLUME_VALID_FLAG = 1u << 0u;
-const uint DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VALID_FLAG = 1u << 1u;
-const uint DDGI_GATHER_TILE_SECONDARY_CLIPMAP_VALID_FLAG = 1u << 2u;
-const uint DDGI_GATHER_TILE_FALLBACK_FLAG = 1u << 3u;
 const int REFLECTION_PROBE_BOX_PROJECTION_FLAG = 1;
 const int REFLECTION_PROBE_CAPTURED_RADIANCE_AVAILABLE_FLAG = 1 << 1;
 const int REFLECTION_PROBE_SHAPE_SPHERE = 1;
@@ -289,6 +245,13 @@ uint ForwardAmbientOcclusionSamplingMode()
 uint ForwardGlobalIlluminationEnabled()
 {
     return (pc.Push.DebugAndAoFlags >> 31u) & 1u;
+}
+
+bool ForwardReflectionCaptureEnabled()
+{
+    // Bit 31 is reserved in DiagnosticFlags so adding the capture mode does
+    // not change the established 256-byte forward push-constant ABI.
+    return (pc.Push.DiagnosticFlags & (1u << 31u)) != 0u;
 }
 
 bool DdgiForwardEstimateCountersEnabled()
@@ -448,11 +411,6 @@ const uint DDGI_PRIMARY_UPDATE_REASON_AGE_REFRESH = 5u;
 const float DDGI_FORWARD_ESTIMATE_LOW_DELIVERED_LUMINANCE_THRESHOLD = 0.00001;
 
 uint PackDdgiForwardEstimateWeight(float value);
-
-uint ForwardSsgiEnabled()
-{
-    return ForwardGlobalIlluminationEnabled() & ((pc.Push.DebugAndAoFlags >> 28u) & 1u);
-}
 
 uint HashUint(uint value)
 {
@@ -703,302 +661,6 @@ struct DdgiSampleResult
     uint transportSourcePath;
 };
 
-struct DdgiVolumeSampleInfo
-{
-    uint volumeIndex;
-    uint firstProbe;
-    uint kind;
-    uint cascadeIndex;
-    uvec3 probeCounts;
-    ivec3 gridMinCell;
-    ivec3 ringOffset;
-    vec3 origin;
-    vec3 spacing;
-    ivec3 cellBase;
-    vec3 cellFraction;
-    float edgeFade;
-    float normalBias;
-    float viewBias;
-    float maxRayDistance;
-    float raysPerProbe;
-    float volumeIntensity;
-};
-
-struct DdgiGatherTileInfo
-{
-    uint localVolumeIndex;
-    uint primaryClipmapVolumeIndex;
-    uint secondaryClipmapVolumeIndex;
-    uint flags;
-    vec4 blendWeights;
-};
-
-vec4 ReadPackedDdgiHalf4(uint bufferIndex, uint wordOffset)
-{
-    vec2 xy = unpackHalf2x16(ReadStorageWord(bufferIndex, wordOffset + 0u));
-    vec2 zw = unpackHalf2x16(ReadStorageWord(bufferIndex, wordOffset + 1u));
-    return vec4(xy, zw);
-}
-
-vec2 ReadPackedDdgiHalf2(uint bufferIndex, uint wordOffset)
-{
-    return unpackHalf2x16(ReadStorageWord(bufferIndex, wordOffset));
-}
-
-vec2 DdgiSignNotZero(vec2 value)
-{
-    return vec2(
-        value.x >= 0.0 ? 1.0 : -1.0,
-        value.y >= 0.0 ? 1.0 : -1.0);
-}
-
-vec2 DdgiOctahedralEncode(vec3 direction)
-{
-    vec3 n = direction / max(abs(direction.x) + abs(direction.y) + abs(direction.z), 0.0001);
-    vec2 encoded = n.xy;
-    if (n.z < 0.0)
-        encoded = (1.0 - abs(encoded.yx)) * DdgiSignNotZero(encoded);
-    return encoded * 0.5 + 0.5;
-}
-
-uvec2 RemapDdgiOctahedralTexelCoord(ivec2 coord, uint texelsPerProbe)
-{
-    int maxCoord = int(max(texelsPerProbe, 1u)) - 1;
-    ivec2 remapped = coord;
-
-    if (remapped.x < 0)
-    {
-        remapped.x = 0;
-        remapped.y = maxCoord - remapped.y;
-    }
-    else if (remapped.x > maxCoord)
-    {
-        remapped.x = maxCoord;
-        remapped.y = maxCoord - remapped.y;
-    }
-
-    if (remapped.y < 0)
-    {
-        remapped.y = 0;
-        remapped.x = maxCoord - remapped.x;
-    }
-    else if (remapped.y > maxCoord)
-    {
-        remapped.y = maxCoord;
-        remapped.x = maxCoord - remapped.x;
-    }
-
-    return uvec2(clamp(remapped, ivec2(0), ivec2(maxCoord)));
-}
-
-void DdgiBilinearOctahedralTexels(
-    vec3 direction,
-    uint texelsPerProbe,
-    out uvec2 c00,
-    out uvec2 c10,
-    out uvec2 c01,
-    out uvec2 c11,
-    out vec2 fraction)
-{
-    vec2 uv = clamp(DdgiOctahedralEncode(direction), vec2(0.0), vec2(1.0));
-    vec2 sampleCoord = uv * float(texelsPerProbe) - vec2(0.5);
-    ivec2 baseCoord = ivec2(floor(sampleCoord));
-    fraction = fract(sampleCoord);
-
-    c00 = RemapDdgiOctahedralTexelCoord(baseCoord, texelsPerProbe);
-    c10 = RemapDdgiOctahedralTexelCoord(baseCoord + ivec2(1, 0), texelsPerProbe);
-    c01 = RemapDdgiOctahedralTexelCoord(baseCoord + ivec2(0, 1), texelsPerProbe);
-    c11 = RemapDdgiOctahedralTexelCoord(baseCoord + ivec2(1, 1), texelsPerProbe);
-}
-
-float ResolveDdgiRoundedBoxEdgeFade(vec3 edgeDistance, vec3 blendDistance)
-{
-    vec3 safeBlendDistance = max(blendDistance, vec3(0.0001));
-    vec3 axisFade = clamp(edgeDistance / safeBlendDistance, vec3(0.0), vec3(1.0));
-    float perAxisFade = min(axisFade.x, min(axisFade.y, axisFade.z));
-    float cornerPressure = clamp(length(vec3(1.0) - axisFade) * 0.70710678, 0.0, 1.0);
-    float roundedBoxFade = perAxisFade * mix(1.0, 1.0 - cornerPressure * 0.25, perAxisFade);
-    return clamp(roundedBoxFade, 0.0, 1.0);
-}
-
-bool ReadDdgiVolumeSampleInfo(
-    uint volumeIndex,
-    vec3 worldPosition,
-    out DdgiVolumeSampleInfo info)
-{
-    uint volumeBaseWord = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME_HEADER) / 4u;
-    uint volumeStrideWords = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME) / 4u;
-    uint baseWord = volumeBaseWord + volumeIndex * volumeStrideWords;
-    vec4 originAndFirst = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_ORIGIN_AND_FIRST_PROBE_INDEX) / 4u);
-    vec4 sizeAndCountX = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_SIZE_AND_PROBE_COUNT_X) / 4u);
-    vec4 spacingAndCountY = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_PROBE_SPACING_AND_PROBE_COUNT_Y) / 4u);
-    vec4 biasAndCountZ = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_BIAS_AND_PROBE_COUNT_Z) / 4u);
-    vec4 rayAndUpdateParams = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_RAY_AND_UPDATE_PARAMS) / 4u);
-    vec4 gridMinAndKind = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_GRID_MIN_AND_KIND) / 4u);
-    vec4 ringOffsetAndCascade = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_RING_OFFSET_AND_CASCADE) / 4u);
-    vec4 blendAndFlags = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_BLEND_AND_FLAGS) / 4u);
-
-    info.volumeIndex = volumeIndex;
-    info.firstProbe = uint(originAndFirst.w);
-    info.kind = uint(round(gridMinAndKind.w));
-    info.cascadeIndex = uint(max(round(ringOffsetAndCascade.w), 0.0));
-    info.probeCounts = uvec3(
-        max(uint(sizeAndCountX.w), 2u),
-        max(uint(spacingAndCountY.w), 2u),
-        max(uint(biasAndCountZ.w), 2u));
-    info.gridMinCell = ivec3(round(gridMinAndKind.xyz));
-    info.ringOffset = ivec3(round(ringOffsetAndCascade.xyz));
-    info.origin = originAndFirst.xyz;
-    info.spacing = max(spacingAndCountY.xyz, vec3(0.0001));
-    info.normalBias = max(biasAndCountZ.x, 0.0);
-    info.viewBias = max(biasAndCountZ.y, 0.0);
-    info.maxRayDistance = max(biasAndCountZ.z, 0.0001);
-    info.raysPerProbe = max(rayAndUpdateParams.x, 0.0);
-    info.volumeIntensity = max(rayAndUpdateParams.z, 0.0);
-
-    float volumeEdgeFade;
-    if (info.kind == DDGI_VOLUME_KIND_CAMERA_CLIPMAP)
-    {
-        vec3 logicalPosition = worldPosition / info.spacing;
-        vec3 minLogical = vec3(info.gridMinCell);
-        vec3 maxLogical = minLogical + vec3(info.probeCounts - uvec3(1u));
-        if (any(lessThan(logicalPosition, minLogical - vec3(0.5))) ||
-            any(greaterThan(logicalPosition, maxLogical + vec3(0.5))))
-            return false;
-
-        vec3 logicalGridPosition = clamp(logicalPosition, minLogical, maxLogical);
-        vec3 logicalBase = floor(clamp(logicalGridPosition, minLogical, maxLogical - vec3(1.0)));
-        info.cellBase = ivec3(logicalBase);
-        info.cellFraction = clamp(logicalGridPosition - logicalBase, vec3(0.0), vec3(1.0));
-
-        vec3 logicalEdgeDistance = min(logicalGridPosition - minLogical, maxLogical - logicalGridPosition);
-        float shortestAxisCells = min(min(float(info.probeCounts.x), float(info.probeCounts.y)), float(info.probeCounts.z));
-        float minEdgeBlendCells = min(2.0, max(shortestAxisCells * 0.125, 1.0));
-        float edgeBlendCells = max(blendAndFlags.x * shortestAxisCells, minEdgeBlendCells);
-        float edgeBlendDistance = max(blendAndFlags.y / max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.0001), edgeBlendCells);
-        volumeEdgeFade = ResolveDdgiRoundedBoxEdgeFade(logicalEdgeDistance, vec3(edgeBlendDistance));
-    }
-    else
-    {
-        vec3 latticeMax = info.origin + info.spacing * vec3(info.probeCounts - uvec3(1u));
-        vec3 influenceMin = info.origin - info.spacing * 0.5;
-        vec3 influenceMax = latticeMax + info.spacing * 0.5;
-        if (any(lessThan(worldPosition, influenceMin)) || any(greaterThan(worldPosition, influenceMax)))
-            return false;
-
-        vec3 influenceEdgeDistance = min(worldPosition - influenceMin, influenceMax - worldPosition);
-        volumeEdgeFade = ResolveDdgiRoundedBoxEdgeFade(influenceEdgeDistance, info.spacing * 0.5);
-        vec3 gridPosition = clamp((worldPosition - info.origin) / info.spacing, vec3(0.0), vec3(info.probeCounts - uvec3(1u)));
-        vec3 localBase = floor(clamp(gridPosition, vec3(0.0), vec3(info.probeCounts - uvec3(2u))));
-        info.cellBase = ivec3(localBase);
-        info.cellFraction = clamp(gridPosition - localBase, vec3(0.0), vec3(1.0));
-    }
-
-    info.edgeFade = clamp(volumeEdgeFade, 0.0, 1.0);
-    return true;
-}
-
-vec3 DdgiSurfaceProbeSamplePosition(DdgiVolumeSampleInfo info, vec3 worldPosition, vec3 normal)
-{
-    float minProbeSpacing = max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.001);
-    float surfaceBias = clamp(max(info.normalBias, minProbeSpacing * 0.16), 0.0, minProbeSpacing * 0.45);
-    return worldPosition + normal * surfaceBias;
-}
-
-uint DdgiProbeIndex(DdgiVolumeSampleInfo info, ivec3 probeCoord)
-{
-    if (info.kind == DDGI_VOLUME_KIND_CAMERA_CLIPMAP)
-    {
-        return DdgiCalculatePhysicalProbeIndex(
-            probeCoord,
-            info.gridMinCell,
-            info.ringOffset,
-            info.probeCounts,
-            info.firstProbe);
-    }
-
-    uvec3 localCoord = uvec3(max(probeCoord, ivec3(0)));
-    localCoord = min(localCoord, info.probeCounts - uvec3(1u));
-    return info.firstProbe + localCoord.x + localCoord.y * info.probeCounts.x + localCoord.z * info.probeCounts.x * info.probeCounts.y;
-}
-
-vec3 DdgiProbeWorldPosition(DdgiVolumeSampleInfo info, ivec3 probeCoord)
-{
-    if (info.kind == DDGI_VOLUME_KIND_CAMERA_CLIPMAP)
-        return vec3(probeCoord) * info.spacing;
-
-    return info.origin + info.spacing * vec3(probeCoord);
-}
-
-uint DecodeDdgiFallbackProbeIndex(vec4 probeStatistics)
-{
-    return uint(round(max(probeStatistics.z, 0.0)));
-}
-
-bool DecodeDdgiVolumeLogicalCellFromProbeIndex(
-    DdgiVolumeSampleInfo info,
-    uint probeIndex,
-    out ivec3 logicalCell)
-{
-    logicalCell = info.cellBase;
-    uint volumeProbeCount = info.probeCounts.x * info.probeCounts.y * info.probeCounts.z;
-    if (probeIndex < info.firstProbe || probeIndex >= info.firstProbe + volumeProbeCount)
-        return false;
-
-    if (info.kind == DDGI_VOLUME_KIND_CAMERA_CLIPMAP)
-    {
-        logicalCell = DdgiDecodeLogicalCellFromPhysicalProbeIndex(
-            probeIndex,
-            info.gridMinCell,
-            info.ringOffset,
-            info.probeCounts,
-            info.firstProbe);
-        ivec3 relative = logicalCell - info.gridMinCell;
-        return all(greaterThanEqual(relative, ivec3(0))) && all(lessThan(relative, ivec3(info.probeCounts)));
-    }
-
-    uint localIndex = probeIndex - info.firstProbe;
-    uint x = localIndex % info.probeCounts.x;
-    uint y = (localIndex / info.probeCounts.x) % info.probeCounts.y;
-    uint z = localIndex / (info.probeCounts.x * info.probeCounts.y);
-    logicalCell = ivec3(x, y, z);
-    return all(lessThan(uvec3(logicalCell), info.probeCounts));
-}
-
-bool TryResolveDdgiInactiveProbeFallback(
-    DdgiVolumeSampleInfo info,
-    ivec3 sourceLogicalCell,
-    uint sourceProbeIndex,
-    out uint fallbackProbeIndex,
-    out ivec3 fallbackLogicalCell,
-    out bool useFallbackVisibility)
-{
-    fallbackProbeIndex = sourceProbeIndex;
-    fallbackLogicalCell = sourceLogicalCell;
-    useFallbackVisibility = true;
-
-    uint relocationBase = sourceProbeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
-    vec4 probeStatistics = ReadStorageVec4(uint(DDGI_PROBE_RELOCATION_CLASSIFICATION_BUFFER_INDEX), relocationBase + 8u);
-    uint storedFallbackProbeIndex = DecodeDdgiFallbackProbeIndex(probeStatistics);
-    if (storedFallbackProbeIndex == sourceProbeIndex)
-        return false;
-
-    if (!DecodeDdgiVolumeLogicalCellFromProbeIndex(info, storedFallbackProbeIndex, fallbackLogicalCell))
-        return false;
-
-    uint fallbackStateBase = storedFallbackProbeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
-    vec4 fallbackStateIrradiance = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), fallbackStateBase);
-    vec4 fallbackRelocationAndClassification = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), fallbackStateBase + 8u);
-    float fallbackActive = clamp(min(fallbackStateIrradiance.w, fallbackRelocationAndClassification.w), 0.0, 1.0);
-    if (fallbackActive <= 0.50)
-        return false;
-
-    ivec3 cellDelta = fallbackLogicalCell - sourceLogicalCell;
-    useFallbackVisibility = dot(vec3(cellDelta), vec3(cellDelta)) <= 1.0;
-    fallbackProbeIndex = storedFallbackProbeIndex;
-    return true;
-}
-
 DdgiSampleResult EmptyDdgiSampleResult()
 {
     DdgiSampleResult result;
@@ -1035,941 +697,6 @@ DdgiSampleResult EmptyDdgiSampleResult()
     result.sampleExpectedWeight = 0.0;
     result.transportSourcePath = MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN;
     return result;
-}
-
-bool DdgiHeaderEnabled(out uint volumeCount)
-{
-    uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
-    volumeCount = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 0u);
-    return (flags & DDGI_ENABLED_FLAG) != 0u && volumeCount > 0u;
-}
-
-bool DdgiExhaustiveGatherFallbackEnabled()
-{
-    uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
-    return (flags & DDGI_EXHAUSTIVE_GATHER_FALLBACK_ENABLED_FLAG) != 0u;
-}
-
-bool DdgiSampleHasUsableGatherData(DdgiSampleResult ddgiSample)
-{
-    return !any(isnan(ddgiSample.irradiance)) &&
-        !any(isinf(ddgiSample.irradiance)) &&
-        ddgiSample.spatialCoverage > 0.000001 &&
-        ddgiSample.supportCoverage > 0.000001 &&
-        ddgiSample.weight > 0.000001 &&
-        ddgiSample.ownershipConsumed > 0.000001;
-}
-
-bool DdgiShouldTryExhaustiveGatherFallback(DdgiSampleResult gatherResult)
-{
-    return gatherResult.spatialCoverage <= 0.000001;
-}
-
-void AddDdgiFastGatherAttemptDiagnostic()
-{
-    if (!DdgiFastGatherDiagnosticPixel())
-        return;
-
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FAST_GATHER_ATTEMPT_COUNTER, 1u);
-}
-
-void AddDdgiFastGatherAcceptedDiagnostic()
-{
-    if (!DdgiFastGatherDiagnosticPixel())
-        return;
-
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FAST_GATHER_ACCEPTED_COUNTER, 1u);
-}
-
-void AddDdgiFastGatherRejectedDiagnostic(DdgiSampleResult ddgiSample)
-{
-    if (!DdgiFastGatherDiagnosticPixel())
-        return;
-
-    if (ddgiSample.spatialCoverage <= 0.000001)
-        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FAST_GATHER_REJECTED_ZERO_SPATIAL_COUNTER, 1u);
-    if (ddgiSample.supportCoverage <= 0.000001)
-        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FAST_GATHER_REJECTED_ZERO_SUPPORT_COUNTER, 1u);
-    if (ddgiSample.weight <= 0.000001)
-        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FAST_GATHER_REJECTED_ZERO_DATA_COUNTER, 1u);
-    if (ddgiSample.ownershipConsumed <= 0.000001)
-        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FAST_GATHER_REJECTED_ZERO_OWNERSHIP_COUNTER, 1u);
-}
-
-void AddDdgiShaderGatherFallbackAttemptDiagnostic()
-{
-    if (!DdgiFastGatherDiagnosticPixel())
-        return;
-
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SHADER_GATHER_FALLBACK_ATTEMPT_COUNTER, 1u);
-}
-
-void AddDdgiShaderGatherFallbackResultDiagnostic(DdgiSampleResult ddgiSample)
-{
-    if (!DdgiFastGatherDiagnosticPixel())
-        return;
-
-    if (DdgiSampleHasUsableGatherData(ddgiSample))
-        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SHADER_GATHER_FALLBACK_ACCEPTED_COUNTER, 1u);
-    else
-        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SHADER_GATHER_FALLBACK_EMPTY_COUNTER, 1u);
-}
-
-bool DdgiRawAtlasRadianceConventionEnabled()
-{
-    // Phase 2 convention: probe atlases store irradiance; forward applies diffuse BRDF exactly once.
-    // The legacy scaled-atlas path is intentionally disabled for production consistency.
-    return true;
-}
-
-uint DdgiCacheGeneration()
-{
-    return ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 16u);
-}
-
-uint DdgiCacheLastUpdatedFrameSerial()
-{
-    return ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 17u);
-}
-
-uint DdgiCacheWarmupState()
-{
-    return ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 18u);
-}
-
-bool DdgiCacheValid()
-{
-    uint cacheGeneration = DdgiCacheGeneration();
-    return cacheGeneration > 0u;
-}
-
-bool DdgiSampledProbeInsideCurrentFrustum(vec3 probePosition)
-{
-    vec4 clip = MulRowMajor(vec4(probePosition, 1.0), pc.Push.ViewProjectionMatrix);
-    if (clip.w <= 0.000001)
-        return false;
-
-    vec3 ndc = clip.xyz / clip.w;
-    return ndc.x >= -1.0 && ndc.x <= 1.0 &&
-        ndc.y >= -1.0 && ndc.y <= 1.0 &&
-        ndc.z >= 0.0 && ndc.z <= 1.0;
-}
-
-bool DdgiSampledProbeIsStaleOrAge(vec4 qualityAndReason)
-{
-    uint lastUpdateReason = uint(round(clamp(qualityAndReason.w, 0.0, 255.0)));
-    return lastUpdateReason == DDGI_PRIMARY_UPDATE_REASON_AGE_REFRESH;
-}
-
-void AccumulateDdgiSampledProbeUseDiagnostics(vec4 qualityAndReason, vec3 probePosition)
-{
-    if (!DdgiForwardEstimateDiagnosticPixel())
-        return;
-
-    if (DdgiSampledProbeIsStaleOrAge(qualityAndReason))
-    {
-        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SAMPLED_PROBE_STALE_AGE_COUNTER, 1u);
-        return;
-    }
-
-    uint counter = DdgiSampledProbeInsideCurrentFrustum(probePosition)
-        ? DDGI_SAMPLED_PROBE_CURRENT_FRUSTUM_COUNTER
-        : DDGI_SAMPLED_PROBE_SIDE_REAR_COUNTER;
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, counter, 1u);
-}
-
-float DdgiCacheReadiness()
-{
-    if (!DdgiCacheValid())
-        return 0.0;
-
-    uint cacheWarmupState = DdgiCacheWarmupState();
-    if (cacheWarmupState == DDGI_WARMUP_STATE_DISABLED)
-        return 0.0;
-    if (cacheWarmupState == DDGI_WARMUP_STATE_COLD_START)
-        return 0.35;
-    if (cacheWarmupState == DDGI_WARMUP_STATE_LOCAL_VOLUME)
-        return 0.65;
-    if (cacheWarmupState == DDGI_WARMUP_STATE_NEAR_CASCADE)
-        return 0.85;
-    if (cacheWarmupState == DDGI_WARMUP_STATE_RECOVERY)
-        return 0.75;
-
-    return 1.0;
-}
-
-bool DdgiDebugForceProbeActive()
-{
-    uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
-    return (flags & DDGI_DEBUG_FORCE_PROBE_ACTIVE_FLAG) != 0u;
-}
-
-bool DdgiDebugBypassFinalSuppression(uint debugViewMode)
-{
-    return debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAW_DIFFUSE;
-}
-
-bool DdgiDebugBypassFinalSuppression()
-{
-    return DdgiDebugBypassFinalSuppression(ForwardDebugViewMode());
-}
-
-bool DdgiDebugBypassConfidenceSuppression(uint debugViewMode)
-{
-    return debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS;
-}
-
-bool DdgiDebugBypassConfidenceSuppression()
-{
-    return DdgiDebugBypassConfidenceSuppression(ForwardDebugViewMode());
-}
-
-float DdgiSoftConfidenceTrust(float confidence, float trustedFloor)
-{
-    confidence = clamp(confidence, 0.0, 1.0);
-    return mix(clamp(trustedFloor, 0.0, 1.0), 1.0, smoothstep(0.05, 0.75, confidence));
-}
-
-float DdgiSparseDataTrust(float dataConfidence)
-{
-    float confidence = clamp(dataConfidence, 0.0, 1.0);
-    if (confidence <= 0.000001)
-        return 0.0;
-
-    return DdgiSoftConfidenceTrust(confidence, 0.35);
-}
-
-float DdgiSquare(float value)
-{
-    return value * value;
-}
-
-float ShapeDdgiGatherWeight(float weight)
-{
-    if (weight < 0.2)
-        weight *= (weight * weight) / 0.04;
-    return weight;
-}
-
-bool ReadDdgiGatherTile(out DdgiGatherTileInfo tile)
-{
-    tile.localVolumeIndex = DDGI_GATHER_INVALID_VOLUME_INDEX;
-    tile.primaryClipmapVolumeIndex = DDGI_GATHER_INVALID_VOLUME_INDEX;
-    tile.secondaryClipmapVolumeIndex = DDGI_GATHER_INVALID_VOLUME_INDEX;
-    tile.flags = DDGI_GATHER_TILE_FALLBACK_FLAG;
-    tile.blendWeights = vec4(0.0);
-
-    uint headerFlags = ReadStorageWord(uint(DDGI_GATHER_TILE_BUFFER_INDEX), 3u);
-    if ((headerFlags & DDGI_GATHER_HEADER_ENABLED_FLAG) == 0u)
-        return false;
-
-    uint tileCountX = max(ReadStorageWord(uint(DDGI_GATHER_TILE_BUFFER_INDEX), 0u), 1u);
-    uint tileCountY = max(ReadStorageWord(uint(DDGI_GATHER_TILE_BUFFER_INDEX), 1u), 1u);
-    uint tileSize = max(ReadStorageWord(uint(DDGI_GATHER_TILE_BUFFER_INDEX), 2u), 1u);
-    uvec2 pixel = uvec2(max(gl_FragCoord.xy, vec2(0.0)));
-    uvec2 tileCoord = min(pixel / tileSize, uvec2(tileCountX - 1u, tileCountY - 1u));
-    uint tileIndex = tileCoord.x + tileCoord.y * tileCountX;
-    uint tileBaseWord = uint(SIZEOF_GPU_DDGI_GATHER_TILE_HEADER) / 4u +
-        tileIndex * (uint(SIZEOF_GPU_DDGI_GATHER_TILE) / 4u);
-
-    tile.localVolumeIndex = ReadStorageWord(uint(DDGI_GATHER_TILE_BUFFER_INDEX), tileBaseWord + uint(OFFSET_GPU_DDGI_GATHER_TILE_LOCAL_VOLUME_INDEX) / 4u);
-    tile.primaryClipmapVolumeIndex = ReadStorageWord(uint(DDGI_GATHER_TILE_BUFFER_INDEX), tileBaseWord + uint(OFFSET_GPU_DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VOLUME_INDEX) / 4u);
-    tile.secondaryClipmapVolumeIndex = ReadStorageWord(uint(DDGI_GATHER_TILE_BUFFER_INDEX), tileBaseWord + uint(OFFSET_GPU_DDGI_GATHER_TILE_SECONDARY_CLIPMAP_VOLUME_INDEX) / 4u);
-    tile.flags = ReadStorageWord(uint(DDGI_GATHER_TILE_BUFFER_INDEX), tileBaseWord + uint(OFFSET_GPU_DDGI_GATHER_TILE_FLAGS) / 4u);
-    tile.blendWeights = ReadStorageVec4(uint(DDGI_GATHER_TILE_BUFFER_INDEX), tileBaseWord + uint(OFFSET_GPU_DDGI_GATHER_TILE_BLEND_WEIGHTS) / 4u);
-    return true;
-}
-
-vec4 ReadDdgiProbeIrradiance(uint probeIndex, vec3 normal)
-{
-    uint texelsPerProbe = max(ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 10u), 1u);
-    uint texelCount = texelsPerProbe * texelsPerProbe;
-    uint wordsPerProbe = texelCount * 2u;
-    uvec2 c00;
-    uvec2 c10;
-    uvec2 c01;
-    uvec2 c11;
-    vec2 fraction;
-    DdgiBilinearOctahedralTexels(normal, texelsPerProbe, c00, c10, c01, c11, fraction);
-    uint baseWord = probeIndex * wordsPerProbe;
-    vec4 s00 = DecodeDdgiIrradianceAtlasSqrtSample(ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c00.y * texelsPerProbe + c00.x) * 2u));
-    vec4 s10 = DecodeDdgiIrradianceAtlasSqrtSample(ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c10.y * texelsPerProbe + c10.x) * 2u));
-    vec4 s01 = DecodeDdgiIrradianceAtlasSqrtSample(ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c01.y * texelsPerProbe + c01.x) * 2u));
-    vec4 s11 = DecodeDdgiIrradianceAtlasSqrtSample(ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c11.y * texelsPerProbe + c11.x) * 2u));
-    return ResolveDdgiIrradianceAtlasSqrtBlend(mix(mix(s00, s10, fraction.x), mix(s01, s11, fraction.x), fraction.y));
-}
-
-vec2 ReadDdgiProbeVisibility(uint probeIndex, vec3 probeToPoint)
-{
-    uint texelsPerProbe = max(ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 11u), 1u);
-    uint texelCount = texelsPerProbe * texelsPerProbe;
-    uvec2 c00;
-    uvec2 c10;
-    uvec2 c01;
-    uvec2 c11;
-    vec2 fraction;
-    DdgiBilinearOctahedralTexels(probeToPoint, texelsPerProbe, c00, c10, c01, c11, fraction);
-    uint baseWord = probeIndex * texelCount;
-    vec2 s00 = ReadPackedDdgiHalf2(uint(DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), baseWord + c00.y * texelsPerProbe + c00.x);
-    vec2 s10 = ReadPackedDdgiHalf2(uint(DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), baseWord + c10.y * texelsPerProbe + c10.x);
-    vec2 s01 = ReadPackedDdgiHalf2(uint(DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), baseWord + c01.y * texelsPerProbe + c01.x);
-    vec2 s11 = ReadPackedDdgiHalf2(uint(DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), baseWord + c11.y * texelsPerProbe + c11.x);
-    return mix(mix(s00, s10, fraction.x), mix(s01, s11, fraction.x), fraction.y);
-}
-
-float EvaluateDdgiVisibility(
-    vec2 moments,
-    float probeDistance,
-    float viewBias,
-    float minProbeSpacing,
-    out float mean,
-    out float variance)
-{
-    mean = max(moments.x, 0.0001);
-    float mean2 = max(moments.y, mean * mean);
-    float minVariance = max(0.005, minProbeSpacing * minProbeSpacing * 0.0025);
-    variance = max(mean2 - mean * mean, minVariance);
-    if (probeDistance <= mean + max(viewBias, 0.02))
-        return 1.0;
-
-    float delta = probeDistance - mean;
-    return clamp(variance / (variance + delta * delta), 0.0, 1.0);
-}
-
-float DdgiVisibilityConfidence(float visibilityTransport)
-{
-    return smoothstep(0.02, 0.40, clamp(visibilityTransport, 0.0, 1.0));
-}
-
-float DdgiVisibilityMomentTrust(float visibilityConfidence)
-{
-    return smoothstep(0.05, 0.20, clamp(visibilityConfidence, 0.0, 1.0));
-}
-
-void AccumulateDdgiVisibilityMomentDiagnostics(
-    float mean,
-    float variance,
-    float probeDistance,
-    float maxRayDistance,
-    float visibilityTransport,
-    float irradianceConfidence);
-
-DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worldPosition, vec3 normal, float indirectAo, float globalIntensity)
-{
-    DdgiSampleResult result = EmptyDdgiSampleResult();
-    vec3 viewVector = pc.Push.CameraPosition - worldPosition;
-    float viewLength = length(viewVector);
-    vec3 viewDirection = viewLength > 0.0001 ? viewVector / viewLength : vec3(0.0);
-    vec3 biasedPosition = worldPosition + normal * info.normalBias + viewDirection * info.viewBias;
-    vec3 accumulated = vec3(0.0);
-    float totalWeight = 0.0;
-    float expectedWeight = 0.0;
-    float spatialCoveredWeight = 0.0;
-    float supportWeightSum = 0.0;
-    float dataWeightSum = 0.0;
-    float visibilityWeightedSupport = 0.0;
-    float totalVisibility = 0.0;
-    float totalActive = 0.0;
-    float strongestWeight = -1.0;
-    result.rayBudget = clamp(info.raysPerProbe / 128.0, 0.0, 1.0);
-
-    for (uint z = 0u; z <= 1u; z++)
-    {
-        for (uint y = 0u; y <= 1u; y++)
-        {
-            for (uint x = 0u; x <= 1u; x++)
-            {
-                ivec3 corner = info.cellBase + ivec3(x, y, z);
-                vec3 trilinear = mix(vec3(1.0) - info.cellFraction, info.cellFraction, vec3(x, y, z));
-                float cellWeight = clamp(trilinear.x * trilinear.y * trilinear.z * 2.0, 0.0, 1.0);
-                if (cellWeight <= 0.000001)
-                    continue;
-
-                uint probeIndex = DdgiProbeIndex(info, corner);
-                uint stateBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
-                vec4 stateIrradiance = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase);
-                vec4 relocationAndClassification = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + 8u);
-                vec4 qualityAndReason = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + 12u);
-                uint relocationBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
-                vec4 sourceClassification = ReadStorageVec4(uint(DDGI_PROBE_RELOCATION_CLASSIFICATION_BUFFER_INDEX), relocationBase + 4u);
-                vec3 logicalProbePosition = DdgiProbeWorldPosition(info, corner);
-                vec3 probePosition = logicalProbePosition + relocationAndClassification.xyz;
-                vec3 toProbe = probePosition - worldPosition;
-                float distanceToProbe = max(length(toProbe), 0.0001);
-                vec3 pointToProbeDirection = toProbe / distanceToProbe;
-                float alignment = dot(normal, pointToProbeDirection);
-                float normalWeight = max(DdgiSquare(clamp(alignment * 0.5 + 0.5, 0.0, 1.0)), 0.1);
-
-                float distanceWeight = 1.0 / (1.0 + distanceToProbe * 0.025);
-                float expectedContributionWeight = cellWeight * normalWeight * distanceWeight;
-                expectedWeight += expectedContributionWeight;
-                spatialCoveredWeight += expectedContributionWeight;
-                float sourceProbeActive = clamp(min(stateIrradiance.w, relocationAndClassification.w), 0.0, 1.0);
-                uint sampleProbeIndex = probeIndex;
-                vec3 sampleLogicalProbePosition = logicalProbePosition;
-                vec3 sampleProbePosition = probePosition;
-                vec4 sampleStateIrradiance = stateIrradiance;
-                vec4 sampleRelocationAndClassification = relocationAndClassification;
-                vec4 sampleQualityAndReason = qualityAndReason;
-                bool useProbeVisibility = true;
-                if (!DdgiDebugForceProbeActive() && sourceProbeActive <= 0.36 && sourceClassification.y > 0.50)
-                {
-                    uint fallbackProbeIndex;
-                    ivec3 fallbackLogicalCell;
-                    bool fallbackUseVisibility;
-                    if (TryResolveDdgiInactiveProbeFallback(info, corner, probeIndex, fallbackProbeIndex, fallbackLogicalCell, fallbackUseVisibility))
-                    {
-                        uint fallbackStateBase = fallbackProbeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
-                        sampleProbeIndex = fallbackProbeIndex;
-                        sampleLogicalProbePosition = DdgiProbeWorldPosition(info, fallbackLogicalCell);
-                        sampleStateIrradiance = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), fallbackStateBase);
-                        sampleRelocationAndClassification = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), fallbackStateBase + 8u);
-                        sampleQualityAndReason = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), fallbackStateBase + 12u);
-                        sampleProbePosition = sampleLogicalProbePosition + sampleRelocationAndClassification.xyz;
-                        useProbeVisibility = fallbackUseVisibility;
-                    }
-                }
-
-                vec4 probeIrradianceSample = ReadDdgiProbeIrradiance(sampleProbeIndex, normal);
-                float irradianceConfidence = clamp(probeIrradianceSample.w, 0.0, 1.0);
-                float probeActive = clamp(min(sampleStateIrradiance.w, sampleRelocationAndClassification.w), 0.0, 1.0);
-                if (DdgiDebugForceProbeActive())
-                    probeActive = 1.0;
-                if (probeActive <= 0.001)
-                {
-                    if (DdgiForwardEstimateDiagnosticPixel())
-                        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SUPPORT_REJECTED_INACTIVE_COUNTER, 1u);
-                    continue;
-                }
-
-                vec3 probeIrradiance = probeIrradianceSample.rgb;
-                float rayHitConfidence = clamp(sampleQualityAndReason.x, 0.0, 1.0);
-                float stateIrradianceConfidence = clamp(sampleQualityAndReason.y, 0.0, 1.0);
-                float visibilityConfidence = clamp(sampleQualityAndReason.z, 0.0, 1.0);
-                if (DdgiForwardEstimateDiagnosticPixel())
-                {
-                    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_PROBE_IRRADIANCE_ALPHA_COUNTER, PackDdgiForwardEstimateWeight(irradianceConfidence));
-                    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_PROBE_QUALITY_X_COUNTER, PackDdgiForwardEstimateWeight(rayHitConfidence));
-                    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_PROBE_QUALITY_Y_COUNTER, PackDdgiForwardEstimateWeight(stateIrradianceConfidence));
-                    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_PROBE_QUALITY_Z_COUNTER, PackDdgiForwardEstimateWeight(visibilityConfidence));
-                    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_PROBE_QUALITY_SAMPLE_COUNT_COUNTER, 1u);
-                }
-                if (irradianceConfidence <= 0.000001)
-                {
-                    if (DdgiForwardEstimateDiagnosticPixel())
-                        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SUPPORT_REJECTED_ZERO_IRRADIANCE_ALPHA_COUNTER, 1u);
-                    continue;
-                }
-                bool confidenceBypass = DdgiDebugBypassConfidenceSuppression();
-                float atlasDataTrust = confidenceBypass ? 1.0 : DdgiSparseDataTrust(irradianceConfidence);
-                float radianceTransportTrust = confidenceBypass ? 1.0 : DdgiSoftConfidenceTrust(rayHitConfidence, 0.35);
-                float stateIrradianceTrust = confidenceBypass ? 1.0 : DdgiSoftConfidenceTrust(max(stateIrradianceConfidence, irradianceConfidence), 0.45);
-                float qualityConfidence = clamp(radianceTransportTrust * stateIrradianceTrust, 0.0, 1.0);
-                if (qualityConfidence <= 0.000001 || expectedContributionWeight <= 0.000001)
-                {
-                    if (DdgiForwardEstimateDiagnosticPixel())
-                        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SUPPORT_REJECTED_LOW_QUALITY_COUNTER, 1u);
-                    continue;
-                }
-
-                float supportWeight = expectedContributionWeight * probeActive * atlasDataTrust;
-                float radianceWeight = supportWeight * qualityConfidence;
-
-                vec3 probeToBiasedPoint = biasedPosition - sampleProbePosition;
-                float biasedDistanceToProbe = max(length(probeToBiasedPoint), 0.0001);
-                vec3 probeToPointDirection = probeToBiasedPoint / biasedDistanceToProbe;
-                float minProbeSpacing = max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.001);
-                float visibilityMean = info.maxRayDistance;
-                float visibilityVariance = 0.0;
-                float visibilityTransport = 1.0;
-                float visibilityTrust = DdgiVisibilityMomentTrust(visibilityConfidence);
-                if (visibilityTrust > 0.000001 && useProbeVisibility)
-                {
-                    vec2 visibilityMoments = ReadDdgiProbeVisibility(sampleProbeIndex, probeToPointDirection);
-                    visibilityTransport = EvaluateDdgiVisibility(
-                        visibilityMoments,
-                        biasedDistanceToProbe,
-                        info.viewBias,
-                        minProbeSpacing,
-                        visibilityMean,
-                        visibilityVariance);
-                }
-                float visibilityAttenuation = mix(
-                    1.0,
-                    clamp(visibilityTransport, 0.0, 1.0),
-                    clamp(visibilityTrust, 0.0, 1.0));
-                float probeVisibilityConfidence = DdgiVisibilityConfidence(visibilityAttenuation);
-                AccumulateDdgiVisibilityMomentDiagnostics(
-                    visibilityMean,
-                    visibilityVariance,
-                    biasedDistanceToProbe,
-                    info.maxRayDistance,
-                    visibilityTransport,
-                    irradianceConfidence);
-                float visibilityLeakFloor = mix(0.005, 0.05, probeVisibilityConfidence);
-                float visibilityWeight = max(visibilityAttenuation * visibilityAttenuation * visibilityAttenuation, visibilityLeakFloor);
-                float visibleRadianceWeight = ShapeDdgiGatherWeight(radianceWeight * visibilityWeight);
-                float visibleSupportWeight = supportWeight * mix(0.05, 1.0, probeVisibilityConfidence);
-                supportWeightSum += visibleSupportWeight;
-                if (visibleRadianceWeight > 0.000001)
-                    AccumulateDdgiSampledProbeUseDiagnostics(sampleQualityAndReason, sampleProbePosition);
-                accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * visibleRadianceWeight;
-                totalWeight += visibleRadianceWeight;
-                dataWeightSum += visibleRadianceWeight;
-                visibilityWeightedSupport += visibleSupportWeight * visibilityAttenuation;
-                totalVisibility += probeVisibilityConfidence * visibleSupportWeight;
-                totalActive += probeActive * atlasDataTrust * cellWeight;
-
-                if (visibleRadianceWeight > strongestWeight)
-                {
-                    strongestWeight = visibleRadianceWeight;
-                    result.probeIndex = sampleProbeIndex;
-                    result.relocation = sampleRelocationAndClassification.xyz;
-                    result.logicalProbePosition = sampleLogicalProbePosition;
-                    result.relocatedProbePosition = sampleProbePosition;
-                    result.minProbeSpacing = minProbeSpacing;
-                    result.classificationInvalidScore = clamp(sourceClassification.y, 0.0, 1.0);
-                    result.visibility = probeVisibilityConfidence;
-                    result.activeProbe = probeActive;
-                    result.leakClamp = visibilityAttenuation * normalWeight * indirectAo;
-                    result.visibilityMomentMean = visibilityMean;
-                    result.visibilityMomentVariance = visibilityVariance;
-                    result.visibilityProbeDistance = biasedDistanceToProbe;
-                    result.visibilityMaxRayDistance = info.maxRayDistance;
-                    result.updateReason = clamp(sampleQualityAndReason.w / 255.0, 0.0, 1.0);
-                    result.irradianceAtlasConfidence = irradianceConfidence;
-                    result.rayHitConfidence = rayHitConfidence;
-                    result.stateIrradianceConfidence = stateIrradianceConfidence;
-                    result.visibilityConfidence = visibilityConfidence;
-                    result.qualityConfidence = qualityConfidence;
-                    result.strongestSupportWeight = visibleRadianceWeight;
-                }
-            }
-        }
-    }
-
-    float volumeEdgeFade = info.edgeFade;
-    float safeExpectedWeight = max(expectedWeight, 0.000001);
-    float edgeFade = clamp(volumeEdgeFade, 0.0, 1.0);
-    float spatialCoverage = clamp(spatialCoveredWeight / safeExpectedWeight, 0.0, 1.0) * edgeFade;
-    float supportCoverage = clamp(supportWeightSum / safeExpectedWeight, 0.0, 1.0) * edgeFade;
-    float dataConfidence = clamp(dataWeightSum / safeExpectedWeight, 0.0, 1.0) * edgeFade;
-    result.coverage = spatialCoverage;
-    result.spatialCoverage = spatialCoverage;
-    result.supportCoverage = supportCoverage;
-    result.sampleTotalWeight = dataWeightSum;
-    result.sampleExpectedWeight = expectedWeight;
-    result.visibility = clamp(totalVisibility / max(supportWeightSum, 0.000001), 0.0, 1.0);
-    result.activeProbe = clamp(totalActive, 0.0, 1.0);
-
-    if (totalWeight <= 0.000001)
-        return result;
-
-    float finalIntensity = globalIntensity * info.volumeIntensity;
-    float normalizationWeight = mix(1.0, totalWeight, clamp(totalWeight * totalWeight + 0.9, 0.0, 1.0));
-    result.irradiance = clamp((accumulated / max(normalizationWeight, 0.000001)) * finalIntensity, vec3(0.0), vec3(64.0));
-    result.weight = dataConfidence;
-    result.leakClamp = clamp(visibilityWeightedSupport / max(supportWeightSum, 0.000001), 0.0, 1.0);
-    result.leakClamp = clamp(result.leakClamp, 0.0, 1.0);
-    result.cascadeIndex = float(info.cascadeIndex);
-    result.cascadeBlendWeight = clamp(volumeEdgeFade, 0.0, 1.0);
-    result.transportSourcePath = info.kind == DDGI_VOLUME_KIND_CAMERA_CLIPMAP
-        ? MATERIAL_TRANSPORT_PROVENANCE_COMPACT_PRIMITIVE
-        : MATERIAL_TRANSPORT_PROVENANCE_DETAILED_MESH;
-    return result;
-}
-
-float AccumulateDdgiCandidate(
-    uint volumeIndex,
-    uint volumeCount,
-    vec3 worldPosition,
-    vec3 normal,
-    float indirectAo,
-    float globalIntensity,
-    float candidateBlendWeight,
-    inout vec3 blendedIrradiance,
-    inout float blendedSpatialCoverage,
-    inout float blendedSupportCoverage,
-    inout float totalOwnership,
-    inout float remainingOwnership,
-    inout float blendedVisibility,
-    inout float blendedActive,
-    inout float blendedDataConfidence,
-    inout float blendedLeakClamp,
-    inout float bestDebugWeight,
-    inout DdgiSampleResult result)
-{
-    if (volumeIndex == DDGI_GATHER_INVALID_VOLUME_INDEX || volumeIndex >= volumeCount || remainingOwnership <= 0.001)
-        return -1.0;
-
-    candidateBlendWeight = clamp(candidateBlendWeight, 0.0, 1.0);
-    if (candidateBlendWeight <= 0.000001)
-        return -1.0;
-
-    DdgiVolumeSampleInfo info;
-    if (!ReadDdgiVolumeSampleInfo(volumeIndex, worldPosition, info))
-        return -1.0;
-
-    vec3 probeSamplePosition = DdgiSurfaceProbeSamplePosition(info, worldPosition, normal);
-    DdgiVolumeSampleInfo biasedInfo;
-    if (ReadDdgiVolumeSampleInfo(volumeIndex, probeSamplePosition, biasedInfo))
-        info = biasedInfo;
-
-    DdgiSampleResult candidate = SampleDdgiVolumeIrradiance(info, worldPosition, normal, indirectAo, globalIntensity);
-    float candidateSpatial = clamp(candidate.spatialCoverage, 0.0, 1.0);
-    float candidateSupport = clamp(candidate.supportCoverage, 0.0, 1.0);
-    float candidateData = clamp(candidate.weight, 0.0, 1.0);
-    result.spatialCoverage = max(result.spatialCoverage, candidateSpatial);
-    result.coverage = result.spatialCoverage;
-    if (candidateSpatial <= 0.000001)
-        return -1.0;
-
-    float candidateVisibility = clamp(candidate.leakClamp, 0.0, 1.0);
-    float candidateOwnership = candidateSupport * DdgiSparseDataTrust(candidateData) * mix(0.10, 1.0, candidateVisibility) * candidateBlendWeight;
-    if (candidateOwnership <= 0.000001)
-        return -1.0;
-
-    float blendWeight = clamp(candidateOwnership * remainingOwnership, 0.0, remainingOwnership);
-    blendedIrradiance += candidate.irradiance * blendWeight;
-    blendedSpatialCoverage = max(blendedSpatialCoverage, candidateSpatial);
-    blendedSupportCoverage += candidateSupport * blendWeight;
-    totalOwnership += blendWeight;
-    blendedVisibility += candidate.visibility * blendWeight;
-    blendedActive += candidate.activeProbe * blendWeight;
-    blendedDataConfidence += candidateData * blendWeight;
-    blendedLeakClamp += candidate.leakClamp * blendWeight;
-    remainingOwnership = clamp(remainingOwnership - blendWeight, 0.0, 1.0);
-
-    if (blendWeight > bestDebugWeight)
-    {
-        bestDebugWeight = blendWeight;
-        result.probeIndex = candidate.probeIndex;
-        result.relocation = candidate.relocation;
-        result.logicalProbePosition = candidate.logicalProbePosition;
-        result.relocatedProbePosition = candidate.relocatedProbePosition;
-        result.minProbeSpacing = candidate.minProbeSpacing;
-        result.classificationInvalidScore = candidate.classificationInvalidScore;
-        result.cascadeIndex = candidate.cascadeIndex;
-        result.cascadeBlendWeight = candidate.cascadeBlendWeight;
-        result.updateReason = candidate.updateReason;
-        result.rayBudget = candidate.rayBudget;
-        result.irradianceAtlasConfidence = candidate.irradianceAtlasConfidence;
-        result.rayHitConfidence = candidate.rayHitConfidence;
-        result.stateIrradianceConfidence = candidate.stateIrradianceConfidence;
-        result.visibilityConfidence = candidate.visibilityConfidence;
-        result.qualityConfidence = candidate.qualityConfidence;
-        result.strongestSupportWeight = candidate.strongestSupportWeight;
-        result.sampleTotalWeight = candidate.sampleTotalWeight;
-        result.sampleExpectedWeight = candidate.sampleExpectedWeight;
-        result.transportSourcePath = candidate.transportSourcePath;
-    }
-
-    return candidate.cascadeBlendWeight;
-}
-
-void AddDdgiClipmapCoverageAttempt(float primaryBlendWeight)
-{
-    if (!DdgiClipmapCoverageCountersEnabled())
-        return;
-
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_CLIPMAP_INFO_PRIMARY_ATTEMPT_COUNTER, 1u);
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_CLIPMAP_INFO_PRIMARY_BLEND_WEIGHT_COUNTER, PackDdgiForwardEstimateWeight(primaryBlendWeight));
-}
-
-void AddDdgiClipmapCoverageOk(float primaryEdgeFade, float primaryBlendWeight)
-{
-    if (!DdgiClipmapCoverageCountersEnabled())
-        return;
-
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_CLIPMAP_INFO_PRIMARY_OK_COUNTER, 1u);
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_CLIPMAP_INFO_PRIMARY_EDGE_FADE_COUNTER, PackDdgiForwardEstimateWeight(primaryEdgeFade));
-}
-
-void AddDdgiClipmapCoverageFail(float primaryBlendWeight)
-{
-    if (!DdgiClipmapCoverageCountersEnabled())
-        return;
-
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_CLIPMAP_INFO_PRIMARY_FAILED_COUNTER, 1u);
-}
-
-void AddDdgiClipmapCoverageDiagnostics(DdgiGatherTileInfo tile, uint volumeCount, vec3 worldPosition)
-{
-    if (!DdgiClipmapCoverageDiagnosticPixel())
-        return;
-
-    if ((tile.flags & DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VALID_FLAG) == 0u)
-        return;
-
-    AddDdgiClipmapCoverageAttempt(tile.blendWeights.y);
-
-    DdgiVolumeSampleInfo info;
-    bool primaryInfoOk =
-        tile.primaryClipmapVolumeIndex != DDGI_GATHER_INVALID_VOLUME_INDEX &&
-        tile.primaryClipmapVolumeIndex < volumeCount &&
-        ReadDdgiVolumeSampleInfo(tile.primaryClipmapVolumeIndex, worldPosition, info);
-
-    if (primaryInfoOk)
-        AddDdgiClipmapCoverageOk(info.edgeFade, tile.blendWeights.y);
-    else
-        AddDdgiClipmapCoverageFail(tile.blendWeights.y);
-}
-
-DdgiSampleResult ResolveDdgiAccumulation(
-    DdgiSampleResult result,
-    vec3 blendedIrradiance,
-    float blendedSpatialCoverage,
-    float blendedSupportCoverage,
-    float totalOwnership,
-    float blendedVisibility,
-    float blendedActive,
-    float blendedDataConfidence,
-    float blendedLeakClamp)
-{
-    result.spatialCoverage = max(result.spatialCoverage, clamp(blendedSpatialCoverage, 0.0, 1.0));
-    result.coverage = result.spatialCoverage;
-
-    if (totalOwnership <= 0.000001)
-        return result;
-
-    float invOwnership = 1.0 / max(totalOwnership, 0.000001);
-    result.irradiance = clamp(blendedIrradiance * invOwnership, vec3(0.0), vec3(64.0));
-    result.supportCoverage = clamp(blendedSupportCoverage * invOwnership, 0.0, 1.0);
-    result.ownershipConsumed = clamp(totalOwnership, 0.0, 1.0);
-    result.weight = clamp(blendedDataConfidence * invOwnership, 0.0, 1.0);
-    result.visibility = clamp(blendedVisibility * invOwnership, 0.0, 1.0);
-    result.activeProbe = clamp(blendedActive * invOwnership, 0.0, 1.0);
-    result.leakClamp = clamp(blendedLeakClamp * invOwnership, 0.0, 1.0);
-    return result;
-}
-
-DdgiSampleResult SampleDdgiGatherCandidates(DdgiGatherTileInfo tile, uint volumeCount, vec3 worldPosition, vec3 normal, float indirectAo, float globalIntensity)
-{
-    DdgiSampleResult result = EmptyDdgiSampleResult();
-    vec3 blendedIrradiance = vec3(0.0);
-    float blendedSpatialCoverage = 0.0;
-    float blendedSupportCoverage = 0.0;
-    float totalOwnership = 0.0;
-    float remainingOwnership = 1.0;
-    float blendedVisibility = 0.0;
-    float blendedActive = 0.0;
-    float blendedDataConfidence = 0.0;
-    float blendedLeakClamp = 0.0;
-    float bestDebugWeight = -1.0;
-    if ((tile.flags & DDGI_GATHER_TILE_LOCAL_VOLUME_VALID_FLAG) != 0u &&
-        tile.blendWeights.x > 0.0001)
-        AccumulateDdgiCandidate(
-            tile.localVolumeIndex,
-            volumeCount,
-            worldPosition,
-            normal,
-            indirectAo,
-            globalIntensity,
-            tile.blendWeights.x,
-            blendedIrradiance,
-            blendedSpatialCoverage,
-            blendedSupportCoverage,
-            totalOwnership,
-            remainingOwnership,
-            blendedVisibility,
-            blendedActive,
-            blendedDataConfidence,
-            blendedLeakClamp,
-            bestDebugWeight,
-            result);
-
-    float primaryClipmapEdgeFade = -1.0;
-    bool primaryClipmapAttempt =
-        (tile.flags & DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VALID_FLAG) != 0u &&
-        tile.blendWeights.y > 0.0001 &&
-        remainingOwnership > 0.001;
-    if (primaryClipmapAttempt)
-    {
-        primaryClipmapEdgeFade = AccumulateDdgiCandidate(
-            tile.primaryClipmapVolumeIndex,
-            volumeCount,
-            worldPosition,
-            normal,
-            indirectAo,
-            globalIntensity,
-            tile.blendWeights.y,
-            blendedIrradiance,
-            blendedSpatialCoverage,
-            blendedSupportCoverage,
-            totalOwnership,
-            remainingOwnership,
-            blendedVisibility,
-            blendedActive,
-            blendedDataConfidence,
-            blendedLeakClamp,
-            bestDebugWeight,
-            result);
-    }
-
-    bool nearClipmapTransition = primaryClipmapEdgeFade < 0.0 || primaryClipmapEdgeFade < 0.985;
-    if ((tile.flags & DDGI_GATHER_TILE_SECONDARY_CLIPMAP_VALID_FLAG) != 0u &&
-        tile.blendWeights.z > 0.0001 &&
-        nearClipmapTransition &&
-        remainingOwnership > 0.001)
-    {
-        AccumulateDdgiCandidate(
-            tile.secondaryClipmapVolumeIndex,
-            volumeCount,
-            worldPosition,
-            normal,
-            indirectAo,
-            globalIntensity,
-            tile.blendWeights.z,
-            blendedIrradiance,
-            blendedSpatialCoverage,
-            blendedSupportCoverage,
-            totalOwnership,
-            remainingOwnership,
-            blendedVisibility,
-            blendedActive,
-            blendedDataConfidence,
-            blendedLeakClamp,
-            bestDebugWeight,
-            result);
-    }
-
-    return ResolveDdgiAccumulation(
-        result,
-        blendedIrradiance,
-        blendedSpatialCoverage,
-        blendedSupportCoverage,
-        totalOwnership,
-        blendedVisibility,
-        blendedActive,
-        blendedDataConfidence,
-        blendedLeakClamp);
-}
-
-DdgiSampleResult SampleDdgiIrradianceExhaustive(uint volumeCount, vec3 worldPosition, vec3 normal, float indirectAo, float globalIntensity)
-{
-    DdgiSampleResult result = EmptyDdgiSampleResult();
-    vec3 blendedIrradiance = vec3(0.0);
-    float blendedSpatialCoverage = 0.0;
-    float blendedSupportCoverage = 0.0;
-    float totalOwnership = 0.0;
-    float remainingOwnership = 1.0;
-    float blendedVisibility = 0.0;
-    float blendedActive = 0.0;
-    float blendedDataConfidence = 0.0;
-    float blendedLeakClamp = 0.0;
-    float bestDebugWeight = -1.0;
-
-    for (uint pass = 0u; pass < 2u && remainingOwnership > 0.001; pass++)
-    {
-        bool sampleAuthored = pass == 0u;
-        for (uint volumeIndex = 0u; volumeIndex < 16u; volumeIndex++)
-        {
-            if (volumeIndex >= volumeCount || remainingOwnership <= 0.001)
-                break;
-
-            DdgiVolumeSampleInfo info;
-            if (!ReadDdgiVolumeSampleInfo(volumeIndex, worldPosition, info))
-                continue;
-
-            bool isAuthored = info.kind == DDGI_VOLUME_KIND_AUTHORED;
-            if (isAuthored != sampleAuthored)
-                continue;
-
-            AccumulateDdgiCandidate(
-                volumeIndex,
-                volumeCount,
-                worldPosition,
-                normal,
-                indirectAo,
-                globalIntensity,
-                1.0,
-                blendedIrradiance,
-                blendedSpatialCoverage,
-                blendedSupportCoverage,
-                totalOwnership,
-                remainingOwnership,
-                blendedVisibility,
-                blendedActive,
-                blendedDataConfidence,
-                blendedLeakClamp,
-                bestDebugWeight,
-                result);
-        }
-    }
-
-    return ResolveDdgiAccumulation(
-        result,
-        blendedIrradiance,
-        blendedSpatialCoverage,
-        blendedSupportCoverage,
-        totalOwnership,
-        blendedVisibility,
-        blendedActive,
-        blendedDataConfidence,
-        blendedLeakClamp);
-}
-
-DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float indirectAo)
-{
-    DdgiSampleResult result = EmptyDdgiSampleResult();
-    if (ForwardGlobalIlluminationEnabled() == 0u)
-        return result;
-
-    uint volumeCount;
-    if (!DdgiHeaderEnabled(volumeCount))
-        return result;
-
-    float globalIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 12u), 0.0, 8.0);
-    uint exhaustiveFallbackVolumeCount = min(volumeCount, 4u);
-    DdgiGatherTileInfo tile;
-    if (ReadDdgiGatherTile(tile))
-    {
-        AddDdgiClipmapCoverageDiagnostics(tile, volumeCount, worldPosition);
-
-        if ((tile.flags & DDGI_GATHER_TILE_FALLBACK_FLAG) == 0u)
-        {
-            AddDdgiFastGatherAttemptDiagnostic();
-            DdgiSampleResult gatherResult = SampleDdgiGatherCandidates(tile, volumeCount, worldPosition, normal, indirectAo, globalIntensity);
-            if (DdgiSampleHasUsableGatherData(gatherResult))
-            {
-                AddDdgiFastGatherAcceptedDiagnostic();
-                return gatherResult;
-            }
-
-            if (DdgiExhaustiveGatherFallbackEnabled() && DdgiShouldTryExhaustiveGatherFallback(gatherResult))
-            {
-                AddDdgiFastGatherRejectedDiagnostic(gatherResult);
-                AddDdgiShaderGatherFallbackAttemptDiagnostic();
-                DdgiSampleResult fallbackResult = SampleDdgiIrradianceExhaustive(exhaustiveFallbackVolumeCount, worldPosition, normal, indirectAo, globalIntensity);
-                AddDdgiShaderGatherFallbackResultDiagnostic(fallbackResult);
-                return fallbackResult;
-            }
-
-            AddDdgiFastGatherRejectedDiagnostic(gatherResult);
-            return gatherResult;
-        }
-    }
-
-    if (DdgiExhaustiveGatherFallbackEnabled())
-    {
-        AddDdgiShaderGatherFallbackAttemptDiagnostic();
-        DdgiSampleResult fallbackResult = SampleDdgiIrradianceExhaustive(exhaustiveFallbackVolumeCount, worldPosition, normal, indirectAo, globalIntensity);
-        AddDdgiShaderGatherFallbackResultDiagnostic(fallbackResult);
-        return fallbackResult;
-    }
-
-    return result;
-}
-
-vec3 SampleDdgiDiffuse(
-    DdgiSampleResult ddgi,
-    vec3 diffuseReflectance,
-    float materialOcclusion)
-{
-    // Probe atlas values are irradiance. Apply the receiver diffuse BRDF exactly once here.
-    return ApplyGiMaterialOcclusion(
-        EvaluateGiDiffuseFromIrradiance(ddgi.irradiance, diffuseReflectance),
-        materialOcclusion);
 }
 
 struct HybridDiffuseGiResult
@@ -2195,76 +922,6 @@ vec3 SafeRadiance(vec3 value)
         return vec3(0.0);
 
     return clamp(value, vec3(0.0), vec3(64.0));
-}
-
-HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, DdgiSampleResult ddgi, float indirectAo, float environmentFallbackIntensity, uint debugViewMode)
-{
-    HybridDiffuseGiResult result;
-    float spatialCoverage = clamp(ddgi.coverage, 0.0, 1.0);
-    float supportCoverage = clamp(ddgi.supportCoverage, 0.0, 1.0);
-    float dataConfidence = clamp(ddgi.weight, 0.0, 1.0);
-    if (DdgiCacheGeneration() == 0u)
-    {
-        dataConfidence = 0.0;
-        supportCoverage = 0.0;
-    }
-    float visibilityConfidence = clamp(ddgi.visibility, 0.0, 1.0);
-    float visibilityTransport = clamp(ddgi.leakClamp, 0.0, 1.0);
-    float indirectAoWeight = clamp(indirectAo, 0.0, 1.0);
-    float thinWallLeakClampStrength = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 14u), 0.0, 1.0);
-    float thinWallProxyThickness = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 15u), 0.0, 1.0);
-    float leakStrength = clamp(thinWallLeakClampStrength * mix(0.35, 0.85, clamp(thinWallProxyThickness * 8.0, 0.0, 1.0)), 0.0, 0.85);
-    float leakAttenuation = clamp(mix(1.0, visibilityTransport, leakStrength), 0.05, 1.0);
-    bool confidenceBypass = DdgiDebugBypassConfidenceSuppression(debugViewMode);
-    float dataTrust = confidenceBypass && dataConfidence > 0.000001
-        ? 1.0
-        : DdgiSparseDataTrust(dataConfidence);
-    float supportTrust = supportCoverage * dataTrust;
-    float ddgiTrust = clamp(supportTrust * leakAttenuation, 0.0, 1.0);
-    float environmentTrust = clamp(1.0 - supportTrust, 0.0, 1.0);
-    vec3 debugSuppression = vec3(
-        supportCoverage,
-        leakAttenuation,
-        dataConfidence);
-    float cacheReadiness = DdgiCacheReadiness();
-    float warmupFallbackFloor = DdgiCacheValid()
-        ? (1.0 - cacheReadiness) * (1.0 - supportTrust)
-        : 1.0;
-    float effectiveEnvironmentFallbackIntensity = max(environmentFallbackIntensity, warmupFallbackFloor);
-    float environmentFallbackWeight = clamp(environmentTrust * effectiveEnvironmentFallbackIntensity, 0.0, 4.0);
-    vec3 ddgiLowFrequencyField = SafeRadiance(ddgiDiffuse * ddgiTrust);
-    vec3 environmentFallbackField = SafeRadiance(diffuseIbl * environmentFallbackWeight);
-    vec3 nearField = vec3(0.0);
-
-    if (dataTrust <= 0.000001)
-    {
-        result.diffuse = SafeRadiance(environmentFallbackField * indirectAoWeight);
-        result.ddgiCoverage = spatialCoverage;
-        result.environmentFallbackWeight = environmentFallbackWeight;
-        result.nearContactSuppression = 0.0;
-        result.effectiveDdgiWeight = 0.0;
-        result.suppressionMask = debugSuppression;
-        return result;
-    }
-
-    if (DdgiDebugBypassFinalSuppression(debugViewMode))
-    {
-        result.diffuse = SafeRadiance(ddgiDiffuse);
-        result.ddgiCoverage = spatialCoverage;
-        result.environmentFallbackWeight = 0.0;
-        result.nearContactSuppression = 0.0;
-        result.effectiveDdgiWeight = ddgiTrust;
-        result.suppressionMask = debugSuppression;
-        return result;
-    }
-
-    result.diffuse = SafeRadiance(ddgiLowFrequencyField + (environmentFallbackField + nearField) * indirectAoWeight);
-    result.ddgiCoverage = spatialCoverage;
-    result.environmentFallbackWeight = environmentFallbackWeight;
-    result.nearContactSuppression = 1.0 - leakAttenuation;
-    result.effectiveDdgiWeight = ddgiTrust;
-    result.suppressionMask = debugSuppression;
-    return result;
 }
 
 uint SelectShadowCascade(float cameraDistance, vec4 splits, uint cascadeCount)
@@ -3244,41 +1901,44 @@ vec3 EvaluateReflectionSpecular(
     bool blendingEnabled = (header.Flags & REFLECTION_PROBE_BLENDING_ENABLED_FLAG) != 0u;
     int maxAcceptedProbes = max(header.MaxProbesPerPixel, 1);
 
-    for (int probeIndex = 0; probeIndex < header.ProbeCount && acceptedProbeCount < maxAcceptedProbes; probeIndex++)
+    if (!ForwardReflectionCaptureEnabled())
     {
-        GPUReflectionProbe probe = ReadReflectionProbe(uint(probeIndex));
-        // Array layers are recyclable. Only probe captures that have completed both rendering
-        // and prefiltering are allowed to contribute local radiance.
-        if (probe.CubemapArrayIndex < 0 ||
-            (probe.Flags & REFLECTION_PROBE_CAPTURED_RADIANCE_AVAILABLE_FLAG) == 0)
-            continue;
-        float weight = ProbeInfluenceWeight(probe, worldPosition);
-        if (weight <= 0.0001)
-            continue;
-
-        if (!blendingEnabled)
-            weight = 1.0;
-
-        vec3 probeDirection = ProjectProbeDirection(header, probe, worldPosition, reflectionDirection);
-        vec3 probeColor = textureLod(
-            BindlessCubeArrayTextures[nonuniformEXT(header.ProbeCubemapArrayTextureIndex)],
-            vec4(probeDirection, float(probe.CubemapArrayIndex)),
-            lod).rgb * max(probe.BlendParams.y, 0.0);
-
-        if (acceptedProbeCount == 0)
+        for (int probeIndex = 0; probeIndex < header.ProbeCount && acceptedProbeCount < maxAcceptedProbes; probeIndex++)
         {
-            selectedProbeIndex = probeIndex;
-            projectedDirection = probeDirection;
+            GPUReflectionProbe probe = ReadReflectionProbe(uint(probeIndex));
+            // Array layers are recyclable. Only probe captures that have completed both rendering
+            // and prefiltering are allowed to contribute local radiance.
+            if (probe.CubemapArrayIndex < 0 ||
+                (probe.Flags & REFLECTION_PROBE_CAPTURED_RADIANCE_AVAILABLE_FLAG) == 0)
+                continue;
+            float weight = ProbeInfluenceWeight(probe, worldPosition);
+            if (weight <= 0.0001)
+                continue;
+
+            if (!blendingEnabled)
+                weight = 1.0;
+
+            vec3 probeDirection = ProjectProbeDirection(header, probe, worldPosition, reflectionDirection);
+            vec3 probeColor = textureLod(
+                BindlessCubeArrayTextures[nonuniformEXT(header.ProbeCubemapArrayTextureIndex)],
+                vec4(probeDirection, float(probe.CubemapArrayIndex)),
+                lod).rgb * max(probe.BlendParams.y, 0.0);
+
+            if (acceptedProbeCount == 0)
+            {
+                selectedProbeIndex = probeIndex;
+                projectedDirection = probeDirection;
+            }
+            if (acceptedProbeCount < 3)
+                firstWeightColor[acceptedProbeCount] = weight;
+
+            localReflection += probeColor * weight;
+            totalWeight += weight;
+            acceptedProbeCount++;
+
+            if (!blendingEnabled)
+                break;
         }
-        if (acceptedProbeCount < 3)
-            firstWeightColor[acceptedProbeCount] = weight;
-
-        localReflection += probeColor * weight;
-        totalWeight += weight;
-        acceptedProbeCount++;
-
-        if (!blendingEnabled)
-            break;
     }
 
     float localWeight = clamp(totalWeight, 0.0, 1.0);
@@ -3668,27 +2328,6 @@ void WriteDdgiDebugColor(uint view, vec3 color)
         forwardDebugOutputAlpha));
 }
 
-void WriteSsgiTraceSource(vec4 color)
-{
-#if !FORWARD_WEIGHTED_OIT && FORWARD_SSGI_TRACE_SOURCE_OUTPUT
-    outSsgiTraceSource = color;
-#endif
-}
-
-void WriteGiCompositionBaseline(vec3 diffuseIndirect, float ddgiOwnership)
-{
-#if !FORWARD_WEIGHTED_OIT && FORWARD_SSGI_TRACE_SOURCE_OUTPUT
-    // Alpha remains the exact scalar DDGI/probe ownership consumed by hybrid
-    // composition. The target has no spare channel for exact selected-cascade
-    // or far-field ray-hit provenance, so the later transport-source view
-    // combines this value with SSGI support and configured fallback capability
-    // and explicitly presents capability/ownership rather than fake provenance.
-    outGiCompositionBaseline = vec4(
-        clamp(diffuseIndirect, vec3(0.0), vec3(GI_MATERIAL_MAXIMUM_FINITE_RADIANCE)),
-        clamp(ddgiOwnership, 0.0, 1.0));
-#endif
-}
-
 void WriteMaterialTransportProvenance(uint sourcePath)
 {
 #if !FORWARD_WEIGHTED_OIT && NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
@@ -3706,7 +2345,7 @@ uint ResolveSimpleDdgiMaterialTransportProvenance(
         return MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN;
 
     uint sourceVolumeIndex = gather.selectedVolume;
-    if (gather.secondaryVolume != SIMPLE_DDGI_GATHER_TILE_INVALID_VOLUME_INDEX &&
+    if (gather.secondaryVolume != SIMPLE_DDGI_INVALID_VOLUME_INDEX &&
         gather.secondaryContributionWeight > gather.primaryContributionWeight)
     {
         sourceVolumeIndex = gather.secondaryVolume;
@@ -3731,8 +2370,6 @@ void main()
 {
     uint debugViewMode = ForwardDebugViewMode();
     uint ambientOcclusionDebugView = ForwardAmbientOcclusionDebugView();
-    WriteSsgiTraceSource(vec4(0.0, 0.0, 0.0, 1.0));
-    WriteGiCompositionBaseline(vec3(0.0), 0.0);
     WriteMaterialTransportProvenance(MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN);
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
     bool geometryDecal = GiMaterialHasFlag(
@@ -4432,19 +3069,6 @@ void main()
         }
     }
 
-    // Keep diffuse-source radiance and emission distinct until this transport
-    // boundary. SSGI estimates the same diffuse path space as DDGI, so visible
-    // emission must be available to both estimators; aggregate direct specular
-    // remains exclusively owned by the reflection path.
-    vec3 ssgiDiffuseSource = max(directDiffuseSource, vec3(0.0));
-    vec3 ssgiEmissionSource = max(emissive, vec3(0.0));
-    WriteSsgiTraceSource(vec4(
-        clamp(
-            ssgiDiffuseSource + ssgiEmissionSource,
-            vec3(0.0),
-            vec3(GI_MATERIAL_MAXIMUM_FINITE_RADIANCE)),
-        1.0));
-
     if (debugViewMode == MATERIAL_CAPTURE_LINEAR_DIRECT_DIFFUSE)
     {
         WriteForwardColor(vec4(
@@ -4495,8 +3119,8 @@ void main()
     DdgiSampleResult ddgiSample = EmptyDdgiSampleResult();
     vec3 simpleDdgiContributingVolumeColor = vec3(0.0);
     vec3 simpleDdgiSourceCacheIrradiance = vec3(0.0);
-    uint simpleDdgiPrimaryVolume = SIMPLE_DDGI_GATHER_TILE_INVALID_VOLUME_INDEX;
-    uint simpleDdgiSecondaryVolume = SIMPLE_DDGI_GATHER_TILE_INVALID_VOLUME_INDEX;
+    uint simpleDdgiPrimaryVolume = SIMPLE_DDGI_INVALID_VOLUME_INDEX;
+    uint simpleDdgiSecondaryVolume = SIMPLE_DDGI_INVALID_VOLUME_INDEX;
     float simpleDdgiSecondVolumeUsed = 0.0;
     float simpleDdgiPrimaryContributionWeight = 0.0;
     float simpleDdgiSecondaryContributionWeight = 0.0;
@@ -4670,12 +3294,14 @@ void main()
             diffuseIbl,
             finalDiffuseIndirect);
     }
-    else if (simpleDdgiConfigured)
+    else
     {
-        // Never sample a stale simple atlas when the ray-query-backed structured
-        // path is unavailable.  The simple manager owns storage incompatible with
-        // legacy DDGI, so environment IBL is the safe fallback until updates resume.
-        fallbackWeight = simpleDdgiParams.environmentFallbackIntensity;
+        // Simple DDGI is the only dynamic-GI backend. During startup, recovery,
+        // or unsupported ray-query frames, use its configured environment
+        // fallback instead of sampling a second probe implementation.
+        fallbackWeight = simpleDdgiConfigured
+            ? simpleDdgiParams.environmentFallbackIntensity
+            : 1.0;
         finalDiffuseIndirect = diffuseIbl * fallbackWeight * indirectAo;
         hybridDebugDiffuse = finalDiffuseIndirect;
         hybridSuppressionMask = vec3(0.0);
@@ -4692,68 +3318,23 @@ void main()
             vec3(0.0),
             diffuseReflectance,
             geometryDecal);
-        AccumulateDdgiInvestigationForwardDiagnostics(
-            true,
-            simpleDdgiParams,
-            fragWorldPosition,
-            ddgiNormal,
-            viewDirection,
-            vec3(0.0),
-            0.0,
-            0.0,
-            vec3(0.0),
-            diffuseIbl,
-            finalDiffuseIndirect);
-    }
-    else
-    {
-        ddgiSample = SampleDdgiIrradiance(fragWorldPosition, ddgiNormal, ddgiIndirectAo);
-        AccumulateDdgiVisibilityMomentDiagnostics(
-            ddgiSample.visibilityMomentMean,
-            ddgiSample.visibilityMomentVariance,
-            ddgiSample.visibilityProbeDistance,
-            ddgiSample.visibilityMaxRayDistance,
-            ddgiSample.visibility,
-            ddgiSample.irradianceAtlasConfidence);
-        ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, diffuseReflectance, ambientOcclusion);
-        float ddgiEnvironmentFallbackIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 13u), 0.0, 4.0);
-        HybridDiffuseGiResult hybridDiffuse = ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo, ddgiEnvironmentFallbackIntensity, debugViewMode);
-        AccumulateDdgiForwardEstimateDiagnostics(
-            hybridDiffuse,
-            ddgiSample,
-            ddgiDiffuse,
-            diffuseReflectance,
-            geometryDecal);
-        ddgiCoverage = hybridDiffuse.ddgiCoverage;
-        fallbackWeight = hybridDiffuse.environmentFallbackWeight;
-        nearContactSuppression = hybridDiffuse.nearContactSuppression;
-        finalDiffuseIndirect = hybridDiffuse.diffuse;
-        finalDdgiDiffuse = ddgiDiffuse * hybridDiffuse.effectiveDdgiWeight;
-        hybridDebugDiffuse = hybridDiffuse.diffuse;
-        hybridSuppressionMask = hybridDiffuse.suppressionMask;
-        hybridEffectiveDdgiWeight = hybridDiffuse.effectiveDdgiWeight;
-        if (hybridEffectiveDdgiWeight > 0.000001)
-            materialTransportProvenance = ddgiSample.transportSourcePath;
-        AccumulateDdgiInvestigationForwardDiagnostics(
-            false,
-            simpleDdgiParams,
-            fragWorldPosition,
-            ddgiNormal,
-            viewDirection,
-            vec3(0.0),
-            0.0,
-            0.0,
-            ddgiDiffuse,
-            diffuseIbl,
-            finalDiffuseIndirect);
+        if (simpleDdgiConfigured)
+        {
+            AccumulateDdgiInvestigationForwardDiagnostics(
+                true,
+                simpleDdgiParams,
+                fragWorldPosition,
+                ddgiNormal,
+                viewDirection,
+                vec3(0.0),
+                0.0,
+                0.0,
+                vec3(0.0),
+                diffuseIbl,
+                finalDiffuseIndirect);
+        }
     }
 
-    // Record exactly the diffuse-indirect term already present in SceneColor.
-    // The later composite adds w * (Lssgi - Lbaseline), making the resulting
-    // diffuse term a bounded convex estimate instead of a second positive-only
-    // lighting contribution. The alpha channel exposes DDGI ownership; the
-    // environment fallback owns its complement.
-    WriteGiCompositionBaseline(finalDiffuseIndirect, hybridEffectiveDdgiWeight);
     WriteMaterialTransportProvenance(materialTransportProvenance);
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT)
     {
@@ -4762,41 +3343,6 @@ void main()
     }
 
     vec2 giDebugUv = clamp(gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0)), vec2(0.0), vec2(1.0));
-    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_SSGI_RAW)
-    {
-        vec4 ssgiRaw = texture(BindlessTextures[nonuniformEXT(SSGI_RAW_TEXTURE_INDEX)], giDebugUv);
-        WriteForwardColor(vec4(clamp(ssgiRaw.rgb, vec3(0.0), vec3(16.0)), 1.0));
-        return;
-    }
-
-    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_SSGI_FILTERED)
-    {
-        vec4 ssgiFiltered = texture(BindlessTextures[nonuniformEXT(SSGI_FILTERED_TEXTURE_INDEX)], giDebugUv);
-        WriteForwardColor(vec4(clamp(ssgiFiltered.rgb, vec3(0.0), vec3(16.0)), 1.0));
-        return;
-    }
-
-    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_SSGI_HISTORY)
-    {
-        vec4 ssgiHistory = texture(BindlessTextures[nonuniformEXT(SSGI_HISTORY_TEXTURE_INDEX)], giDebugUv);
-        WriteForwardColor(vec4(clamp(ssgiHistory.rgb, vec3(0.0), vec3(16.0)), 1.0));
-        return;
-    }
-
-    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_SSGI_RAY_HIT_MASK)
-    {
-        float hitMask = texture(BindlessTextures[nonuniformEXT(SSGI_RAW_TEXTURE_INDEX)], giDebugUv).a;
-        WriteForwardColor(vec4(vec3(clamp(hitMask, 0.0, 1.0)), 1.0));
-        return;
-    }
-
-    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_SSGI_HISTORY_REJECTION)
-    {
-        vec4 rejection = texture(BindlessTextures[nonuniformEXT(SSGI_FILTERED_TEXTURE_INDEX)], giDebugUv);
-        WriteForwardColor(vec4(clamp(rejection.rgb, vec3(0.0), vec3(1.0)), 1.0));
-        return;
-    }
-
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_OCCUPANCY_SLICE)
     {
         FarFieldClipmapParams farField = ReadFarFieldClipmapParams(uint(FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX));
@@ -5114,19 +3660,12 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT)
     {
-        if (simpleDdgiActive && globalIlluminationEnabled)
-        {
-            WriteDdgiDebugColor(
-                GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT,
-                vec3(clamp(simpleDdgiSecondaryContributionWeight, 0.0, 1.0)));
-            return;
-        }
-
-        DdgiGatherTileInfo tile;
-        if (!ReadDdgiGatherTile(tile))
-            WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT, vec3(1.0, 0.0, 1.0));
-        else
-            WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT, vec3(clamp(tile.blendWeights.y, 0.0, 1.0)));
+        float blendWeight = simpleDdgiActive && globalIlluminationEnabled
+            ? clamp(simpleDdgiSecondaryContributionWeight, 0.0, 1.0)
+            : 0.0;
+        WriteDdgiDebugColor(
+            GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT,
+            vec3(blendWeight));
         return;
     }
 
@@ -5135,93 +3674,69 @@ void main()
         debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP_BLEND_WEIGHT ||
         debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_FALLBACK)
     {
-        if (simpleDdgiActive && globalIlluminationEnabled)
+        if (!(simpleDdgiActive && globalIlluminationEnabled))
         {
-            bool primaryValid = simpleDdgiPrimaryContributionWeight > 0.000001 &&
-                simpleDdgiPrimaryVolume < simpleDdgiParams.volumeCount;
-            bool secondaryValid = simpleDdgiSecondaryContributionWeight > 0.000001 &&
-                simpleDdgiSecondVolumeUsed > 0.5 &&
-                simpleDdgiSecondaryVolume < simpleDdgiParams.volumeCount;
-            SimpleDdgiVolume primaryVolume = ReadSimpleDdgiVolume(
-                uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX),
-                primaryValid ? simpleDdgiPrimaryVolume : 0u);
-            SimpleDdgiVolume secondaryVolume = ReadSimpleDdgiVolume(
-                uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX),
-                secondaryValid ? simpleDdgiSecondaryVolume : 0u);
-
-            if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_LOCAL_VOLUME)
-            {
-                bool primaryAuthored = primaryValid && primaryVolume.kind == SIMPLE_DDGI_VOLUME_KIND_AUTHORED;
-                bool secondaryAuthored = secondaryValid && secondaryVolume.kind == SIMPLE_DDGI_VOLUME_KIND_AUTHORED;
-                uint authoredIndex = primaryAuthored
-                    ? simpleDdgiPrimaryVolume
-                    : (secondaryAuthored ? simpleDdgiSecondaryVolume : SIMPLE_DDGI_GATHER_TILE_INVALID_VOLUME_INDEX);
-                WriteDdgiDebugColor(
-                    GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_LOCAL_VOLUME,
-                    authoredIndex != SIMPLE_DDGI_GATHER_TILE_INVALID_VOLUME_INDEX
-                        ? MeshletDebugColor(authoredIndex + 1u)
-                        : vec3(0.0));
-                return;
-            }
-
-            bool primaryRing = primaryValid && primaryVolume.kind == SIMPLE_DDGI_VOLUME_KIND_RING;
-            bool secondaryRing = secondaryValid && secondaryVolume.kind == SIMPLE_DDGI_VOLUME_KIND_RING;
-            if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP)
-            {
-                uint ringIndex = primaryRing
-                    ? simpleDdgiPrimaryVolume
-                    : (secondaryRing ? simpleDdgiSecondaryVolume : SIMPLE_DDGI_GATHER_TILE_INVALID_VOLUME_INDEX);
-                WriteDdgiDebugColor(
-                    GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP,
-                    ringIndex != SIMPLE_DDGI_GATHER_TILE_INVALID_VOLUME_INDEX
-                        ? MeshletDebugColor(ringIndex + 1u)
-                        : vec3(0.0));
-                return;
-            }
-
-            if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP_BLEND_WEIGHT)
-            {
-                float ringWeight =
-                    (primaryRing ? simpleDdgiPrimaryContributionWeight : 0.0) +
-                    (secondaryRing ? simpleDdgiSecondaryContributionWeight : 0.0);
-                WriteDdgiDebugColor(
-                    GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP_BLEND_WEIGHT,
-                    vec3(clamp(ringWeight, 0.0, 1.0)));
-                return;
-            }
-
-            float fallback = clamp(simpleDdgiSecondVolumeUsed, 0.0, 1.0);
-            WriteDdgiDebugColor(
-                GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_FALLBACK,
-                vec3(fallback, 1.0 - fallback, 0.0));
+            WriteDdgiDebugColor(debugViewMode, vec3(0.0));
             return;
         }
 
-        DdgiGatherTileInfo gatherTile;
-        bool gatherValid = ReadDdgiGatherTile(gatherTile);
+        bool primaryValid = simpleDdgiPrimaryContributionWeight > 0.000001 &&
+            simpleDdgiPrimaryVolume < simpleDdgiParams.volumeCount;
+        bool secondaryValid = simpleDdgiSecondaryContributionWeight > 0.000001 &&
+            simpleDdgiSecondVolumeUsed > 0.5 &&
+            simpleDdgiSecondaryVolume < simpleDdgiParams.volumeCount;
+        SimpleDdgiVolume primaryVolume = ReadSimpleDdgiVolume(
+            uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX),
+            primaryValid ? simpleDdgiPrimaryVolume : 0u);
+        SimpleDdgiVolume secondaryVolume = ReadSimpleDdgiVolume(
+            uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX),
+            secondaryValid ? simpleDdgiSecondaryVolume : 0u);
+
         if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_LOCAL_VOLUME)
         {
-            bool hasLocal = gatherValid && (gatherTile.flags & DDGI_GATHER_TILE_LOCAL_VOLUME_VALID_FLAG) != 0u;
-            WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_LOCAL_VOLUME, hasLocal ? MeshletDebugColor(gatherTile.localVolumeIndex + 1u) : vec3(0.0));
+            bool primaryAuthored = primaryValid && primaryVolume.kind == SIMPLE_DDGI_VOLUME_KIND_AUTHORED;
+            bool secondaryAuthored = secondaryValid && secondaryVolume.kind == SIMPLE_DDGI_VOLUME_KIND_AUTHORED;
+            uint authoredIndex = primaryAuthored
+                ? simpleDdgiPrimaryVolume
+                : (secondaryAuthored ? simpleDdgiSecondaryVolume : SIMPLE_DDGI_INVALID_VOLUME_INDEX);
+            WriteDdgiDebugColor(
+                GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_LOCAL_VOLUME,
+                authoredIndex != SIMPLE_DDGI_INVALID_VOLUME_INDEX
+                    ? MeshletDebugColor(authoredIndex + 1u)
+                    : vec3(0.0));
             return;
         }
 
+        bool primaryRing = primaryValid && primaryVolume.kind == SIMPLE_DDGI_VOLUME_KIND_RING;
+        bool secondaryRing = secondaryValid && secondaryVolume.kind == SIMPLE_DDGI_VOLUME_KIND_RING;
         if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP)
         {
-            bool hasClipmap = gatherValid && (gatherTile.flags & DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VALID_FLAG) != 0u;
-            WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP, hasClipmap ? MeshletDebugColor(gatherTile.primaryClipmapVolumeIndex + 1u) : vec3(0.0));
+            uint ringIndex = primaryRing
+                ? simpleDdgiPrimaryVolume
+                : (secondaryRing ? simpleDdgiSecondaryVolume : SIMPLE_DDGI_INVALID_VOLUME_INDEX);
+            WriteDdgiDebugColor(
+                GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP,
+                ringIndex != SIMPLE_DDGI_INVALID_VOLUME_INDEX
+                    ? MeshletDebugColor(ringIndex + 1u)
+                    : vec3(0.0));
             return;
         }
 
         if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP_BLEND_WEIGHT)
         {
-            float blendWeight = gatherValid ? clamp(gatherTile.blendWeights.z, 0.0, 1.0) : 0.0;
-            WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP_BLEND_WEIGHT, vec3(blendWeight));
+            float ringWeight =
+                (primaryRing ? simpleDdgiPrimaryContributionWeight : 0.0) +
+                (secondaryRing ? simpleDdgiSecondaryContributionWeight : 0.0);
+            WriteDdgiDebugColor(
+                GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP_BLEND_WEIGHT,
+                vec3(clamp(ringWeight, 0.0, 1.0)));
             return;
         }
 
-        float fallback = (!gatherValid || (gatherTile.flags & DDGI_GATHER_TILE_FALLBACK_FLAG) != 0u) ? 1.0 : 0.0;
-        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_FALLBACK, vec3(fallback, 1.0 - fallback, 0.0));
+        float fallback = clamp(simpleDdgiSecondVolumeUsed, 0.0, 1.0);
+        WriteDdgiDebugColor(
+            GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_FALLBACK,
+            vec3(fallback, 1.0 - fallback, 0.0));
         return;
     }
 

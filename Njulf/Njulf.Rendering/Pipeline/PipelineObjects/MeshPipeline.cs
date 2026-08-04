@@ -31,9 +31,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _transparentForwardPipeline;
         private VkPipeline _weightedOitTransparentPipeline;
         private VkPipeline _motionVectorPipeline;
-        private VkPipeline _sceneSurfacePipeline;
-        private VkPipeline _sceneSurfaceSimplePipeline;
-        private VkPipeline _sceneSurfaceCompactedPipeline;
         private VkPipeline _sceneOpaqueCompactionPipeline;
         private VkPipeline _forwardVisibilityCompactionPipeline;
         private PipelineLayout _layout;
@@ -82,9 +79,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline TransparentForwardPipeline => _transparentForwardPipeline;
         public VkPipeline WeightedOitTransparentPipeline => _weightedOitTransparentPipeline;
         public VkPipeline MotionVectorPipeline => _motionVectorPipeline;
-        public VkPipeline SceneSurfacePipeline => _sceneSurfacePipeline;
-        public VkPipeline SceneSurfaceSimplePipeline => _sceneSurfaceSimplePipeline;
-        public VkPipeline SceneSurfaceCompactedPipeline => _sceneSurfaceCompactedPipeline;
         public VkPipeline SceneOpaqueCompactionPipeline => _sceneOpaqueCompactionPipeline;
         public VkPipeline ForwardVisibilityCompactionPipeline => _forwardVisibilityCompactionPipeline;
         public VkPipeline Pipeline => _forwardPipeline;
@@ -92,7 +86,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public PipelineLayout SceneSubmissionComputeLayout => _sceneSubmissionComputeLayout;
         public RenderSettings Settings { get; }
         public bool GpuMeshletCountersEnabled { get; private set; }
-        public bool SsgiColorAttachmentsEnabled { get; private set; }
         public bool MaterialTransportProvenanceAttachmentEnabled { get; private set; }
 
         public void Recreate(Format colorFormat, Format depthFormat)
@@ -212,8 +205,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             string forwardTaskShaderName = GpuMeshletCountersEnabled
                 ? "forward_diagnostics.task.spv"
                 : "forward.task.spv";
-            bool ssgiEnabled = Settings.GlobalIllumination.EffectiveUseSsgi;
-            SsgiColorAttachmentsEnabled = ssgiEnabled;
             bool materialTransportProvenanceEnabled =
                 Settings.GlobalIllumination.DebugView ==
                 GlobalIlluminationDebugView.MaterialTransportHitProvenance;
@@ -221,16 +212,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 materialTransportProvenanceEnabled;
             string provenanceSuffix =
                 materialTransportProvenanceEnabled ? "_provenance" : string.Empty;
-            string forwardOpaqueFragmentShaderName = ssgiEnabled
-                ? $"forward_opaque{provenanceSuffix}.frag.spv"
-                : $"forward_opaque_ddgi{provenanceSuffix}.frag.spv";
-            string forwardOpaqueSimpleFragmentShaderName = ssgiEnabled
-                ? $"forward_opaque_simple{provenanceSuffix}.frag.spv"
-                : $"forward_opaque_simple_ddgi{provenanceSuffix}.frag.spv";
-            string forwardOpaqueSimpleFullInputFragmentShaderName = ssgiEnabled
-                ? $"forward_opaque_simple_full_input{provenanceSuffix}.frag.spv"
-                : $"forward_opaque_simple_full_input_ddgi{provenanceSuffix}.frag.spv";
-            Format? forwardSecondaryColorFormat = ssgiEnabled ? colorFormat : null;
+            string forwardOpaqueFragmentShaderName =
+                $"forward_opaque_ddgi{provenanceSuffix}.frag.spv";
+            string forwardOpaqueSimpleFragmentShaderName =
+                $"forward_opaque_simple_ddgi{provenanceSuffix}.frag.spv";
+            string forwardOpaqueSimpleFullInputFragmentShaderName =
+                $"forward_opaque_simple_full_input_ddgi{provenanceSuffix}.frag.spv";
             Format? materialTransportProvenanceFormat =
                 materialTransportProvenanceEnabled
                     ? RenderTargetManager.MaterialTransportProvenanceFormat
@@ -299,7 +286,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false,
-                secondaryColorFormat: forwardSecondaryColorFormat,
+                secondaryColorFormat: null,
                 materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_forwardPipeline.Handle, ObjectType.Pipeline, "Opaque Forward Plus Mesh Pipeline");
 
@@ -314,7 +301,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false,
-                secondaryColorFormat: forwardSecondaryColorFormat,
+                secondaryColorFormat: null,
                 materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_forwardCompactedPipeline.Handle, ObjectType.Pipeline, "Compacted Opaque Forward Plus Mesh Pipeline");
 
@@ -329,7 +316,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false,
-                secondaryColorFormat: forwardSecondaryColorFormat,
+                secondaryColorFormat: null,
                 materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_forwardSimplePipeline.Handle, ObjectType.Pipeline, "Simple Opaque Forward Plus Mesh Pipeline");
 
@@ -344,7 +331,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false,
-                secondaryColorFormat: forwardSecondaryColorFormat,
+                secondaryColorFormat: null,
                 materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_forwardSimpleFullInputPipeline.Handle, ObjectType.Pipeline, "Simple Full-Input Opaque Forward Plus Mesh Pipeline");
 
@@ -359,7 +346,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false,
-                secondaryColorFormat: forwardSecondaryColorFormat,
+                secondaryColorFormat: null,
                 materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_forwardCompactedSimplePipeline.Handle, ObjectType.Pipeline, "Compacted Simple Opaque Forward Plus Mesh Pipeline");
 
@@ -374,7 +361,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false,
-                secondaryColorFormat: forwardSecondaryColorFormat,
+                secondaryColorFormat: null,
                 materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_forwardCompactedSimpleFullInputPipeline.Handle, ObjectType.Pipeline, "Compacted Simple Full-Input Opaque Forward Plus Mesh Pipeline");
 
@@ -413,26 +400,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthBiasEnable: false);
             _context.SetDebugName(_motionVectorPipeline.Handle, ObjectType.Pipeline, "Motion Vector Mesh Pipeline");
 
-            _sceneSurfacePipeline = CreateSceneSurfaceGraphicsPipeline(
-                forwardTaskShaderName,
-                "forward.mesh.spv",
-                "scene_surface.frag.spv",
-                depthFormat);
-            _context.SetDebugName(_sceneSurfacePipeline.Handle, ObjectType.Pipeline, "Scene Surface Mesh Pipeline");
-
-            _sceneSurfaceSimplePipeline = CreateSceneSurfaceGraphicsPipeline(
-                forwardTaskShaderName,
-                "forward_simple.mesh.spv",
-                "scene_surface_simple.frag.spv",
-                depthFormat);
-            _context.SetDebugName(_sceneSurfaceSimplePipeline.Handle, ObjectType.Pipeline, "Simple Scene Surface Mesh Pipeline");
-
-            _sceneSurfaceCompactedPipeline = CreateSceneSurfaceGraphicsPipeline(
-                taskShaderName: null,
-                "forward_compacted.mesh.spv",
-                "scene_surface.frag.spv",
-                depthFormat);
-            _context.SetDebugName(_sceneSurfaceCompactedPipeline.Handle, ObjectType.Pipeline, "Compacted Scene Surface Mesh Pipeline");
         }
 
         private void CreateComputePipelines()
@@ -579,38 +546,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             }
         }
 
-        private VkPipeline CreateSceneSurfaceGraphicsPipeline(
-            string? taskShaderName,
-            string meshShaderName,
-            string fragmentShaderName,
-            Format depthFormat)
-        {
-            ShaderModule taskModule = new ShaderModule();
-            ShaderModule meshModule = new ShaderModule();
-            ShaderModule fragmentModule = new ShaderModule();
-
-            try
-            {
-                if (taskShaderName != null)
-                {
-                    taskModule = ShaderModuleLoader.Load(_context, taskShaderName);
-                    _context.SetDebugName(taskModule.Handle, ObjectType.ShaderModule, taskShaderName);
-                }
-                meshModule = ShaderModuleLoader.Load(_context, meshShaderName);
-                _context.SetDebugName(meshModule.Handle, ObjectType.ShaderModule, meshShaderName);
-                fragmentModule = ShaderModuleLoader.Load(_context, fragmentShaderName);
-                _context.SetDebugName(fragmentModule.Handle, ObjectType.ShaderModule, fragmentShaderName);
-
-                return CreateSceneSurfaceGraphicsPipeline(taskModule, meshModule, fragmentModule, depthFormat);
-            }
-            finally
-            {
-                DestroyShaderModule(fragmentModule);
-                DestroyShaderModule(meshModule);
-                DestroyShaderModule(taskModule);
-            }
-        }
-
         private VkPipeline CreateGraphicsPipeline(
             ShaderModule taskModule,
             ShaderModule meshModule,
@@ -700,13 +635,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             uint colorAttachmentCount =
                 ForwardDynamicRenderingContract.ResolveColorAttachmentCount(
                     hasColorAttachment,
-                    secondaryColorFormat.HasValue,
                     materialTransportProvenanceFormat.HasValue);
-            var colorBlendAttachments = stackalloc PipelineColorBlendAttachmentState[4];
+            var colorBlendAttachments = stackalloc PipelineColorBlendAttachmentState[2];
             colorBlendAttachments[0] = colorBlendAttachment;
             colorBlendAttachments[1] = colorBlendAttachment;
-            colorBlendAttachments[2] = colorBlendAttachment;
-            colorBlendAttachments[3] = colorBlendAttachment;
 
             var colorBlendInfo = new PipelineColorBlendStateCreateInfo
             {
@@ -728,17 +660,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 PDynamicStates = dynamicStates
             };
 
-            var renderingColorFormats = stackalloc Format[4];
+            var renderingColorFormats = stackalloc Format[2];
             renderingColorFormats[0] = colorFormat;
             renderingColorFormats[1] =
                 secondaryColorFormat ??
                 materialTransportProvenanceFormat ??
                 colorFormat;
-            renderingColorFormats[2] = secondaryColorFormat.HasValue
-                ? RenderTargetManager.GiFinalDiffuseFormat
-                : colorFormat;
-            renderingColorFormats[3] =
-                materialTransportProvenanceFormat ?? colorFormat;
             var renderingInfo = new PipelineRenderingCreateInfo
             {
                 SType = StructureType.PipelineRenderingCreateInfo,
@@ -943,153 +870,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             return pipeline;
         }
 
-        private VkPipeline CreateSceneSurfaceGraphicsPipeline(
-            ShaderModule taskModule,
-            ShaderModule meshModule,
-            ShaderModule fragmentModule,
-            Format depthFormat)
-        {
-            var stages = stackalloc PipelineShaderStageCreateInfo[3];
-            int stageCount = 0;
-            if (taskModule.Handle != 0)
-                stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
-            stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.MeshBitExt, meshModule);
-            stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.FragmentBit, fragmentModule);
-
-            var vertexInputInfo = new PipelineVertexInputStateCreateInfo
-            {
-                SType = StructureType.PipelineVertexInputStateCreateInfo
-            };
-
-            var inputAssemblyInfo = new PipelineInputAssemblyStateCreateInfo
-            {
-                SType = StructureType.PipelineInputAssemblyStateCreateInfo,
-                Topology = PrimitiveTopology.TriangleList
-            };
-
-            var viewportInfo = new PipelineViewportStateCreateInfo
-            {
-                SType = StructureType.PipelineViewportStateCreateInfo,
-                ViewportCount = 1,
-                ScissorCount = 1
-            };
-
-            var rasterInfo = new PipelineRasterizationStateCreateInfo
-            {
-                SType = StructureType.PipelineRasterizationStateCreateInfo,
-                DepthClampEnable = false,
-                RasterizerDiscardEnable = false,
-                PolygonMode = PolygonMode.Fill,
-                CullMode = CullModeFlags.None,
-                FrontFace = FrontFace.CounterClockwise,
-                DepthBiasEnable = false,
-                LineWidth = 1.0f
-            };
-
-            var multisampleInfo = new PipelineMultisampleStateCreateInfo
-            {
-                SType = StructureType.PipelineMultisampleStateCreateInfo,
-                RasterizationSamples = SampleCountFlags.Count1Bit
-            };
-
-            var depthStencilInfo = new PipelineDepthStencilStateCreateInfo
-            {
-                SType = StructureType.PipelineDepthStencilStateCreateInfo,
-                DepthTestEnable = true,
-                DepthWriteEnable = false,
-                DepthCompareOp = CompareOp.GreaterOrEqual,
-                DepthBoundsTestEnable = false,
-                StencilTestEnable = false,
-                MinDepthBounds = 0.0f,
-                MaxDepthBounds = 1.0f
-            };
-
-            var colorBlendAttachments = stackalloc PipelineColorBlendAttachmentState[2];
-            for (int i = 0; i < 2; i++)
-            {
-                colorBlendAttachments[i] = new PipelineColorBlendAttachmentState
-                {
-                    BlendEnable = false,
-                    SrcColorBlendFactor = BlendFactor.One,
-                    DstColorBlendFactor = BlendFactor.Zero,
-                    ColorBlendOp = BlendOp.Add,
-                    SrcAlphaBlendFactor = BlendFactor.One,
-                    DstAlphaBlendFactor = BlendFactor.Zero,
-                    AlphaBlendOp = BlendOp.Add,
-                    ColorWriteMask = ColorComponentFlags.RBit |
-                                     ColorComponentFlags.GBit |
-                                     ColorComponentFlags.BBit |
-                                     ColorComponentFlags.ABit
-                };
-            }
-
-            var colorBlendInfo = new PipelineColorBlendStateCreateInfo
-            {
-                SType = StructureType.PipelineColorBlendStateCreateInfo,
-                LogicOpEnable = false,
-                AttachmentCount = 2,
-                PAttachments = colorBlendAttachments
-            };
-
-            var dynamicStates = stackalloc DynamicState[3];
-            dynamicStates[0] = DynamicState.Viewport;
-            dynamicStates[1] = DynamicState.Scissor;
-            dynamicStates[2] = DynamicState.DepthBias;
-
-            var dynamicInfo = new PipelineDynamicStateCreateInfo
-            {
-                SType = StructureType.PipelineDynamicStateCreateInfo,
-                DynamicStateCount = 3,
-                PDynamicStates = dynamicStates
-            };
-
-            var colorFormats = stackalloc Format[2];
-            colorFormats[0] = RenderTargetManager.SceneNormalFormat;
-            colorFormats[1] = RenderTargetManager.SceneMaterialFormat;
-            var renderingInfo = new PipelineRenderingCreateInfo
-            {
-                SType = StructureType.PipelineRenderingCreateInfo,
-                ColorAttachmentCount = 2,
-                PColorAttachmentFormats = colorFormats,
-                DepthAttachmentFormat = depthFormat,
-                StencilAttachmentFormat = Format.Undefined
-            };
-
-            var pipelineInfo = new GraphicsPipelineCreateInfo
-            {
-                SType = StructureType.GraphicsPipelineCreateInfo,
-                PNext = &renderingInfo,
-                StageCount = checked((uint)stageCount),
-                PStages = stages,
-                PVertexInputState = &vertexInputInfo,
-                PInputAssemblyState = &inputAssemblyInfo,
-                PViewportState = &viewportInfo,
-                PRasterizationState = &rasterInfo,
-                PMultisampleState = &multisampleInfo,
-                PDepthStencilState = &depthStencilInfo,
-                PColorBlendState = &colorBlendInfo,
-                PDynamicState = &dynamicInfo,
-                Layout = _layout,
-                RenderPass = default,
-                Subpass = 0,
-                BasePipelineHandle = default,
-                BasePipelineIndex = -1
-            };
-
-            Result result = _context.Api.CreateGraphicsPipelines(
-                _context.Device,
-                _pipelineCache,
-                1,
-                &pipelineInfo,
-                null,
-                out VkPipeline pipeline);
-
-            if (result != Result.Success)
-                throw new VulkanException("Failed to create scene surface mesh graphics pipeline", result);
-
-            return pipeline;
-        }
-
         private PipelineShaderStageCreateInfo CreateShaderStageInfo(ShaderStageFlags stageFlags, ShaderModule module)
         {
             return new PipelineShaderStageCreateInfo
@@ -1179,24 +959,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 _context.Api.DestroyPipeline(_context.Device, _motionVectorPipeline, null);
                 _motionVectorPipeline = default;
-            }
-
-            if (_sceneSurfacePipeline.Handle != 0)
-            {
-                _context.Api.DestroyPipeline(_context.Device, _sceneSurfacePipeline, null);
-                _sceneSurfacePipeline = default;
-            }
-
-            if (_sceneSurfaceSimplePipeline.Handle != 0)
-            {
-                _context.Api.DestroyPipeline(_context.Device, _sceneSurfaceSimplePipeline, null);
-                _sceneSurfaceSimplePipeline = default;
-            }
-
-            if (_sceneSurfaceCompactedPipeline.Handle != 0)
-            {
-                _context.Api.DestroyPipeline(_context.Device, _sceneSurfaceCompactedPipeline, null);
-                _sceneSurfaceCompactedPipeline = default;
             }
 
             if (_sceneOpaqueCompactionPipeline.Handle != 0)

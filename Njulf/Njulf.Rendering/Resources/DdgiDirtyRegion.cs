@@ -1,5 +1,4 @@
 using Njulf.Core.Math;
-using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Resources
 {
@@ -44,55 +43,4 @@ namespace Njulf.Rendering.Resources
         public ulong SourceIdentifier { get; init; }
     }
 
-    internal static class DdgiDirtyReasonPolicy
-    {
-        public static uint ToProbeUpdateFlags(DdgiDirtyReason reason)
-        {
-            uint flags = GlobalIlluminationProbeVolumeData.ProbeUpdateReasonDirtyBoundsFlag;
-            return reason switch
-            {
-                DdgiDirtyReason.GeometryAdded => flags |
-                    GlobalIlluminationProbeVolumeData.ProbeUpdateReasonGeometryAddedFlag,
-                DdgiDirtyReason.GeometryRemoved => flags |
-                    GlobalIlluminationProbeVolumeData.ProbeUpdateReasonGeometryRemovedFlag,
-                DdgiDirtyReason.TransformChanged => flags |
-                    GlobalIlluminationProbeVolumeData.ProbeUpdateReasonTransformChangedFlag,
-                DdgiDirtyReason.MaterialChanged => flags |
-                    GlobalIlluminationProbeVolumeData.ProbeUpdateReasonMaterialChangedFlag,
-                DdgiDirtyReason.EmissiveChanged => flags |
-                    GlobalIlluminationProbeVolumeData.ProbeUpdateReasonEmissiveChangedFlag,
-                DdgiDirtyReason.LocalLightChanged => flags |
-                    GlobalIlluminationProbeVolumeData.ProbeUpdateReasonLocalLightChangedFlag,
-                DdgiDirtyReason.DirectionalLightChanged => flags |
-                    GlobalIlluminationProbeVolumeData.ProbeUpdateReasonDirectionalLightChangedFlag,
-                DdgiDirtyReason.StreamIn => flags |
-                    GlobalIlluminationProbeVolumeData.ProbeUpdateReasonStreamInFlag,
-                DdgiDirtyReason.StreamOut => flags |
-                    GlobalIlluminationProbeVolumeData.ProbeUpdateReasonStreamOutFlag,
-                DdgiDirtyReason.Teleport => flags |
-                    GlobalIlluminationProbeVolumeData.ProbeUpdateReasonTeleportWarmupFlag,
-                DdgiDirtyReason.AgeRefresh => GlobalIlluminationProbeVolumeData.ProbeUpdateReasonAgeRefreshFlag,
-                _ => flags
-            };
-        }
-
-        public static uint ResolvePriority(DdgiDirtyReason reason)
-        {
-            return reason switch
-            {
-                DdgiDirtyReason.GeometryAdded or
-                DdgiDirtyReason.GeometryRemoved or
-                DdgiDirtyReason.TransformChanged or
-                DdgiDirtyReason.StreamIn or
-                DdgiDirtyReason.StreamOut or
-                DdgiDirtyReason.Teleport => DdgiProbeUpdateScheduler.PriorityDirtyGeometry,
-                DdgiDirtyReason.MaterialChanged or
-                DdgiDirtyReason.EmissiveChanged or
-                DdgiDirtyReason.LocalLightChanged => DdgiProbeUpdateScheduler.PriorityDirtyLighting,
-                DdgiDirtyReason.DirectionalLightChanged => DdgiProbeUpdateScheduler.PriorityDirectionalLight,
-                DdgiDirtyReason.AgeRefresh => DdgiProbeUpdateScheduler.PriorityAgeRefresh,
-                _ => DdgiProbeUpdateScheduler.PriorityDirtyBounds
-            };
-        }
-    }
 }

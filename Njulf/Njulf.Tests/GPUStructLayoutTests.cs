@@ -88,13 +88,6 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION"] = Marshal.SizeOf<GPUDdgiProbeRelocationClassification>(),
                 ["SIZEOF_GPU_DDGI_RAY_QUERY_INSTANCE"] = Marshal.SizeOf<GPUDdgiRayQueryInstance>(),
                 ["SIZEOF_GPU_DDGI_EMISSIVE_SOURCE"] = Marshal.SizeOf<GPUDdgiEmissiveSource>(),
-                ["SIZEOF_GPU_DDGI_GATHER_TILE_HEADER"] = Marshal.SizeOf<GPUDdgiGatherTileHeader>(),
-                ["SIZEOF_GPU_DDGI_GATHER_TILE"] = Marshal.SizeOf<GPUDdgiGatherTile>(),
-                ["SIZEOF_GPU_DDGI_SCHEDULER_CONSTANTS"] = Marshal.SizeOf<GPUDdgiSchedulerConstants>(),
-                ["SIZEOF_GPU_DDGI_DIRTY_REGION"] = Marshal.SizeOf<GPUDdgiDirtyRegion>(),
-                ["SIZEOF_GPU_DDGI_SCHEDULER_COUNTERS"] = Marshal.SizeOf<GPUDdgiSchedulerCounters>(),
-                ["SIZEOF_GPU_DDGI_PROBE_CANDIDATE"] = Marshal.SizeOf<GPUDdgiProbeCandidate>(),
-                ["SIZEOF_GPU_DDGI_TRACE_INDIRECT_DISPATCH"] = Marshal.SizeOf<GPUDdgiTraceIndirectDispatch>(),
                 ["SIZEOF_GPU_DDGI_UPDATE_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUDdgiUpdatePushConstants>(),
                 ["SIZEOF_GPU_FOG_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUFogPushConstants>(),
                 ["SIZEOF_GPU_ANTI_ALIASING_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUAntiAliasingPushConstants>(),
@@ -176,13 +169,6 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeRelocationClassification>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUDdgiRayQueryInstance>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUDdgiEmissiveSource>(), Is.EqualTo(64));
-                Assert.That(Marshal.SizeOf<GPUDdgiGatherTileHeader>(), Is.EqualTo(16));
-                Assert.That(Marshal.SizeOf<GPUDdgiGatherTile>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUDdgiSchedulerConstants>(), Is.EqualTo(168));
-                Assert.That(Marshal.SizeOf<GPUDdgiDirtyRegion>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUDdgiSchedulerCounters>(), Is.EqualTo(124));
-                Assert.That(Marshal.SizeOf<GPUDdgiProbeCandidate>(), Is.EqualTo(40));
-                Assert.That(Marshal.SizeOf<GPUDdgiTraceIndirectDispatch>(), Is.EqualTo(12));
                 Assert.That(Marshal.SizeOf<GPUDdgiUpdatePushConstants>(), Is.EqualTo(148));
                 Assert.That(Marshal.SizeOf<GPUFogPushConstants>(), Is.EqualTo(224));
                 Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(100));
@@ -228,18 +214,14 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void DdgiRadianceAndGatherStructs_MatchShaderLayoutAnchors()
+        public void DdgiRadianceStructs_MatchShaderLayoutAnchors()
         {
             Assert.Multiple(() =>
             {
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeVolumeHeader>(), Is.EqualTo(ReadShaderIntConstant("SIZEOF_GPU_DDGI_PROBE_VOLUME_HEADER")));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeVolume>(), Is.EqualTo(ReadShaderIntConstant("SIZEOF_GPU_DDGI_PROBE_VOLUME")));
-                Assert.That(Marshal.SizeOf<GPUDdgiGatherTileHeader>(), Is.EqualTo(ReadShaderIntConstant("SIZEOF_GPU_DDGI_GATHER_TILE_HEADER")));
-                Assert.That(Marshal.SizeOf<GPUDdgiGatherTile>(), Is.EqualTo(ReadShaderIntConstant("SIZEOF_GPU_DDGI_GATHER_TILE")));
                 AssertFieldOffset<GPUDdgiProbeVolume>(nameof(GPUDdgiProbeVolume.RayAndUpdateParams), "OFFSET_GPU_DDGI_PROBE_VOLUME_RAY_AND_UPDATE_PARAMS");
-                AssertFieldOffset<GPUDdgiGatherTile>(nameof(GPUDdgiGatherTile.BlendWeights), "OFFSET_GPU_DDGI_GATHER_TILE_BLEND_WEIGHTS");
                 Assert.That(Marshal.OffsetOf<GPUDdgiProbeVolume>(nameof(GPUDdgiProbeVolume.RayAndUpdateParams)).ToInt32() / sizeof(uint), Is.EqualTo(16));
-                Assert.That(Marshal.OffsetOf<GPUDdgiGatherTile>(nameof(GPUDdgiGatherTile.BlendWeights)).ToInt32() / sizeof(uint), Is.EqualTo(4));
             });
         }
 
@@ -385,8 +367,6 @@ namespace Njulf.Tests
                 typeof(GPUDdgiProbeRelocationClassification),
                 typeof(GPUDdgiRayQueryInstance),
                 typeof(GPUDdgiEmissiveSource),
-                typeof(GPUDdgiGatherTileHeader),
-                typeof(GPUDdgiGatherTile),
                 typeof(GPUDdgiUpdatePushConstants),
                 typeof(GPUFogPushConstants),
                 typeof(GPUAntiAliasingPushConstants),
@@ -738,21 +718,6 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUDdgiProbeState>(nameof(GPUDdgiProbeState.QualityAndReason), "OFFSET_GPU_DDGI_PROBE_STATE_QUALITY_AND_REASON");
                 AssertFieldOffset<GPUDdgiProbeState>(nameof(GPUDdgiProbeState.UpdateMetadata), "OFFSET_GPU_DDGI_PROBE_STATE_UPDATE_METADATA");
                 AssertFieldOffset<GPUDdgiProbeState>(nameof(GPUDdgiProbeState.RepresentationMetadata), "OFFSET_GPU_DDGI_PROBE_STATE_REPRESENTATION_METADATA");
-                AssertFieldOffset<GPUDdgiSchedulerConstants>(nameof(GPUDdgiSchedulerConstants.FrameSerial), "OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_FRAME_SERIAL");
-                AssertFieldOffset<GPUDdgiSchedulerConstants>(nameof(GPUDdgiSchedulerConstants.WarmupState), "OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_WARMUP_STATE");
-                AssertFieldOffset<GPUDdgiSchedulerConstants>(nameof(GPUDdgiSchedulerConstants.ScanProbeCount), "OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_SCAN_PROBE_COUNT");
-                AssertFieldOffset<GPUDdgiSchedulerConstants>(nameof(GPUDdgiSchedulerConstants.CandidateOutputOffset), "OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_CANDIDATE_OUTPUT_OFFSET");
-                AssertFieldOffset<GPUDdgiSchedulerConstants>(nameof(GPUDdgiSchedulerConstants.CandidateOutputCapacity), "OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_CANDIDATE_OUTPUT_CAPACITY");
-                AssertFieldOffset<GPUDdgiSchedulerConstants>(nameof(GPUDdgiSchedulerConstants.SchedulerScanMode), "OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_SCHEDULER_SCAN_MODE");
-                AssertFieldOffset<GPUDdgiSchedulerConstants>(nameof(GPUDdgiSchedulerConstants.RayCapacityPerProbe), "OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_RAY_CAPACITY_PER_PROBE");
-                AssertFieldOffset<GPUDdgiSchedulerCounters>(nameof(GPUDdgiSchedulerCounters.WarmupWarmedCascade0ProbeCount), "OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_WARMED_CASCADE0_PROBE_COUNT");
-                AssertFieldOffset<GPUDdgiSchedulerCounters>(nameof(GPUDdgiSchedulerCounters.CandidateBufferOverflowCount), "OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_BUFFER_OVERFLOW_COUNT");
-                AssertFieldOffset<GPUDdgiSchedulerCounters>(nameof(GPUDdgiSchedulerCounters.PerBucketOverflowCount), "OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PER_BUCKET_OVERFLOW_COUNT");
-                AssertFieldOffset<GPUDdgiSchedulerCounters>(nameof(GPUDdgiSchedulerCounters.RequestBudgetRejectedCount), "OFFSET_GPU_DDGI_SCHEDULER_COUNTER_REQUEST_BUDGET_REJECTED_COUNT");
-                AssertFieldOffset<GPUDdgiSchedulerCounters>(nameof(GPUDdgiSchedulerCounters.PrimaryRayBudgetRejectedCount), "OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIMARY_RAY_BUDGET_REJECTED_COUNT");
-                AssertFieldOffset<GPUDdgiSchedulerCounters>(nameof(GPUDdgiSchedulerCounters.ScanProbeCount), "OFFSET_GPU_DDGI_SCHEDULER_COUNTER_SCAN_PROBE_COUNT");
-                AssertFieldOffset<GPUDdgiSchedulerCounters>(nameof(GPUDdgiSchedulerCounters.CandidateOutputCapacity), "OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_OUTPUT_CAPACITY");
-                AssertFieldOffset<GPUDdgiSchedulerCounters>(nameof(GPUDdgiSchedulerCounters.PriorityBucketMismatchSkipCount), "OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY_BUCKET_MISMATCH_SKIP_COUNT");
                 AssertFieldOffset<GPUDdgiProbeUpdateRequest>(nameof(GPUDdgiProbeUpdateRequest.ProbeIndex), "OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_PROBE_INDEX");
                 AssertFieldOffset<GPUDdgiProbeUpdateRequest>(nameof(GPUDdgiProbeUpdateRequest.VolumeIndex), "OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_VOLUME_INDEX");
                 AssertFieldOffset<GPUDdgiProbeUpdateRequest>(nameof(GPUDdgiProbeUpdateRequest.Flags), "OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_FLAGS");
@@ -765,11 +730,6 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUDdgiRayQueryInstance>(nameof(GPUDdgiRayQueryInstance.IndexOffset), "OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_INDEX_OFFSET");
                 AssertFieldOffset<GPUDdgiRayQueryInstance>(nameof(GPUDdgiRayQueryInstance.MaterialIndex), "OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_MATERIAL_INDEX");
                 AssertFieldOffset<GPUDdgiRayQueryInstance>(nameof(GPUDdgiRayQueryInstance.WorldMatrixInverseTranspose), "OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_WORLD_MATRIX_INVERSE_TRANSPOSE");
-                AssertFieldOffset<GPUDdgiGatherTile>(nameof(GPUDdgiGatherTile.LocalVolumeIndex), "OFFSET_GPU_DDGI_GATHER_TILE_LOCAL_VOLUME_INDEX");
-                AssertFieldOffset<GPUDdgiGatherTile>(nameof(GPUDdgiGatherTile.PrimaryClipmapVolumeIndex), "OFFSET_GPU_DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VOLUME_INDEX");
-                AssertFieldOffset<GPUDdgiGatherTile>(nameof(GPUDdgiGatherTile.SecondaryClipmapVolumeIndex), "OFFSET_GPU_DDGI_GATHER_TILE_SECONDARY_CLIPMAP_VOLUME_INDEX");
-                AssertFieldOffset<GPUDdgiGatherTile>(nameof(GPUDdgiGatherTile.Flags), "OFFSET_GPU_DDGI_GATHER_TILE_FLAGS");
-                AssertFieldOffset<GPUDdgiGatherTile>(nameof(GPUDdgiGatherTile.BlendWeights), "OFFSET_GPU_DDGI_GATHER_TILE_BLEND_WEIGHTS");
             });
         }
 

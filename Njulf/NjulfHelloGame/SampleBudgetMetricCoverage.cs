@@ -272,19 +272,10 @@ internal readonly record struct SampleBudgetMetricCoverage(
                 yield return "DDGI update request budget";
                 yield return "DDGI probes updated";
             }
-            if (diagnostics.DdgiGatherTileCount > 0)
-                yield return "DDGI gather fallback tiles";
             if (diagnostics.SimpleDdgiDirtyFirstUpdateLatencySampleCount > 0)
                 yield return "DDGI dirty first-update latency";
             if (diagnostics.SimpleDdgiDirtyConvergenceLatencySampleCount > 0)
                 yield return "DDGI dirty convergence latency";
-        }
-
-        if (diagnostics.GlobalIlluminationSsgiActive != 0 ||
-            diagnostics.SsgiRayCount > 0)
-        {
-            yield return "SSGI resolution scale";
-            yield return "SSGI rays per pixel";
         }
     }
 }

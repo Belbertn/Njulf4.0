@@ -27,9 +27,9 @@ namespace Njulf.Rendering.Pipeline
         private readonly FoliageManager? _foliageManager;
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
-        private bool _lastGlobalIlluminationEnabled;
-        private GlobalIlluminationMode _lastGlobalIlluminationMode = GlobalIlluminationMode.Disabled;
-        private float _lastGlobalIlluminationResolutionScale = -1.0f;
+        private readonly PipelineObjects.SkyboxPipeline? _skyboxPipeline;
+        private bool _recordingReflectionCapture;
+        private bool _reflectionCaptureIncludesDdgi;
 
         public ForwardPlusPass(
             VulkanContext context,
@@ -40,7 +40,8 @@ namespace Njulf.Rendering.Pipeline
             RenderSettings settings,
             PipelineObjects.FoliagePipeline? foliagePipeline = null,
             BufferManager? bufferManager = null,
-            FoliageManager? foliageManager = null)
+            FoliageManager? foliageManager = null,
+            PipelineObjects.SkyboxPipeline? skyboxPipeline = null)
             : base("ForwardPlusPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
@@ -49,10 +50,228 @@ namespace Njulf.Rendering.Pipeline
             _foliageManager = foliageManager;
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _skyboxPipeline = skyboxPipeline;
         }
 
         public override void Initialize()
         {
+        }
+
+        /// <summary>
+        /// Records the same material/mesh forward path into one probe face. The caller supplies a
+        /// ticket-pinned view and private attachments; no camera state, local reflection lookup,
+        /// post-processing, exposure, or screen-space effect is allowed to leak into the capture.
+        /// </summary>
+        internal void RecordReflectionCapture(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            in ReflectionCaptureViewContext view,
+            ImageView colorView,
+            ImageView depthView)
+        {
+            if (colorView.Handle == 0 || depthView.Handle == 0)
+                throw new InvalidOperationException("Reflection capture attachments are unavailable.");
+
+            Matrix4x4 oldView = sceneData.ViewMatrix;
+            Matrix4x4 oldProjection = sceneData.ProjectionMatrix;
+            Matrix4x4 oldViewProjection = sceneData.ViewProjectionMatrix;
+            Matrix4x4 oldInverseView = sceneData.InverseViewMatrix;
+            Matrix4x4 oldInverseProjection = sceneData.InverseProjectionMatrix;
+            Matrix4x4 oldInverseViewProjection = sceneData.InverseViewProjectionMatrix;
+            Vector3 oldCameraPosition = sceneData.CameraPosition;
+            uint oldScreenWidth = sceneData.ScreenWidth;
+            uint oldScreenHeight = sceneData.ScreenHeight;
+            bool oldDepthPrePassEnabled = sceneData.DepthPrePassEnabled;
+            bool oldReflectionsEnabled = sceneData.ReflectionsEnabled;
+            ReflectionMode oldReflectionMode = sceneData.ReflectionMode;
+            int oldReflectionProbeCount = sceneData.ReflectionProbeCount;
+            bool oldOcclusionEnabled = sceneData.OcclusionCullingEnabled;
+            uint oldHiZMipCount = sceneData.HiZMipCount;
+            int oldForwardTaskInvocations = sceneData.ForwardTaskInvocations;
+            int oldDdgiProbeCount = sceneData.DdgiProbeCount;
+            int oldGlobalIlluminationDdgiActive = sceneData.GlobalIlluminationDdgiActive;
+            int oldSimpleDdgiActive = sceneData.SimpleDdgiActive;
+
+            try
+            {
+                _recordingReflectionCapture = true;
+                _reflectionCaptureIncludesDdgi = view.IncludesDdgi;
+                sceneData.ViewMatrix = view.View;
+                sceneData.ProjectionMatrix = view.Projection;
+                sceneData.ViewProjectionMatrix = view.View * view.Projection;
+                sceneData.InverseViewMatrix = view.View.Invert();
+                sceneData.InverseProjectionMatrix = view.Projection.Invert();
+                sceneData.InverseViewProjectionMatrix = sceneData.ViewProjectionMatrix.Invert();
+                sceneData.CameraPosition = view.Position;
+                sceneData.ScreenWidth = view.Resolution;
+                sceneData.ScreenHeight = view.Resolution;
+                sceneData.DepthPrePassEnabled = view.IncludesDdgi;
+                sceneData.ReflectionsEnabled = false;
+                sceneData.ReflectionMode = ReflectionMode.Disabled;
+                sceneData.ReflectionProbeCount = 0;
+                sceneData.DdgiProbeCount = view.IncludesDdgi ? oldDdgiProbeCount : 0;
+                if (!view.IncludesDdgi)
+                {
+                    sceneData.GlobalIlluminationDdgiActive = 0;
+                    sceneData.SimpleDdgiActive = 0;
+                }
+                sceneData.OcclusionCullingEnabled = false;
+                sceneData.HiZMipCount = 0;
+
+                var viewport = new Viewport
+                {
+                    X = 0,
+                    Y = 0,
+                    Width = view.Resolution,
+                    Height = view.Resolution,
+                    MinDepth = 0.0f,
+                    MaxDepth = 1.0f
+                };
+                var scissor = new Rect2D
+                {
+                    Offset = new Offset2D { X = 0, Y = 0 },
+                    Extent = new Extent2D { Width = view.Resolution, Height = view.Resolution }
+                };
+                _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
+                _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
+                BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
+
+                RenderingAttachmentInfo colorAttachment = ColorAttachment(
+                    colorView,
+                    ImageLayout.ColorAttachmentOptimal,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f)));
+                RenderingAttachmentInfo depthAttachment = DepthAttachment(
+                    depthView,
+                    ImageLayout.DepthStencilAttachmentOptimal,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(null, new ClearDepthStencilValue(0.0f, 0)));
+                var renderingInfo = new RenderingInfo
+                {
+                    SType = StructureType.RenderingInfo,
+                    RenderArea = new Rect2D
+                    {
+                        Offset = new Offset2D { X = 0, Y = 0 },
+                        Extent = new Extent2D { Width = view.Resolution, Height = view.Resolution }
+                    },
+                    LayerCount = 1,
+                    ColorAttachmentCount = 1,
+                    PColorAttachments = &colorAttachment,
+                    PDepthAttachment = &depthAttachment
+                };
+                _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
+
+                // A local capture is a complete scene radiance sample, not a black-clear
+                // fallback. Draw the ticket-pinned global sky before opaque geometry so the
+                // reverse-Z scene depth naturally occludes it.
+                RecordReflectionSkybox(cmd, view);
+
+                ForwardOpaqueVariantSelection selection = ResolveOpaqueVariantSelection(sceneData);
+                DrawForwardBucket(
+                    cmd,
+                    sceneData,
+                    selection.UseSimpleGlobalIblPipeline
+                        ? _meshPipeline.ForwardSimpleGlobalIblPipeline
+                        : _meshPipeline.ForwardFullMaterialPipeline,
+                    Math.Max(0, sceneData.SimpleOpaqueMeshletCount),
+                    BindlessIndex.MeshletDrawBufferBase);
+                DrawForwardBucket(
+                    cmd,
+                    sceneData,
+                    selection.UseSimpleGlobalIblPipeline
+                        ? _meshPipeline.ForwardSimpleFullInputGlobalIblPipeline
+                        : _meshPipeline.ForwardFullMaterialPipeline,
+                    Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount),
+                    BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferBase);
+                DrawForwardBucket(
+                    cmd,
+                    sceneData,
+                    selection.UseSimpleGlobalIblPipeline
+                        ? _meshPipeline.ForwardSimpleGlobalIblPipeline
+                        : _meshPipeline.ForwardFullMaterialPipeline,
+                    Math.Max(0, sceneData.FullOpaqueMeshletCount),
+                    BindlessIndex.FullOpaqueMeshletDrawBufferBase);
+                DrawFoliageForward(cmd, sceneData);
+                _context.KhrDynamicRendering.CmdEndRendering(cmd);
+            }
+            finally
+            {
+                _recordingReflectionCapture = false;
+                _reflectionCaptureIncludesDdgi = false;
+                sceneData.ViewMatrix = oldView;
+                sceneData.ProjectionMatrix = oldProjection;
+                sceneData.ViewProjectionMatrix = oldViewProjection;
+                sceneData.InverseViewMatrix = oldInverseView;
+                sceneData.InverseProjectionMatrix = oldInverseProjection;
+                sceneData.InverseViewProjectionMatrix = oldInverseViewProjection;
+                sceneData.CameraPosition = oldCameraPosition;
+                sceneData.ScreenWidth = oldScreenWidth;
+                sceneData.ScreenHeight = oldScreenHeight;
+                sceneData.DepthPrePassEnabled = oldDepthPrePassEnabled;
+                sceneData.ReflectionsEnabled = oldReflectionsEnabled;
+                sceneData.ReflectionMode = oldReflectionMode;
+                sceneData.ReflectionProbeCount = oldReflectionProbeCount;
+                sceneData.OcclusionCullingEnabled = oldOcclusionEnabled;
+                sceneData.HiZMipCount = oldHiZMipCount;
+                sceneData.ForwardTaskInvocations = oldForwardTaskInvocations;
+                sceneData.DdgiProbeCount = oldDdgiProbeCount;
+                sceneData.GlobalIlluminationDdgiActive = oldGlobalIlluminationDdgiActive;
+                sceneData.SimpleDdgiActive = oldSimpleDdgiActive;
+            }
+        }
+
+        private void RecordReflectionSkybox(
+            CommandBuffer cmd,
+            in ReflectionCaptureViewContext view)
+        {
+            if (_skyboxPipeline == null || !_settings.Environment.Enabled)
+                return;
+
+            _context.Api.CmdBindPipeline(
+                cmd,
+                PipelineBindPoint.Graphics,
+                _skyboxPipeline.Pipeline);
+
+            DescriptorSet storageSet = _bindlessHeap.StorageBufferSet;
+            DescriptorSet textureSet = _bindlessHeap.TextureSamplerSet;
+            _context.Api.CmdBindDescriptorSets(
+                cmd,
+                PipelineBindPoint.Graphics,
+                _skyboxPipeline.Layout,
+                0,
+                1,
+                &storageSet,
+                0,
+                null);
+            _context.Api.CmdBindDescriptorSets(
+                cmd,
+                PipelineBindPoint.Graphics,
+                _skyboxPipeline.Layout,
+                1,
+                1,
+                &textureSet,
+                0,
+                null);
+
+            GPUSkyboxPushConstants pushConstants = new()
+            {
+                InverseViewMatrix = view.View.Invert(),
+                InverseProjectionMatrix = view.Projection.Invert(),
+                EnvironmentTextureIndex = BindlessIndex.EnvironmentCubemapTexture,
+                SkyIntensity = _settings.Environment.SkyIntensity,
+                RotationRadians = _settings.Environment.RotationRadians,
+                DebugView = (uint)EnvironmentDebugView.None
+            };
+            _context.Api.CmdPushConstants(
+                cmd,
+                _skyboxPipeline.Layout,
+                ShaderStageFlags.FragmentBit,
+                0,
+                (uint)Marshal.SizeOf<GPUSkyboxPushConstants>(),
+                &pushConstants);
+            _context.Api.CmdDraw(cmd, 3, 1, 0, 0);
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
@@ -69,25 +288,18 @@ namespace Njulf.Rendering.Pipeline
                     "ForwardPlusPass requires tiled local-light culling produced from current-frame depth.");
             }
 
-            ResetGlobalIlluminationHistoryIfInputsChanged();
             if (sceneData.GlobalIlluminationDdgiActive != 0 ||
                 sceneData.SimpleDdgiActive != 0)
             {
                 PublishComputeStorageToFragment(cmd);
             }
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
-            bool ssgiEnabled = ShouldApplySsgi(sceneData);
             bool materialTransportProvenanceEnabled =
                 ShouldWriteMaterialTransportProvenance();
             SetFullViewportAndScissor(cmd, renderExtent);
             BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
 
             _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
-            if (ssgiEnabled)
-            {
-                _renderTargets.SsgiTraceSource.TransitionToColorAttachment(cmd);
-                _renderTargets.GiFinalDiffuse.TransitionToColorAttachment(cmd);
-            }
             if (materialTransportProvenanceEnabled)
                 _renderTargets.MaterialTransportProvenance.TransitionToColorAttachment(cmd);
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
@@ -102,29 +314,13 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.ClearColor.Y,
                     sceneData.ClearColor.Z,
                     sceneData.ClearColor.W)));
-            var colorAttachments = stackalloc RenderingAttachmentInfo[4];
+            var colorAttachments = stackalloc RenderingAttachmentInfo[2];
             colorAttachments[0] = colorAttachment;
-            int nextColorAttachment = 1;
-            if (ssgiEnabled)
-            {
-                colorAttachments[nextColorAttachment++] = ColorAttachment(
-                    _renderTargets.SsgiTraceSource.View,
-                    ImageLayout.ColorAttachmentOptimal,
-                    AttachmentLoadOp.Clear,
-                    AttachmentStoreOp.Store,
-                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f)));
-                colorAttachments[nextColorAttachment++] = ColorAttachment(
-                    _renderTargets.GiFinalDiffuse.View,
-                    ImageLayout.ColorAttachmentOptimal,
-                    AttachmentLoadOp.Clear,
-                    AttachmentStoreOp.Store,
-                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)));
-            }
             if (materialTransportProvenanceEnabled)
             {
                 // Zero is the stable background/no-geometry code. Rasterized
                 // pixels overwrite it with a categorical source-path byte.
-                colorAttachments[nextColorAttachment] = ColorAttachment(
+                colorAttachments[1] = ColorAttachment(
                     _renderTargets.MaterialTransportProvenance.View,
                     ImageLayout.ColorAttachmentOptimal,
                     AttachmentLoadOp.Clear,
@@ -146,7 +342,6 @@ namespace Njulf.Rendering.Pipeline
                 ColorAttachmentCount =
                     ForwardDynamicRenderingContract.ResolveColorAttachmentCount(
                         hasColorAttachment: true,
-                        ssgiEnabled,
                         materialTransportProvenanceEnabled),
                 PColorAttachments = colorAttachments,
                 PDepthAttachment = &depthAttachment,
@@ -423,7 +618,9 @@ namespace Njulf.Rendering.Pipeline
                     ShouldCollectDirectionalShadowReceiverCounters(sceneData),
                     (uint)sceneData.DirectionalShadowPreviewCascade,
                     materialTransportProvenanceEnabled:
-                        ShouldWriteMaterialTransportProvenance())
+                        ShouldWriteMaterialTransportProvenance()),
+                CaptureFlags = Data.GPUForwardPushConstants.PackCaptureFlags(
+                    _recordingReflectionCapture)
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -583,7 +780,9 @@ namespace Njulf.Rendering.Pipeline
                     ShouldCollectDirectionalShadowReceiverCounters(sceneData),
                     (uint)sceneData.DirectionalShadowPreviewCascade,
                     materialTransportProvenanceEnabled:
-                        ShouldWriteMaterialTransportProvenance())
+                        ShouldWriteMaterialTransportProvenance()),
+                CaptureFlags = Data.GPUForwardPushConstants.PackCaptureFlags(
+                    _recordingReflectionCapture)
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -611,8 +810,18 @@ namespace Njulf.Rendering.Pipeline
                 (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
         }
 
-        private bool ShouldApplyGlobalIllumination(Data.SceneRenderingData sceneData) =>
-            ShouldApplyGlobalIllumination(sceneData, _settings.GlobalIllumination);
+        private bool ShouldApplyGlobalIllumination(Data.SceneRenderingData sceneData)
+        {
+            if (_recordingReflectionCapture)
+            {
+                return _reflectionCaptureIncludesDdgi &&
+                       (_settings.GlobalIllumination.EffectiveUseDdgi ||
+                        _settings.GlobalIllumination.EffectiveUseDdgi) &&
+                       sceneData.DdgiProbeCount > 0;
+            }
+
+            return ShouldApplyGlobalIllumination(sceneData, _settings.GlobalIllumination);
+        }
 
         private bool ShouldCollectDdgiForwardEstimateCounters(Data.SceneRenderingData sceneData)
         {
@@ -684,46 +893,21 @@ namespace Njulf.Rendering.Pipeline
             if (!RenderFeatureIsolationPolicy.AllowsPostProcessing(sceneData.ActiveFeatureIsolation))
                 return false;
 
-            return ShouldApplyDdgi(sceneData, gi) || ShouldApplySsgi(sceneData, gi);
+            return ShouldApplyDdgi(sceneData, gi);
         }
-
-        private bool ShouldApplySsgi(Data.SceneRenderingData sceneData) =>
-            ShouldApplySsgi(sceneData, _settings.GlobalIllumination);
 
         private bool ShouldWriteMaterialTransportProvenance() =>
+            !_recordingReflectionCapture &&
             _settings.GlobalIllumination.DebugView ==
             GlobalIlluminationDebugView.MaterialTransportHitProvenance;
-
-        internal static bool ShouldApplySsgi(
-            Data.SceneRenderingData sceneData,
-            GlobalIlluminationSettings gi)
-        {
-            return gi.EffectiveUseSsgi && sceneData.DepthPrePassEnabled;
-        }
 
         internal static bool ShouldApplyDdgi(
             Data.SceneRenderingData sceneData,
             GlobalIlluminationSettings gi)
         {
-            return (gi.EffectiveUseDdgi || gi.EffectiveUseSimpleDdgi) &&
+            return gi.EffectiveUseDdgi &&
                    sceneData.DdgiProbeCount > 0 &&
                    sceneData.DepthPrePassEnabled;
-        }
-
-        private void ResetGlobalIlluminationHistoryIfInputsChanged()
-        {
-            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
-            bool enabled = gi.EffectiveUseSsgi;
-            bool changed = _lastGlobalIlluminationEnabled != enabled ||
-                _lastGlobalIlluminationMode != gi.Mode ||
-                MathF.Abs(_lastGlobalIlluminationResolutionScale - gi.ResolutionScale) > 0.0001f;
-
-            if (changed)
-            {
-                _lastGlobalIlluminationEnabled = enabled;
-                _lastGlobalIlluminationMode = gi.Mode;
-                _lastGlobalIlluminationResolutionScale = gi.ResolutionScale;
-            }
         }
 
         private void DrawFoliageForward(CommandBuffer cmd, Data.SceneRenderingData sceneData)

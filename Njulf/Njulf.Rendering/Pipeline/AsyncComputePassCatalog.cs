@@ -34,20 +34,14 @@ public static class AsyncComputePassCatalog
     [
         Candidate("AmbientOcclusionBlurPass", "AO generation + depth", "Forward+", "Blur output has a late first consumer and independent graphics can overlap."),
         Candidate("HiZBuildPass", "Depth prepass", "Visibility compaction", "Auto timing gate rejects immediate-consumer workloads."),
-        Candidate("SsgiTracePass", "Forward trace source, depth, normal, material", "SSGI temporal", "Atomic SSGI chain; never scheduled independently."),
-        Candidate("SsgiTemporalPass", "SSGI trace/history/motion", "SSGI denoise", "Atomic SSGI chain; never scheduled independently."),
-        Candidate("SsgiDenoisePass", "SSGI trace/temporal history", "SSGI composite", "Atomic SSGI chain; Auto requires unrelated graphics overlap."),
         Candidate("FarFieldClipmapBakePass", "Scene geometry/material uploads", "Simple DDGI trace or next-frame sampling", "Grouped with adjacent DDGI work when it is consumed immediately."),
+        Candidate("SimpleDdgiSchedulePass", "Simple DDGI frame/policy/delta uploads", "Simple DDGI trace/relocate consumers", "The resident arena is the producer of all fixed indirect commands."),
         Candidate("SimpleDdgiTracePass", "TLAS, scene material/light/environment state", "Simple DDGI relocate/blend", "All ray-query inputs and writable DDGI allocations have concrete contracts."),
         Candidate("SimpleDdgiRelocateClassifyPass", "Simple DDGI trace/state", "Simple DDGI transport/blend", "Part of the indivisible simple-DDGI update segment."),
         Candidate("SimpleDdgiTransportPass", "Simple DDGI cached source and published irradiance", "Simple DDGI blend/publication", "Explicit Jacobi transport remains in the indivisible simple-DDGI update segment."),
         Candidate("SimpleDdgiBlendPass", "Simple DDGI trace/state", "Simple DDGI publication", "Private transport remains unobservable until the following publication pass."),
         Candidate("SimpleDdgiPublishPass", "Simple DDGI blend/private transport", "Transparent/next-frame GI sampling", "GPU-driven atlas publication completes the indivisible Simple-DDGI update segment."),
-        Candidate("DdgiSchedulePass", "Full-DDGI scheduler uploads", "Full-DDGI trace", "Optional at runtime; omitted from a plan when the CPU scheduler is selected."),
-        Candidate("DdgiTracePass", "TLAS, scene material/light/environment and scheduler state", "Full-DDGI blend", "All ray-query and scheduler resources are allocation-bound."),
-        Candidate("DdgiBlendPass", "Full-DDGI trace", "Full-DDGI relocation/publish", "Part of the full-DDGI update segment."),
-        Candidate("DdgiRelocateClassifyPass", "Full-DDGI atlas/state", "Full-DDGI publish", "Part of the full-DDGI update segment."),
-        Candidate("DdgiPublishPass", "Full-DDGI update state", "Next-frame GI sampling", "Publication remains in the same compute segment and is frame-fence covered."),
+        Candidate("SimpleDdgiSchedulerCommitPass", "Simple DDGI publication and outcomes", "Delayed feedback/next-frame CPU policy", "Commit is the sole resident lifecycle publication boundary and exports a fixed summary."),
         Candidate("FogPass", "Scene color/depth", "Exposure, bloom, tone-map", "Concrete image imports and first-consumer waits are modeled."),
         Candidate("BloomPass", "Scene/fog output", "Tone-map", "Atomic mip-chain scheduling is timing-gated."),
         Candidate("GpuParticleResetPass", "Per-frame particle allocation", "GPU particle simulation", "Grouped reset/simulate/sort segment; zero-emitter frames stay on graphics."),
@@ -86,10 +80,18 @@ public static class AsyncComputePassCatalog
     public static bool IsProductionCandidate(string passName) =>
         GetClassification(passName) == AsyncComputePassClassification.ProductionAsyncCandidate;
 
-    /// <summary>Correctness promotion is an explicit, evidence-backed source decision.</summary>
-    public static bool IsCorrectnessCertified(AsyncComputePath path) => false;
+    /// <summary>
+    /// Correctness promotion is an explicit, evidence-backed source decision. Profitability is a
+    /// separate runtime/evidence gate; a true value here does not bypass the Auto timing policy.
+    /// </summary>
+    public static bool IsCorrectnessCertified(AsyncComputePath path) =>
+        AsyncComputeCertificationEvidence.Get(path).CorrectnessCertified;
 
-    public static string GetCertificationEvidenceRevision(AsyncComputePath path) => string.Empty;
+    public static string GetCertificationEvidenceRevision(AsyncComputePath path) =>
+        AsyncComputeCertificationEvidence.Get(path).EvidenceRevision;
+
+    public static AsyncComputePathCertificationEvidence GetCertificationEvidence(AsyncComputePath path) =>
+        AsyncComputeCertificationEvidence.Get(path);
 
     private static AsyncComputePassAuditEntry Candidate(string passName, string producers, string consumers, string rationale) =>
         new(passName, AsyncComputePassClassification.ProductionAsyncCandidate, producers, consumers, rationale);

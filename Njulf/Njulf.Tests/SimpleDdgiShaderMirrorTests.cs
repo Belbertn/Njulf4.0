@@ -737,32 +737,18 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void ForwardTileCandidates_ValidateUnbiasedOwnershipAndFailClosedToBoundedSelection()
+        public void ForwardGather_UsesBoundedSimpleDdgiSelection()
         {
             string shared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
-            string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
-            string tileManager = ReadRepoText("Njulf.Rendering", "Resources", "DdgiGatherTileManager.cs");
 
             Assert.Multiple(() =>
             {
-                Assert.That(forward, Does.Contain("#define SIMPLE_DDGI_FORWARD_TILE_CANDIDATES 1"));
-                Assert.That(shared, Does.Contain("#if SIMPLE_DDGI_FORWARD_TILE_CANDIDATES"));
-                Assert.That(shared, Does.Contain("bool ReadSimpleDdgiForwardTileCandidates(out SimpleDdgiForwardTileCandidates candidates)"));
-                Assert.That(shared, Does.Contain("SIMPLE_DDGI_GATHER_TILE_HEADER_SIMPLE_DDGI_FLAG"));
-                Assert.That(shared, Does.Contain("bool TrySelectSimpleDdgiTilePrimary("));
-                Assert.That(shared, Does.Contain("vec3 unbiasedReceiverWorldPosition"));
-                Assert.That(shared, Does.Contain("!SimpleDdgiContains(candidate, unbiasedReceiverWorldPosition)"));
-                Assert.That(shared, Does.Contain("bool TryFindSimpleDdgiTileSecondary("));
-                Assert.That(shared, Does.Contain("candidates.secondaryVolumeIndex <= selectedVolumeIndex"));
-                Assert.That(shared, Does.Contain("(tileCandidates.flags & SIMPLE_DDGI_GATHER_TILE_FALLBACK_FLAG) == 0u"));
-                Assert.That(shared, Does.Contain("SIMPLE_DDGI_GATHER_TILE_CANDIDATE_OVERFLOW_FLAG"));
-                Assert.That(shared, Does.Contain("!selectedFromTileCandidates &&"));
-                Assert.That(shared, Does.Contain("foundFallback = FindSimpleDdgiFallbackVolume("));
+                Assert.That(shared, Does.Contain("const uint SIMPLE_DDGI_MAX_VOLUME_COUNT = 16u"));
+                Assert.That(shared, Does.Contain("const uint SIMPLE_DDGI_MAX_SELECTION_VOLUME_CHECKS"));
+                Assert.That(shared, Does.Contain("bool FindSimpleDdgiFallbackVolume("));
+                Assert.That(shared, Does.Contain("SimpleDdgiGatherResult SampleSimpleDdgiGather("));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_MAX_RECOVERY_GATHER_SAMPLES = 2u"));
-                Assert.That(tileManager, Does.Contain("public const uint HeaderSimpleDdgiFlag = 1u << 1"));
-                Assert.That(tileManager, Does.Contain("HeaderEnabledFlag | HeaderSimpleDdgiFlag"));
-                Assert.That(tileManager, Does.Contain("tile.Flags |= TileFallbackFlag;"));
-                Assert.That(tileManager, Does.Contain("TileSimpleCandidateOverflowFlag = 1u << 4"));
+                Assert.That(shared, Does.Not.Contain("SIMPLE_DDGI_FORWARD_TILE_CANDIDATES"));
             });
         }
 
@@ -1088,30 +1074,21 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void BackendModeSwitch_DisablesInactiveControlHeadersWithoutRunningInactiveUpdates()
+        public void BackendPreparation_UsesOnlySimpleDdgi()
         {
             string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
             string simpleManager = ReadRepoText("Njulf.Rendering", "Resources", "SimpleDdgiVolumeManager.cs");
-            string legacyManager = ReadRepoText("Njulf.Rendering", "Resources", "DdgiProbeVolumeManager.cs");
 
             Assert.Multiple(() =>
             {
                 Assert.That(renderer, Does.Contain(
-                    "_ddgiProbeVolumeManager.EnsureDisabled(_stagingRing, _currentCommandBuffer);"));
-                Assert.That(renderer, Does.Contain(
                     "_simpleDdgiVolumeManager?.EnsureDisabled(_stagingRing, _currentCommandBuffer);"));
-                Assert.That(renderer, Does.Contain("if (ddgiActive)"));
-                Assert.That(renderer, Does.Contain("if (simpleDdgiActive)"));
+                Assert.That(renderer, Does.Contain("bool simpleDdgiActive ="));
                 Assert.That(simpleManager, Does.Contain(
                     "if (_controlHeaderInitialized && !_wasSimpleDdgiEnabled)"));
                 Assert.That(simpleManager, Does.Contain("DisableCore(_settings.GlobalIllumination"));
                 Assert.That(simpleManager, Does.Contain("_wasSimpleDdgiEnabled = false;"));
                 Assert.That(simpleManager, Does.Contain("PackHeaderWord(0u)"));
-                Assert.That(legacyManager, Does.Contain(
-                    "if (_controlHeaderInitialized && !_wasDdgiEnabled)"));
-                Assert.That(legacyManager, Does.Contain(
-                    "Upload(DdgiFrameLayout.Empty, stagingRing, commandBuffer);"));
-                Assert.That(legacyManager, Does.Contain("_controlHeaderInitialized = true;"));
             });
         }
 
@@ -1257,7 +1234,9 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("vec3 SimpleDdgiProbeRelocatedPosition(uint probeIndex, SimpleDdgiVolume volume, uint localProbeIndex)"));
                 Assert.That(shared, Does.Contain("state.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE"));
                 Assert.That(trace, Does.Contain("SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, updateProbeOffset);"));
-                Assert.That(trace, Does.Contain("uint updateProbeOffset = pc.DispatchQueueOffset +"));
+                Assert.That(trace, Does.Contain("bool gpuScheduler = SimpleDdgiGpuSchedulerActive(pc.SchedulerArenaBufferIndex);"));
+                Assert.That(trace, Does.Contain("uint updateProbeOffset = (gpuScheduler ? schedulerQueueOffset : pc.DispatchQueueOffset) +"));
+                Assert.That(trace, Does.Contain("if (!gpuScheduler && updateProbeOffset >= params.probesToUpdate)"));
                 Assert.That(trace, Does.Contain("uint globalRay = updateProbeOffset * params.raysPerProbe + rayIndex;"));
                 Assert.That(trace, Does.Contain("uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);"));
                 Assert.That(trace, Does.Contain("if (rayIndex >= activeRayCount)"));
@@ -1271,7 +1250,9 @@ namespace Njulf.Tests
                 Assert.That(transport, Does.Contain("bounceRadiance = reflectedBounceRadiance + transmittedBounceRadiance;"));
                 Assert.That(transport, Does.Not.Contain("bounceRadiance = ApplyGiMaterialOcclusion("));
                 Assert.That(transport, Does.Contain("ReadSimpleDdgiTransportRayCache("));
-                Assert.That(transport, Does.Contain("uint queueOffset = pc.DispatchQueueOffset +"));
+                Assert.That(transport, Does.Contain("bool gpuScheduler = SimpleDdgiGpuSchedulerActive(pc.SchedulerArenaBufferIndex);"));
+                Assert.That(transport, Does.Contain("uint queueOffset = (gpuScheduler ? schedulerQueueOffset : pc.DispatchQueueOffset) +"));
+                Assert.That(transport, Does.Contain("if (!gpuScheduler && queueOffset >= params.probesToUpdate)"));
                 Assert.That(transport, Does.Contain("uint globalRay = queueOffset * params.raysPerProbe + rayIndex;"));
                 Assert.That(transport, Does.Contain("SampleSimpleDdgiSolverBounceIrradiance("));
                 Assert.That(transport, Does.Not.Contain("SampleSimpleDdgiUnifiedIrradiance("));
@@ -1424,7 +1405,7 @@ namespace Njulf.Tests
                 Assert.That(hitShading, Does.Contain("GPUDdgiEmissiveSource source = ReadDdgiEmissiveSource(selectedIndex);"));
                 Assert.That(forward, Does.Contain("bool simpleDdgiConfigured = (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_ENABLED) != 0u && simpleDdgiParams.probeCount > 0u;"));
                 Assert.That(forward, Does.Contain("(simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) != 0u;"));
-                Assert.That(forward, Does.Contain("else if (simpleDdgiConfigured)"));
+                Assert.That(forward, Does.Contain("else if (simpleDdgiActive)"));
                 Assert.That(forward, Does.Contain("finalDiffuseIndirect = diffuseIbl * fallbackWeight * indirectAo;"));
                 Assert.That(forward, Does.Contain("SimpleDdgiGatherResult simpleGather = SampleSimpleDdgiGather("));
                 Assert.That(forward, Does.Contain("simpleDdgiParams,"));
@@ -1473,7 +1454,7 @@ namespace Njulf.Tests
                 Assert.That(simplePasses, Does.Contain("!gi.SimpleDdgiStructuredGatherEnabled"));
                 Assert.That(simplePasses, Does.Contain("if (!VolumeManager.CanExecuteRelocateClassifyTransaction)"));
                 Assert.That(simplePasses, Does.Contain("if (!VolumeManager.CanExecuteBlendTransaction)"));
-                Assert.That(simplePasses, Does.Contain("if (!_volumeManager.CanExecutePublishTransaction)"));
+                Assert.That(simplePasses, Does.Contain("if (!gpuResident && !_volumeManager.CanExecutePublishTransaction)"));
                 Assert.That(simplePasses, Does.Contain("SimpleDdgiPublishPass"));
                 Assert.That(simplePasses, Does.Contain("BeginSampledAtlasGpuPublication(cmd)"));
                 Assert.That(simplePasses, Does.Contain("MarkPublishExecuted()"));
@@ -1515,11 +1496,11 @@ namespace Njulf.Tests
                 Assert.That(fog, Does.Contain("#include \"ddgi_simple_shared.glsl\""));
                 Assert.That(fog, Does.Contain("SIMPLE_DDGI_FLAG_FOG_ENABLED"));
                 Assert.That(fog, Does.Contain("SampleSimpleDdgiIrradiance(samplePosition, ambientNormal, -viewDirection)"));
-                Assert.That(fog, Does.Contain("SampleDdgiAmbientIrradiance(samplePosition, ambientNormal, 6u)"));
+                Assert.That(fog, Does.Not.Contain("SampleDdgiAmbientIrradiance("));
                 Assert.That(particleVertex, Does.Contain("#include \"ddgi_simple_shared.glsl\""));
                 Assert.That(particleVertex, Does.Contain("SIMPLE_DDGI_FLAG_PARTICLE_ENABLED"));
                 Assert.That(particleVertex, Does.Contain("SampleSimpleDdgiIrradiance(center, particleDdgiNormal, particleDdgiNormal)"));
-                Assert.That(particleVertex, Does.Contain("SampleDdgiAmbientDiffuse(center, particleDdgiNormal, particleAlbedo, 0.75, 4u)"));
+                Assert.That(particleVertex, Does.Not.Contain("SampleDdgiAmbientDiffuse("));
             });
         }
 

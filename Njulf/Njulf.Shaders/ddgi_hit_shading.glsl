@@ -388,7 +388,7 @@ vec2 MaterialDdgiHitUv(vec2 uv0, vec2 uv1, float texCoordSet, vec4 offsetScale, 
 GPUDdgiRayQueryInstance ReadDdgiRayQueryInstance(uint instanceIndex)
 {
     uint baseWord = instanceIndex * uint(SIZEOF_GPU_DDGI_RAY_QUERY_INSTANCE / 4);
-    uint bufferIndex = uint(DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX);
+    uint bufferIndex = uint(SIMPLE_DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX);
     uvec4 header = ReadStorageAlignedUVec4Uniform(bufferIndex, baseWord);
     GPUDdgiRayQueryInstance instance;
     instance.VertexOffset = header.x;

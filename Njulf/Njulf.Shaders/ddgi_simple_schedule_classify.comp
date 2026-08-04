@@ -1,0 +1,259 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_schedule_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+uint SchedulerNextGeneration(uint generation)
+{
+    uint next = generation + 1u;
+    next &= 0x00ffffffu;
+    return next == 0u ? 1u : next;
+}
+
+void SchedulerInvalidateProbe(
+    uint probeIndex,
+    uint stateBase,
+    uint stateFlags,
+    uint generation,
+    uint reasons)
+{
+    uint nextGeneration = SchedulerNextGeneration(generation);
+    uint nextFlags = stateFlags & ~SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK;
+    nextFlags |= nextGeneration << SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT;
+    nextFlags |= SIMPLE_DDGI_PROBE_FLAG_FRESH;
+    if ((reasons & SIMPLE_DDGI_SCHEDULER_REASON_SCROLL) != 0u)
+        nextFlags |= SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED;
+    WriteStorageWordUniform(pc.ProbeStateBufferIndex, stateBase + 4u, nextFlags);
+    WriteStorageWordUniform(pc.ProbeStateBufferIndex, stateBase + 5u, 0u);
+}
+
+void main()
+{
+    uint sequenceOrdinal = gl_GlobalInvocationID.x;
+    if (sequenceOrdinal >= SchedulerActiveProbeCount())
+        return;
+
+    uint candidateBase = pc.CandidateInputOffsetWords +
+        sequenceOrdinal * SIMPLE_DDGI_SCHEDULER_CANDIDATE_WORDS;
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[
+        pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_CONSIDERED], 1u);
+
+    uint volumeIndex;
+    uint localOrdinal;
+    if (!SchedulerFindSequenceVolume(sequenceOrdinal, volumeIndex, localOrdinal))
+    {
+        SchedulerWriteCandidate(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
+            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE, 0u, sequenceOrdinal, 0u, 0u, 0u, 0u);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[
+            pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_INVALID_GENERATION], 1u);
+        return;
+    }
+
+    uint probeIndex = SchedulerSequenceProbeIndex(volumeIndex, localOrdinal);
+    uint stateBase = probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+    uint stateFlags = ReadStorageWordUniform(pc.ProbeStateBufferIndex, stateBase + 4u);
+    uint stateAge = ReadStorageWordUniform(pc.ProbeStateBufferIndex, stateBase + 5u);
+    uint expectedGeneration = (stateFlags & SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK) >>
+        SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT;
+    if (expectedGeneration == 0u)
+    {
+        SchedulerWriteCandidate(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
+            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE, 0u, sequenceOrdinal, 0u, 0u, 0u, 0u);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[
+            pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_INVALID_GENERATION], 1u);
+        return;
+    }
+
+    uint schedulerStateBase = pc.SchedulerProbeStateOffsetWords +
+        probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+    // Word 6 is the last applied invalidation marker. It is deliberately
+    // retained through commit so a dirty generation cannot re-admit the same
+    // probe on every frame while the CPU keeps the dirty signal alive for its
+    // atmosphere/source cohort.
+    uint invalidationMarker = SchedulerArenaRead(schedulerStateBase + 6u);
+    uint dirtyReasons;
+    bool regionalDirtySignal = SchedulerDirtyIntersects(volumeIndex, localOrdinal, dirtyReasons);
+    bool sourceInvalid = (stateFlags & SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID) != 0u;
+    uint sourceGeneration = SchedulerArenaRead(schedulerStateBase + 2u);
+    uint schedulerMetadata = SchedulerArenaRead(schedulerStateBase + 5u) &
+        SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBILITY_MASK;
+    bool globalDirtySignal = SchedulerDirtyReasonFlags() != 0u;
+    bool globalDirty = globalDirtySignal && sourceGeneration != SchedulerSourceGeneration();
+    bool regionalDirty = regionalDirtySignal &&
+        invalidationMarker != SchedulerVolumeDirtyGeneration(volumeIndex);
+    bool fresh = (stateFlags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u;
+    bool scrollExposed = (stateFlags & SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED) != 0u;
+    bool relocationRetry = (stateFlags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u;
+    bool inactive = (stateFlags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u;
+    uint retryFrames = max(SchedulerFrame(28u), 1u);
+    bool inactiveRetry = inactive && stateAge >= retryFrames;
+
+    uint countX = max(SchedulerVolumeCurrentCountX(volumeIndex), 1u);
+    uint countY = max(SchedulerVolumeCurrentCountY(volumeIndex), 1u);
+    uint countZ = max(SchedulerVolumeCurrentCountZ(volumeIndex), 1u);
+    uint logical = (localOrdinal * max(SchedulerVolumeSequenceStride(volumeIndex), 1u)) %
+        max(SchedulerVolumeProbeCount(volumeIndex), 1u);
+    uint logicalZ = logical / (countX * countY);
+    uint logicalRem = logical - logicalZ * countX * countY;
+    uint logicalY = logicalRem / countX;
+    uint logicalX = logicalRem - logicalY * countX;
+    int deltaX = int(SchedulerVolumeWord(volumeIndex, 36u));
+    int deltaY = int(SchedulerVolumeWord(volumeIndex, 37u));
+    int deltaZ = int(SchedulerVolumeWord(volumeIndex, 38u));
+    bool cellAligned = (SchedulerVolumeLayoutFlags(volumeIndex) & 2u) != 0u;
+    bool topologyInvalid = (SchedulerVolumeLayoutFlags(volumeIndex) & 1u) == 0u ||
+        SchedulerVolumeCurrentCountX(volumeIndex) != SchedulerVolumePreviousCountX(volumeIndex) ||
+        SchedulerVolumeCurrentCountY(volumeIndex) != SchedulerVolumePreviousCountY(volumeIndex) ||
+        SchedulerVolumeCurrentCountZ(volumeIndex) != SchedulerVolumePreviousCountZ(volumeIndex);
+    bool exposed = SchedulerToroidal() && cellAligned &&
+        (deltaX != 0 || deltaY != 0 || deltaZ != 0) &&
+        (int(logicalX) - deltaX < 0 || int(logicalX) - deltaX >= int(countX) ||
+         int(logicalY) - deltaY < 0 || int(logicalY) - deltaY >= int(countY) ||
+         int(logicalZ) - deltaZ < 0 || int(logicalZ) - deltaZ >= int(countZ));
+
+    uint invalidationReasons = dirtyReasons;
+    if (globalDirty)
+        invalidationReasons |= SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY;
+    if (exposed)
+        invalidationReasons |= SIMPLE_DDGI_SCHEDULER_REASON_SCROLL;
+    if (topologyInvalid || SchedulerAtlasFresh())
+        invalidationReasons |= SIMPLE_DDGI_SCHEDULER_REASON_FRESH;
+    if (sourceInvalid)
+        invalidationReasons |= SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID;
+
+    uint marker = topologyInvalid || exposed
+        ? SchedulerVolumeGeneration()
+        : (globalDirty || sourceInvalid
+            ? SchedulerSourceGeneration()
+            : SchedulerVolumeDirtyGeneration(volumeIndex));
+    bool invalidate = invalidationReasons != 0u &&
+        (marker == 0u || invalidationMarker != marker);
+    if (invalidate)
+    {
+        // Mirror mode is a diagnostic producer only.  It must not mutate the
+        // CPU-authoritative public state while the CPU queue is being rendered.
+        // Resident mode advances the public physical generation exactly once;
+        // mirror mode evaluates the same hypothetical generation locally and
+        // leaves the canonical state untouched.
+        if (SchedulerGpuResident())
+        {
+            SchedulerInvalidateProbe(probeIndex, stateBase, stateFlags,
+                expectedGeneration, invalidationReasons);
+            expectedGeneration = SchedulerNextGeneration(expectedGeneration);
+        }
+        stateFlags |= SIMPLE_DDGI_PROBE_FLAG_FRESH;
+        if ((invalidationReasons & SIMPLE_DDGI_SCHEDULER_REASON_SCROLL) != 0u)
+            stateFlags |= SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED;
+        SchedulerArenaWrite(schedulerStateBase + 5u, invalidationReasons);
+        SchedulerArenaWrite(schedulerStateBase + 6u,
+            marker == 0u ? SchedulerQueueGeneration() : marker);
+        schedulerMetadata &= ~SIMPLE_DDGI_SCHEDULER_PROBE_META_PUBLISHED;
+        fresh = true;
+        scrollExposed = (invalidationReasons & SIMPLE_DDGI_SCHEDULER_REASON_SCROLL) != 0u;
+    }
+
+    uint sourceRays = SchedulerArenaRead(schedulerStateBase + 7u) & 0x1ffu;
+    bool sourceReady = SchedulerTransportV2() && sourceRays != 0u &&
+        sourceGeneration == SchedulerSourceGeneration() && !sourceInvalid;
+    uint lastSourceFrame = SchedulerArenaRead(schedulerStateBase + 1u);
+    bool routineDue = SchedulerTransportV2() && sourceReady &&
+        (SchedulerFrameIndex() - lastSourceFrame >= max(SchedulerFrame(29u), 1u));
+
+    uint ring = min(SchedulerVolumeRing(volumeIndex), 2u);
+    uint workClass;
+    uint transport;
+    uint rayTier;
+    uint reasons = 0u;
+    vec3 camera = vec3(
+        uintBitsToFloat(SchedulerFrame(20u)),
+        uintBitsToFloat(SchedulerFrame(21u)),
+        uintBitsToFloat(SchedulerFrame(22u)));
+    vec3 origin = SchedulerVolumeOrigin(volumeIndex);
+    vec3 position = origin + vec3(logicalX, logicalY, logicalZ) * SchedulerVolumeSpacing(volumeIndex);
+    bool visible = distance(camera, position) <= max(
+        uintBitsToFloat(SchedulerFrame(23u)), SchedulerVolumeSpacing(volumeIndex) * 8.0);
+    if (visible)
+        reasons |= SIMPLE_DDGI_SCHEDULER_REASON_VISIBLE;
+    if (visible)
+        schedulerMetadata |= SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBLE;
+    else
+        schedulerMetadata &= ~SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBILITY_MASK;
+    SchedulerArenaWrite(schedulerStateBase + 5u, schedulerMetadata);
+    if (fresh || scrollExposed || (invalidate && (invalidationReasons & SIMPLE_DDGI_SCHEDULER_REASON_FRESH) != 0u))
+    {
+        workClass = SIMPLE_DDGI_SCHEDULER_WORK_FRESH_EXPOSED_VISIBLE;
+        transport = SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE;
+        rayTier = SIMPLE_DDGI_SCHEDULER_RAY_FULL;
+        reasons |= fresh ? SIMPLE_DDGI_SCHEDULER_REASON_FRESH : 0u;
+        reasons |= scrollExposed ? SIMPLE_DDGI_SCHEDULER_REASON_SCROLL : 0u;
+    }
+    else if (inactive && !inactiveRetry)
+    {
+        SchedulerWriteCandidate(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
+            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE, 0u, sequenceOrdinal, 0u, 0u, 0u, 0u);
+        return;
+    }
+    else if (relocationRetry || inactiveRetry)
+    {
+        workClass = SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_RETRY;
+        transport = SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE;
+        rayTier = SIMPLE_DDGI_SCHEDULER_RAY_FULL;
+        reasons |= SIMPLE_DDGI_SCHEDULER_REASON_RETRY;
+        reasons |= relocationRetry ? SIMPLE_DDGI_SCHEDULER_REASON_RELOCATION_RETRY : 0u;
+        reasons |= inactiveRetry ? SIMPLE_DDGI_SCHEDULER_REASON_INACTIVE_RETRY : 0u;
+    }
+    else if (sourceInvalid || globalDirty || regionalDirty)
+    {
+        workClass = SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_DIRTY;
+        transport = SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE;
+        rayTier = SIMPLE_DDGI_SCHEDULER_RAY_FULL;
+        reasons |= regionalDirty ? SIMPLE_DDGI_SCHEDULER_REASON_REGIONAL_DIRTY : 0u;
+        reasons |= sourceInvalid ? SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID : 0u;
+        reasons |= globalDirty ? SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY : 0u;
+    }
+    else
+    {
+        workClass = SIMPLE_DDGI_SCHEDULER_WORK_NEAR_MAINTENANCE + ring;
+        transport = sourceReady
+            ? SIMPLE_DDGI_SCHEDULER_TRANSPORT_CACHED_SOLVER
+            : SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE;
+        rayTier = sourceReady
+            ? SIMPLE_DDGI_SCHEDULER_RAY_MAINTENANCE
+            : SIMPLE_DDGI_SCHEDULER_RAY_FULL;
+        reasons |= sourceReady ? SIMPLE_DDGI_SCHEDULER_REASON_CONVERGENCE :
+            SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID;
+        if (routineDue)
+        {
+            transport = SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
+            rayTier = SIMPLE_DDGI_SCHEDULER_RAY_FULL;
+            reasons |= SIMPLE_DDGI_SCHEDULER_REASON_ROUTINE_DUE;
+        }
+    }
+
+    uint fullRays = clamp(SchedulerVolumeFullRays(volumeIndex), 1u, SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
+    uint maintenanceRays = clamp(SchedulerVolumeMaintenanceRays(volumeIndex), 1u, SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
+    uint activeRayCount = rayTier == SIMPLE_DDGI_SCHEDULER_RAY_FULL ? fullRays : maintenanceRays;
+    uint sourceRayCount = (transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE ||
+        transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE) ? fullRays : 0u;
+    uint lane = SchedulerLaneIndex(volumeIndex, workClass, transport, rayTier);
+    if (lane >= SIMPLE_DDGI_SCHEDULER_MAX_LANES)
+    {
+        SchedulerWriteCandidate(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
+            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE, 0u, sequenceOrdinal, 0u, 0u, 0u, 0u);
+        return;
+    }
+
+    SchedulerWriteCandidate(candidateBase, probeIndex, volumeIndex, expectedGeneration,
+        sequenceOrdinal, workClass | (transport << 3u),
+        rayTier | ((reasons & 0xffffu) << 8u), activeRayCount, sourceRayCount);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[
+        pc.LaneCandidateCountsOffsetWords + lane], 1u);
+    SchedulerAtomicIncrementGroupLaneCount(
+        sequenceOrdinal / SIMPLE_DDGI_SCHEDULER_WORKGROUP_SIZE,
+        lane);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[
+        pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE], 1u);
+}

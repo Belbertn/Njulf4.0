@@ -193,7 +193,7 @@ namespace Njulf.Rendering.Data
 
     public sealed record DdgiVolumeDiagnosticsEntry(
         int VolumeIndex,
-        DdgiProbeVolumeKind Kind,
+        SimpleDdgiVolumeKind Kind,
         int CascadeIndex,
         int FirstProbeIndex,
         int ProbeCount,
@@ -1028,7 +1028,6 @@ namespace Njulf.Rendering.Data
         /// <summary>1 when the live rollback switch deliberately suppresses dynamic GI.</summary>
         public int GlobalIlluminationEmergencyFallbackEnabled { get; init; }
         public string GlobalIlluminationFallbackReason { get; init; } = string.Empty;
-        public int GlobalIlluminationSsgiRequested { get; init; }
         public int GlobalIlluminationDdgiRequested { get; init; }
         public int SimpleDdgiRequested { get; init; }
         public int GlobalIlluminationRayQueryRequested { get; init; }
@@ -1041,7 +1040,6 @@ namespace Njulf.Rendering.Data
         public GlobalIlluminationDebugView GlobalIlluminationDebugView { get; init; } = GlobalIlluminationDebugView.None;
         public int GlobalIlluminationRayQuerySupported { get; init; }
         public int GlobalIlluminationRayQueryActive { get; init; }
-        public int GlobalIlluminationSsgiActive { get; init; }
         public int GlobalIlluminationDdgiActive { get; init; }
         public int SimpleDdgiActive { get; init; }
         public int SimpleDdgiStructuredGatherEnabled { get; init; }
@@ -1102,8 +1100,15 @@ namespace Njulf.Rendering.Data
         public ulong SimpleDdgiTransportSourceCacheInvalidationCount { get; init; }
         public int SimpleDdgiTransportSolverInvalidationCount { get; init; }
         public float SimpleDdgiTransportSolverInvalidationsPerSourceRefresh { get; init; }
+        public uint SimpleDdgiVolumeResourceGeneration { get; init; }
         public uint SimpleDdgiSourceLightingGeneration { get; init; }
+        public uint SimpleDdgiAdmittedSourceCohortGeneration { get; init; }
         public uint SimpleDdgiTransportGeneration { get; init; }
+        public uint SimpleDdgiPublishedPropagationGeneration { get; init; }
+        public int SimpleDdgiVisiblePriorityParticipatingProbeCount { get; init; }
+        public int SimpleDdgiVisiblePrioritySourceReadyProbeCount { get; init; }
+        public int SimpleDdgiVisiblePriorityPublishedProbeCount { get; init; }
+        public int SimpleDdgiQuietPeriodComplete { get; init; }
         public int SimpleDdgiTransportSourceReadyProbeCount { get; init; }
         public int SimpleDdgiTransportSourceStaleProbeCount { get; init; }
         public int SimpleDdgiTransportConvergedProbeCount { get; init; }
@@ -1269,13 +1274,6 @@ namespace Njulf.Rendering.Data
         public int DdgiBlackFrameAfterRecenter { get; init; }
         public int DdgiBlackFrameAfterAtlasClear { get; init; }
         public int DdgiBlackFrameDuringFreshAtlas { get; init; }
-        public DdgiCameraMovementClass DdgiBlackFrameMovementClass { get; init; } = DdgiCameraMovementClass.None;
-        public uint SsgiWidth { get; init; }
-        public uint SsgiHeight { get; init; }
-        public float SsgiResolutionScale { get; init; }
-        public int SsgiRayCount { get; init; }
-        public int SsgiHistoryValid { get; init; }
-        public int SsgiRejectedHistoryPixelCount { get; init; }
         public int DdgiProbeVolumeCount { get; init; }
         public int DdgiProbeCount { get; init; }
         public int DdgiActiveProbeCount { get; init; }
@@ -1287,21 +1285,6 @@ namespace Njulf.Rendering.Data
         public int DdgiProbeUpdatePrimaryRayBudget { get; init; }
         public int DdgiScheduledRequestBudget { get; init; }
         public int DdgiScheduledPrimaryRayBudget { get; init; }
-        public int DdgiGpuSchedulerPredictedRequestUpperBound { get; init; }
-        public uint DdgiGpuSchedulerActualRequestCount { get; init; }
-        public uint DdgiGpuSchedulerActualPrimaryRayCount { get; init; }
-        public int DdgiGatherTileCount { get; init; }
-        public int DdgiGatherTileCountX { get; init; }
-        public int DdgiGatherTileCountY { get; init; }
-        public int DdgiGatherSelectedLocalTileCount { get; init; }
-        public int DdgiGatherSelectedClipmapTileCount { get; init; }
-        public int DdgiGatherFallbackTileCount { get; init; }
-        public float DdgiGatherSelectedLocalTileFraction { get; init; }
-        public float DdgiGatherSelectedClipmapTileFraction { get; init; }
-        public float DdgiGatherFallbackTileFraction { get; init; }
-        public int DdgiForwardGatherFallbackUsed { get; init; }
-        public int DdgiForwardGatherFallbackDisabled { get; init; }
-        public int DdgiForwardGatherTileEmpty { get; init; }
         public float DdgiAverageSpatialCoverageEstimate { get; init; }
         public float DdgiAverageSupportCoverageEstimate { get; init; }
         public float DdgiAverageDataConfidenceEstimate { get; init; }
@@ -1435,7 +1418,6 @@ namespace Njulf.Rendering.Data
         public float SimpleDdgiAverageCloseRatioEstimate { get; init; }
         public float SimpleDdgiAverageHardInvalidProbeScoreEstimate { get; init; }
         public int DdgiClassifiedInactiveProbeCountEstimate { get; init; }
-        public DdgiSchedulerMode DdgiSchedulerMode { get; init; } = DdgiSchedulerMode.CpuReference;
         public DdgiQualityTier DdgiQualityTier { get; init; } = DdgiQualityTier.DdgiHigh;
         public float DdgiAdaptiveBudgetScale { get; init; } = 1.0f;
         public int DdgiAdaptiveBudgetReduced { get; init; }
@@ -1486,8 +1468,6 @@ namespace Njulf.Rendering.Data
         public ulong DdgiProbeRelocationClassificationBytes { get; init; }
         public ulong DdgiCurrentIrradianceAtlasBytes { get; init; }
         public ulong DdgiCurrentVisibilityAtlasBytes { get; init; }
-        public ulong DdgiGatherTileBufferBytes { get; init; }
-        public ulong DdgiLocalSlotReservedPoolBytes { get; init; }
         public int DdgiUpdateExecuted { get; init; }
         public string DdgiUpdateSkipReason { get; init; } = string.Empty;
         public ulong DdgiRayScratchBytes { get; init; }
@@ -1506,12 +1486,7 @@ namespace Njulf.Rendering.Data
         public int DdgiResourceReinitializationCount { get; init; }
         public int DdgiTotalResourceReinitializationCount { get; init; }
         public int DdgiActiveLocalSlotCount { get; init; }
-        public int DdgiLocalSlotGeneration { get; init; }
-        public ulong DdgiLocalSlotInitBytes { get; init; }
-        public string DdgiLocalVolumeEvictionReason { get; init; } = string.Empty;
         public string DdgiCacheClearReason { get; init; } = string.Empty;
-        public DdgiCameraMovementClass DdgiCameraMovementClass { get; init; } = DdgiCameraMovementClass.None;
-        public long CpuSsgiRecordMicroseconds { get; init; }
         public long CpuDdgiRecordMicroseconds { get; init; }
         public long CpuSimpleDdgiRecordMicroseconds { get; init; }
         public SimpleDdgiUploadTiming SimpleDdgiUploadTiming { get; init; }
@@ -1519,94 +1494,31 @@ namespace Njulf.Rendering.Data
         public long CpuGlobalIlluminationRecordMicroseconds { get; init; }
         public long CpuGlobalIlluminationRecordP95Microseconds { get; init; }
         public int GlobalIlluminationCpuTimingSampleCount { get; init; }
-        public long CpuDdgiSchedulerMicroseconds { get; init; }
-        public long CpuDdgiSchedulerP95Microseconds { get; init; }
-        public long CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds { get; init; }
-        public long CpuDdgiSchedulerPhaseDirtyRegionsMicroseconds { get; init; }
-        public long CpuDdgiSchedulerPhaseUninitializedMicroseconds { get; init; }
-        public long CpuDdgiSchedulerPhaseFrustumMicroseconds { get; init; }
-        public long CpuDdgiSchedulerPhaseSafetyMicroseconds { get; init; }
-        public long CpuDdgiSchedulerPhaseRoundRobinMicroseconds { get; init; }
-        public int CpuDdgiSchedulerCandidateInsertCount { get; init; }
-        public int CpuDdgiSchedulerCandidateMaxShiftCount { get; init; }
-        public int DdgiSchedulerTimingSampleCount { get; init; }
-        public int DdgiSchedulerP95OverBudget { get; init; }
-        public long GpuSsgiTraceMicroseconds { get; init; }
-        public long GpuSsgiTemporalMicroseconds { get; init; }
-        public long GpuSsgiDenoiseMicroseconds { get; init; }
-        public long GpuDdgiScheduleMicroseconds { get; init; }
-        public long GpuDdgiScheduleP95Microseconds { get; init; }
-        public int GpuDdgiScheduleOverBudget { get; init; }
-        public long GpuDdgiScheduleResetMicroseconds { get; init; }
-        public long GpuDdgiScheduleScoreMicroseconds { get; init; }
-        public long GpuDdgiSchedulePrefixMicroseconds { get; init; }
-        public long GpuDdgiScheduleCompactMicroseconds { get; init; }
-        public long GpuDdgiScheduleFinalizeMicroseconds { get; init; }
-        public long GpuDdgiScheduleReadbackMicroseconds { get; init; }
-        public long GpuDdgiScheduleBarrierMicroseconds { get; init; }
         public long GpuDdgiTraceMicroseconds { get; init; }
         public long GpuDdgiBlendMicroseconds { get; init; }
         public long GpuDdgiRelocateClassifyMicroseconds { get; init; }
         public long GpuDdgiPublishMicroseconds { get; init; }
         public long GpuDdgiUpdateMicroseconds { get; init; }
         public long GpuSimpleDdgiTraceMicroseconds { get; init; }
+        public long GpuSimpleDdgiScheduleMicroseconds { get; init; }
         public long GpuSimpleDdgiTransportMicroseconds { get; init; }
         public long GpuSimpleDdgiBlendMicroseconds { get; init; }
+        public long GpuSimpleDdgiCommitMicroseconds { get; init; }
+        public SimpleDdgiSchedulerMode SimpleDdgiSchedulerMode { get; init; } = SimpleDdgiSchedulerMode.CpuReference;
+        public int SimpleDdgiSchedulerReady { get; init; }
+        public uint SimpleDdgiSchedulerResourceGeneration { get; init; }
+        public ulong SimpleDdgiSchedulerArenaBytes { get; init; }
+        public ulong SimpleDdgiSchedulerFeedbackReadbackBytes { get; init; }
+        public ulong SimpleDdgiSchedulerRetiredBytes { get; init; }
+        public ulong SimpleDdgiSchedulerStaleFeedbackCount { get; init; }
+        public ulong SimpleDdgiSchedulerFeedbackGenerationRejectionCount { get; init; }
+        public int SimpleDdgiSchedulerFallbackLatched { get; init; }
+        public int SimpleDdgiSchedulerFallbackFreshResetPending { get; init; }
+        public ulong SimpleDdgiSchedulerFallbackCount { get; init; }
+        public string SimpleDdgiSchedulerFallbackReason { get; init; } = string.Empty;
         public long GpuGiCompositeMicroseconds { get; init; }
-        public ulong GlobalIlluminationRenderTargetBytes { get; init; }
-        public ulong SsgiRenderTargetBytes { get; init; }
-        public ulong SceneSurfaceRenderTargetBytes { get; init; }
         public ulong DdgiTextureBytes { get; init; }
         public ulong DdgiBufferBytes { get; init; }
-        public ulong DdgiGpuSchedulerBufferBytes { get; init; }
-        public int DdgiGpuSchedulerDirtyRegionCapacity { get; init; }
-        public int DdgiGpuSchedulerCandidateCapacity { get; init; }
-        public int DdgiGpuSchedulerGroupCountCapacity { get; init; }
-        public int DdgiGpuSchedulerPrefixCapacity { get; init; }
-        public int DdgiGpuSchedulerDirtyRegionCount { get; init; }
-        public int DdgiGpuSchedulerDirtyRegionOverflowCount { get; init; }
-        public int DdgiGpuSchedulerResourceReinitializationCount { get; init; }
-        public int DdgiGpuSchedulerTotalResourceReinitializationCount { get; init; }
-        public ulong DdgiGpuSchedulerUploadBytes { get; init; }
-        public int DdgiGpuSchedulerReadbackValid { get; init; }
-        public int DdgiGpuSchedulerReadbackLatencyFrames { get; init; }
-        public int DdgiGpuSchedulerFallbackActive { get; init; }
-        public string DdgiGpuSchedulerFallbackReason { get; init; } = string.Empty;
-        public int DdgiGpuSchedulerConsideredProbeCount { get; init; }
-        public uint DdgiGpuSchedulerRequestCount { get; init; }
-        public uint DdgiGpuSchedulerPrimaryRayCount { get; init; }
-        public uint DdgiGpuSchedulerCandidateCount { get; init; }
-        public uint DdgiGpuSchedulerOverflowCount { get; init; }
-        public uint DdgiGpuSchedulerCandidateBufferOverflowCount { get; init; }
-        public uint DdgiGpuSchedulerPerBucketOverflowCount { get; init; }
-        public uint DdgiGpuSchedulerDuplicateRequestCount { get; init; }
-        public uint DdgiGpuSchedulerBudgetRejectedCount { get; init; }
-        public uint DdgiGpuSchedulerRequestBudgetRejectedCount { get; init; }
-        public uint DdgiGpuSchedulerPrimaryRayBudgetRejectedCount { get; init; }
-        public uint DdgiGpuSchedulerInvalidProbeCount { get; init; }
-        public int DdgiGpuSchedulerCandidateOutputCapacity { get; init; }
-        public int DdgiGpuSchedulerFullScan { get; init; }
-        public uint DdgiGpuSchedulerVisibleFrustumCandidateCount { get; init; }
-        public uint DdgiGpuSchedulerSafetyShellCandidateCount { get; init; }
-        public uint DdgiGpuSchedulerAgeRefreshCandidateCount { get; init; }
-        public uint DdgiGpuSchedulerHighVarianceCandidateCount { get; init; }
-        public uint DdgiGpuSchedulerLowConfidenceCandidateCount { get; init; }
-        public uint DdgiGpuSchedulerStableSkippedCount { get; init; }
-        public uint DdgiGpuSchedulerPriority0RequestCount { get; init; }
-        public uint DdgiGpuSchedulerPriority1RequestCount { get; init; }
-        public uint DdgiGpuSchedulerPriority2RequestCount { get; init; }
-        public uint DdgiGpuSchedulerPriority3RequestCount { get; init; }
-        public uint DdgiGpuSchedulerPriorityBucketMismatchSkipCount { get; init; }
-        public int DdgiGpuSchedulerRequestBudgetSaturated { get; init; }
-        public int DdgiGpuSchedulerPrimaryRayBudgetSaturated { get; init; }
-        public int DdgiGpuSchedulerValidationValid { get; init; }
-        public string DdgiGpuSchedulerValidationStatus { get; init; } = string.Empty;
-        public int DdgiGpuSchedulerValidationCpuRequestCount { get; init; }
-        public uint DdgiGpuSchedulerValidationGpuRequestCount { get; init; }
-        public int DdgiGpuSchedulerValidationComparedRequestCount { get; init; }
-        public int DdgiGpuSchedulerValidationMismatchCount { get; init; }
-        public int DdgiGpuSchedulerValidationSampleLimit { get; init; }
-        public string DdgiGpuSchedulerValidationFirstMismatch { get; init; } = string.Empty;
         public uint DdgiTraceDispatchGroupCount { get; init; }
         public uint DdgiTraceProbeCount { get; init; }
         public uint DdgiTraceRayCount { get; init; }
@@ -1666,6 +1578,15 @@ namespace Njulf.Rendering.Data
         public ulong ReflectionProbeBytes { get; init; }
         public ulong ReflectionProbeCaptureTargetBytes { get; init; }
         public ulong ReflectionProbeCubemapArrayBytes { get; init; }
+        public int ReflectionProbeRetirementActiveCount { get; init; }
+        public ulong ReflectionProbeRetirementActiveBytes { get; init; }
+        public ulong ReflectionProbeRetirementOldestAgeFrames { get; init; }
+        public int ReflectionProbeRetirementPeakCount { get; init; }
+        public ulong ReflectionProbeRetirementPeakBytes { get; init; }
+        public ulong ReflectionProbeRetirementCapacityRejections { get; init; }
+        public ulong ReflectionProbeRetirementMemoryBudgetRejections { get; init; }
+        public ulong ReflectionProbeRetirementInvalidRecordCount { get; init; }
+        public ulong ReflectionProbeRetiredCount { get; init; }
         public int ReflectionProbeCaptureBudgetUsed { get; init; }
         public int ReflectionProbeCaptureBudgetExceeded { get; init; }
         public ulong StagingBufferAllocatedBytes { get; init; }

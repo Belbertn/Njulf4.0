@@ -37,9 +37,7 @@ public sealed class GlobalIlluminationDefaultsTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(settings.DdgiSimpleEnabled, Is.True);
-            Assert.That(settings.EffectiveUseSimpleDdgi, Is.True);
-            Assert.That(settings.EffectiveUseDdgi, Is.False);
+            Assert.That(settings.EffectiveUseDdgi, Is.True);
         });
     }
 
@@ -91,17 +89,13 @@ public sealed class GlobalIlluminationDefaultsTests
     public void QualityPreset_RestoresSimpleDdgiAsDefault(RenderQualityPreset preset)
     {
         var settings = new RenderSettings();
-        settings.GlobalIllumination.DdgiSimpleEnabled = false;
-
         settings.ApplyQualityPreset(preset);
 
-        Assert.That(settings.GlobalIllumination.DdgiSimpleEnabled, Is.True);
         if (settings.GlobalIllumination.Enabled && settings.GlobalIllumination.UseDdgi)
         {
             Assert.Multiple(() =>
             {
-                Assert.That(settings.GlobalIllumination.EffectiveUseSimpleDdgi, Is.True);
-                Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.False);
+                Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
             });
         }
 
@@ -160,9 +154,7 @@ public sealed class GlobalIlluminationDefaultsTests
 
             Assert.Multiple(() =>
             {
-                Assert.That(settings.GlobalIllumination.DdgiSimpleEnabled, Is.True);
-                Assert.That(settings.GlobalIllumination.EffectiveUseSimpleDdgi, Is.True);
-                Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.False);
+                Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
             });
         }
         finally
@@ -173,11 +165,11 @@ public sealed class GlobalIlluminationDefaultsTests
     }
 
     [Test]
-    public void SettingsFileWithExplicitLegacySelector_PreservesOverride()
+    public void SettingsFileWithRemovedLegacySelector_IsIgnored()
     {
         string path = Path.Combine(
             TestContext.CurrentContext.WorkDirectory,
-            $"render-settings-legacy-ddgi-override-{Guid.NewGuid():N}.json");
+            $"render-settings-removed-legacy-ddgi-selector-{Guid.NewGuid():N}.json");
 
         try
         {
@@ -198,8 +190,6 @@ public sealed class GlobalIlluminationDefaultsTests
 
             Assert.Multiple(() =>
             {
-                Assert.That(settings.GlobalIllumination.DdgiSimpleEnabled, Is.False);
-                Assert.That(settings.GlobalIllumination.EffectiveUseSimpleDdgi, Is.False);
                 Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
             });
         }

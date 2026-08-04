@@ -33,7 +33,7 @@ These live directly on `VulkanRenderer`, not inside `RenderSettings`.
 | `UseCameraDependentCpuScenePayload` | Enables camera-dependent CPU scene payload generation. |
 | `UseCpuMeshletFrustumCulling` | Enables CPU meshlet frustum culling. |
 
-`RenderSettings` defaults to `DdgiHigh`, which is the DDGI-only production profile. `Ultra` remains selectable for the old ray-query hybrid path.
+`RenderSettings` defaults to `DdgiHigh`, the Simple-DDGI production profile. `Ultra` remains selectable as the highest Simple-DDGI quality tier.
 
 ## Dynamic Resolution
 
@@ -225,46 +225,24 @@ AO debug views:
 | Setting | Purpose |
 | --- | --- |
 | `Enabled` | Enables diffuse global illumination. |
-| `Mode` | GI mode: `Disabled`, `Ssgi`, `Ddgi`, `Hybrid`, `RayQueryHybrid`. |
-| `UseSsgi` | Allows the SSGI backend when the selected mode supports it. |
-| `UseDdgi` | Allows DDGI probe lighting when the selected mode supports it. |
-| `UseRayQueryBackend` | Allows ray-query DDGI updates when DDGI is effective and the device supports it. |
+| `Mode` | GI mode: `Disabled` or `Ddgi`. The active implementation is Simple DDGI. |
+| `UseDdgi` | Enables Simple DDGI probe lighting. |
+| `UseRayQueryBackend` | Enables ray-query Simple DDGI updates when the device supports them. |
 | `DdgiQualityTier` | DDGI quality tier: `DdgiLow`, `DdgiMedium`, `DdgiHigh`, `DdgiUltra`. |
 | `DdgiProbeClassificationEnabled` | Enables DDGI probe classification. |
 | `DdgiProbeRelocationEnabled` | Enables DDGI probe relocation. |
 | `DdgiCameraRelativeEnabled` | Enables camera-relative DDGI clipmaps. |
 | `DdgiAdaptiveBudgetingEnabled` | Enables GPU-time-driven adaptive DDGI update budgets. |
-| `DdgiSchedulerMode` | DDGI probe scheduler mode: `CpuReference`, `Gpu`, or `CpuGpuCompare`. Defaults to CPU reference while the GPU scheduler is gated. |
-| `DdgiGpuSchedulerReadbackValidationEnabled` | Enables optional frame-late GPU scheduler validation readback. |
-| `DdgiCompareModeUseGpuQueueForRendering` | In `CpuGpuCompare`, renders with the GPU-produced queue while the CPU scheduler runs as the validation reference. Disable to render the CPU queue and skip the GPU schedule pass. |
-| `DdgiGpuSchedulerMaxDirtyRegions` | Maximum dirty regions uploaded for GPU scheduler input. |
-| `DdgiGpuSchedulerCandidateBucketCount` | Priority bucket count reserved for GPU scheduler candidate compaction. |
-| `DdgiGpuSchedulerLocalScanFraction` | Fraction of the bounded steady-frame GPU scheduler scan list reserved for authored local volumes before age-refresh remainder. |
-| `DdgiGpuSchedulerCascade0ScanFraction` | Fraction of the bounded steady-frame GPU scheduler scan list reserved for near camera-relative cascade probes before age-refresh remainder. |
-| `DdgiGpuSchedulerSafetyScanFraction` | Fraction of the bounded steady-frame GPU scheduler scan list reserved for camera-relative safety-shell probes before age-refresh remainder. |
-| `DdgiGpuSchedulerDirtyScanFraction` | Fraction of the bounded steady-frame GPU scheduler scan list reserved for dirty-region probes before age-refresh remainder. |
-| `DdgiGpuSchedulerFallbackOnValidationFailure` | Allows GPU scheduler validation failures to fall back to the CPU reference scheduler. |
-| `DdgiGpuSchedulerForceCpuFallback` | Forces CPU reference scheduling while still reporting GPU scheduler fallback diagnostics. |
-| `DdgiGpuSchedulerAutoRetryAfterFallback` | Allows a latched GPU scheduler fallback to retry after the configured stable-frame count. Defaults off for conservative production behavior. |
-| `DdgiGpuSchedulerValidationFailureThreshold` | Consecutive validation mismatch count required before latching CPU fallback. |
-| `DdgiGpuSchedulerFallbackRetryStableFrames` | Stable fallback frames required before an opt-in GPU scheduler retry. |
-| `DdgiGpuScheduleTimeBudgetMilliseconds` | Target GPU scheduler pass budget used for schedule-specific P95 diagnostics. |
-| `DdgiGpuTotalUpdateTimeBudgetMilliseconds` | Target total GPU DDGI update budget used by adaptive update selection in GPU scheduler modes. |
 | `DdgiAdaptiveBudgetHysteresisFraction` | Fractional timing headroom before adaptive DDGI reduces work. |
 | `DdgiEmergencyDegradeGpuTimeMultiplier` | GPU-time multiplier that triggers emergency DDGI degradation. |
 | `DdgiAsyncComputeEnabled` | Allows DDGI update work on async compute when renderer async compute is also enabled. |
 | `DdgiMaxProbeUpdatesPerFrame` | Hard probe-update count cap. |
 | `DdgiProbeUpdatePrimaryRayBudget` | Steady-frame primary ray budget for scheduled probe updates. |
-| `DdgiColdStartMaxProbeUpdatesPerFrame` | Cold-start probe-update count cap used before GPU timing is available. |
-| `DdgiColdStartPrimaryRayBudget` | Cold-start primary ray budget used before GPU timing is available. |
-| `DdgiMinimumProbeRefreshFrames` | Maximum target frame age for active probes before the adaptive scheduler preserves refresh work. |
 | `DdgiMaxRaysPerProbe` | Upper bound for rays per updated probe. |
-| `DdgiCascade0RaysPerProbe` ... `DdgiCascade3RaysPerProbe` | Per-cascade ray budgets, clamped by `DdgiMaxRaysPerProbe`. |
-| `DdgiCascade0MaxRayDistance` ... `DdgiCascade3MaxRayDistance` | Explicit per-cascade ray traversal distances for camera-relative DDGI. |
 | `DdgiMaxShadedLights` | Maximum lights shaded at a DDGI ray hit before the shader hard cap. |
 | `DdgiMaterialTextureMaxCascade` | Highest camera-relative cascade that samples material textures in DDGI hit shading; `-1` disables cascade texture sampling while authored volumes still sample textures. |
 | `DdgiSelfShadowBiasScale` | Artist-facing multiplier for authored DDGI normal/view self-shadow bias. Default `1.0`; higher values reduce acne/leaks at the cost of contact accuracy. |
-| `DdgiThinWallPolicyEnabled`, `DdgiThinWallLeakClampStrength` | Enables and controls visibility-based leak attenuation for legacy and Simple-DDGI. Simple-DDGI keeps one-sided source shading but records covered backfaces in receiver visibility and uses close backface hits to relocate probes trapped immediately behind architectural shells. Directional moments broadly filter hit and miss distances separately, with a narrower vote selecting the owning class at silhouettes; low-confidence probe selection is cubic, and the final clamp only suppresses all-occluded residuals in receiver and recursive-bounce sampling. |
+| `DdgiThinWallPolicyEnabled`, `DdgiThinWallLeakClampStrength` | Enables and controls Simple-DDGI visibility-based leak attenuation. Simple-DDGI keeps one-sided source shading, records covered backfaces in receiver visibility, and uses close backface hits to relocate probes trapped behind architectural shells. |
 | `DdgiHysteresisResponse` | Artist-facing response scale for DDGI probe lighting history. Default `1.0`; higher values converge lighting changes faster, lower values favor stability. |
 | `SimpleDdgiSampledAtlasEnabled` | Enables the optional filtered image mirror of the canonical Simple-DDGI SSBO atlases. High and Ultra request it; the runtime disables it safely if the DDGI memory budget cannot admit the extra image allocation. |
 | `SimpleDdgiReducedBlendEnabled` | Uses the SH irradiance projection on constrained tiers. Low and Medium enable it; High and Ultra use the full irradiance estimator. Visibility moments always use the exact directional ray estimator so reduced mode cannot create sparse zero-moment shadow bands. |
@@ -280,23 +258,21 @@ AO debug views:
 | `FarFieldClipmapEnabled`, `FarFieldPagedEnabled` | Enables the bounded paged far-field representation used beyond detailed TLAS coverage. Quality-tier application enables both and supplies tier-specific page/cache budgets. The cache becomes authoritative only after at least one page is published and no requested page bake remains pending. |
 | `GiAccelerationStructureMemoryBudgetBytes` | Hard detailed ray-query residency budget. High and Ultra require a complete scene-wide resolved resident set, trace it for the full probe ray, and publish no TLAS when it cannot fit. Low and Medium may trim only a coherent nearest-first static tail after the far-field representation is fully ready. |
 
-`DdgiHigh` is the default DDGI-only production profile: DDGI mode, SSGI disabled, ray-query backend requested, probe classification/relocation enabled, camera-relative clipmaps enabled, AO/reflections enabled, and DDGI async compute enabled. The production DDGI tier budgets are explicit: `DdgiLow` uses 2 cascades at 16x6x16 with a 64 MB DDGI memory target, `DdgiMedium` uses 3 cascades at 20x8x20 with 128 MB, `DdgiHigh` uses 4 cascades at 24x14x24 with 192 MB, and `DdgiUltra` uses 4 cascades at 32x12x32 with 384 MB. Dense probe density is reserved for admitted authored local volumes such as interiors and alleys; the camera-relative clipmap remains tier-bounded instead of allocating a dense all-world volume. Milestone 9 validation reports include a DDGI production gate for required benchmark scenes and fail if SSGI resources/passes remain active in `DdgiHigh`.
+`DdgiHigh` is the default production profile. It enables Simple DDGI with ray-query updates, camera-relative rings, AO, reflections, and optional async compute. Authored Simple-DDGI volumes add density to specific rooms or locations; they are not a second GI backend.
 
 Authored Simple-DDGI volumes are optional standalone local overrides, not required scene coverage. A normal scene starts with an empty authored-volume list and uses the quality tier's camera-relative rings. Add a volume explicitly with only its world-space bounds and desired spacing when a specific room or location needs extra probe density; phase, purpose, and priority have safe defaults for the simple case.
 
 The `DdgiHigh` Simple-DDGI profile uses three asymmetric camera-relative rings: near `28x14x28` at `1.25 m`, mid `18x10x18` at `3.75 m`, and far `12x8x12` at `11.25 m`. This is 15,368 probes total, reaching approximately `±16.9 m / ±8.1 m`, `±31.9 m / ±16.9 m`, and `±61.9 m / ±39.4 m` horizontally/vertically before authored volumes. Its global update budget is 2,048 probes per frame, with near/mid/far preferred quotas of 1,024/324/128 and 128/64/32 full-refresh rays per probe. DDGI diagnostics report each active Simple-DDGI ring's grid, spacing, reach, and exact CPU age P95.
 
-DDGI debug views include `DdgiCoverage`, `DdgiCascadeSelection`, `DdgiCascadeBlendWeight`, `DdgiUpdateReasons`, `DdgiRayBudget`, and gather-tile views such as `DdgiGatherBlendWeight` for validating volume selection, probe validity, update reasons, ray-budget behavior, and shader-read tile state.
+Simple-DDGI debug views cover irradiance, coverage, update reasons, ray budget, probe state, and ring transitions.
 
-DDGI debug screenshots are designed to be self-identifying without console history: DDGI debug views render a category-colored screen border, a top-left checker/binary view-id badge, and a bottom-left RGB legend strip. DDGI gather debug views also enable a sparse one-sample-per-16x16-block clipmap coverage readback so `ddgiClipmapCoverage` describes the same shader tile path being displayed without enabling the full per-probe forward estimate counter set. The sample prints a `DDGI debug legend` line when DDGI debug views are selected. Screenshots requested while GI debug or the DDGI diagnostics filter is active include a filename suffix such as `-gi-DdgiSupportCoverage-ddgi-filter.png`.
+GI debug screenshots are self-identifying: Simple-DDGI views render a category-colored border, a view-id badge, and a legend strip. The sample prints a matching debug-legend line and includes the selected view in the screenshot filename.
 
-Performance snapshots expose Phase 1 GPU scheduler resource diagnostics separately from aggregate DDGI memory: scheduler buffer bytes, dirty-region/candidate/group/prefix capacities, dirty-region upload count, dirty-region overflow count, and scheduler input upload bytes. Phase 2 adds `DdgiSchedulePass` before `DdgiTracePass` and reports `GpuDdgiScheduleMicroseconds` as part of aggregate `GpuDdgiUpdateMicroseconds`. Phase 3 GPU scheduler mode writes the DDGI update queue and scheduler counters on GPU; CPU reference mode still builds and uploads the CPU queue. Phase 4 copies scheduler counters through a frame-late diagnostics readback ring and reports GPU-produced request/candidate/overflow/budget counters without same-frame CPU synchronization. Phase 5 compare mode can run the CPU reference scheduler before GPU scheduling, copy the GPU queue frame-late, and report validation status, mismatch count, first mismatch, and CPU/GPU request counts. Phase 6 feeds adaptive budgets from frame-late DDGI GPU update timing in GPU scheduler modes, falls back to estimated timing while timestamps are pending, caps GPU candidate generation before prefix/compact/finalize, applies priority quotas with downward carry, protects visible/local/new-cell budget floors, and reports scheduler pass P95/over-budget diagnostics. Phase 7 enforces production tier memory budgets and reports DDGI probe volume buffer, probe state buffer, irradiance/visibility atlas, ray scratch, update queue, relocation/classification buffer, scheduler buffers, gather tile buffer, and local slot reserved pool bytes in performance snapshots and sample diagnostics output. Phase 8 hardens relocation and classification: trace output stores nearest-hit, close-hit, backface, miss, and relocation-direction evidence; relocation is confidence-gated free-space correction rather than surface snapping; and inactive probe coverage falls back to environment lighting instead of black. Phase 9 makes one-frame DDGI cache publication explicit: the probe-volume header, performance snapshots, and sample diagnostics expose cache generation, last updated frame serial, and cache warmup state, and forward shading treats cold cache as zero DDGI confidence so environment fallback is used instead of black. Phase 10 adds unit coverage for scheduler input clamping and scripted sample support for `cpu-reference`, `gpu`, and `cpu-gpu-compare` DDGI scheduler snapshot runs.
-
-The current DDGI production gate enforces Phase 8 tier budgets with total DDGI update P95 from `DdgiSchedulePass`, `DdgiTracePass`, `DdgiBlendPass`, `DdgiRelocateClassifyPass`, and `DdgiPublishPass`: `DdgiLow <= 0.75 ms`, `DdgiMedium <= 1.0 ms`, `DdgiHigh <= 1.5 ms`, and `DdgiUltra <= 2.5 ms`. It also fails when a tier raises its DDGI atlas budget above 64 MB, 128 MB, 192 MB, or 384 MB respectively, and when emergency degradation starves visible/dirty/new-probe near-field work.
+Performance snapshots report the Simple-DDGI trace, transport, blend, upload, atlas, and far-field timings alongside bounded scheduler-policy and probe-lifecycle telemetry. The production gate verifies these Simple-DDGI stages, memory budgets, ray-query readiness, and visible-probe latency.
 
 The production gate also includes the Phase 9 weak-bounce checks: healthy raw atlas/sample/blend energy must survive into final DDGI diffuse, high environment fallback weight must not mask weak DDGI contribution, emissive validation scenes must show emissive bounce energy, and thin-wall/leak scenes must keep leak attenuation active.
 
-DDGI-only debug shortcut cycle order: `FinalIndirect`, `DdgiIrradiance`, `DdgiSourceCacheRadiance`, `DdgiRawDiffuse`, `DdgiSuppressionMask`, `DdgiEffectiveWeight`, `DdgiEnvironmentFallbackWeight`, `DdgiVisibility`, `DdgiVisibilityMoments`, `DdgiProbeIndex`, `DdgiProbeState`, `DdgiProbeRelocation`, `DdgiRelocationNormalized`, `DdgiProbeLogicalPosition`, `DdgiProbeRelocatedPosition`, `DdgiProbeRelocationDirection`, `DdgiClassificationInvalidScore`, `DdgiLeakClamp`, `DdgiCoverage`, `DdgiSpatialCoverage`, `DdgiSupportCoverage`, `DdgiDataConfidence`, `DdgiDirectionalSupport`, `DdgiVisibilityConfidence`, `DdgiConfidenceChain`, `DdgiCascadeSelection`, `DdgiCascadeBlendWeight`, `DdgiUpdateReasons`, `DdgiRayBudget`, `DdgiGatherLocalVolume`, `DdgiGatherClipmap`, `DdgiGatherClipmapBlendWeight`, `DdgiGatherFallback`, `FinalIndirect`.
+Simple-DDGI debug shortcut cycle order: `FinalIndirect`, `DdgiIrradiance`, `DdgiSourceCacheRadiance`, `DdgiSampledIrradiance`, `DdgiFinalDiffuse`, `DdgiRawDiffuse`, `DdgiConfidenceBypass`, `DdgiSuppressionMask`, `DdgiEffectiveWeight`, `DdgiEnvironmentFallbackWeight`, `DdgiVisibility`, `DdgiVisibilityMoments`, `DdgiProbeIndex`, `DdgiProbeState`, `DdgiProbeRelocation`, `DdgiProbeLogicalPosition`, `DdgiProbeRelocatedPosition`, `DdgiProbeRelocationDirection`, `DdgiClassificationInvalidScore`, `DdgiLeakClamp`, `DdgiCoverage`, `DdgiSpatialCoverage`, `DdgiSupportCoverage`, `DdgiDataConfidence`, `DdgiDirectionalSupport`, `DdgiVisibilityConfidence`, `DdgiConfidenceChain`, `DdgiCascadeSelection`, `DdgiCascadeBlendWeight`, `DdgiUpdateReasons`, `DdgiRayBudget`, `DdgiGatherLocalVolume`, `DdgiGatherClipmap`, `DdgiGatherClipmapBlendWeight`, `DdgiGatherBlendWeight`, `DdgiGatherFallback`, `FarFieldOccupancySlice`, `FarFieldTraceResult`, `FarFieldSkyVisibility`, `FarFieldSunShadow`, `MaterialTransportHitProvenance`, then `None`.
 
 `DdgiDataConfidence` displays accepted probe-data availability. `DdgiDirectionalSupport` displays the separate geometric fraction with useful normal-facing support. `DdgiConfidenceChain` encodes availability, directional authority, and transport visibility in RGB. `DdgiIrradiance` uses a normalized logarithmic presentation so low nonzero energy remains distinguishable from exact zero; `DdgiSampledIrradiance` retains the raw linear diagnostic. `DdgiSourceCacheRadiance` uses the same logarithmic presentation for direct, emissive, and sky source-cache energy before recursive bounce.
 
@@ -402,7 +378,7 @@ Fog debug views:
 | `Mode` | Transparency mode: `SortedAlphaBlend`, `WeightedBlendedOit`. |
 | `DebugView` | Transparency debug view. |
 | `ReceiveShadows` | Transparent surfaces receive shadows. |
-| `ReceiveGlobalIllumination` | Transparent surfaces sample DDGI when a DDGI backend is active. SSGI-only presets disable this because layered fragments do not own the opaque trace-source contract. |
+| `ReceiveGlobalIllumination` | Transparent surfaces sample Simple DDGI when GI is active. |
 | `SampleReflections` | Transparent surfaces sample reflections. |
 | `SortPerMeshlet` | Sorts transparency at meshlet granularity. |
 | `MaxTransparentMeshlets` | Transparent meshlet budget. |
@@ -776,16 +752,16 @@ Control-modified chords are also used by the sample:
 | `Ctrl+3` | Cycle lighting mode. |
 | `Ctrl+[` | Toggle auto exposure. |
 | `Ctrl+5` | Toggle global illumination. |
-| `Ctrl+6` | Cycle all GI debug views, including SSGI, DDGI, and ray-query views. |
-| `Ctrl+D` | Cycle DDGI-only debug view and force DDGI-only mode. |
-| `Ctrl+F` | Toggle DDGI-only diagnostics console filter. |
-| `Ctrl+G` | Cycle focused DDGI debug views: final indirect, irradiance, coverage, update reasons. |
+| `Ctrl+6` | Cycle the available Simple-DDGI debug views. |
+| `Ctrl+D` | Enable Simple DDGI and cycle its debug view. |
+| `Ctrl+F` | Toggle Simple-DDGI diagnostics console filter. |
+| `Ctrl+G` | Cycle focused Simple-DDGI debug views: final indirect, irradiance, coverage, update reasons. |
 | `Ctrl+P` | Restore the current scene/scenario's normal render view and clear visualization overrides. |
-| `Ctrl+T` | Cycle DDGI quality tier and force DDGI-only mode. |
-| `Ctrl+L` | Toggle DDGI compact L1 probe metadata. |
-| `Ctrl+V` | Cycle DDGI investigation views: gather clipmap, shader-read blend weight, fallback, support, data, confidence, irradiance, raw diffuse, probe position, update reasons. |
-| `Ctrl+R` | Print DDGI diagnostics: effective mode, runtime snapshot, forward estimate counters, persistent DDGI warnings, SSGI allocation status, probe/update budgets, adaptive state, GPU scheduler counts/reasons/fallback/validation, memory, AS counts, and CPU/GPU timings. |
-| `Ctrl+Y` | Cycle GI mode for comparison: disabled, SSGI, DDGI, hybrid, ray-query hybrid. |
+| `Ctrl+T` | Cycle Simple-DDGI quality tier and enable Simple DDGI. |
+| `Ctrl+L` | Toggle Simple-DDGI compact L1 probe metadata. |
+| `Ctrl+V` | Cycle Simple-DDGI investigation views: gather clipmap, shader-read blend weight, fallback, support, data, confidence, irradiance, raw diffuse, probe position, update reasons. |
+| `Ctrl+R` | Print Simple-DDGI diagnostics: runtime state, probe/update budgets, scheduler policy, memory, acceleration structures, and CPU/GPU timings. |
+| `Ctrl+Y` | Cycle GI mode: disabled or Simple DDGI. |
 | `Ctrl+Backspace` | Clear GI debug view. |
 | `Ctrl+Keypad0` | Store diagnostic output JSON and a window screenshot with matching base filenames in `DiagnosticSnapshots`, and enable CPU snapshots for object/material inspection. |
 | `Ctrl+Keypad9` | Cycle debug overlay mode, including DDGI probe volume/activity/update overlays. |

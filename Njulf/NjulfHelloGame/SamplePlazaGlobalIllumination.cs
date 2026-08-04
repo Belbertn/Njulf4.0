@@ -14,8 +14,6 @@ internal enum SamplePlazaGpuMemoryProfile
 
 internal static class SamplePlazaGlobalIllumination
 {
-    private const string LegacyDenseAlleyVolumeName = "Dense Alley DDGI";
-
     public static void ConfigureRenderSettings(RenderSettings settings)
     {
         ConfigureRenderSettingsForMemoryProfile(settings, SamplePlazaGpuMemoryProfile.High);
@@ -49,11 +47,10 @@ internal static class SamplePlazaGlobalIllumination
 
         GlobalIlluminationSettings gi = settings.GlobalIllumination;
         gi.Enabled = true;
-        gi.Mode = GlobalIlluminationMode.Ssgi;
+        gi.Mode = GlobalIlluminationMode.Ddgi;
         gi.DebugView = GlobalIlluminationDebugView.None;
-        gi.UseSsgi = true;
-        gi.UseDdgi = false;
-        gi.UseRayQueryBackend = false;
+        gi.UseDdgi = true;
+        gi.UseRayQueryBackend = true;
         gi.IndirectIntensity = 0.85f;
         gi.EnvironmentFallbackIntensity = 0.45f;
         gi.ResolutionScale = 0.5f;
@@ -85,7 +82,6 @@ internal static class SamplePlazaGlobalIllumination
         gi.Enabled = false;
         gi.Mode = GlobalIlluminationMode.Disabled;
         gi.DebugView = GlobalIlluminationDebugView.None;
-        gi.UseSsgi = false;
         gi.UseDdgi = false;
         gi.UseRayQueryBackend = false;
         gi.IndirectIntensity = 0.0f;
@@ -118,16 +114,5 @@ internal static class SamplePlazaGlobalIllumination
             throw new ArgumentNullException(nameof(scene));
 
         scene.AmbientLight = new Color(0.0f, 0.0f, 0.0f, 1.0f);
-        RemoveLegacyDenseAlleyVolume(scene);
-    }
-
-    private static void RemoveLegacyDenseAlleyVolume(Scene scene)
-    {
-        for (int i = scene.GlobalIlluminationProbeVolumes.Count - 1; i >= 0; i--)
-        {
-            GlobalIlluminationProbeVolume volume = scene.GlobalIlluminationProbeVolumes[i];
-            if (string.Equals(volume.Name, LegacyDenseAlleyVolumeName, StringComparison.Ordinal))
-                scene.Remove(volume);
-        }
     }
 }

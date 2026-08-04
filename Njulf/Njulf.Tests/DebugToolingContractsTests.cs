@@ -230,7 +230,6 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.DdgiDiagnosticWarnings, Is.Empty);
                 Assert.That(diagnostics.DdgiResourceReinitializationCount, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiTotalResourceReinitializationCount, Is.EqualTo(0));
-                Assert.That(diagnostics.DdgiCameraMovementClass, Is.EqualTo(DdgiCameraMovementClass.None));
                 Assert.That(diagnostics.GpuTimingSupported, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuTimingEnabled, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuTimingUnavailableReason, Is.EqualTo(string.Empty));
@@ -272,7 +271,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void SampleInputController_DdgiDebugShortcutsStayDocumented()
+        public void SampleInputController_SimpleDdgiDebugShortcutsStayDocumented()
         {
             string controller = ReadRepoText("NjulfHelloGame", "SampleInputController.cs");
             string program = ReadRepoText("NjulfHelloGame", "Program.cs");
@@ -284,7 +283,7 @@ namespace Njulf.Tests
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.F, ref _toggleDdgiDiagnosticsFilterPressed)"));
                 Assert.That(controller, Does.Contain("ApplyDdgiDiagnosticsCounterState(_getDiagnosticsFilter?.Invoke() ?? SampleDiagnosticsFilter.FullFrame);"));
                 Assert.That(controller, Does.Contain("diagnostics.DdgiForwardEstimateCountersEnabled = true;"));
-                Assert.That(controller, Does.Contain("DDGI forward estimate counters: enabled for DDGI-only diagnostics."));
+                Assert.That(controller, Does.Contain("DDGI forward estimate counters: enabled for Simple DDGI diagnostics."));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.V, ref _cycleDdgiInvestigationViewPressed)"));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.P, ref _resetNormalRenderViewPressed)"));
                 Assert.That(controller, Does.Contain("ResetNormalRenderView()"));
@@ -307,17 +306,17 @@ namespace Njulf.Tests
                 Assert.That(program, Does.Contain("() => RestoreSceneRenderSettings(renderer)"));
                 Assert.That(program, Does.Contain("_performanceScenarioRunner.CurrentScenario"));
                 Assert.That(controller, Does.Not.Contain("ApplyDdgiQualityTier(DdgiQualityTier.DdgiMedium);"));
-                Assert.That(reference, Does.Contain("`Ctrl+D` | Cycle DDGI-only debug view"));
-                Assert.That(reference, Does.Contain("`Ctrl+F` | Toggle DDGI-only diagnostics console filter"));
-                Assert.That(reference, Does.Contain("`Ctrl+V` | Cycle DDGI investigation views"));
+                Assert.That(reference, Does.Contain("`Ctrl+D` | Enable Simple DDGI and cycle its debug view"));
+                Assert.That(reference, Does.Contain("`Ctrl+F` | Toggle Simple-DDGI diagnostics console filter"));
+                Assert.That(reference, Does.Contain("`Ctrl+V` | Cycle Simple-DDGI investigation views"));
                 Assert.That(reference, Does.Contain("`Ctrl+P` | Restore the current scene/scenario's normal render view"));
-                Assert.That(reference, Does.Contain("`Ctrl+T` | Cycle DDGI quality tier"));
-                Assert.That(reference, Does.Contain("`Ctrl+L` | Toggle DDGI compact L1 probe metadata"));
-                Assert.That(reference, Does.Contain("`Ctrl+R` | Print DDGI diagnostics"));
-                Assert.That(reference, Does.Contain("category-colored screen border"));
-                Assert.That(reference, Does.Contain("top-left checker/binary view-id badge"));
-                Assert.That(reference, Does.Contain("bottom-left RGB legend strip"));
-                Assert.That(reference, Does.Contain("-gi-DdgiSupportCoverage-ddgi-filter.png"));
+                Assert.That(reference, Does.Contain("`Ctrl+T` | Cycle Simple-DDGI quality tier"));
+                Assert.That(reference, Does.Contain("`Ctrl+L` | Toggle Simple-DDGI compact L1 probe metadata"));
+                Assert.That(reference, Does.Contain("`Ctrl+R` | Print Simple-DDGI diagnostics"));
+                Assert.That(reference, Does.Contain("category-colored border"));
+                Assert.That(reference, Does.Contain("view-id badge"));
+                Assert.That(reference, Does.Contain("legend strip"));
+                Assert.That(reference, Does.Contain("includes the selected view in the screenshot filename"));
             });
         }
 
@@ -471,7 +470,7 @@ namespace Njulf.Tests
                 Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.FarFieldSunShadow => 123u"));
                 Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiDirectionalSupport => 124u"));
                 Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiSourceCacheRadiance => 125u"));
-                Assert.That(renderer, Does.Contain("ScheduleReflectionProbeRecapturesFromGi(sceneData, ddgiActive, simpleDdgiActive);"));
+                Assert.That(renderer, Does.Contain("ScheduleReflectionProbeRecapturesFromGi(sceneData, simpleDdgiActive: true);"));
                 Assert.That(renderer, Does.Contain("_reflectionProbeManager.RequestRecaptureAll(\"ddgi-ready\")"));
                 Assert.That(renderer, Does.Contain("_reflectionProbeManager.RequestRecaptureAll(\"simple-ddgi-dirty\")"));
             });
@@ -514,8 +513,8 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(renderer, Does.Contain("DrawSimpleDdgiProbeVolumeOverlay(sceneData, depthMode, remainingDetailedProbeMarkers);"));
-                Assert.That(renderer, Does.Contain("Settings.GlobalIllumination.EffectiveUseSimpleDdgi"));
+                Assert.That(renderer, Does.Contain("DrawSimpleDdgiProbeVolumeOverlay(sceneData, depthMode, maxProbeMarkers);"));
+                Assert.That(renderer, Does.Contain("Settings.GlobalIllumination.EffectiveUseDdgi"));
                 Assert.That(renderer, Does.Contain("_simpleDdgiVolumeManager.ProbeCount <= 0"));
                 Assert.That(renderer, Does.Contain("ReadOnlySpan<GPUSimpleDdgiVolume> volumes = _simpleDdgiVolumeManager.LastVolumes;"));
                 Assert.That(renderer, Does.Contain("for (int volumeIndex = 0; volumeIndex < volumes.Length; volumeIndex++)"));
@@ -721,7 +720,7 @@ namespace Njulf.Tests
                     Does.Not.Contain("CalculateAmbientOcclusionExtent(extent, 0.5f)"));
                 Assert.That(
                     renderer.ReplaceLineEndings("\n"),
-                    Does.Contain("Settings.AmbientOcclusion.ResolutionScale,\n                ssgiTargetEnabled"));
+                    Does.Contain("Settings.AmbientOcclusion.ResolutionScale,\n                Settings.AntiAliasing.EffectiveMode"));
                 Assert.That(
                     renderer,
                     Does.Contain("_lastAmbientOcclusionResolutionScale - ambientOcclusionResolutionScale"));

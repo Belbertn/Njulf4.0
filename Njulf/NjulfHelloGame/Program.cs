@@ -107,6 +107,7 @@ internal sealed class HelloGame : Game
     private string? _startupFailure;
     private string? _runtimeSmokeFailure;
     private int _drawnFrames;
+    private bool _sponzaAtmosphereFrozen;
     private int _baselineScenarioRenderedFrames;
     private bool _baselineSnapshotExported;
     private float _modelRotation;
@@ -207,8 +208,8 @@ internal sealed class HelloGame : Game
         if (startupScenario != SamplePerformanceScenario.Normal)
         {
             SamplePerformanceScenarioSummary summary = _performanceScenarioRunner.Apply(startupScenario);
+            _sponzaAtmosphereFrozen = false;
             SampleGlobalIlluminationValidation.ConfigureRenderSettings(renderer.Settings, startupScenario);
-            SampleGlobalIlluminationValidation.ConfigureSchedulerMode(renderer.Settings, _smokeOptions.DdgiSchedulerModeOverride);
             ApplySmokeRenderSettings(renderer);
             ApplyPerformanceScenarioCamera(camera, startupScenario);
             Console.WriteLine(
@@ -296,8 +297,8 @@ internal sealed class HelloGame : Game
             if (reloadScenario != SamplePerformanceScenario.Normal)
             {
                 _performanceScenarioRunner.Apply(reloadScenario);
+                _sponzaAtmosphereFrozen = false;
                 SampleGlobalIlluminationValidation.ConfigureRenderSettings(renderer.Settings, reloadScenario);
-                SampleGlobalIlluminationValidation.ConfigureSchedulerMode(renderer.Settings, _smokeOptions.DdgiSchedulerModeOverride);
                 ApplySmokeRenderSettings(renderer);
                 ApplyPerformanceScenarioCamera(camera, reloadScenario);
             }
@@ -463,13 +464,49 @@ internal sealed class HelloGame : Game
             renderer.Settings.AsyncCompute.Mode = _smokeOptions.AsyncComputeModeOverride.Value;
         else if (_smokeOptions.EnableAsyncCompute)
             renderer.Settings.AsyncCompute.Mode = AsyncComputeMode.ForceEnabledForValidation;
+        if (_smokeOptions.SimpleDdgiSchedulerModeOverride.HasValue)
+        {
+            renderer.Settings.GlobalIllumination.SimpleDdgiSchedulerMode =
+                _smokeOptions.SimpleDdgiSchedulerModeOverride.Value;
+        }
         renderer.Settings.AsyncCompute.ForceValidationPath = _smokeOptions.AsyncComputeValidationPath;
+        if (_smokeOptions.AsyncComputeValidationPath is { } validationPath)
+        {
+            // An explicit validation selector is an opt-in to exercise that atomic path. This
+            // is important for paths such as GPU particles whose production toggles are
+            // deliberately conservative by default; it does not bypass the renderer's feature,
+            // capability, concrete-resource, or validation-failure gates.
+            switch (validationPath)
+            {
+                case AsyncComputePath.SimpleDdgiUpdate:
+                    renderer.Settings.AsyncCompute.SimpleDdgiUpdateEnabled = true;
+                    break;
+                case AsyncComputePath.FarFieldClipmapBake:
+                    renderer.Settings.AsyncCompute.FarFieldClipmapBakeEnabled = true;
+                    break;
+                case AsyncComputePath.AmbientOcclusionBlur:
+                    renderer.Settings.AsyncCompute.AmbientOcclusionBlurEnabled = true;
+                    break;
+                case AsyncComputePath.HiZBuild:
+                    renderer.Settings.AsyncCompute.HiZBuildEnabled = true;
+                    break;
+                case AsyncComputePath.Fog:
+                    renderer.Settings.AsyncCompute.FogEnabled = true;
+                    break;
+                case AsyncComputePath.Bloom:
+                    renderer.Settings.AsyncCompute.BloomEnabled = true;
+                    break;
+                case AsyncComputePath.GpuParticles:
+                    renderer.Settings.AsyncCompute.GpuParticlesEnabled = true;
+                    renderer.Settings.Particles.SimulationMode = ParticleSimulationMode.Gpu;
+                    break;
+            }
+        }
         if (_smokeOptions.EnableFarFieldClipmap)
             renderer.Settings.GlobalIllumination.FarFieldClipmapEnabled = true;
         if (_smokeOptions.EnableFarFieldForceAll)
             renderer.Settings.GlobalIllumination.FarFieldForceAll = true;
 
-        SampleGlobalIlluminationValidation.ConfigureSchedulerMode(renderer.Settings, _smokeOptions.DdgiSchedulerModeOverride);
         renderer.Settings.Transparency.Mode = _smokeOptions.TransparencyMode;
         _materialGiRolloutBootstrap.Apply(renderer.Settings, Console.Out);
         if (_smokeOptions.Benchmark.Enabled)
@@ -479,6 +516,11 @@ internal sealed class HelloGame : Game
             // budgeting remains available in normal rendering and explicit
             // experiments, but the canonical benchmark uses the authored cap.
             renderer.Settings.GlobalIllumination.DdgiAdaptiveBudgetingEnabled = false;
+            // Particle simulation is normally wall-clock driven. Lock it to the
+            // benchmark timestep so graphics/async image captures compare the
+            // same scene state rather than two different particle trajectories.
+            renderer.Settings.Particles.FixedSimulationDeltaSeconds =
+                BenchmarkSimulationDeltaSeconds;
             SampleBenchmarkCaptureVariant.Apply(
                 renderer.Settings,
                 _smokeOptions.Benchmark.CaptureVariant);
@@ -520,7 +562,26 @@ internal sealed class HelloGame : Game
             _sceneLoader?.ApplyModelRotation(_modelRotation);
         }
 
+        ApplySponzaScenarioFrameControls();
+
         base.Update(simulationDeltaTime);
+    }
+
+    private void ApplySponzaScenarioFrameControls()
+    {
+        SamplePerformanceScenario scenario = _performanceScenarioRunner?.CurrentScenario ??
+            _smokeOptions.PerformanceScenario;
+        if (scenario != SamplePerformanceScenario.GiSponzaFreezeAfterAtmosphereStep ||
+            Renderer is not VulkanRenderer renderer || _sponzaAtmosphereFrozen)
+            return;
+
+        // Let the first rendered frame expose one quantized atmosphere update, then hold the
+        // exact owner generation still so the convergence and reflection publication gates can be
+        // measured without an additional CPU-side scene scan.
+        if (_drawnFrames < 1)
+            return;
+        renderer.Settings.Environment.AnimateTimeOfDay = false;
+        _sponzaAtmosphereFrozen = true;
     }
 
     internal static float ResolveSimulationDeltaTime(
@@ -1126,7 +1187,8 @@ internal sealed class HelloGame : Game
         FirstPersonCamera camera,
         SamplePerformanceScenario scenario)
     {
-        if (scenario != SamplePerformanceScenario.GiSponzaRightWallStationary)
+        if (scenario != SamplePerformanceScenario.GiSponzaRightWallStationary &&
+            !SampleSponzaAtmosphereScenario.IsScenario(scenario))
             return;
 
         SampleSponzaGiCameraBookmark bookmark = SampleSponzaGiCaptureContract.Default.LowBookmark;

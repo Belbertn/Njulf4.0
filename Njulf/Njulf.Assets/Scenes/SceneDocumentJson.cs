@@ -175,7 +175,6 @@ public static class SceneDocumentJson
         Objects = document.Objects.OrderBy(static item => item.Id).ToList(),
         Lights = document.Lights.OrderBy(static item => item.Id).ToList(),
         ReflectionProbes = document.ReflectionProbes.OrderBy(static item => item.Id).ToList(),
-        GiProbeVolumes = document.GiProbeVolumes.OrderBy(static item => item.Id).ToList(),
         InstanceBatches = document.InstanceBatches.OrderBy(static item => item.Id).Select(Normalize).ToList(),
         FoliagePrototypes = document.FoliagePrototypes.OrderBy(static item => item.Id).ToList(),
         FoliagePatches = document.FoliagePatches.OrderBy(static item => item.Id).ToList(),

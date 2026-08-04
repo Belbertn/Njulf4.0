@@ -372,7 +372,7 @@ public sealed class SampleSponzaGiCaptureContract
             violations.Add("The canonical directional sun and shadow settings must be locked.");
         }
         if (!settings.GlobalIllumination.Enabled ||
-            !settings.GlobalIllumination.EffectiveUseSimpleDdgi)
+            !settings.GlobalIllumination.EffectiveUseDdgi)
         {
             violations.Add("Simple DDGI must be enabled for the non-direct-only capture outputs.");
         }

@@ -144,12 +144,12 @@ public sealed class MaterialTransportLifecycleTests
     }
 
     [Test]
-    public void SsgiInputRevision_TracksTraceInputsButNotRasterOrFarFieldOnlyChanges()
+    public void GiTransportInputRevision_TracksTransportInputsButNotRasterOrFarFieldOnlyChanges()
     {
         using var manager = new MaterialManager();
         MaterialHandle handle = manager.RegisterMaterialDefinition(
-            new MaterialDefinition { Name = "SSGI revision" });
-        uint initial = manager.SsgiInputRevision;
+            new MaterialDefinition { Name = "GI revision" });
+        uint initial = manager.GiTransportInputRevision;
 
         manager.UpdateMaterialDefinition(
             handle,
@@ -157,22 +157,22 @@ public sealed class MaterialTransportLifecycleTests
             {
                 EmissiveFactor = new Vector3(0.5f, 0.25f, 0.125f)
             });
-        uint afterEmission = manager.SsgiInputRevision;
+        uint afterEmission = manager.GiTransportInputRevision;
 
         manager.UpdateMaterialDefinition(
             handle,
             manager.GetMaterialDefinition(handle) with { DecalLayer = 3 });
-        uint afterRasterOnly = manager.SsgiInputRevision;
+        uint afterRasterOnly = manager.GiTransportInputRevision;
 
         manager.UpdateMaterialDefinition(
             handle,
             manager.GetMaterialDefinition(handle) with { OcclusionStrength = 0.25f });
-        uint afterOcclusion = manager.SsgiInputRevision;
+        uint afterOcclusion = manager.GiTransportInputRevision;
 
         manager.UpdateMaterialDefinition(
             handle,
             manager.GetMaterialDefinition(handle) with { AlphaCutoff = 0.75f });
-        uint afterCoverage = manager.SsgiInputRevision;
+        uint afterCoverage = manager.GiTransportInputRevision;
 
         Assert.Multiple(() =>
         {
@@ -181,7 +181,7 @@ public sealed class MaterialTransportLifecycleTests
             Assert.That(afterRasterOnly, Is.EqualTo(afterEmission));
             Assert.That(afterOcclusion, Is.GreaterThan(afterRasterOnly));
             Assert.That(afterCoverage, Is.GreaterThan(afterOcclusion));
-            Assert.That(MaterialManager.AffectsSsgiInputs(MaterialChangeMask.FarField), Is.False);
+            Assert.That(MaterialManager.AffectsGiTransportInputs(MaterialChangeMask.FarField), Is.False);
         });
 
         manager.ReleaseMaterial(handle);
@@ -817,12 +817,12 @@ public sealed class MaterialTransportLifecycleTests
         MaterialAspectRevisions authoredBefore = manager.GetMaterialAspectRevisions(authored);
         MaterialAspectRevisions rawBefore = manager.GetMaterialAspectRevisions(rawV1);
         uint dataRevisionBefore = manager.MaterialDataRevision;
-        uint ssgiRevisionBefore = manager.SsgiInputRevision;
+        uint giTransportRevisionBefore = manager.GiTransportInputRevision;
 
         manager.SetTransportV2Enabled(false);
         MaterialAspectRevisions authoredDisabled = manager.GetMaterialAspectRevisions(authored);
         uint disabledDataRevision = manager.MaterialDataRevision;
-        uint disabledSsgiRevision = manager.SsgiInputRevision;
+        uint disabledGiTransportRevision = manager.GiTransportInputRevision;
         manager.SetTransportV2Enabled(false);
 
         Assert.Multiple(() =>
@@ -833,9 +833,9 @@ public sealed class MaterialTransportLifecycleTests
             Assert.That(authoredDisabled.Material, Is.GreaterThan(authoredBefore.Material));
             Assert.That(manager.GetMaterialAspectRevisions(rawV1), Is.EqualTo(rawBefore));
             Assert.That(disabledDataRevision, Is.GreaterThan(dataRevisionBefore));
-            Assert.That(disabledSsgiRevision, Is.GreaterThan(ssgiRevisionBefore));
+            Assert.That(disabledGiTransportRevision, Is.GreaterThan(giTransportRevisionBefore));
             Assert.That(manager.MaterialDataRevision, Is.EqualTo(disabledDataRevision));
-            Assert.That(manager.SsgiInputRevision, Is.EqualTo(disabledSsgiRevision));
+            Assert.That(manager.GiTransportInputRevision, Is.EqualTo(disabledGiTransportRevision));
             Assert.That(manager.GetMaterialDefinition(authored), Is.EqualTo(authoredDefinition));
             Assert.That(manager.GetMaterialTransportProfile(authored), Is.EqualTo(authoredProfile));
         });

@@ -365,25 +365,25 @@ public sealed class KhronosMaterialGiRenderedGateTests
     }
 
     [Test]
-    public void ForwardDynamicRenderingContract_DeclaresThreeSsgiAttachments()
+    public void ForwardDynamicRenderingContract_DeclaresOnlySceneAndOptionalProvenanceAttachments()
     {
         Assert.Multiple(() =>
         {
             Assert.That(
                 ForwardDynamicRenderingContract.ResolveColorAttachmentCount(
                     hasColorAttachment: false,
-                    ssgiEnabled: true),
+                    materialTransportProvenanceEnabled: true),
                 Is.Zero);
             Assert.That(
                 ForwardDynamicRenderingContract.ResolveColorAttachmentCount(
                     hasColorAttachment: true,
-                    ssgiEnabled: false),
+                    materialTransportProvenanceEnabled: false),
                 Is.EqualTo(1));
             Assert.That(
                 ForwardDynamicRenderingContract.ResolveColorAttachmentCount(
                     hasColorAttachment: true,
-                    ssgiEnabled: true),
-                Is.EqualTo(3));
+                    materialTransportProvenanceEnabled: true),
+                Is.EqualTo(2));
         });
     }
 

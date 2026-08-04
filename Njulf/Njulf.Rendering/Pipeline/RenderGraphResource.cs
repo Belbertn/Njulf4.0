@@ -13,18 +13,6 @@ namespace Njulf.Rendering.Pipeline
         AmbientOcclusionRaw,
         AmbientOcclusionBlurred,
         AmbientOcclusionScratch,
-        SceneNormal,
-        SceneMaterial,
-        SsgiTraceSource,
-        SsgiRaw,
-        SsgiHitDistance,
-        SsgiFiltered,
-        SsgiHistory,
-        SsgiDepthHistory,
-        SsgiNormalHistory,
-        SsgiMoments,
-        SsgiHistoryLength,
-        GiFinalDiffuse,
         MaterialTransportProvenance,
         DdgiProbeResources,
         TlasStorage,
@@ -50,11 +38,6 @@ namespace Njulf.Rendering.Pipeline
         SimpleDdgiProbeState,
         SimpleDdgiUpdateQueue,
         SimpleDdgiRelocationData,
-        FullDdgiScheduler,
-        FullDdgiRayResources,
-        FullDdgiAtlases,
-        FullDdgiState,
-        FullDdgiPublishResources,
         FogOutput,
         DirectionalShadowMap,
         SpotShadowAtlas,
@@ -84,7 +67,10 @@ namespace Njulf.Rendering.Pipeline
         WeightedOitRevealage,
         ReflectionProbeCubemaps,
         EnvironmentMaps,
-        TransientIntermediate
+        TransientIntermediate,
+        // Persistent GPU-resident Simple-DDGI scheduler arena. Appended to keep
+        // existing graph resource identities stable for capture compatibility.
+        SimpleDdgiScheduler
     }
 
     public enum RenderGraphResourceKind

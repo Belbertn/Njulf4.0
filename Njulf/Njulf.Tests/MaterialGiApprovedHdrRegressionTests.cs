@@ -222,7 +222,7 @@ public sealed class MaterialGiApprovedHdrRegressionTests
                 Is.LessThanOrEqualTo(0.10));
             Assert.That(
                 results.Single(result =>
-                    result.Kind == SampleMaterialGiVisualRoiGateKind.HybridLowFrequencyMean)
+                    result.Kind == SampleMaterialGiVisualRoiGateKind.LowFrequencyMean)
                     .MeasuredRelativeDifference,
                 Is.EqualTo(0.01).Within(1e-5));
             Assert.That(
@@ -655,8 +655,8 @@ public sealed class MaterialGiApprovedHdrRegressionTests
                     new SampleMaterialGiPixelRegion(leftWidth, 0, rightWidth, height)
                 ]),
             new(
-                SampleMaterialGiVisualRoiGateKind.HybridLowFrequencyMean,
-                SampleMaterialGiApprovedHdrComparer.MaximumHybridLowFrequencyMeanDifference,
+                SampleMaterialGiVisualRoiGateKind.LowFrequencyMean,
+                SampleMaterialGiApprovedHdrComparer.MaximumLowFrequencyMeanDifference,
                 SampleMaterialGiCaptureSignal.FinalComposedIndirect,
                 ComparisonSignal: SampleMaterialGiCaptureSignal.FinalDdgiDiffuse)
         };
@@ -733,7 +733,7 @@ public sealed class MaterialGiApprovedHdrRegressionTests
             sceneRevision,
             RenderQualityPreset.DdgiHigh,
             MaterialGiV2Feature.All,
-            GlobalIlluminationMode.Hybrid,
+            GlobalIlluminationMode.Ddgi,
             AsyncComputeMode.Disabled,
             AsyncComputeMode.Disabled,
             0,

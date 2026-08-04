@@ -1,9 +1,14 @@
-# GI low-contribution audit and remediation report
+# Historical GI low-contribution audit and remediation report
 
 Date: 2026-07-16  
 Branch: `Simplified-SDF`  
 Audited HEAD: `6c9acb9` (`NewW`)  
 Supplied captures: commit `a9c1f90` (`Dark wall issue fixed`)
+
+> **Superseded implementation note (2026-08-04):** The legacy/full DDGI and
+> original SSGI paths discussed in this historical audit have been removed.
+> The current runtime uses Simple DDGI only; a new complementary SSGI remains
+> future work.
 
 The remediation described below is uncommitted working-tree state on top of
 `6c9acb9`; it is not part of that commit. Post-fix captures consequently still

@@ -33,7 +33,7 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
     private const double ApprovedHdrMaximumFlipP95 = 0.08;
     private const double ApprovedHdrMaximumUniformLuminanceDifference = 0.05;
     private const double ApprovedHdrMaximumTransitionStep = 0.10;
-    private const double ApprovedHdrMaximumHybridLowFrequencyMeanDifference = 0.02;
+    private const double ApprovedHdrMaximumLowFrequencyMeanDifference = 0.02;
     private const double ApprovedHdrMaximumTemporalP95 = 0.03;
     private const string ApprovedHdrMetricVersion = "nvidia-hdr-flip/v1.7";
     private const string ApprovedHdrRelativeRmseDefinition =
@@ -49,7 +49,6 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
         "DirectSpecular",
         "RawDdgiIrradiance",
         "FinalDdgiDiffuse",
-        "RawSsgiEstimate",
         "FinalComposedIndirect",
         "MaterialDiffuseReflectance",
         "CompiledEmission",
@@ -112,11 +111,7 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
             "DDGI dirty first-update latency",
             "DDGI dirty convergence latency",
             "GI memory",
-            "SSGI resolution scale",
-            "SSGI rays per pixel",
-            "DDGI probes updated",
-            "DDGI resource reinitializations",
-            "DDGI gather fallback tiles"
+            "DDGI probes updated"
         };
 
     private static readonly HashSet<string> RequiredDdgiProductionCriteria =
@@ -125,18 +120,15 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
             "required-production-scene",
             "ddgi-high-profile",
             "ddgi-only-ray-query-active",
-            "no-ssgi-resources",
-            "no-ssgi-passes",
             "ddgi-split-passes-present",
             "no-recursive-ddgi-copy",
             "ddgi-async-compute-state-consistent",
             "no-static-frame-full-as-rebuild",
+            "blas-compaction-settled-and-lossless",
             "ddgi-ray-query-scene-complete",
             "ddgi-static-ray-coverage-complete",
             "requested-paged-far-field-active",
             "clipmaps-preserved-with-authored-volumes",
-            "ddgi-gather-tiles-valid",
-            "ddgi-forward-exhaustive-fallback-unused",
             "phase10-forward-metrics-valid",
             "phase9-raw-atlas-to-final-energy",
             "phase9-environment-fallback-not-dominant",
@@ -144,11 +136,8 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
             "phase9-thin-wall-leak-policy-active",
             "phase10-cache-warmup-steady",
             "phase10-warmup-progress-valid",
-            "phase10-scheduler-p95-budget",
-            "phase10-scheduler-overflow-free",
-            "phase10-scheduler-equivalence",
+            "simple-ddgi-probe-lifecycle-bounded",
             "gpu-timing-valid",
-            "ddgi-update-p95-budget",
             "simple-ddgi-transport-blend-p95-budget",
             "simple-ddgi-upload-p95-budget",
             "simple-ddgi-capacity-p95-budget",
@@ -846,8 +835,8 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
                     ApprovedHdrMaximumUniformLuminanceDifference,
                 "TransitionStep" =>
                     ApprovedHdrMaximumTransitionStep,
-                "HybridLowFrequencyMean" =>
-                    ApprovedHdrMaximumHybridLowFrequencyMeanDifference,
+                "LowFrequencyMean" =>
+                    ApprovedHdrMaximumLowFrequencyMeanDifference,
                 "TemporalStability" =>
                     ApprovedHdrMaximumTemporalP95,
                 _ => throw new InvalidDataException(
@@ -871,12 +860,12 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
             [
                 "UniformLuminance",
                 "TransitionStep",
-                "HybridLowFrequencyMean",
+                "LowFrequencyMean",
                 "TemporalStability"
             ]))
         {
             throw new InvalidDataException(
-                "Approved HDR producer must contain exactly the frozen uniform, transition, hybrid, and temporal ROI gates.");
+                "Approved HDR producer must contain exactly the frozen uniform, transition, low-frequency, and temporal ROI gates.");
         }
     }
 
@@ -1200,7 +1189,6 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
             RequireInt64(diagnostics, "GlobalIlluminationRayQueryActive") != 1 ||
             RequireInt64(diagnostics, "GlobalIlluminationEnabled") != 1 ||
             RequireInt64(diagnostics, "GlobalIlluminationDdgiActive") != 1 ||
-            RequireInt64(diagnostics, "GlobalIlluminationSsgiActive") != 0 ||
             RequireInt64(diagnostics, "SimpleDdgiActive") != 1 ||
             RequireInt64(diagnostics, "MaterialGiReleaseQualificationRequired") != 1 ||
             RequireInt64(diagnostics, "MaterialGiReleaseQualified") != 0 ||
@@ -1308,9 +1296,6 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
         ulong declaredGiBudget = SaturatingAdd(
             checked((ulong)ddgiAtlasBudget),
             checked((ulong)farFieldBudget));
-        declaredGiBudget = SaturatingAdd(
-            declaredGiBudget,
-            profile.GlobalIlluminationRenderTargetBudgetBytes);
         declaredGiBudget = SaturatingAdd(declaredGiBudget, residentBudget);
         declaredGiBudget = SaturatingAdd(declaredGiBudget, transientBudget);
         RequireBenchmarkMetricThreshold(
@@ -1379,8 +1364,6 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
                 profile.GlobalIlluminationGpuBudgetMilliseconds,
             "GI memory" => profile.GlobalIlluminationMemoryBudgetBytes,
             "Transparent objects" => profile.TransparentObjectBudget,
-            "SSGI resolution scale" => 0.5,
-            "SSGI rays per pixel" => 8,
             "DDGI dirty first-update latency" => 1,
             "DDGI dirty convergence latency" => 8,
             "Material GI non-finite values" or
@@ -1392,9 +1375,7 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
             "DDGI emissive truncated sources" or
             "DDGI emissive skipped energy" or
             "DDGI emissive unsupported skinned objects" or
-            "DDGI emissive unsupported skinned importance" or
-            "DDGI resource reinitializations" or
-            "DDGI gather fallback tiles" => 0,
+            "DDGI emissive unsupported skinned importance" => 0,
             _ => double.NaN
         };
         if (double.IsNaN(failure))
@@ -1421,11 +1402,7 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
         "DDGI emissive unsupported skinned objects" or
         "DDGI emissive unsupported skinned importance" or
         "DDGI dirty first-update latency" or
-        "DDGI dirty convergence latency" or
-        "SSGI resolution scale" or
-        "SSGI rays per pixel" or
-        "DDGI resource reinitializations" or
-        "DDGI gather fallback tiles" => true,
+        "DDGI dirty convergence latency" => true,
         _ => false
     };
 
@@ -1484,7 +1461,6 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
         "DDGI emissive unsupported skinned importance" => "importance",
         "DDGI dirty first-update latency" or
         "DDGI dirty convergence latency" => "frames",
-        "SSGI resolution scale" => "scale",
         _ => "count"
     };
 

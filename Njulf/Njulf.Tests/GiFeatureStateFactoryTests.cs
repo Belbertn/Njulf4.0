@@ -396,8 +396,6 @@ public sealed class GiFeatureStateFactoryTests
             DdgiAdaptiveBudgetReduced = 1,
             DdgiEmergencyDegradeActive = 1,
             DdgiAdaptiveBudgetReason = "frame-pressure",
-            DdgiGpuSchedulerFallbackActive = 1,
-            DdgiGpuSchedulerFallbackReason = "transient",
             DdgiEffectiveMaxShadedLights = 1,
             DdgiLightSelectionMode = "disabled-for-cache-reuse-frame",
             DdgiEmissiveSourceRevision = 999,

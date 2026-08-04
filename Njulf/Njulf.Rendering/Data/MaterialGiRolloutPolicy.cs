@@ -19,11 +19,9 @@ public enum MaterialGiV2Feature : uint
     MaterialTransport = 1u << 0,
     EmissiveMeshSampling = 1u << 1,
     FarFieldMaterial = 1u << 2,
-    HybridComposition = 1u << 3,
     All = MaterialTransport |
           EmissiveMeshSampling |
-          FarFieldMaterial |
-          HybridComposition
+          FarFieldMaterial
 }
 
 public enum MaterialGiRolloutMode

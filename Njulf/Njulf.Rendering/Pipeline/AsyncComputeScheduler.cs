@@ -64,6 +64,27 @@ namespace Njulf.Rendering.Pipeline
         bool IsSignalOrderingDependency = false);
 
     /// <summary>
+    /// Explicit release/acquire halves of a queue handoff. Keeping these scopes separate prevents
+    /// a destination usage from accidentally being reused as the source release scope when a
+    /// resource has several graph consumers.
+    /// </summary>
+    public readonly record struct AsyncComputeReleaseScope(
+        PipelineStageFlags2 StageMask,
+        AccessFlags2 AccessMask,
+        ImageLayout OldLayout,
+        ImageLayout NewLayout,
+        uint SourceQueueFamily,
+        uint DestinationQueueFamily);
+
+    public readonly record struct AsyncComputeAcquireScope(
+        PipelineStageFlags2 StageMask,
+        AccessFlags2 AccessMask,
+        ImageLayout OldLayout,
+        ImageLayout NewLayout,
+        uint SourceQueueFamily,
+        uint DestinationQueueFamily);
+
+    /// <summary>
     /// One concrete cross-queue resource handoff.  The same object produces exactly one release
     /// and one acquire barrier; pairing them by Id is part of plan validation.
     /// </summary>
@@ -109,6 +130,20 @@ namespace Njulf.Rendering.Pipeline
         public ImageLayout ReleaseNewLayout => RequiresQueueFamilyOwnershipTransfer ? NewLayout : OldLayout;
         public ImageLayout AcquireOldLayout => OldLayout;
         public ImageLayout AcquireNewLayout => NewLayout;
+        public AsyncComputeReleaseScope ReleaseScope => new(
+            SourceStageMask,
+            SourceAccessMask,
+            ReleaseOldLayout,
+            ReleaseNewLayout,
+            SourceQueueFamily,
+            DestinationQueueFamily);
+        public AsyncComputeAcquireScope AcquireScope => new(
+            DestinationStageMask,
+            DestinationAccessMask,
+            AcquireOldLayout,
+            AcquireNewLayout,
+            SourceQueueFamily,
+            DestinationQueueFamily);
 
         private static int CountImageSubresources(ImageSubresourceRange range)
         {
@@ -300,40 +335,6 @@ namespace Njulf.Rendering.Pipeline
             AsyncComputePassRequest[] executablePasses = input.Passes
                 .Where(pass => pass.EnabledByFeatureIsolation && pass.WillExecute)
                 .ToArray();
-
-            // The SSGI trace/temporal/denoise chain publishes directly into the composite pass.
-            // Auto must not spend a warmup window proving the obvious loss of a compute submit
-            // followed immediately by a graphics wait. Force mode intentionally bypasses this
-            // profitability rule so the fully bound chain remains validation-testable.
-            if (input.Mode == AsyncComputeMode.Auto &&
-                activePaths.Contains(AsyncComputePath.SsgiChain) &&
-                !HasIndependentGraphicsWorkAfterSsgi(executablePasses, activePaths))
-            {
-                activePaths.Remove(AsyncComputePath.SsgiChain);
-                int statusIndex = statuses.FindIndex(status => status.Path == AsyncComputePath.SsgiChain);
-                if (statusIndex >= 0)
-                {
-                    AsyncComputePathRuntimeStatus current = statuses[statusIndex];
-                    statuses[statusIndex] = current with
-                    {
-                        Eligible = false,
-                        Active = false,
-                        Status = AsyncComputePathStatus.NoMeasuredBenefit,
-                        Reason = "The SSGI composite is the immediate graphics consumer; no independent graphics work can overlap the chain."
-                    };
-                }
-            }
-
-            if (activePaths.Count == 0)
-            {
-                return new AsyncComputeSubmissionPlan(
-                    Accepted: true,
-                    FailureReason: string.Empty,
-                    input.ResourceBindings.Generation,
-                    Array.Empty<AsyncComputeSubmissionSegment>(),
-                    Array.Empty<QueueOwnershipTransfer>(),
-                    statuses);
-            }
 
             try
             {
@@ -610,9 +611,9 @@ namespace Njulf.Rendering.Pipeline
         }
 
         /// <summary>
-        /// A path such as SSGI is only valid as one compute submission while its intermediate
-        /// images remain queue-local. If a future pipeline edit inserts graphics work into an
-        /// atomic group, reject the plan instead of silently creating a partial cross-queue chain.
+        /// An atomic compute path is only valid as one submission while its intermediate
+        /// resources remain queue-local. If a future pipeline edit inserts graphics work into
+        /// an atomic group, reject the plan instead of silently splitting it across queues.
         /// </summary>
         private static void ValidateAtomicComputeGroups(
             IReadOnlyList<AsyncComputePassRequest> passes,
@@ -654,44 +655,6 @@ namespace Njulf.Rendering.Pipeline
                         $"Atomic async group '{group}' is not contiguous: '{passes[index].Name}' splits its compute passes.");
                 }
             }
-        }
-
-        private static bool HasIndependentGraphicsWorkAfterSsgi(
-            IReadOnlyList<AsyncComputePassRequest> passes,
-            IReadOnlySet<AsyncComputePath> activePaths)
-        {
-            var ssgiResources = new HashSet<RenderGraphResourceId>();
-            int lastSsgiPass = -1;
-            for (int index = 0; index < passes.Count; index++)
-            {
-                AsyncComputePassRequest pass = passes[index];
-                if (pass.Path != AsyncComputePath.SsgiChain || !activePaths.Contains(AsyncComputePath.SsgiChain))
-                    continue;
-
-                lastSsgiPass = index;
-                foreach (RenderGraphResourceUsage usage in pass.ResourceUsages)
-                    ssgiResources.Add(usage.Resource);
-            }
-
-            if (lastSsgiPass < 0 || ssgiResources.Count == 0)
-                return false;
-
-            for (int index = lastSsgiPass + 1; index < passes.Count; index++)
-            {
-                AsyncComputePassRequest pass = passes[index];
-                bool runsOnCompute = pass.Path.HasValue && activePaths.Contains(pass.Path.Value);
-                if (runsOnCompute)
-                    continue;
-
-                // The first graphics use of any chain input/output forces the handoff. Only a
-                // completely disjoint graphics pass before that boundary is useful overlap.
-                if (pass.ResourceUsages.Any(usage => ssgiResources.Contains(usage.Resource)))
-                    return false;
-
-                return true;
-            }
-
-            return false;
         }
 
         private static List<QueueOwnershipTransfer> BuildTransfers(

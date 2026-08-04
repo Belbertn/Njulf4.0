@@ -56,7 +56,7 @@ internal sealed class GpuParticleResetGraphPass : GpuParticleGraphPassBase
         sceneData.GpuParticleDrawCapacity > 0;
 
     public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData) =>
-        _executor.Execute(cmd, frameIndex, sceneData);
+        _executor.Execute(cmd, frameIndex, sceneData, IsRecordingOnComputeQueue);
 }
 
 internal sealed class GpuParticleSimulateGraphPass : GpuParticleGraphPassBase
@@ -80,7 +80,7 @@ internal sealed class GpuParticleSimulateGraphPass : GpuParticleGraphPassBase
         sceneData.GpuParticleMaxSpawnPerEmitter > 0;
 
     public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData) =>
-        _executor.Execute(cmd, frameIndex, sceneData);
+        _executor.Execute(cmd, frameIndex, sceneData, IsRecordingOnComputeQueue);
 }
 
 internal sealed class GpuParticleSortGraphPass : GpuParticleGraphPassBase
@@ -108,7 +108,7 @@ internal sealed class GpuParticleSortGraphPass : GpuParticleGraphPassBase
 
     public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
     {
-        _executor.Execute(cmd, frameIndex, sceneData);
+        _executor.Execute(cmd, frameIndex, sceneData, IsRecordingOnComputeQueue);
         _runtimeManager.RecordCounterReadback(cmd, frameIndex, sceneData);
     }
 }

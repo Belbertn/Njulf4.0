@@ -143,7 +143,6 @@ public sealed class EditorController
         {
             EditorSelectionKind.Object => Remove<RenderObject>(_scene.FindById(Selection.Id), _scene.Remove),
             EditorSelectionKind.ReflectionProbe => Remove<ReflectionProbe>(_scene.FindById(Selection.Id), _scene.Remove),
-            EditorSelectionKind.GiVolume => Remove<GlobalIlluminationProbeVolume>(_scene.FindById(Selection.Id), _scene.Remove),
             EditorSelectionKind.FoliagePatch => Remove<Njulf.Core.Foliage.FoliagePatch>(_scene.FindById(Selection.Id), _scene.Remove),
             EditorSelectionKind.FoliagePrototype => Remove<Njulf.Core.Foliage.FoliagePrototype>(_scene.FindById(Selection.Id), _scene.Remove),
             EditorSelectionKind.ParticleEffect => Remove<ParticleEffectInstance>(_scene.FindById(Selection.Id), _scene.Remove),
@@ -275,19 +274,6 @@ public sealed class EditorController
         }, $"{type} Light");
     }
 
-    public GlobalIlluminationProbeVolume AddGlobalIlluminationProbeVolumeAtCamera()
-    {
-        var volume = new GlobalIlluminationProbeVolume
-        {
-            Name = NextGlobalIlluminationProbeVolumeName()
-        };
-        Vector3 center = Camera?.Position ?? Vector3.Zero;
-        volume.Origin = center - volume.Size * 0.5f;
-        _scene.Add(volume);
-        MarkDirty(EditorSelection.ForEntity(EditorSelectionKind.GiVolume, volume.Id));
-        return volume;
-    }
-
     public int AddSimpleDdgiAuthoredVolumeAtCamera()
     {
         GlobalIlluminationSettings settings = RendererSettings?.GlobalIllumination ??
@@ -359,9 +345,6 @@ public sealed class EditorController
                 break;
             case EditorSelectionKind.ReflectionProbe when _scene.FindById(Selection.Id) is ReflectionProbe probe:
                 _renderer.DebugDraw.OrientedBox(probe.Rotation.ToMatrix4x4() * Matrix4x4.CreateTranslation(probe.Position), probe.BoxExtents, color, depthMode: DebugDrawDepthMode.XRay);
-                break;
-            case EditorSelectionKind.GiVolume when _scene.FindById(Selection.Id) is GlobalIlluminationProbeVolume volume:
-                _renderer.DebugDraw.Box(new BoundingBox(volume.Origin, volume.Origin + volume.Size), color, DebugDrawDepthMode.XRay);
                 break;
             case EditorSelectionKind.FoliagePatch when _scene.FindById(Selection.Id) is Njulf.Core.Foliage.FoliagePatch patch:
                 _renderer.DebugDraw.Box(patch.Bounds, color, DebugDrawDepthMode.XRay);
@@ -449,20 +432,6 @@ public sealed class EditorController
             if (string.Equals(item.Name, selector, StringComparison.Ordinal))
                 return item;
         return null;
-    }
-
-    private string NextGlobalIlluminationProbeVolumeName()
-    {
-        const string baseName = "GI Probe Volume";
-        int suffix = _scene.GlobalIlluminationProbeVolumes.Count + 1;
-        string name;
-        do
-        {
-            name = $"{baseName} {suffix++}";
-        }
-        while (_scene.GlobalIlluminationProbeVolumes.Any(
-            volume => string.Equals(volume.Name, name, StringComparison.OrdinalIgnoreCase)));
-        return name;
     }
 
     private static bool Remove<T>(IIdentifiedSceneEntity? value, Action<T> remove) where T : class, IIdentifiedSceneEntity

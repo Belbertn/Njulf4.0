@@ -23,6 +23,10 @@ namespace Njulf.Rendering.Pipeline
         
         public string Name { get; }
         internal VulkanContext Context => _context;
+        // The render graph sets this immediately before invoking Execute. Passes with
+        // queue-specific local barriers use it to keep graphics-only stages out of dedicated
+        // compute command buffers while retaining the same-queue dependency in fallback mode.
+        internal bool IsRecordingOnComputeQueue { get; set; }
         public virtual bool SupportsSecondaryCommandBuffer => false;
         public virtual RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Graphics;
         public virtual bool SupportsAsyncCompute => false;

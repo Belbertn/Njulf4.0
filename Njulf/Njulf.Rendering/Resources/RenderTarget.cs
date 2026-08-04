@@ -172,6 +172,39 @@ namespace Njulf.Rendering.Resources
                 AccessFlags2.ShaderSampledReadBit);
         }
 
+        /// <summary>
+        /// Transitions a sampled image for a compute-only command buffer. The general
+        /// <see cref="TransitionToShaderRead"/> helper includes fragment stages because it is
+        /// also used by graphics passes; recording those stages on a compute-only queue is
+        /// invalid on queue families without graphics capability.
+        /// </summary>
+        public void TransitionToComputeShaderRead(CommandBuffer cmd)
+        {
+            EnsureUsage(ImageUsageFlags.SampledBit, ImageLayout.ShaderReadOnlyOptimal);
+            Transition(
+                cmd,
+                ImageLayout.ShaderReadOnlyOptimal,
+                PipelineStageFlags2.ComputeShaderBit,
+                GetSourceAccessForLayout(Layout),
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderSampledReadBit);
+        }
+
+        /// <summary>
+        /// Transitions a depth image for compute sampling on a compute-only queue.
+        /// </summary>
+        public void TransitionToComputeDepthReadOnly(CommandBuffer cmd)
+        {
+            EnsureUsage(ImageUsageFlags.SampledBit, ImageLayout.DepthStencilReadOnlyOptimal);
+            Transition(
+                cmd,
+                ImageLayout.DepthStencilReadOnlyOptimal,
+                PipelineStageFlags2.ComputeShaderBit,
+                GetSourceAccessForLayout(Layout),
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderSampledReadBit);
+        }
+
         public void TransitionToStorageWrite(CommandBuffer cmd)
         {
             EnsureUsage(ImageUsageFlags.StorageBit, ImageLayout.General);
@@ -184,6 +217,21 @@ namespace Njulf.Rendering.Resources
                 AccessFlags2.ShaderStorageWriteBit);
         }
 
+        /// <summary>
+        /// Transitions a storage image using scopes valid for a compute-only command buffer.
+        /// </summary>
+        public void TransitionToComputeStorageWrite(CommandBuffer cmd)
+        {
+            EnsureUsage(ImageUsageFlags.StorageBit, ImageLayout.General);
+            Transition(
+                cmd,
+                ImageLayout.General,
+                PipelineStageFlags2.ComputeShaderBit,
+                GetSourceAccessForLayout(Layout),
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit);
+        }
+
         public void TransitionToStorageReadWrite(CommandBuffer cmd)
         {
             EnsureUsage(ImageUsageFlags.StorageBit, ImageLayout.General);
@@ -191,6 +239,22 @@ namespace Njulf.Rendering.Resources
                 cmd,
                 ImageLayout.General,
                 GetSourceStageForLayout(Layout),
+                GetSourceAccessForLayout(Layout),
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+        }
+
+        /// <summary>
+        /// Transitions a read/write storage image using scopes valid for a compute-only command
+        /// buffer.
+        /// </summary>
+        public void TransitionToComputeStorageReadWrite(CommandBuffer cmd)
+        {
+            EnsureUsage(ImageUsageFlags.StorageBit, ImageLayout.General);
+            Transition(
+                cmd,
+                ImageLayout.General,
+                PipelineStageFlags2.ComputeShaderBit,
                 GetSourceAccessForLayout(Layout),
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);

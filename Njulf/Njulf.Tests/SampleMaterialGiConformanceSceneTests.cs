@@ -242,7 +242,7 @@ public sealed class SampleMaterialGiConformanceSceneTests
     }
 
     [Test]
-    public void Layout_LocksTransitionDistancesLiveEditsAndHybridOverlap()
+    public void Layout_LocksTransitionDistancesLiveEditsAndSimpleDdgiReceiver()
     {
         SampleMaterialGiSceneFixture near = FindFixture("material-gi.transition.near");
         SampleMaterialGiSceneFixture compact = FindFixture("material-gi.transition.compact");
@@ -250,7 +250,7 @@ public sealed class SampleMaterialGiConformanceSceneTests
         IReadOnlyList<SampleMaterialGiSceneFixture> liveEdit =
             Fixtures(SampleMaterialGiSceneFixtureCategory.LiveEditMaterialWall);
         IReadOnlyList<SampleMaterialGiSceneFixture> overlap =
-            Fixtures(SampleMaterialGiSceneFixtureCategory.SsgiDdgiOverlap);
+            Fixtures(SampleMaterialGiSceneFixtureCategory.SimpleDdgiReceiver);
 
         Assert.Multiple(() =>
         {

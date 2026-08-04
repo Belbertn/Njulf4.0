@@ -1,0 +1,71 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_schedule_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    uint candidateIndex = gl_GlobalInvocationID.x;
+    if (candidateIndex >= SchedulerCandidateCapacity())
+        return;
+
+    uint inputBase = pc.CandidateInputOffsetWords +
+        candidateIndex * SIMPLE_DDGI_SCHEDULER_CANDIDATE_WORDS;
+    uint probeIndex = SchedulerCandidateWord(inputBase, 0u);
+    if (probeIndex == SIMPLE_DDGI_SCHEDULER_INVALID_PROBE)
+        return;
+
+    uint volumeIndex = SchedulerCandidateWord(inputBase, 1u);
+    uint workClassAndTransport = SchedulerCandidateWord(inputBase, 4u);
+    uint rayTierAndReason = SchedulerCandidateWord(inputBase, 5u);
+    uint workClass = workClassAndTransport & 7u;
+    uint transport = (workClassAndTransport >> 3u) & 3u;
+    uint rayTier = rayTierAndReason & 0xffu;
+    if (volumeIndex >= SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES ||
+        workClass >= SIMPLE_DDGI_SCHEDULER_WORK_CLASSES ||
+        transport >= SIMPLE_DDGI_SCHEDULER_TRANSPORT_CATEGORIES ||
+        rayTier >= SIMPLE_DDGI_SCHEDULER_RAY_TIERS)
+        return;
+
+    uint lane = SchedulerLaneIndex(volumeIndex, workClass, transport, rayTier);
+    uint group = candidateIndex / SIMPLE_DDGI_SCHEDULER_WORKGROUP_SIZE;
+    uint groupStart = group * SIMPLE_DDGI_SCHEDULER_WORKGROUP_SIZE;
+    uint localRank = 0u;
+    for (uint prior = groupStart; prior < candidateIndex; prior++)
+    {
+        uint priorBase = pc.CandidateInputOffsetWords +
+            prior * SIMPLE_DDGI_SCHEDULER_CANDIDATE_WORDS;
+        uint priorProbe = SchedulerCandidateWord(priorBase, 0u);
+        if (priorProbe == SIMPLE_DDGI_SCHEDULER_INVALID_PROBE)
+            continue;
+        uint priorVolume = SchedulerCandidateWord(priorBase, 1u);
+        uint priorClassTransport = SchedulerCandidateWord(priorBase, 4u);
+        uint priorRayReason = SchedulerCandidateWord(priorBase, 5u);
+        uint priorLane = SchedulerLaneIndex(
+            priorVolume,
+            priorClassTransport & 7u,
+            (priorClassTransport >> 3u) & 3u,
+            priorRayReason & 0xffu);
+        if (priorLane == lane)
+            localRank++;
+    }
+
+    uint outputIndex = SchedulerArenaRead(pc.LaneCursorsOffsetWords + lane) +
+        SchedulerGroupLaneCount(group, lane) + localRank;
+    if (outputIndex >= SchedulerCandidateCapacity())
+    {
+        SchedulerArenaAtomicAdd(
+            pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_OVERFLOW, 1u);
+        return;
+    }
+
+    uint outputBase = pc.CandidateOutputOffsetWords +
+        outputIndex * SIMPLE_DDGI_SCHEDULER_COMPACT_OUTPUT_WORDS;
+    // Store the deterministic input index.  The full candidate remains in the
+    // input pool, so admission can dereference it without a second 32-byte
+    // record allocation or an atomic append order dependency.
+    SchedulerArenaWrite(outputBase, candidateIndex);
+}

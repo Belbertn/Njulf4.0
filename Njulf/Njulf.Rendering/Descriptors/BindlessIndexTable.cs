@@ -440,59 +440,9 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Current-frame forward visibility indirect dispatch buffer for the second in-flight frame</summary>
         public const int ForwardVisibilityIndirectDispatchBufferFrame1 = ForwardVisibilityIndirectDispatchBufferBase + 1;
 
-        /// <summary>DDGI probe volume metadata and packed settings</summary>
-        public const int DdgiProbeVolumeBuffer = ForwardVisibilityIndirectDispatchBufferFrame1 + 1;
-
-        /// <summary>DDGI per-probe irradiance, visibility, relocation, and classification state</summary>
-        public const int DdgiProbeStateBuffer = DdgiProbeVolumeBuffer + 1;
-
-        /// <summary>DDGI probe update queue consumed by amortized update passes</summary>
-        public const int DdgiProbeUpdateQueueBuffer = DdgiProbeStateBuffer + 1;
-
-        /// <summary>DDGI relocation and classification output buffer</summary>
-        public const int DdgiProbeRelocationClassificationBuffer = DdgiProbeUpdateQueueBuffer + 1;
-
-        /// <summary>DDGI octahedral irradiance atlas backing buffer</summary>
-        public const int DdgiIrradianceAtlasBuffer = DdgiProbeRelocationClassificationBuffer + 1;
-
-        /// <summary>DDGI octahedral visibility atlas backing buffer</summary>
-        public const int DdgiVisibilityAtlasBuffer = DdgiIrradianceAtlasBuffer + 1;
-
-        /// <summary>DDGI compact per-ray update scratch sized by the scheduled ray budget</summary>
-        public const int DdgiRayResultScratchBuffer = DdgiVisibilityAtlasBuffer + 1;
-
-        /// <summary>DDGI ray-query TLAS instance metadata used to resolve mesh and material hits</summary>
-        public const int DdgiRayQueryInstanceBuffer = DdgiRayResultScratchBuffer + 1;
-
-        /// <summary>DDGI emissive proxy sources sampled by the trace shader</summary>
-        public const int DdgiEmissiveSourceBuffer = DdgiRayQueryInstanceBuffer + 1;
-
-        /// <summary>Per-screen-tile DDGI gather candidates sampled by forward shading</summary>
-        public const int DdgiGatherTileBuffer = DdgiEmissiveSourceBuffer + 1;
-
-        /// <summary>DDGI GPU scheduler constants uploaded by the CPU before scheduling</summary>
-        public const int DdgiSchedulerConstantsBuffer = DdgiGatherTileBuffer + 1;
-
-        /// <summary>DDGI dirty-region bounds uploaded for GPU scheduling</summary>
-        public const int DdgiDirtyRegionBuffer = DdgiSchedulerConstantsBuffer + 1;
-
-        /// <summary>DDGI GPU scheduler candidate compaction records</summary>
-        public const int DdgiProbeCandidateBuffer = DdgiDirtyRegionBuffer + 1;
-
-        /// <summary>DDGI GPU scheduler per-workgroup priority counts</summary>
-        public const int DdgiSchedulerGroupCountBuffer = DdgiProbeCandidateBuffer + 1;
-
-        /// <summary>DDGI GPU scheduler prefix offsets for deterministic compaction</summary>
-        public const int DdgiSchedulerPrefixBuffer = DdgiSchedulerGroupCountBuffer + 1;
-
-        /// <summary>DDGI GPU scheduler counters and frame-late diagnostics source</summary>
-        public const int DdgiSchedulerCounterBuffer = DdgiSchedulerPrefixBuffer + 1;
-
-        /// <summary>DDGI GPU scheduler trace dispatch arguments</summary>
-        public const int DdgiTraceIndirectDispatchBuffer = DdgiSchedulerCounterBuffer + 1;
 
         /// <summary>Simple fixed-grid DDGI packed params</summary>
-        public const int SimpleDdgiParamsBuffer = DdgiTraceIndirectDispatchBuffer + 1;
+        public const int SimpleDdgiParamsBuffer = ForwardVisibilityIndirectDispatchBufferFrame1 + 1;
 
         /// <summary>Simple fixed-grid DDGI irradiance atlas buffer</summary>
         public const int SimpleDdgiIrradianceAtlasBuffer = SimpleDdgiParamsBuffer + 1;
@@ -524,8 +474,14 @@ namespace Njulf.Rendering.Descriptors
         /// </summary>
         public const int SimpleDdgiTransportSourceCacheBuffer = SimpleDdgiTransportIrradianceAtlasBuffer + 1;
 
+        /// <summary>Ray-query instance metadata consumed by Simple DDGI hit shading.</summary>
+        public const int SimpleDdgiRayQueryInstanceBuffer = SimpleDdgiTransportSourceCacheBuffer + 1;
+
+        /// <summary>Emissive-triangle sampling table consumed by Simple DDGI transport.</summary>
+        public const int SimpleDdgiEmissiveSourceBuffer = SimpleDdgiRayQueryInstanceBuffer + 1;
+
         /// <summary>Coarse far-field occupancy clipmap params</summary>
-        public const int FarFieldClipmapParamsBuffer = SimpleDdgiTransportSourceCacheBuffer + 1;
+        public const int FarFieldClipmapParamsBuffer = SimpleDdgiEmissiveSourceBuffer + 1;
 
         /// <summary>Coarse far-field occupancy clipmap voxel buffer</summary>
         public const int FarFieldClipmapVoxelBuffer = FarFieldClipmapParamsBuffer + 1;
@@ -560,6 +516,12 @@ namespace Njulf.Rendering.Descriptors
         /// continuous environment and light buffers.
         /// </summary>
         public const int EnvironmentGiDataBuffer = EnvironmentPrefilterDataBuffer + 1;
+
+        /// <summary>
+        /// Single resident arena for Simple-DDGI GPU classification, admission,
+        /// indirect commands, lifecycle outcomes, and bounded feedback.
+        /// </summary>
+        public const int SimpleDdgiSchedulerArenaBuffer = EnvironmentGiDataBuffer + 1;
 
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -622,44 +584,8 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Fixed sampled blurred ambient occlusion texture</summary>
         public const int AmbientOcclusionBlurredTexture = AmbientOcclusionRawTexture + 1;
 
-        /// <summary>Fixed sampled scene normal texture</summary>
-        public const int SceneNormalTexture = AmbientOcclusionBlurredTexture + 1;
-
-        /// <summary>Fixed sampled packed scene material texture</summary>
-        public const int SceneMaterialTexture = SceneNormalTexture + 1;
-
-        /// <summary>Fixed sampled direct-lighting source for screen-space global illumination tracing</summary>
-        public const int SsgiTraceSourceTexture = SceneMaterialTexture + 1;
-
-        /// <summary>Fixed sampled raw screen-space global illumination texture</summary>
-        public const int SsgiRawTexture = SsgiTraceSourceTexture + 1;
-
-        /// <summary>Fixed sampled first-hit screen-space global illumination distance texture</summary>
-        public const int SsgiHitDistanceTexture = SsgiRawTexture + 1;
-
-        /// <summary>Fixed sampled filtered screen-space global illumination texture</summary>
-        public const int SsgiFilteredTexture = SsgiHitDistanceTexture + 1;
-
-        /// <summary>Fixed sampled screen-space global illumination history texture</summary>
-        public const int SsgiHistoryTexture = SsgiFilteredTexture + 1;
-
-        /// <summary>Fixed sampled previous-frame SSGI depth history texture</summary>
-        public const int SsgiPreviousDepthTexture = SsgiHistoryTexture + 1;
-
-        /// <summary>Fixed sampled previous-frame SSGI normal history texture</summary>
-        public const int SsgiPreviousNormalTexture = SsgiPreviousDepthTexture + 1;
-
-        /// <summary>Fixed sampled SSGI luminance moments texture</summary>
-        public const int SsgiMomentsTexture = SsgiPreviousNormalTexture + 1;
-
-        /// <summary>Fixed sampled SSGI temporal history length texture</summary>
-        public const int SsgiHistoryLengthTexture = SsgiMomentsTexture + 1;
-
-        /// <summary>Fixed sampled final diffuse global illumination texture</summary>
-        public const int GiFinalDiffuseTexture = SsgiHistoryLengthTexture + 1;
-
         /// <summary>Fixed sampled post-tone-map LDR scene color texture</summary>
-        public const int LdrSceneColorTexture = GiFinalDiffuseTexture + 1;
+        public const int LdrSceneColorTexture = AmbientOcclusionBlurredTexture + 1;
 
         /// <summary>Fixed sampled SMAA edge mask texture</summary>
         public const int SmaaEdgesTexture = LdrSceneColorTexture + 1;
@@ -728,7 +654,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
 
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = EnvironmentGiDataBuffer + 1;
+        public const int StaticBufferCount = SimpleDdgiSchedulerArenaBuffer + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -896,23 +822,6 @@ namespace Njulf.Rendering.Descriptors
                     SceneDirectionalDynamicShadowCompactedCascade2BufferFrame1 => nameof(SceneDirectionalDynamicShadowCompactedCascade2BufferFrame1),
                     SceneDirectionalDynamicShadowCompactedCascade3BufferBase => nameof(SceneDirectionalDynamicShadowCompactedCascade3BufferBase),
                     SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1 => nameof(SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1),
-                    DdgiProbeVolumeBuffer => nameof(DdgiProbeVolumeBuffer),
-                    DdgiProbeStateBuffer => nameof(DdgiProbeStateBuffer),
-                    DdgiProbeUpdateQueueBuffer => nameof(DdgiProbeUpdateQueueBuffer),
-                    DdgiProbeRelocationClassificationBuffer => nameof(DdgiProbeRelocationClassificationBuffer),
-                    DdgiIrradianceAtlasBuffer => nameof(DdgiIrradianceAtlasBuffer),
-                    DdgiVisibilityAtlasBuffer => nameof(DdgiVisibilityAtlasBuffer),
-                    DdgiRayResultScratchBuffer => nameof(DdgiRayResultScratchBuffer),
-                    DdgiRayQueryInstanceBuffer => nameof(DdgiRayQueryInstanceBuffer),
-                    DdgiEmissiveSourceBuffer => nameof(DdgiEmissiveSourceBuffer),
-                    DdgiGatherTileBuffer => nameof(DdgiGatherTileBuffer),
-                    DdgiSchedulerConstantsBuffer => nameof(DdgiSchedulerConstantsBuffer),
-                    DdgiDirtyRegionBuffer => nameof(DdgiDirtyRegionBuffer),
-                    DdgiProbeCandidateBuffer => nameof(DdgiProbeCandidateBuffer),
-                    DdgiSchedulerGroupCountBuffer => nameof(DdgiSchedulerGroupCountBuffer),
-                    DdgiSchedulerPrefixBuffer => nameof(DdgiSchedulerPrefixBuffer),
-                    DdgiSchedulerCounterBuffer => nameof(DdgiSchedulerCounterBuffer),
-                    DdgiTraceIndirectDispatchBuffer => nameof(DdgiTraceIndirectDispatchBuffer),
                     SimpleDdgiParamsBuffer => nameof(SimpleDdgiParamsBuffer),
                     SimpleDdgiIrradianceAtlasBuffer => nameof(SimpleDdgiIrradianceAtlasBuffer),
                     SimpleDdgiVisibilityAtlasBuffer => nameof(SimpleDdgiVisibilityAtlasBuffer),
@@ -922,6 +831,8 @@ namespace Njulf.Rendering.Descriptors
                     SimpleDdgiRelocationClassificationBuffer => nameof(SimpleDdgiRelocationClassificationBuffer),
                     SimpleDdgiTransportIrradianceAtlasBuffer => nameof(SimpleDdgiTransportIrradianceAtlasBuffer),
                     SimpleDdgiTransportSourceCacheBuffer => nameof(SimpleDdgiTransportSourceCacheBuffer),
+                    SimpleDdgiRayQueryInstanceBuffer => nameof(SimpleDdgiRayQueryInstanceBuffer),
+                    SimpleDdgiEmissiveSourceBuffer => nameof(SimpleDdgiEmissiveSourceBuffer),
                     FarFieldClipmapParamsBuffer => nameof(FarFieldClipmapParamsBuffer),
                     FarFieldClipmapVoxelBuffer => nameof(FarFieldClipmapVoxelBuffer),
                     FarFieldClipmapInstanceBuffer => nameof(FarFieldClipmapInstanceBuffer),
@@ -932,6 +843,7 @@ namespace Njulf.Rendering.Descriptors
                     FarFieldClipmapPageTableBuffer => nameof(FarFieldClipmapPageTableBuffer),
                     EnvironmentPrefilterDataBuffer => nameof(EnvironmentPrefilterDataBuffer),
                     EnvironmentGiDataBuffer => nameof(EnvironmentGiDataBuffer),
+                    SimpleDdgiSchedulerArenaBuffer => nameof(SimpleDdgiSchedulerArenaBuffer),
                     _ => "Unknown"
                 };
             }

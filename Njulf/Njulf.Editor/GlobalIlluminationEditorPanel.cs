@@ -8,17 +8,13 @@ using NumericsVector3 = System.Numerics.Vector3;
 namespace Njulf.Editor;
 
 /// <summary>
-/// Live editor for renderer-owned GI configuration. Scene DDGI volumes are edited by the
-/// regular entity inspector; this panel also exposes the camera-relative Simple-DDGI path,
-/// which does not require scene-authored volumes.
+/// Live editor for renderer-owned Simple DDGI configuration.
 /// </summary>
 internal sealed unsafe class GlobalIlluminationEditorPanel
 {
     private static readonly string[] GroupOrder =
     [
         "General",
-        "SSGI",
-        "DDGI",
         "Simple DDGI",
         "Far Field",
         "Ray Query / Acceleration Structures",
@@ -79,7 +75,7 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
     {
         ImGui.SeparatorText("Transparent and decal receivers");
         ImGui.TextWrapped(
-            "Layered receivers sample DDGI directly. SSGI-only presets leave these disabled because transparent fragments do not own the opaque depth/trace-source contract.");
+            "Layered receivers sample Simple DDGI directly.");
 
         bool transparentGi = settings.Transparency.ReceiveGlobalIllumination;
         if (ImGui.Checkbox("Transparent materials receive DDGI", ref transparentGi))
@@ -105,7 +101,6 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
     private void RenderRuntimeSummary(EditorController editor)
     {
         RendererDiagnostics? diagnostics = editor.RendererDiagnostics;
-        int sceneVolumeCount = editor.Scene.GlobalIlluminationProbeVolumes.Count;
         if (diagnostics != null)
         {
             int runtimeVolumeCount = diagnostics.DdgiVolumes.Count > 0
@@ -113,24 +108,10 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
                 : diagnostics.DdgiProbeVolumeCount;
             string backend = diagnostics.SimpleDdgiActive != 0
                 ? "Simple DDGI"
-                : diagnostics.GlobalIlluminationDdgiActive != 0
-                    ? "DDGI"
-                    : diagnostics.GlobalIlluminationSsgiActive != 0
-                        ? "SSGI"
-                        : "Inactive";
+                : "Inactive";
             ImGui.Text($"Active backend: {backend} ({diagnostics.GlobalIlluminationMode})");
             ImGui.Text($"Runtime DDGI volumes: {runtimeVolumeCount}    Probes: {Math.Max(diagnostics.SimpleDdgiProbeCount, diagnostics.DdgiProbeCount)}");
         }
-
-        ImGui.Text($"Authored scene DDGI volumes: {sceneVolumeCount}");
-        if (sceneVolumeCount == 0)
-        {
-            ImGui.TextDisabled("This is valid: camera-relative Simple DDGI creates its runtime rings automatically.");
-            ImGui.TextDisabled("Add a scene volume only when using the legacy DDGI backend or an explicit local volume is needed.");
-        }
-
-        if (ImGui.Button("Add scene DDGI volume"))
-            Run(editor.AddGlobalIlluminationProbeVolumeAtCamera);
     }
 
     private void RenderPersistence(EditorController editor)
@@ -393,7 +374,7 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
     {
         if (!editable || name.StartsWith("Effective", StringComparison.Ordinal))
             return "Effective State";
-        if (name.StartsWith("SimpleDdgi", StringComparison.Ordinal) || name == nameof(GlobalIlluminationSettings.DdgiSimpleEnabled))
+        if (name.StartsWith("SimpleDdgi", StringComparison.Ordinal))
             return "Simple DDGI";
         if (name.StartsWith("FarField", StringComparison.Ordinal))
             return "Far Field";
@@ -403,20 +384,8 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
         {
             return "Ray Query / Acceleration Structures";
         }
-        if (name.Contains("Ssgi", StringComparison.Ordinal) ||
-            name is nameof(GlobalIlluminationSettings.ResolutionScale) or
-                nameof(GlobalIlluminationSettings.MaxBounceDistance) or
-                nameof(GlobalIlluminationSettings.TemporalEnabled) or
-                nameof(GlobalIlluminationSettings.DenoiserEnabled) or
-                nameof(GlobalIlluminationSettings.HistoryResponsiveness) or
-                nameof(GlobalIlluminationSettings.NormalRejectionThreshold) or
-                nameof(GlobalIlluminationSettings.DepthRejectionThreshold) or
-                nameof(GlobalIlluminationSettings.LeakClampStrength))
-        {
-            return "SSGI";
-        }
         if (name.StartsWith("Ddgi", StringComparison.Ordinal) || name == nameof(GlobalIlluminationSettings.UseDdgi))
-            return "DDGI";
+            return "Simple DDGI";
         return "General";
     }
 
@@ -436,7 +405,6 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
         }
         return builder.ToString()
             .Replace("Ddgi", "DDGI", StringComparison.Ordinal)
-            .Replace("Ssgi", "SSGI", StringComparison.Ordinal)
             .Replace("Gpu", "GPU", StringComparison.Ordinal)
             .Replace("Gi ", "GI ", StringComparison.Ordinal);
     }

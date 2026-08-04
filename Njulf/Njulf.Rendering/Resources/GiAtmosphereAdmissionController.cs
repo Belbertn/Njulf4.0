@@ -20,7 +20,9 @@ public enum GiAtmosphereAdmissionReason
     SourceCohortRefreshing,
     PublicationBoundaryPending,
     CohortReleased,
-    SourceContractChanged
+    SourceContractChanged,
+    FeedbackGenerationMismatch,
+    QuietPeriodPending
 }
 
 /// <summary>
@@ -35,12 +37,41 @@ public readonly record struct GiAtmosphereCohortFeedback(
     int StaleParticipatingProbeCount,
     bool VisiblePublicationBoundaryComplete = true,
     bool MinimumPropagationBoundaryComplete = true,
-    float AchievableSourceSweepSeconds = 0.0f);
+    float AchievableSourceSweepSeconds = 0.0f,
+    uint VolumeResourceGeneration = 0U,
+    uint SourceCohortGeneration = 0U,
+    uint AdmittedSourceCohortGeneration = 0U,
+    uint PropagationGeneration = 0U,
+    uint PublishedPropagationGeneration = 0U,
+    int VisiblePriorityParticipatingProbeCount = 0,
+    int VisiblePrioritySourceReadyProbeCount = 0,
+    int VisiblePriorityPublishedProbeCount = 0,
+    bool QuietPeriodComplete = true,
+    bool CandidateStreamActive = false,
+    uint SourceCohortStartFrame = 0U,
+    uint SourceCohortCompletionFrame = 0U,
+    ulong SourceCohortStartCount = 0UL,
+    ulong SourceCohortCompletionCount = 0UL,
+    int TargetSourceProbeCount = 0,
+    int AdmittedSourceProbeCount = 0,
+    int ScheduledSourceProbeCount = 0,
+    ulong TargetSourceRayCount = 0UL,
+    ulong AdmittedSourceRayCount = 0UL,
+    ulong ScheduledSourceRayCount = 0UL,
+    int SourceCapacityShortfall = 0,
+    ulong SourceRayCapacityShortfall = 0UL,
+    uint StaticConvergedGeneration = 0U,
+    bool StaticConvergencePending = false,
+    ulong StaleReadbackRejectionCount = 0UL,
+    ulong ResourceGenerationRejectionCount = 0UL);
 
 public readonly record struct GiAtmosphereAdmissionInput(
     ulong CandidateSignature,
     in GiAtmosphereCohortFeedback Cohort,
-    bool HardInvalidation = false);
+    bool HardInvalidation = false,
+    uint CurrentVolumeResourceGeneration = 0U,
+    uint CurrentSourceCohortGeneration = 0U,
+    uint CurrentPropagationGeneration = 0U);
 
 public readonly record struct GiAtmosphereAdmissionDecision(
     GiAtmosphereAdmissionAction Action,
@@ -111,11 +142,38 @@ public struct GiAtmosphereAdmissionController
             return Admit(GiAtmosphereAdmissionAction.AdmitPendingCandidate, GiAtmosphereAdmissionReason.ConsumerInactive, input);
         if (cohort.ParticipatingProbeCount <= 0)
             return Admit(GiAtmosphereAdmissionAction.AdmitPendingCandidate, GiAtmosphereAdmissionReason.NoParticipatingProbes, input);
+        if (HasGenerationMismatch(input))
+        {
+            return Decision(
+                newRequest
+                    ? GiAtmosphereAdmissionAction.ReplacePendingCandidate
+                    : GiAtmosphereAdmissionAction.Hold,
+                GiAtmosphereAdmissionReason.FeedbackGenerationMismatch,
+                input);
+        }
         if (cohort.SourceCohortActive || cohort.StaleParticipatingProbeCount > 0)
             return Decision(newRequest ? GiAtmosphereAdmissionAction.ReplacePendingCandidate : GiAtmosphereAdmissionAction.Hold,
                 GiAtmosphereAdmissionReason.SourceCohortRefreshing, input);
+        int visibleParticipants = cohort.VisiblePriorityParticipatingProbeCount;
+        bool hasExplicitVisibleCounters = visibleParticipants > 0 ||
+            cohort.VisiblePrioritySourceReadyProbeCount > 0 ||
+            cohort.VisiblePriorityPublishedProbeCount > 0;
+        if (hasExplicitVisibleCounters && visibleParticipants > 0 &&
+            cohort.VisiblePrioritySourceReadyProbeCount < visibleParticipants)
+        {
+            return Decision(GiAtmosphereAdmissionAction.Hold,
+                GiAtmosphereAdmissionReason.PublicationBoundaryPending, input);
+        }
+        if (hasExplicitVisibleCounters && visibleParticipants > 0 &&
+            cohort.VisiblePriorityPublishedProbeCount < visibleParticipants)
+        {
+            return Decision(GiAtmosphereAdmissionAction.Hold,
+                GiAtmosphereAdmissionReason.PublicationBoundaryPending, input);
+        }
         if (!cohort.VisiblePublicationBoundaryComplete || !cohort.MinimumPropagationBoundaryComplete)
             return Decision(GiAtmosphereAdmissionAction.Hold, GiAtmosphereAdmissionReason.PublicationBoundaryPending, input);
+        if (!cohort.QuietPeriodComplete || cohort.CandidateStreamActive)
+            return Decision(GiAtmosphereAdmissionAction.Hold, GiAtmosphereAdmissionReason.QuietPeriodPending, input);
 
         return Admit(GiAtmosphereAdmissionAction.AdmitPendingCandidate, GiAtmosphereAdmissionReason.CohortReleased, input);
     }
@@ -140,6 +198,32 @@ public struct GiAtmosphereAdmissionController
         new(action, reason, input.CandidateSignature, _admittedSignature, _admittedGeneration,
             _hasPending, _requestedCount, _coalescedCount, _admittedCount,
             MathF.Max(input.Cohort.AchievableSourceSweepSeconds, 0.0f));
+
+    private static bool HasGenerationMismatch(in GiAtmosphereAdmissionInput input)
+    {
+        GiAtmosphereCohortFeedback cohort = input.Cohort;
+        if (input.CurrentVolumeResourceGeneration != 0U &&
+            cohort.VolumeResourceGeneration != 0U &&
+            cohort.VolumeResourceGeneration != input.CurrentVolumeResourceGeneration)
+            return true;
+        if (input.CurrentSourceCohortGeneration != 0U &&
+            cohort.SourceCohortGeneration != 0U &&
+            cohort.SourceCohortGeneration != input.CurrentSourceCohortGeneration)
+            return true;
+        if (cohort.SourceCohortGeneration != 0U &&
+            cohort.AdmittedSourceCohortGeneration != 0U &&
+            cohort.SourceCohortGeneration != cohort.AdmittedSourceCohortGeneration)
+            return true;
+        if (input.CurrentPropagationGeneration != 0U &&
+            cohort.PropagationGeneration != 0U &&
+            cohort.PropagationGeneration != input.CurrentPropagationGeneration)
+            return true;
+        if (cohort.PropagationGeneration != 0U &&
+            cohort.PublishedPropagationGeneration != 0U &&
+            cohort.PublishedPropagationGeneration != cohort.PropagationGeneration)
+            return true;
+        return false;
+    }
 
     private static ulong SaturatingIncrement(ulong value) =>
         value == ulong.MaxValue ? ulong.MaxValue : value + 1UL;

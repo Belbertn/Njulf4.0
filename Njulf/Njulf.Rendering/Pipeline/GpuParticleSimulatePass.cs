@@ -53,7 +53,11 @@ namespace Njulf.Rendering.Pipeline
             CreatePipeline();
         }
 
-        public void Execute(CommandBuffer commandBuffer, int frameIndex, SceneRenderingData sceneData)
+        public void Execute(
+            CommandBuffer commandBuffer,
+            int frameIndex,
+            SceneRenderingData sceneData,
+            bool isComputeQueue = false)
         {
             if (sceneData.GpuParticlesEnabled == 0 || sceneData.GpuParticleEmitterCount <= 0)
                 return;

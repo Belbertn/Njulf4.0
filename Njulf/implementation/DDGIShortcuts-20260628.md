@@ -1,50 +1,35 @@
-# DDGI Shortcuts
+# Simple DDGI Shortcuts
 
 Source: `NjulfHelloGame/SampleInputController.cs`
 
-All shortcuts below are physical key chords: hold either `Left Ctrl` or `Right Ctrl`, then press the listed key.
+All shortcuts are physical key chords: hold either `Left Ctrl` or `Right Ctrl`, then press the listed key.
 
-## DDGI Controls
-
-| Shortcut | Action |
-| --- | --- |
-| `Ctrl+D` | Cycle DDGI-only debug view. Forces DDGI mode on, disables SSGI, enables ray-query DDGI, camera-relative DDGI, probe classification, and probe relocation. |
-| `Ctrl+V` | Cycle DDGI investigation views: gather path, support/data/confidence, irradiance, raw diffuse, confidence bypass, and update reasons. |
-| `Ctrl+P` | Restore the current scene/scenario's normal render profile and clear visualization overrides. |
-| `Ctrl+T` | Cycle `DdgiQualityTier`, then force DDGI-only mode. |
-| `Ctrl+L` | Toggle DDGI compact L1 probe metadata (`DdgiProbeL1MetadataEnabled`) and print the resulting GI settings. |
-| `Ctrl+R` | Print detailed DDGI diagnostics to the console. |
-
-## GI Controls That Affect DDGI
+## Simple DDGI Controls
 
 | Shortcut | Action |
 | --- | --- |
-| `Ctrl+5` | Toggle global illumination. Disabling GI also clears the GI debug view. |
-| `Ctrl+Y` | Cycle GI mode: `Disabled -> Ssgi -> Ddgi -> Hybrid -> RayQueryHybrid -> Disabled`. DDGI is active in `Ddgi`, `Hybrid`, and `RayQueryHybrid`. |
-| `Ctrl+6` | Cycle the full GI debug view list, including SSGI, DDGI, and ray-query views. |
-| `Ctrl+G` | Cycle focused DDGI GI debug views: `FinalIndirect -> DdgiIrradiance -> DdgiCoverage -> DdgiUpdateReasons -> FinalIndirect`. Also forces DDGI-only mode. |
-| `Ctrl+Backspace` | Clear the GI debug view (`GlobalIlluminationDebugView.None`). |
-| `Ctrl+J` | Decrease GI max bounce distance by `0.5`. |
-| `Ctrl+U` | Increase GI max bounce distance by `0.5`. |
-| `Ctrl+M` | Decrease GI indirect intensity by `0.05`. |
-| `Ctrl+I` | Increase GI indirect intensity by `0.05`. |
+| `Ctrl+D` | Enable Simple DDGI and cycle its debug view. |
+| `Ctrl+F` | Toggle the Simple DDGI diagnostics console filter. |
+| `Ctrl+V` | Cycle Simple DDGI investigation views. |
+| `Ctrl+P` | Restore the scene's normal render profile and clear visualization overrides. |
+| `Ctrl+T` | Cycle `DdgiQualityTier` and enable Simple DDGI. |
+| `Ctrl+L` | Toggle compact L1 probe metadata (`DdgiProbeL1MetadataEnabled`). |
+| `Ctrl+R` | Print Simple DDGI diagnostics to the console. |
 
-## DDGI Debug View Cycles
-
-### `Ctrl+D` DDGI-Only Cycle
-
-`FinalIndirect -> DdgiIrradiance -> DdgiSampledIrradiance -> DdgiFinalDiffuse -> DdgiRawDiffuse -> DdgiConfidenceBypass -> DdgiVisibility -> DdgiVisibilityMoments -> DdgiProbeIndex -> DdgiProbeState -> DdgiProbeRelocation -> DdgiLeakClamp -> DdgiCoverage -> DdgiCascadeSelection -> DdgiCascadeBlendWeight -> DdgiUpdateReasons -> DdgiRayBudget -> DdgiGatherLocalVolume -> DdgiGatherClipmap -> DdgiGatherClipmapBlendWeight -> DdgiGatherFallback -> FinalIndirect`
-
-### `Ctrl+6` Full GI Debug Cycle
-
-`FinalIndirect -> SsgiRaw -> SsgiFiltered -> SsgiHistory -> SsgiRayHitMask -> SsgiHistoryRejection -> DdgiIrradiance -> DdgiSampledIrradiance -> DdgiFinalDiffuse -> DdgiRawDiffuse -> DdgiConfidenceBypass -> DdgiVisibility -> DdgiVisibilityMoments -> DdgiProbeIndex -> DdgiProbeState -> DdgiProbeRelocation -> DdgiLeakClamp -> DdgiCoverage -> DdgiCascadeSelection -> DdgiCascadeBlendWeight -> DdgiUpdateReasons -> DdgiRayBudget -> DdgiGatherLocalVolume -> DdgiGatherClipmap -> DdgiGatherClipmapBlendWeight -> DdgiGatherFallback -> RayQueryCost -> None`
-
-## DDGI Debug Overlays
+## GI Controls
 
 | Shortcut | Action |
 | --- | --- |
-| `Ctrl+Keypad9` | Cycle renderer debug overlays. The cycle includes DDGI overlays after reflection probe volumes. |
+| `Ctrl+5` | Toggle global illumination. Disabling GI clears the debug view. |
+| `Ctrl+Y` | Cycle GI mode: `Disabled -> Ddgi -> Disabled`. |
+| `Ctrl+6` | Cycle the Simple DDGI debug view list. |
+| `Ctrl+G` | Cycle focused Simple DDGI views, beginning with `FinalIndirect`. |
+| `Ctrl+Backspace` | Clear the GI debug view. |
+| `Ctrl+J` / `Ctrl+U` | Decrease/increase maximum GI bounce distance by `0.5`. |
+| `Ctrl+M` / `Ctrl+I` | Decrease/increase indirect intensity by `0.05`. |
 
-DDGI overlay segment:
+`Ctrl+D` and `Ctrl+6` use the same active Simple DDGI debug cycle. The list includes final indirect light, irradiance, source-cache radiance, sampled irradiance, final diffuse, raw diffuse, support/data/visibility diagnostics, probe state, relocation, coverage, update reasons, ray budget, far-field views, and material transport provenance; it returns to the normal view at the end. The renderer prints a legend for the selected view.
 
-`DdgiProbeVolumes -> DdgiProbeActivity -> DdgiUpdatedProbes -> DdgiProbeRelocation -> DdgiProbeAge -> DdgiPhysicalSlots -> DdgiCascadeBounds -> DdgiNewlyExposedCells -> DdgiFrustumPriority -> DdgiSafetyRefresh -> DdgiCascadeBlend -> DdgiUpdateReasons`
+## Debug Overlays
+
+`Ctrl+Keypad9` cycles renderer overlays. The sequence includes the active Simple DDGI probe overlays when available.

@@ -727,7 +727,7 @@ namespace Njulf.Rendering.Data
                     TransparentSortMicroseconds = _transparentSortMicroseconds,
                     TransparentOverflowCount = _transparentOverflowCount,
                     MaterialCount = _materialManager.RegisteredMaterialCount,
-                    SsgiMaterialRevision = _materialManager.SsgiInputRevision,
+                    GiTransportMaterialRevision = _materialManager.GiTransportInputRevision,
                     LightCount = 0,
                     TextureCount = _textureManager?.TextureCount ?? 0,
                     AnimationEnabled = animationStats.SkinnedObjectCount > 0,

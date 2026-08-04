@@ -672,12 +672,8 @@ public sealed class SampleMaterialGiCaptureRunner
         gi.EnableMaterialGiV2ForConformance();
         gi.Enabled = true;
         gi.EmergencyGiFallbackEnabled = false;
-        gi.Mode = GlobalIlluminationMode.Hybrid;
-        gi.UseSsgi = true;
+        gi.Mode = GlobalIlluminationMode.Ddgi;
         gi.UseDdgi = true;
-        gi.DdgiSimpleEnabled = true;
-        gi.DdgiSchedulerMode = DdgiSchedulerMode.Gpu;
-        gi.DdgiGpuSchedulerReadbackValidationEnabled = false;
         gi.DdgiAdaptiveBudgetingEnabled = false;
         gi.FarFieldClipmapEnabled = true;
         gi.FarFieldPagedEnabled = true;

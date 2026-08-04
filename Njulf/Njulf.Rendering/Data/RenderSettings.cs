@@ -371,10 +371,7 @@ namespace Njulf.Rendering.Data
     public enum GlobalIlluminationMode : uint
     {
         Disabled = 0,
-        Ssgi = 1,
-        Ddgi = 2,
-        Hybrid = 3,
-        RayQueryHybrid = 4
+        Ddgi = 1
     }
 
     public enum DdgiQualityTier : uint
@@ -383,13 +380,6 @@ namespace Njulf.Rendering.Data
         DdgiMedium = 1,
         DdgiHigh = 2,
         DdgiUltra = 3
-    }
-
-    public enum DdgiSchedulerMode : uint
-    {
-        CpuReference = 0,
-        Gpu = 1,
-        CpuGpuCompare = 2
     }
 
     /// <summary>
@@ -434,18 +424,12 @@ namespace Njulf.Rendering.Data
     {
         None = 0,
         FinalIndirect = 1,
-        SsgiRaw = 2,
-        SsgiFiltered = 3,
-        SsgiHistory = 4,
-        SsgiRayHitMask = 5,
-        SsgiHistoryRejection = 6,
         DdgiIrradiance = 7,
         DdgiVisibility = 8,
         DdgiProbeIndex = 9,
         DdgiProbeState = 10,
         DdgiProbeRelocation = 11,
         DdgiLeakClamp = 12,
-        RayQueryCost = 13,
         DdgiCoverage = 14,
         DdgiCascadeSelection = 15,
         DdgiCascadeBlendWeight = 16,
@@ -459,7 +443,6 @@ namespace Njulf.Rendering.Data
         DdgiSuppressionMask = 24,
         DdgiEffectiveWeight = 25,
         DdgiEnvironmentFallbackWeight = 26,
-        DdgiRelocationNormalized = 27,
         DdgiClassificationInvalidScore = 28,
         DdgiVisibilityMoments = 29,
         DdgiSpatialCoverage = 30,
@@ -478,22 +461,6 @@ namespace Njulf.Rendering.Data
         FarFieldTraceResult = 43,
         FarFieldSkyVisibility = 44,
         FarFieldSunShadow = 45,
-        /// <summary>
-        /// Source-capability view. Red is textured/SSGI support, green is
-        /// compact/probe ownership, and blue is the far/environment-capable
-        /// remainder. These are capabilities, not an exact ray-hit provenance
-        /// classification.
-        /// </summary>
-        MaterialTransportSourceOwnership = 46,
-        /// <summary>
-        /// Non-overlapping post-composition ownership: retained DDGI in red,
-        /// SSGI replacement in green, and retained environment fallback in blue.
-        /// </summary>
-        HybridEstimatorOwnership = 47,
-        /// <summary>
-        /// Final support-weighted convex hybrid diffuse estimate.
-        /// </summary>
-        HybridFinalComposition = 48,
         /// <summary>
         /// Exact mutually-exclusive DDGI hit-source classification aggregated
         /// over the last fence-complete diagnostic frame. Red is detailed
@@ -1043,10 +1010,23 @@ namespace Njulf.Rendering.Data
         private float _globalVelocityScale = 1.0f;
         private float _globalEmissiveScale = 1.0f;
         private float _distanceCullMultiplier = 1.0f;
+        private float _fixedSimulationDeltaSeconds;
 
         public bool Enabled { get; set; } = true;
         public ParticleSimulationMode SimulationMode { get; set; } = ParticleSimulationMode.Cpu;
         public ParticleDebugView DebugView { get; set; } = ParticleDebugView.None;
+
+        /// <summary>
+        /// Optional fixed simulation timestep used by deterministic captures and benchmarks.
+        /// A value of zero keeps the normal wall-clock timestep.
+        /// </summary>
+        public float FixedSimulationDeltaSeconds
+        {
+            get => _fixedSimulationDeltaSeconds;
+            set => _fixedSimulationDeltaSeconds = float.IsFinite(value)
+                ? Clamp(value, 0.0f, 1.0f / 15.0f)
+                : 0.0f;
+        }
 
         public int MaxParticles
         {
@@ -1814,13 +1794,10 @@ namespace Njulf.Rendering.Data
 
     public sealed class GlobalIlluminationSettings
     {
-        public const int AbsoluteDdgiMaxActiveProbeBudget = 65_536;
-        public const int MaxDdgiClipmapCascadeCount = 4;
-        public const int MaxDdgiClipmapProbeCountX = 32;
-        public const int MaxDdgiClipmapProbeCountY = 16;
-        public const int MaxDdgiClipmapProbeCountZ = 32;
+        public const int MaxSimpleDdgiMaterialTextureCascade = 4;
         public const ulong DefaultDdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL;
-        public const int DefaultDdgiProbeUpdatePrimaryRayBudget = 1_024 * GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe;
+        public const int MinSimpleDdgiRaysPerProbe = 16;
+        public const int DefaultDdgiProbeUpdatePrimaryRayBudget = 1_024 * MaxSimpleDdgiRaysPerProbe;
         public const int MaxDdgiProbeUpdatePrimaryRayBudget = 16_777_216;
         public const int MaxSimpleDdgiProbeCountX = 64;
         public const int MaxSimpleDdgiProbeCountY = 32;
@@ -1837,71 +1814,17 @@ namespace Njulf.Rendering.Data
         private float _environmentFallbackIntensity = 1.0f;
         private float _resolutionScale = 0.5f;
         private float _maxBounceDistance = 6.0f;
-        private float _ssgiMaxDistance = 3.0f;
-        private float _ssgiThickness = 0.04f;
-        private float _ssgiHitNormalThreshold = 0.15f;
         private float _historyResponsiveness = 0.18f;
         private float _normalRejectionThreshold = 0.85f;
         private float _depthRejectionThreshold = 0.08f;
         private float _leakClampStrength = 0.75f;
-        private int _ddgiClipmapCascadeCount = MaxDdgiClipmapCascadeCount;
-        private int _ddgiClipmapProbeCountX = 24;
-        private int _ddgiClipmapProbeCountY = 14;
-        private int _ddgiClipmapProbeCountZ = 24;
-        private float _ddgiClipmapBaseSpacing = 0.75f;
-        private float _ddgiClipmapSpacingScale = 2.0f;
-        private float _ddgiClipmapVerticalCenterOffset = -0.25f;
-        private float _ddgiCascade0VerticalCenterOffset = -0.25f;
-        private float _ddgiCascade1VerticalCenterOffset = 2.5f;
-        private float _ddgiCascade2VerticalCenterOffset = 8.0f;
-        private float _ddgiCascade3VerticalCenterOffset = 16.0f;
-        private float _ddgiClipmapEdgeBlendFraction = 0.15f;
-        private int _ddgiClipmapSafetyMarginCells = 4;
-        private float _ddgiFrustumPriorityWeight = 2.0f;
-        private float _ddgiOutOfFrustumMinimumUpdateFraction = 0.4f;
-        private float _ddgiNewProbeUpdateBoost = 4.0f;
-        private float _ddgiProbeUpdateTimeBudgetMilliseconds = 1.5f;
-        private float _ddgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
-        private float _ddgiGpuTotalUpdateTimeBudgetMilliseconds = 1.5f;
-        private float _ddgiAdaptiveBudgetHysteresisFraction = 0.15f;
-        private float _ddgiEmergencyDegradeGpuTimeMultiplier = 2.0f;
-        private float _ddgiTeleportResetDistance = 50.0f;
-        private int _ddgiMaxActiveProbes = 32_256;
-        private int _ddgiMaxProbeUpdatesPerFrame = 1_024;
-        private int _ddgiGpuSchedulerMaxDirtyRegions = 1024;
-        private int _ddgiGpuSchedulerCandidateBucketCount = 16;
-        private float _ddgiGpuSchedulerLocalScanFraction = 0.35f;
-        private float _ddgiGpuSchedulerCascade0ScanFraction = 0.35f;
-        private float _ddgiGpuSchedulerSafetyScanFraction = 0.3f;
-        private float _ddgiGpuSchedulerDirtyScanFraction = 0.10f;
-        private int _ddgiGpuSchedulerValidationFailureThreshold = 3;
-        private int _ddgiGpuSchedulerFallbackRetryStableFrames = 300;
         private int _ddgiProbeUpdatePrimaryRayBudget = DefaultDdgiProbeUpdatePrimaryRayBudget;
-        private int _ddgiColdStartMaxProbeUpdatesPerFrame = 1_024;
-        private int _ddgiColdStartPrimaryRayBudget = DefaultDdgiProbeUpdatePrimaryRayBudget;
-        private int _ddgiMinimumProbeRefreshFrames = 240;
-        private int _ddgiMaxRaysPerProbe = GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe;
-        private int _ddgiCascade0RaysPerProbe = 128;
-        private int _ddgiCascade1RaysPerProbe = 96;
-        private int _ddgiCascade2RaysPerProbe = 64;
-        private int _ddgiCascade3RaysPerProbe = 48;
-        private float _ddgiCascade0MaxRayDistance = 12.0f;
-        private float _ddgiCascade1MaxRayDistance = 36.0f;
-        private float _ddgiCascade2MaxRayDistance = 96.0f;
-        private float _ddgiCascade3MaxRayDistance = 192.0f;
         private int _ddgiMaxShadedLights = 8;
         private int _ddgiMaterialTextureMaxCascade = 1;
         private int _ddgiEmissiveTriangleBudget = MaxDdgiEmissiveTriangleBudget;
         private ulong _ddgiAtlasMemoryBudgetBytes = DefaultDdgiAtlasMemoryBudgetBytes;
-        private float _ddgiAsyncComputeReservedBudgetFraction = 0.25f;
-        private float _ddgiThinWallProxyThickness = 0.12f;
         private float _ddgiThinWallLeakClampStrength = 0.9f;
         private float _ddgiSelfShadowBiasScale = 1.0f;
-        private float _ddgiHysteresisResponse = 1.0f;
-        private float _ddgiRelocationTargetSurfaceDistanceFraction = 0.15f;
-        private float _ddgiRelocationMinSurfaceDistance = 0.08f;
-        private float _ddgiRelocationMaxDistanceFraction = 0.40f;
-        private float _ddgiRelocationBlendAlpha = 0.20f;
         private float _simpleDdgiProbeSpacing = 1.25f;
         private int _simpleDdgiRingCount = 3;
         private float _simpleDdgiRingBaseSpacing = 1.25f;
@@ -1986,7 +1909,7 @@ namespace Njulf.Rendering.Data
         private GlobalIlluminationDebugView _debugView;
 
         public bool Enabled { get; set; } = true;
-        public GlobalIlluminationMode Mode { get; set; } = GlobalIlluminationMode.Hybrid;
+        public GlobalIlluminationMode Mode { get; set; } = GlobalIlluminationMode.Ddgi;
         public GlobalIlluminationDebugView DebugView
         {
             get => _debugView;
@@ -1997,8 +1920,7 @@ namespace Njulf.Rendering.Data
 
         /// <summary>
         /// Emergency runtime kill-switch for dynamic global-illumination paths.
-        /// When enabled, every <c>EffectiveUse*</c> selector for SSGI, DDGI,
-        /// Simple DDGI, and the GI ray-query backend is false. The authored GI
+        /// When enabled, the Simple-DDGI and GI ray-query selectors are false. The authored GI
         /// configuration is intentionally retained, so clearing the switch
         /// restores it without affecting environment lighting or reflections.
         /// </summary>
@@ -2016,10 +1938,6 @@ namespace Njulf.Rendering.Data
             set => _environmentFallbackIntensity = Clamp(value, 0.0f, 4.0f);
         }
 
-        /// <summary>
-        /// Screen-space global illumination is opt-in while DDGI remains the production default.
-        /// </summary>
-        public bool UseSsgi { get; set; }
         public bool UseDdgi { get; set; } = true;
         public bool UseRayQueryBackend { get; set; }
         public DdgiQualityTier DdgiQualityTier { get; set; } = DdgiQualityTier.DdgiHigh;
@@ -2030,13 +1948,6 @@ namespace Njulf.Rendering.Data
         /// <c>Effective*</c> property, so this switch alone cannot authorize V2.
         /// </summary>
         public bool GiMaterialTransportV2 { get; set; }
-
-        /// <summary>
-        /// Requests replacement of overlapping DDGI/environment and SSGI
-        /// diffuse estimates by a signed convex delta. Runtime activation still
-        /// requires the non-persisted rollout policy.
-        /// </summary>
-        public bool GiHybridCompositionV2 { get; set; }
 
         /// <summary>
         /// Requests bounded world-space emissive triangles and deterministic
@@ -2068,8 +1979,6 @@ namespace Njulf.Rendering.Data
                     features |= MaterialGiV2Feature.EmissiveMeshSampling;
                 if (GiFarFieldMaterialV2)
                     features |= MaterialGiV2Feature.FarFieldMaterial;
-                if (GiHybridCompositionV2)
-                    features |= MaterialGiV2Feature.HybridComposition;
                 return features;
             }
         }
@@ -2093,10 +2002,6 @@ namespace Njulf.Rendering.Data
         public bool EffectiveGiFarFieldMaterialV2 =>
             IsMaterialGiV2FeatureActive(
                 MaterialGiV2Feature.FarFieldMaterial);
-
-        public bool EffectiveGiHybridCompositionV2 =>
-            IsMaterialGiV2FeatureActive(
-                MaterialGiV2Feature.HybridComposition);
 
         public void UseLegacyMaterialGiRollout()
         {
@@ -2169,8 +2074,6 @@ namespace Njulf.Rendering.Data
                 (features & MaterialGiV2Feature.EmissiveMeshSampling) != 0;
             GiFarFieldMaterialV2 =
                 (features & MaterialGiV2Feature.FarFieldMaterial) != 0;
-            GiHybridCompositionV2 =
-                (features & MaterialGiV2Feature.HybridComposition) != 0;
         }
 
         public int DdgiEmissiveTriangleBudget
@@ -2186,18 +2089,8 @@ namespace Njulf.Rendering.Data
         public bool DdgiProbeL1MetadataEnabled { get; set; } = true;
         public bool DdgiCameraRelativeEnabled { get; set; } = true;
         public bool DdgiAdaptiveBudgetingEnabled { get; set; } = true;
-        public DdgiSchedulerMode DdgiSchedulerMode { get; set; } = DdgiSchedulerMode.Gpu;
-        public bool DdgiGpuSchedulerReadbackValidationEnabled { get; set; }
-        public bool DdgiCompareModeUseGpuQueueForRendering { get; set; } = true;
-        public bool DdgiExhaustiveGatherFallbackEnabled { get; set; } = true;
-        // Compatibility setting only; the runtime always uses the production radiance/irradiance convention.
-        public bool DdgiRawAtlasRadianceConventionEnabled { get; set; } = true;
-        // Retained for settings-file compatibility. Production Forward+ is a strict
-        // depth-prepass consumer and intentionally ignores this legacy override.
-        public bool DdgiAllowForwardWithoutDepthPrePass { get; set; } = true;
-        public bool DdgiDebugForceProbeActive { get; set; }
         public bool DdgiThinWallPolicyEnabled { get; set; } = true;
-        public bool DdgiRoomSpacingScaledBiasEnabled { get; set; } = true;
+        public bool DdgiAsyncComputeEnabled { get; set; } = true;
         /// <summary>
         /// Evaluates glTF alpha-mask cutoffs at ray-query candidates. This keeps
         /// curtains, fences, and cutout foliage from becoming opaque DDGI walls.
@@ -2205,7 +2098,13 @@ namespace Njulf.Rendering.Data
         /// performance investigation only.
         /// </summary>
         public bool DdgiAlphaMaskedTransportEnabled { get; set; } = true;
-        public bool DdgiSimpleEnabled { get; set; } = true;
+        /// <summary>
+        /// Authority for Simple-DDGI scheduling.  CPU reference remains the
+        /// safe serialized default until a capture explicitly opts into GPU
+        /// mirror/resident qualification.
+        /// </summary>
+        public SimpleDdgiSchedulerMode SimpleDdgiSchedulerMode { get; set; } =
+            SimpleDdgiSchedulerMode.CpuReference;
         public bool SimpleDdgiSharedMemoryBlendEnabled { get; set; } = true;
         public bool SimpleDdgiClassificationSchedulingEnabled { get; set; } = true;
         public bool SimpleDdgiClassificationReadbackEnabled { get; set; } = true;
@@ -2559,19 +2458,19 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiNearMaterialTextureMaxCascade
         {
             get => _simpleDdgiNearMaterialTextureMaxCascade;
-            set => _simpleDdgiNearMaterialTextureMaxCascade = Clamp(value, -1, MaxDdgiClipmapCascadeCount - 1);
+            set => _simpleDdgiNearMaterialTextureMaxCascade = Clamp(value, -1, MaxSimpleDdgiMaterialTextureCascade - 1);
         }
 
         public int SimpleDdgiMidMaterialTextureMaxCascade
         {
             get => _simpleDdgiMidMaterialTextureMaxCascade;
-            set => _simpleDdgiMidMaterialTextureMaxCascade = Clamp(value, -1, MaxDdgiClipmapCascadeCount - 1);
+            set => _simpleDdgiMidMaterialTextureMaxCascade = Clamp(value, -1, MaxSimpleDdgiMaterialTextureCascade - 1);
         }
 
         public int SimpleDdgiFarMaterialTextureMaxCascade
         {
             get => _simpleDdgiFarMaterialTextureMaxCascade;
-            set => _simpleDdgiFarMaterialTextureMaxCascade = Clamp(value, -1, MaxDdgiClipmapCascadeCount - 1);
+            set => _simpleDdgiFarMaterialTextureMaxCascade = Clamp(value, -1, MaxSimpleDdgiMaterialTextureCascade - 1);
         }
 
         public int SimpleDdgiNearMaxShadedLights
@@ -2830,289 +2729,10 @@ namespace Njulf.Rendering.Data
             set => _giAccelerationStructureEvictionGraceFrames = Clamp(value, 0, 3_600);
         }
 
-        public int DdgiClipmapCascadeCount
-        {
-            get => _ddgiClipmapCascadeCount;
-            set => _ddgiClipmapCascadeCount = Clamp(value, 1, MaxDdgiClipmapCascadeCount);
-        }
-
-        public int DdgiClipmapProbeCountX
-        {
-            get => _ddgiClipmapProbeCountX;
-            set => _ddgiClipmapProbeCountX = Clamp(value, 2, MaxDdgiClipmapProbeCountX);
-        }
-
-        public int DdgiClipmapProbeCountY
-        {
-            get => _ddgiClipmapProbeCountY;
-            set => _ddgiClipmapProbeCountY = Clamp(value, 2, MaxDdgiClipmapProbeCountY);
-        }
-
-        public int DdgiClipmapProbeCountZ
-        {
-            get => _ddgiClipmapProbeCountZ;
-            set => _ddgiClipmapProbeCountZ = Clamp(value, 2, MaxDdgiClipmapProbeCountZ);
-        }
-
-        public float DdgiClipmapBaseSpacing
-        {
-            get => _ddgiClipmapBaseSpacing;
-            set => _ddgiClipmapBaseSpacing = Clamp(value, 0.25f, 16.0f);
-        }
-
-        public float DdgiClipmapSpacingScale
-        {
-            get => _ddgiClipmapSpacingScale;
-            set => _ddgiClipmapSpacingScale = Clamp(value, 1.25f, 8.0f);
-        }
-
-        public float DdgiClipmapVerticalCenterOffset
-        {
-            get => _ddgiClipmapVerticalCenterOffset;
-            set
-            {
-                float clamped = Clamp(value, -64.0f, 64.0f);
-                _ddgiClipmapVerticalCenterOffset = clamped;
-                _ddgiCascade0VerticalCenterOffset = clamped;
-                _ddgiCascade1VerticalCenterOffset = clamped;
-                _ddgiCascade2VerticalCenterOffset = clamped;
-                _ddgiCascade3VerticalCenterOffset = clamped;
-            }
-        }
-
-        public float DdgiCascade0VerticalCenterOffset
-        {
-            get => _ddgiCascade0VerticalCenterOffset;
-            set => _ddgiCascade0VerticalCenterOffset = Clamp(value, -64.0f, 64.0f);
-        }
-
-        public float DdgiCascade1VerticalCenterOffset
-        {
-            get => _ddgiCascade1VerticalCenterOffset;
-            set => _ddgiCascade1VerticalCenterOffset = Clamp(value, -64.0f, 64.0f);
-        }
-
-        public float DdgiCascade2VerticalCenterOffset
-        {
-            get => _ddgiCascade2VerticalCenterOffset;
-            set => _ddgiCascade2VerticalCenterOffset = Clamp(value, -64.0f, 64.0f);
-        }
-
-        public float DdgiCascade3VerticalCenterOffset
-        {
-            get => _ddgiCascade3VerticalCenterOffset;
-            set => _ddgiCascade3VerticalCenterOffset = Clamp(value, -64.0f, 64.0f);
-        }
-
-        public float DdgiClipmapEdgeBlendFraction
-        {
-            get => _ddgiClipmapEdgeBlendFraction;
-            set => _ddgiClipmapEdgeBlendFraction = Clamp(value, 0.0f, 0.5f);
-        }
-
-        public int DdgiClipmapSafetyMarginCells
-        {
-            get => _ddgiClipmapSafetyMarginCells;
-            set => _ddgiClipmapSafetyMarginCells = Clamp(value, 0, 16);
-        }
-
-        public float DdgiFrustumPriorityWeight
-        {
-            get => _ddgiFrustumPriorityWeight;
-            set => _ddgiFrustumPriorityWeight = Clamp(value, 0.0f, 16.0f);
-        }
-
-        public float DdgiOutOfFrustumMinimumUpdateFraction
-        {
-            get => _ddgiOutOfFrustumMinimumUpdateFraction;
-            set => _ddgiOutOfFrustumMinimumUpdateFraction = Clamp(value, 0.0f, 0.5f);
-        }
-
-        public float DdgiNewProbeUpdateBoost
-        {
-            get => _ddgiNewProbeUpdateBoost;
-            set => _ddgiNewProbeUpdateBoost = Clamp(value, 0.0f, 32.0f);
-        }
-
-        public float DdgiProbeUpdateTimeBudgetMilliseconds
-        {
-            get => _ddgiProbeUpdateTimeBudgetMilliseconds;
-            set => _ddgiProbeUpdateTimeBudgetMilliseconds = Clamp(value, 0.0f, 16.0f);
-        }
-
-        public float DdgiGpuScheduleTimeBudgetMilliseconds
-        {
-            get => _ddgiGpuScheduleTimeBudgetMilliseconds;
-            set => _ddgiGpuScheduleTimeBudgetMilliseconds = Clamp(value, 0.0f, 16.0f);
-        }
-
-        public float DdgiGpuTotalUpdateTimeBudgetMilliseconds
-        {
-            get => _ddgiGpuTotalUpdateTimeBudgetMilliseconds;
-            set => _ddgiGpuTotalUpdateTimeBudgetMilliseconds = Clamp(value, 0.0f, 16.0f);
-        }
-
-        public float DdgiAdaptiveBudgetHysteresisFraction
-        {
-            get => _ddgiAdaptiveBudgetHysteresisFraction;
-            set => _ddgiAdaptiveBudgetHysteresisFraction = Clamp(value, 0.0f, 0.75f);
-        }
-
-        public float DdgiEmergencyDegradeGpuTimeMultiplier
-        {
-            get => _ddgiEmergencyDegradeGpuTimeMultiplier;
-            set => _ddgiEmergencyDegradeGpuTimeMultiplier = Clamp(value, 1.0f, 8.0f);
-        }
-
-        public float DdgiTeleportResetDistance
-        {
-            get => _ddgiTeleportResetDistance;
-            set => _ddgiTeleportResetDistance = Clamp(value, 1.0f, 10000.0f);
-        }
-
-        public bool DdgiCameraCutResetEnabled { get; set; } = true;
-        public bool DdgiAsyncComputeEnabled { get; set; } = true;
-
-        public int DdgiMaxActiveProbes
-        {
-            get => _ddgiMaxActiveProbes;
-            set => _ddgiMaxActiveProbes = Clamp(value, 1, AbsoluteDdgiMaxActiveProbeBudget);
-        }
-
-        public int DdgiMaxProbeUpdatesPerFrame
-        {
-            get => _ddgiMaxProbeUpdatesPerFrame;
-            set => _ddgiMaxProbeUpdatesPerFrame = Clamp(value, 0, AbsoluteDdgiMaxActiveProbeBudget);
-        }
-
-        public int DdgiGpuSchedulerMaxDirtyRegions
-        {
-            get => _ddgiGpuSchedulerMaxDirtyRegions;
-            set => _ddgiGpuSchedulerMaxDirtyRegions = Clamp(value, 0, 65_536);
-        }
-
-        public int DdgiGpuSchedulerCandidateBucketCount
-        {
-            get => _ddgiGpuSchedulerCandidateBucketCount;
-            set => _ddgiGpuSchedulerCandidateBucketCount = Clamp(value, 1, 256);
-        }
-
-        public float DdgiGpuSchedulerLocalScanFraction
-        {
-            get => _ddgiGpuSchedulerLocalScanFraction;
-            set => _ddgiGpuSchedulerLocalScanFraction = Clamp(value, 0.0f, 1.0f);
-        }
-
-        public float DdgiGpuSchedulerCascade0ScanFraction
-        {
-            get => _ddgiGpuSchedulerCascade0ScanFraction;
-            set => _ddgiGpuSchedulerCascade0ScanFraction = Clamp(value, 0.0f, 1.0f);
-        }
-
-        public float DdgiGpuSchedulerSafetyScanFraction
-        {
-            get => _ddgiGpuSchedulerSafetyScanFraction;
-            set => _ddgiGpuSchedulerSafetyScanFraction = Clamp(value, 0.0f, 1.0f);
-        }
-
-        public float DdgiGpuSchedulerDirtyScanFraction
-        {
-            get => _ddgiGpuSchedulerDirtyScanFraction;
-            set => _ddgiGpuSchedulerDirtyScanFraction = Clamp(value, 0.0f, 1.0f);
-        }
-
-        public bool DdgiGpuSchedulerFallbackOnValidationFailure { get; set; } = true;
-        public bool DdgiGpuSchedulerForceCpuFallback { get; set; }
-        public bool DdgiGpuSchedulerAutoRetryAfterFallback { get; set; }
-
-        public int DdgiGpuSchedulerValidationFailureThreshold
-        {
-            get => _ddgiGpuSchedulerValidationFailureThreshold;
-            set => _ddgiGpuSchedulerValidationFailureThreshold = Clamp(value, 1, 60);
-        }
-
-        public int DdgiGpuSchedulerFallbackRetryStableFrames
-        {
-            get => _ddgiGpuSchedulerFallbackRetryStableFrames;
-            set => _ddgiGpuSchedulerFallbackRetryStableFrames = Clamp(value, 1, 10_000);
-        }
-
         public int DdgiProbeUpdatePrimaryRayBudget
         {
             get => _ddgiProbeUpdatePrimaryRayBudget;
             set => _ddgiProbeUpdatePrimaryRayBudget = Clamp(value, 0, MaxDdgiProbeUpdatePrimaryRayBudget);
-        }
-
-        public int DdgiColdStartMaxProbeUpdatesPerFrame
-        {
-            get => _ddgiColdStartMaxProbeUpdatesPerFrame;
-            set => _ddgiColdStartMaxProbeUpdatesPerFrame = Clamp(value, 0, AbsoluteDdgiMaxActiveProbeBudget);
-        }
-
-        public int DdgiColdStartPrimaryRayBudget
-        {
-            get => _ddgiColdStartPrimaryRayBudget;
-            set => _ddgiColdStartPrimaryRayBudget = Clamp(value, 0, MaxDdgiProbeUpdatePrimaryRayBudget);
-        }
-
-        public int DdgiMinimumProbeRefreshFrames
-        {
-            get => _ddgiMinimumProbeRefreshFrames;
-            set => _ddgiMinimumProbeRefreshFrames = Clamp(value, 1, 3600);
-        }
-
-        public int DdgiMaxRaysPerProbe
-        {
-            get => _ddgiMaxRaysPerProbe;
-            set => _ddgiMaxRaysPerProbe = Clamp(value, GlobalIlluminationProbeVolume.MinRaysPerProbe, GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe);
-        }
-
-        public int DdgiCascade0RaysPerProbe
-        {
-            get => _ddgiCascade0RaysPerProbe;
-            set => _ddgiCascade0RaysPerProbe = ClampDdgiRays(value);
-        }
-
-        public int DdgiCascade1RaysPerProbe
-        {
-            get => _ddgiCascade1RaysPerProbe;
-            set => _ddgiCascade1RaysPerProbe = ClampDdgiRays(value);
-        }
-
-        public int DdgiCascade2RaysPerProbe
-        {
-            get => _ddgiCascade2RaysPerProbe;
-            set => _ddgiCascade2RaysPerProbe = ClampDdgiRays(value);
-        }
-
-        public int DdgiCascade3RaysPerProbe
-        {
-            get => _ddgiCascade3RaysPerProbe;
-            set => _ddgiCascade3RaysPerProbe = ClampDdgiRays(value);
-        }
-
-        public float DdgiCascade0MaxRayDistance
-        {
-            get => _ddgiCascade0MaxRayDistance;
-            set => _ddgiCascade0MaxRayDistance = ClampDdgiMaxRayDistance(value);
-        }
-
-        public float DdgiCascade1MaxRayDistance
-        {
-            get => _ddgiCascade1MaxRayDistance;
-            set => _ddgiCascade1MaxRayDistance = ClampDdgiMaxRayDistance(value);
-        }
-
-        public float DdgiCascade2MaxRayDistance
-        {
-            get => _ddgiCascade2MaxRayDistance;
-            set => _ddgiCascade2MaxRayDistance = ClampDdgiMaxRayDistance(value);
-        }
-
-        public float DdgiCascade3MaxRayDistance
-        {
-            get => _ddgiCascade3MaxRayDistance;
-            set => _ddgiCascade3MaxRayDistance = ClampDdgiMaxRayDistance(value);
         }
 
         public int DdgiMaxShadedLights
@@ -3124,25 +2744,13 @@ namespace Njulf.Rendering.Data
         public int DdgiMaterialTextureMaxCascade
         {
             get => _ddgiMaterialTextureMaxCascade;
-            set => _ddgiMaterialTextureMaxCascade = Clamp(value, -1, MaxDdgiClipmapCascadeCount - 1);
+            set => _ddgiMaterialTextureMaxCascade = Clamp(value, -1, MaxSimpleDdgiMaterialTextureCascade - 1);
         }
 
         public ulong DdgiAtlasMemoryBudgetBytes
         {
             get => _ddgiAtlasMemoryBudgetBytes;
             set => _ddgiAtlasMemoryBudgetBytes = Clamp(value, 1UL * 1024UL * 1024UL, 2048UL * 1024UL * 1024UL);
-        }
-
-        public float DdgiAsyncComputeReservedBudgetFraction
-        {
-            get => _ddgiAsyncComputeReservedBudgetFraction;
-            set => _ddgiAsyncComputeReservedBudgetFraction = Clamp(value, 0.0f, 0.75f);
-        }
-
-        public float DdgiThinWallProxyThickness
-        {
-            get => _ddgiThinWallProxyThickness;
-            set => _ddgiThinWallProxyThickness = Clamp(value, 0.01f, 1.0f);
         }
 
         public float DdgiThinWallLeakClampStrength
@@ -3157,90 +2765,13 @@ namespace Njulf.Rendering.Data
             set => _ddgiSelfShadowBiasScale = Clamp(value, 0.25f, 4.0f);
         }
 
-        public float DdgiHysteresisResponse
+        public float EffectiveDdgiAdaptiveBudgetTimeMilliseconds => DdgiQualityTier switch
         {
-            get => _ddgiHysteresisResponse;
-            set => _ddgiHysteresisResponse = Clamp(value, 0.25f, 4.0f);
-        }
-
-        public float DdgiRelocationTargetSurfaceDistanceFraction
-        {
-            get => _ddgiRelocationTargetSurfaceDistanceFraction;
-            set => _ddgiRelocationTargetSurfaceDistanceFraction = Clamp(value, 0.02f, 0.35f);
-        }
-
-        public float DdgiRelocationMinSurfaceDistance
-        {
-            get => _ddgiRelocationMinSurfaceDistance;
-            set => _ddgiRelocationMinSurfaceDistance = Clamp(value, 0.01f, 0.5f);
-        }
-
-        public float DdgiRelocationMaxDistanceFraction
-        {
-            get => _ddgiRelocationMaxDistanceFraction;
-            set => _ddgiRelocationMaxDistanceFraction = Clamp(value, 0.05f, 0.40f);
-        }
-
-        public float DdgiRelocationBlendAlpha
-        {
-            get => _ddgiRelocationBlendAlpha;
-            set => _ddgiRelocationBlendAlpha = Clamp(value, 0.02f, 1.0f);
-        }
-
-        public float EffectiveDdgiProbeUpdateTimeBudgetMilliseconds =>
-            DdgiAsyncComputeEnabled
-                ? DdgiProbeUpdateTimeBudgetMilliseconds * (1.0f - DdgiAsyncComputeReservedBudgetFraction)
-                : DdgiProbeUpdateTimeBudgetMilliseconds;
-
-        public float EffectiveDdgiGpuTotalUpdateTimeBudgetMilliseconds =>
-            DdgiAsyncComputeEnabled
-                ? DdgiGpuTotalUpdateTimeBudgetMilliseconds * (1.0f - DdgiAsyncComputeReservedBudgetFraction)
-                : DdgiGpuTotalUpdateTimeBudgetMilliseconds;
-
-        public float EffectiveDdgiAdaptiveBudgetTimeMilliseconds =>
-            DdgiSchedulerMode == DdgiSchedulerMode.CpuReference
-                ? EffectiveDdgiProbeUpdateTimeBudgetMilliseconds
-                : EffectiveDdgiGpuTotalUpdateTimeBudgetMilliseconds;
-
-        public int ResolveDdgiCascadeRaysPerProbe(int cascadeIndex)
-        {
-            int cascadeBudget = cascadeIndex switch
-            {
-                0 => DdgiCascade0RaysPerProbe,
-                1 => DdgiCascade1RaysPerProbe,
-                2 => DdgiCascade2RaysPerProbe,
-                _ => DdgiCascade3RaysPerProbe
-            };
-            return Math.Min(cascadeBudget, DdgiMaxRaysPerProbe);
-        }
-
-        public int ResolveDdgiRaysPerProbe(int authoredRaysPerProbe, int cascadeIndex)
-        {
-            int requested = cascadeIndex >= 0 ? ResolveDdgiCascadeRaysPerProbe(cascadeIndex) : authoredRaysPerProbe;
-            return Math.Min(ClampDdgiRays(requested), DdgiMaxRaysPerProbe);
-        }
-
-        public float ResolveDdgiCascadeMaxRayDistance(int cascadeIndex)
-        {
-            return cascadeIndex switch
-            {
-                0 => DdgiCascade0MaxRayDistance,
-                1 => DdgiCascade1MaxRayDistance,
-                2 => DdgiCascade2MaxRayDistance,
-                _ => DdgiCascade3MaxRayDistance
-            };
-        }
-
-        public float ResolveDdgiClipmapVerticalCenterOffset(int cascadeIndex)
-        {
-            return cascadeIndex switch
-            {
-                0 => DdgiCascade0VerticalCenterOffset,
-                1 => DdgiCascade1VerticalCenterOffset,
-                2 => DdgiCascade2VerticalCenterOffset,
-                _ => DdgiCascade3VerticalCenterOffset
-            };
-        }
+            DdgiQualityTier.DdgiLow => 0.75f,
+            DdgiQualityTier.DdgiMedium => 1.0f,
+            DdgiQualityTier.DdgiUltra => 4.0f,
+            _ => 3.0f
+        };
 
         public float ResolutionScale
         {
@@ -3252,24 +2783,6 @@ namespace Njulf.Rendering.Data
         {
             get => _maxBounceDistance;
             set => _maxBounceDistance = Clamp(value, 0.1f, 100.0f);
-        }
-
-        public float SsgiMaxDistance
-        {
-            get => _ssgiMaxDistance;
-            set => _ssgiMaxDistance = Clamp(value, 0.1f, 100.0f);
-        }
-
-        public float SsgiThickness
-        {
-            get => _ssgiThickness;
-            set => _ssgiThickness = Clamp(value, 0.005f, 1.0f);
-        }
-
-        public float SsgiHitNormalThreshold
-        {
-            get => _ssgiHitNormalThreshold;
-            set => _ssgiHitNormalThreshold = Clamp(value, 0.0f, 1.0f);
         }
 
         public bool TemporalEnabled { get; set; } = true;
@@ -3299,29 +2812,15 @@ namespace Njulf.Rendering.Data
             set => _leakClampStrength = Clamp(value, 0.0f, 1.0f);
         }
 
-        public bool EffectiveUseSsgi => !EmergencyGiFallbackEnabled &&
-            Enabled &&
-            UseSsgi &&
-            Mode is (GlobalIlluminationMode.Ssgi or
-                GlobalIlluminationMode.Hybrid or
-                GlobalIlluminationMode.RayQueryHybrid);
-
         public bool EffectiveUseDdgi => !EmergencyGiFallbackEnabled &&
             Enabled &&
             UseDdgi &&
-            !DdgiSimpleEnabled &&
-            Mode is (GlobalIlluminationMode.Ddgi or GlobalIlluminationMode.Hybrid or GlobalIlluminationMode.RayQueryHybrid);
-
-        public bool EffectiveUseSimpleDdgi => !EmergencyGiFallbackEnabled &&
-            Enabled &&
-            UseDdgi &&
-            DdgiSimpleEnabled &&
-            Mode is (GlobalIlluminationMode.Ddgi or GlobalIlluminationMode.Hybrid or GlobalIlluminationMode.RayQueryHybrid);
+            Mode == GlobalIlluminationMode.Ddgi;
 
         public bool EffectiveUseRayQueryBackend => !EmergencyGiFallbackEnabled &&
             Enabled &&
             UseRayQueryBackend &&
-            (EffectiveUseDdgi || EffectiveUseSimpleDdgi);
+            EffectiveUseDdgi;
 
         public void ApplyDdgiQualityTier(DdgiQualityTier tier)
         {
@@ -3330,21 +2829,13 @@ namespace Njulf.Rendering.Data
             {
                 DdgiQualityTier.DdgiLow => 512,
                 DdgiQualityTier.DdgiMedium => 2_048,
-                DdgiQualityTier.DdgiUltra => MaxDdgiEmissiveTriangleBudget,
                 _ => MaxDdgiEmissiveTriangleBudget
             };
             DdgiAdaptiveBudgetingEnabled = true;
-            DdgiAdaptiveBudgetHysteresisFraction = 0.15f;
-            DdgiEmergencyDegradeGpuTimeMultiplier = 2.0f;
             DdgiProbeClassificationEnabled = true;
             DdgiProbeRelocationEnabled = true;
             DdgiProbeL1MetadataEnabled = true;
             DdgiCameraRelativeEnabled = true;
-            DdgiSelfShadowBiasScale = 1.0f;
-            DdgiHysteresisResponse = 1.0f;
-            DdgiSchedulerMode = DdgiSchedulerMode.Gpu;
-            DdgiGpuSchedulerReadbackValidationEnabled = false;
-            DdgiExhaustiveGatherFallbackEnabled = true;
             SimpleDdgiStructuredGatherEnabled = true;
             SimpleDdgiLayoutAdmissionMode = SimpleDdgiLayoutAdmissionMode.Degrade;
             SimpleDdgiTransportV2Enabled = true;
@@ -3356,159 +2847,20 @@ namespace Njulf.Rendering.Data
             SimpleDdgiVerticalRingPolicy = SimpleDdgiVerticalRingPolicy.CameraRelativeWithHysteresis;
             SimpleDdgiVerticalRecenterHysteresisFraction = 0.25f;
             SimpleDdgiReducedBlendEnabled = tier is DdgiQualityTier.DdgiLow or DdgiQualityTier.DdgiMedium;
-            // The sampled mirror replaces dozens of random SSBO reads per shaded
-            // pixel with filtered image fetches.  It is a net production win on
-            // high/ultra tiers and remains protected by the manager's strict
-            // atlas-memory admission check; low and medium retain the lean SSBO
-            // path.
             SimpleDdgiSampledAtlasEnabled = tier is DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra;
             SimpleDdgiToroidalScrollingEnabled = true;
             SimpleDdgiRegionalInvalidationEnabled = true;
             SimpleDdgiRoughSpecularEnabled = false;
 
-            switch (tier)
+            (DdgiProbeUpdatePrimaryRayBudget, DdgiMaxShadedLights, DdgiMaterialTextureMaxCascade, DdgiAtlasMemoryBudgetBytes) = tier switch
             {
-                case DdgiQualityTier.DdgiLow:
-                    DdgiClipmapCascadeCount = 2;
-                    DdgiClipmapProbeCountX = 16;
-                    DdgiClipmapProbeCountY = 6;
-                    DdgiClipmapProbeCountZ = 16;
-                    DdgiClipmapBaseSpacing = 1.75f;
-                    DdgiClipmapSpacingScale = 2.5f;
-                    DdgiClipmapVerticalCenterOffset = -0.25f;
-                    DdgiCascade1VerticalCenterOffset = 2.5f;
-                    DdgiCascade2VerticalCenterOffset = 8.0f;
-                    DdgiCascade3VerticalCenterOffset = 16.0f;
-                    DdgiOutOfFrustumMinimumUpdateFraction = 0.1f;
-                    DdgiMaxActiveProbes = 6_144;
-                    DdgiMaxProbeUpdatesPerFrame = 128;
-                    DdgiProbeUpdatePrimaryRayBudget = 4_096;
-                    DdgiColdStartMaxProbeUpdatesPerFrame = 128;
-                    DdgiColdStartPrimaryRayBudget = 8_192;
-                    DdgiMinimumProbeRefreshFrames = 360;
-                    DdgiMaxRaysPerProbe = 32;
-                    DdgiCascade0RaysPerProbe = 32;
-                    DdgiCascade1RaysPerProbe = 24;
-                    DdgiCascade2RaysPerProbe = 16;
-                    DdgiCascade3RaysPerProbe = 16;
-                    DdgiCascade0MaxRayDistance = 8.0f;
-                    DdgiCascade1MaxRayDistance = 16.0f;
-                    DdgiCascade2MaxRayDistance = 32.0f;
-                    DdgiCascade3MaxRayDistance = 48.0f;
-                    DdgiMaxShadedLights = 2;
-                    DdgiMaterialTextureMaxCascade = -1;
-                    DdgiAtlasMemoryBudgetBytes = 64UL * 1024UL * 1024UL;
-                    DdgiProbeUpdateTimeBudgetMilliseconds = 0.75f;
-                    DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
-                    DdgiGpuTotalUpdateTimeBudgetMilliseconds = 0.75f;
-                    ApplySimpleDdgiQualityTier(tier);
-                    break;
-                case DdgiQualityTier.DdgiMedium:
-                    DdgiClipmapCascadeCount = 3;
-                    DdgiClipmapProbeCountX = 20;
-                    DdgiClipmapProbeCountY = 8;
-                    DdgiClipmapProbeCountZ = 20;
-                    DdgiClipmapBaseSpacing = 1.5f;
-                    DdgiClipmapSpacingScale = 2.25f;
-                    DdgiClipmapVerticalCenterOffset = -0.25f;
-                    DdgiCascade1VerticalCenterOffset = 2.5f;
-                    DdgiCascade2VerticalCenterOffset = 8.0f;
-                    DdgiCascade3VerticalCenterOffset = 16.0f;
-                    DdgiOutOfFrustumMinimumUpdateFraction = 0.15f;
-                    DdgiMaxActiveProbes = 12_288;
-                    DdgiMaxProbeUpdatesPerFrame = 384;
-                    DdgiProbeUpdatePrimaryRayBudget = 16_384;
-                    DdgiColdStartMaxProbeUpdatesPerFrame = 256;
-                    DdgiColdStartPrimaryRayBudget = 32_768;
-                    DdgiMinimumProbeRefreshFrames = 300;
-                    DdgiMaxRaysPerProbe = 64;
-                    DdgiCascade0RaysPerProbe = 64;
-                    DdgiCascade1RaysPerProbe = 48;
-                    DdgiCascade2RaysPerProbe = 32;
-                    DdgiCascade3RaysPerProbe = 24;
-                    DdgiCascade0MaxRayDistance = 12.0f;
-                    DdgiCascade1MaxRayDistance = 24.0f;
-                    DdgiCascade2MaxRayDistance = 42.0f;
-                    DdgiCascade3MaxRayDistance = 72.0f;
-                    DdgiMaxShadedLights = 4;
-                    DdgiMaterialTextureMaxCascade = 0;
-                    DdgiAtlasMemoryBudgetBytes = 128UL * 1024UL * 1024UL;
-                    DdgiProbeUpdateTimeBudgetMilliseconds = 1.0f;
-                    DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
-                    DdgiGpuTotalUpdateTimeBudgetMilliseconds = 1.0f;
-                    ApplySimpleDdgiQualityTier(tier);
-                    break;
-                case DdgiQualityTier.DdgiUltra:
-                    DdgiClipmapCascadeCount = MaxDdgiClipmapCascadeCount;
-                    DdgiClipmapProbeCountX = MaxDdgiClipmapProbeCountX;
-                    DdgiClipmapProbeCountY = 12;
-                    DdgiClipmapProbeCountZ = MaxDdgiClipmapProbeCountZ;
-                    DdgiClipmapBaseSpacing = 1.0f;
-                    DdgiClipmapSpacingScale = 2.0f;
-                    DdgiClipmapVerticalCenterOffset = -0.25f;
-                    DdgiCascade1VerticalCenterOffset = 2.5f;
-                    DdgiCascade2VerticalCenterOffset = 8.0f;
-                    DdgiCascade3VerticalCenterOffset = 16.0f;
-                    DdgiOutOfFrustumMinimumUpdateFraction = 0.25f;
-                    DdgiMaxActiveProbes = 32_768;
-                    DdgiMaxProbeUpdatesPerFrame = 4_096;
-                    DdgiProbeUpdatePrimaryRayBudget = 524_288;
-                    DdgiColdStartMaxProbeUpdatesPerFrame = 4_096;
-                    DdgiColdStartPrimaryRayBudget = 1_048_576;
-                    DdgiMinimumProbeRefreshFrames = 60;
-                    DdgiMaxRaysPerProbe = 256;
-                    DdgiCascade0RaysPerProbe = 256;
-                    DdgiCascade1RaysPerProbe = 128;
-                    DdgiCascade2RaysPerProbe = 96;
-                    DdgiCascade3RaysPerProbe = 64;
-                    DdgiCascade0MaxRayDistance = 24.0f;
-                    DdgiCascade1MaxRayDistance = 48.0f;
-                    DdgiCascade2MaxRayDistance = 96.0f;
-                    DdgiCascade3MaxRayDistance = 160.0f;
-                    DdgiMaxShadedLights = 16;
-                    DdgiMaterialTextureMaxCascade = 3;
-                    DdgiAtlasMemoryBudgetBytes = 384UL * 1024UL * 1024UL;
-                    DdgiProbeUpdateTimeBudgetMilliseconds = 4.0f;
-                    DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
-                    DdgiGpuTotalUpdateTimeBudgetMilliseconds = 4.0f;
-                    ApplySimpleDdgiQualityTier(tier);
-                    break;
-                default:
-                    DdgiClipmapCascadeCount = MaxDdgiClipmapCascadeCount;
-                    DdgiClipmapProbeCountX = 24;
-                    DdgiClipmapProbeCountY = 14;
-                    DdgiClipmapProbeCountZ = 24;
-                    DdgiClipmapBaseSpacing = 0.75f;
-                    DdgiClipmapSpacingScale = 2.0f;
-                    DdgiClipmapVerticalCenterOffset = -0.25f;
-                    DdgiCascade1VerticalCenterOffset = 2.5f;
-                    DdgiCascade2VerticalCenterOffset = 8.0f;
-                    DdgiCascade3VerticalCenterOffset = 16.0f;
-                    DdgiOutOfFrustumMinimumUpdateFraction = 0.4f;
-                    DdgiMaxActiveProbes = 32_256;
-                    DdgiMaxProbeUpdatesPerFrame = 2_048;
-                    DdgiProbeUpdatePrimaryRayBudget = 262_144;
-                    DdgiColdStartMaxProbeUpdatesPerFrame = 2_048;
-                    DdgiColdStartPrimaryRayBudget = 524_288;
-                    DdgiMinimumProbeRefreshFrames = 120;
-                    DdgiMaxRaysPerProbe = 128;
-                    DdgiCascade0RaysPerProbe = 128;
-                    DdgiCascade1RaysPerProbe = 96;
-                    DdgiCascade2RaysPerProbe = 64;
-                    DdgiCascade3RaysPerProbe = 48;
-                    DdgiCascade0MaxRayDistance = 12.0f;
-                    DdgiCascade1MaxRayDistance = 36.0f;
-                    DdgiCascade2MaxRayDistance = 96.0f;
-                    DdgiCascade3MaxRayDistance = 192.0f;
-                    DdgiMaxShadedLights = 8;
-                    DdgiMaterialTextureMaxCascade = 1;
-                    DdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL;
-                    DdgiProbeUpdateTimeBudgetMilliseconds = 3.0f;
-                    DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
-                    DdgiGpuTotalUpdateTimeBudgetMilliseconds = 3.0f;
-                    ApplySimpleDdgiQualityTier(DdgiQualityTier.DdgiHigh);
-                    break;
-            }
+                DdgiQualityTier.DdgiLow => (4_096, 2, -1, 64UL * 1024UL * 1024UL),
+                DdgiQualityTier.DdgiMedium => (16_384, 4, 0, 128UL * 1024UL * 1024UL),
+                DdgiQualityTier.DdgiUltra => (524_288, 16, 3, 384UL * 1024UL * 1024UL),
+                _ => (262_144, 8, 1, 192UL * 1024UL * 1024UL)
+            };
+
+            ApplySimpleDdgiQualityTier(tier);
         }
 
         private void ApplySimpleDdgiQualityTier(DdgiQualityTier tier)
@@ -3829,7 +3181,7 @@ namespace Njulf.Rendering.Data
         }
 
         private static int ClampDdgiRays(int value) =>
-            Clamp(value, GlobalIlluminationProbeVolume.MinRaysPerProbe, GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe);
+            Clamp(value, MinSimpleDdgiRaysPerProbe, MaxSimpleDdgiRaysPerProbe);
 
         private static float ClampDdgiMaxRayDistance(float value)
         {
@@ -4167,31 +3519,11 @@ namespace Njulf.Rendering.Data
 
         public bool HiZBuildEnabled { get; set; } = true;
         public bool AmbientOcclusionBlurEnabled { get; set; } = true;
-        /// <summary>
-        /// Keeps the async SSGI candidate opt-in while the DDGI path is being finalized.
-        /// </summary>
-        public bool SsgiChainEnabled { get; set; }
         public bool FogEnabled { get; set; } = true;
         public bool BloomEnabled { get; set; } = true;
         public bool SimpleDdgiUpdateEnabled { get; set; } = true;
-        public bool FullDdgiUpdateEnabled { get; set; } = true;
         public bool FarFieldClipmapBakeEnabled { get; set; } = true;
         public bool GpuParticlesEnabled { get; set; } = true;
-
-        /// <summary>
-        /// Compatibility alias for the former single DDGI toggle.  New configurations can control
-        /// Simple DDGI and full DDGI independently.
-        /// </summary>
-        [Obsolete("Use SimpleDdgiUpdateEnabled and FullDdgiUpdateEnabled.")]
-        public bool DdgiUpdateEnabled
-        {
-            get => SimpleDdgiUpdateEnabled && FullDdgiUpdateEnabled;
-            set
-            {
-                SimpleDdgiUpdateEnabled = value;
-                FullDdgiUpdateEnabled = value;
-            }
-        }
 
         /// <summary>Minimum samples retained for each graphics-only/async timing window.</summary>
         public int AutoMinimumSampleCount { get; set; } = 30;
@@ -4311,9 +3643,6 @@ namespace Njulf.Rendering.Data
             QualityPresetChanging?.Invoke(preset);
             QualityPreset = preset;
             ShowRawHdrSceneColor = false;
-            // Simple DDGI is the production DDGI implementation. Presets restore
-            // that default so scene changes cannot inherit the legacy backend.
-            GlobalIllumination.DdgiSimpleEnabled = true;
 
             switch (preset)
             {
@@ -4330,7 +3659,6 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.DebugView = GlobalIlluminationDebugView.None;
                     GlobalIllumination.IndirectIntensity = 0.0f;
                     GlobalIllumination.EnvironmentFallbackIntensity = 1.0f;
-                    GlobalIllumination.UseSsgi = false;
                     GlobalIllumination.UseDdgi = false;
                     GlobalIllumination.UseRayQueryBackend = false;
                     GlobalIllumination.DdgiQualityTier = DdgiQualityTier.DdgiLow;
@@ -4338,10 +3666,7 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.DdgiProbeRelocationEnabled = false;
                     GlobalIllumination.DdgiCameraRelativeEnabled = false;
                     GlobalIllumination.DdgiAsyncComputeEnabled = false;
-                    GlobalIllumination.DdgiMaxProbeUpdatesPerFrame = 1_024;
                     GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
-                    GlobalIllumination.DdgiColdStartMaxProbeUpdatesPerFrame = 1_024;
-                    GlobalIllumination.DdgiColdStartPrimaryRayBudget = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
                     GlobalIllumination.ResolutionScale = 0.5f;
                     GlobalIllumination.MaxBounceDistance = 3.0f;
                     Reflections.Enabled = false;
@@ -4383,22 +3708,18 @@ namespace Njulf.Rendering.Data
                     AmbientOcclusion.ResolutionScale = 0.5f;
                     AmbientOcclusion.SampleCount = 8;
                     GlobalIllumination.Enabled = true;
-                    GlobalIllumination.Mode = GlobalIlluminationMode.Ssgi;
+                    GlobalIllumination.Mode = GlobalIlluminationMode.Ddgi;
                     GlobalIllumination.DebugView = GlobalIlluminationDebugView.None;
                     GlobalIllumination.IndirectIntensity = 0.75f;
                     GlobalIllumination.EnvironmentFallbackIntensity = 1.0f;
-                    GlobalIllumination.UseSsgi = true;
-                    GlobalIllumination.UseDdgi = false;
-                    GlobalIllumination.UseRayQueryBackend = false;
+                    GlobalIllumination.UseDdgi = true;
+                    GlobalIllumination.UseRayQueryBackend = true;
                     GlobalIllumination.DdgiQualityTier = DdgiQualityTier.DdgiMedium;
                     GlobalIllumination.DdgiProbeClassificationEnabled = true;
                     GlobalIllumination.DdgiProbeRelocationEnabled = false;
                     GlobalIllumination.DdgiCameraRelativeEnabled = false;
                     GlobalIllumination.DdgiAsyncComputeEnabled = false;
-                    GlobalIllumination.DdgiMaxProbeUpdatesPerFrame = 1_024;
                     GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
-                    GlobalIllumination.DdgiColdStartMaxProbeUpdatesPerFrame = 1_024;
-                    GlobalIllumination.DdgiColdStartPrimaryRayBudget = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
                     GlobalIllumination.ResolutionScale = 0.5f;
                     GlobalIllumination.MaxBounceDistance = 4.0f;
                     GlobalIllumination.TemporalEnabled = true;
@@ -4428,8 +3749,8 @@ namespace Njulf.Rendering.Data
                     Shadows.MaxShadowedSpotLights = 2;
                     Shadows.MaxShadowedPointLights = 1;
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
-                    // SSGI depends on opaque depth/trace-source ownership and is
-                    // intentionally not sampled by layered forward receivers.
+                    // Dynamic diffuse GI is intentionally not sampled by
+                    // layered forward receivers in this quality tier.
                     Transparency.ReceiveGlobalIllumination = false;
                     Decals.ReceiveGlobalIllumination = false;
                     break;
@@ -4447,7 +3768,6 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.DebugView = GlobalIlluminationDebugView.None;
                     GlobalIllumination.IndirectIntensity = 1.0f;
                     GlobalIllumination.EnvironmentFallbackIntensity = 1.0f;
-                    GlobalIllumination.UseSsgi = false;
                     GlobalIllumination.UseDdgi = true;
                     GlobalIllumination.UseRayQueryBackend = true;
                     GlobalIllumination.DdgiProbeClassificationEnabled = true;
@@ -4497,11 +3817,10 @@ namespace Njulf.Rendering.Data
                     AmbientOcclusion.ResolutionScale = 1.0f;
                     AmbientOcclusion.SampleCount = 32;
                     GlobalIllumination.Enabled = true;
-                    GlobalIllumination.Mode = GlobalIlluminationMode.RayQueryHybrid;
+                    GlobalIllumination.Mode = GlobalIlluminationMode.Ddgi;
                     GlobalIllumination.DebugView = GlobalIlluminationDebugView.None;
                     GlobalIllumination.IndirectIntensity = 1.0f;
                     GlobalIllumination.EnvironmentFallbackIntensity = 1.0f;
-                    GlobalIllumination.UseSsgi = true;
                     GlobalIllumination.UseDdgi = true;
                     GlobalIllumination.UseRayQueryBackend = true;
                     GlobalIllumination.DdgiProbeClassificationEnabled = true;
@@ -4551,26 +3870,17 @@ namespace Njulf.Rendering.Data
                     AmbientOcclusion.ResolutionScale = 0.5f;
                     AmbientOcclusion.SampleCount = 16;
                     GlobalIllumination.Enabled = true;
-                    GlobalIllumination.Mode = GlobalIlluminationMode.Hybrid;
+                    GlobalIllumination.Mode = GlobalIlluminationMode.Ddgi;
                     GlobalIllumination.DebugView = GlobalIlluminationDebugView.None;
                     GlobalIllumination.IndirectIntensity = 1.0f;
                     GlobalIllumination.EnvironmentFallbackIntensity = 1.0f;
-                    GlobalIllumination.UseSsgi = true;
                     GlobalIllumination.UseDdgi = true;
                     GlobalIllumination.UseRayQueryBackend = false;
                     GlobalIllumination.DdgiProbeClassificationEnabled = true;
                     GlobalIllumination.DdgiProbeRelocationEnabled = true;
                     GlobalIllumination.DdgiCameraRelativeEnabled = true;
                     GlobalIllumination.DdgiAsyncComputeEnabled = true;
-                    GlobalIllumination.DdgiMaxProbeUpdatesPerFrame = 1_024;
                     GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
-                    GlobalIllumination.DdgiColdStartMaxProbeUpdatesPerFrame = 1_024;
-                    GlobalIllumination.DdgiColdStartPrimaryRayBudget = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
-                    GlobalIllumination.DdgiMaxRaysPerProbe = GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe;
-                    GlobalIllumination.DdgiCascade0RaysPerProbe = 128;
-                    GlobalIllumination.DdgiCascade1RaysPerProbe = 96;
-                    GlobalIllumination.DdgiCascade2RaysPerProbe = 64;
-                    GlobalIllumination.DdgiCascade3RaysPerProbe = 48;
                     GlobalIllumination.ResolutionScale = 0.5f;
                     GlobalIllumination.MaxBounceDistance = 6.0f;
                     GlobalIllumination.TemporalEnabled = true;
@@ -5002,35 +4312,27 @@ namespace Njulf.Rendering.Data
         private sealed record GlobalIlluminationFile
         {
             public bool Enabled { get; init; } = true;
-            public GlobalIlluminationMode Mode { get; init; } = GlobalIlluminationMode.Hybrid;
+            public GlobalIlluminationMode Mode { get; init; } = GlobalIlluminationMode.Ddgi;
             public GlobalIlluminationDebugView DebugView { get; init; } = GlobalIlluminationDebugView.None;
             public bool EmergencyGiFallbackEnabled { get; init; }
             public float IndirectIntensity { get; init; } = 1.0f;
             public float EnvironmentFallbackIntensity { get; init; } = 1.0f;
             // Keep partially specified settings files on the DDGI-focused default.
-            public bool UseSsgi { get; init; }
             public bool UseDdgi { get; init; } = true;
             public bool UseRayQueryBackend { get; init; }
             public DdgiQualityTier DdgiQualityTier { get; init; } = DdgiQualityTier.DdgiHigh;
             public bool GiMaterialTransportV2 { get; init; }
-            public bool GiHybridCompositionV2 { get; init; }
             public bool GiEmissiveMeshSampling { get; init; }
             public bool DdgiProbeClassificationEnabled { get; init; } = true;
             public bool DdgiProbeRelocationEnabled { get; init; }
             public bool DdgiProbeL1MetadataEnabled { get; init; } = true;
             public bool DdgiCameraRelativeEnabled { get; init; } = true;
             public bool DdgiAdaptiveBudgetingEnabled { get; init; } = true;
-            public DdgiSchedulerMode DdgiSchedulerMode { get; init; } = DdgiSchedulerMode.Gpu;
-            public bool DdgiGpuSchedulerReadbackValidationEnabled { get; init; }
-            public bool DdgiCompareModeUseGpuQueueForRendering { get; init; } = true;
-            public bool DdgiExhaustiveGatherFallbackEnabled { get; init; } = true;
-            public bool DdgiRawAtlasRadianceConventionEnabled { get; init; } = true;
-            public bool DdgiAllowForwardWithoutDepthPrePass { get; init; } = true;
-            public bool DdgiDebugForceProbeActive { get; init; }
             public bool DdgiThinWallPolicyEnabled { get; init; } = true;
-            public bool DdgiRoomSpacingScaledBiasEnabled { get; init; } = true;
+            public bool DdgiAsyncComputeEnabled { get; init; } = true;
             public bool DdgiAlphaMaskedTransportEnabled { get; init; } = true;
-            public bool DdgiSimpleEnabled { get; init; } = true;
+            public SimpleDdgiSchedulerMode SimpleDdgiSchedulerMode { get; init; } =
+                SimpleDdgiSchedulerMode.CpuReference;
             public SimpleDdgiAuthoredVolumeFile[] SimpleDdgiAuthoredVolumes { get; init; } = Array.Empty<SimpleDdgiAuthoredVolumeFile>();
             public bool SimpleDdgiSharedMemoryBlendEnabled { get; init; } = true;
             public bool SimpleDdgiClassificationSchedulingEnabled { get; init; } = true;
@@ -5130,73 +4432,14 @@ namespace Njulf.Rendering.Data
             public float GiAccelerationStructureStaticResidentDistance { get; init; } = 256.0f;
             public int GiAccelerationStructureMaximumStaticInstances { get; init; } = 8_192;
             public int GiAccelerationStructureEvictionGraceFrames { get; init; } = 120;
-            public int DdgiClipmapCascadeCount { get; init; } = GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount;
-            public int DdgiClipmapProbeCountX { get; init; } = 24;
-            public int DdgiClipmapProbeCountY { get; init; } = 14;
-            public int DdgiClipmapProbeCountZ { get; init; } = 24;
-            public float DdgiClipmapBaseSpacing { get; init; } = 0.75f;
-            public float DdgiClipmapSpacingScale { get; init; } = 2.0f;
-            public float DdgiClipmapVerticalCenterOffset { get; init; } = -0.25f;
-            public float? DdgiCascade0VerticalCenterOffset { get; init; }
-            public float? DdgiCascade1VerticalCenterOffset { get; init; }
-            public float? DdgiCascade2VerticalCenterOffset { get; init; }
-            public float? DdgiCascade3VerticalCenterOffset { get; init; }
-            public float DdgiClipmapEdgeBlendFraction { get; init; } = 0.15f;
-            public int DdgiClipmapSafetyMarginCells { get; init; } = 4;
-            public float DdgiFrustumPriorityWeight { get; init; } = 2.0f;
-            public float DdgiOutOfFrustumMinimumUpdateFraction { get; init; } = 0.4f;
-            public float DdgiNewProbeUpdateBoost { get; init; } = 4.0f;
-            public float DdgiProbeUpdateTimeBudgetMilliseconds { get; init; } = 1.5f;
-            public float DdgiGpuScheduleTimeBudgetMilliseconds { get; init; } = 0.25f;
-            public float DdgiGpuTotalUpdateTimeBudgetMilliseconds { get; init; } = 1.5f;
-            public float DdgiAdaptiveBudgetHysteresisFraction { get; init; } = 0.15f;
-            public float DdgiEmergencyDegradeGpuTimeMultiplier { get; init; } = 2.0f;
-            public float DdgiTeleportResetDistance { get; init; } = 50.0f;
-            public bool DdgiCameraCutResetEnabled { get; init; } = true;
-            public bool DdgiAsyncComputeEnabled { get; init; } = true;
-            public int DdgiMaxActiveProbes { get; init; } = 32_256;
-            public int DdgiMaxProbeUpdatesPerFrame { get; init; } = 1_024;
-            public int DdgiGpuSchedulerMaxDirtyRegions { get; init; } = 1024;
-            public int DdgiGpuSchedulerCandidateBucketCount { get; init; } = 16;
-            public float DdgiGpuSchedulerLocalScanFraction { get; init; } = 0.35f;
-            public float DdgiGpuSchedulerCascade0ScanFraction { get; init; } = 0.35f;
-            public float DdgiGpuSchedulerSafetyScanFraction { get; init; } = 0.3f;
-            public float DdgiGpuSchedulerDirtyScanFraction { get; init; } = 0.10f;
-            public bool DdgiGpuSchedulerFallbackOnValidationFailure { get; init; } = true;
-            public bool DdgiGpuSchedulerForceCpuFallback { get; init; }
-            public bool DdgiGpuSchedulerAutoRetryAfterFallback { get; init; }
-            public int DdgiGpuSchedulerValidationFailureThreshold { get; init; } = 3;
-            public int DdgiGpuSchedulerFallbackRetryStableFrames { get; init; } = 300;
             public int DdgiProbeUpdatePrimaryRayBudget { get; init; } = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
-            public int DdgiColdStartMaxProbeUpdatesPerFrame { get; init; } = 1_024;
-            public int DdgiColdStartPrimaryRayBudget { get; init; } = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
-            public int DdgiMinimumProbeRefreshFrames { get; init; } = 240;
-            public int DdgiMaxRaysPerProbe { get; init; } = GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe;
-            public int DdgiCascade0RaysPerProbe { get; init; } = 128;
-            public int DdgiCascade1RaysPerProbe { get; init; } = 96;
-            public int DdgiCascade2RaysPerProbe { get; init; } = 64;
-            public int DdgiCascade3RaysPerProbe { get; init; } = 48;
-            public float DdgiCascade0MaxRayDistance { get; init; } = 12.0f;
-            public float DdgiCascade1MaxRayDistance { get; init; } = 36.0f;
-            public float DdgiCascade2MaxRayDistance { get; init; } = 96.0f;
-            public float DdgiCascade3MaxRayDistance { get; init; } = 192.0f;
             public int DdgiMaxShadedLights { get; init; } = 8;
             public int DdgiMaterialTextureMaxCascade { get; init; } = 1;
             public ulong DdgiAtlasMemoryBudgetBytes { get; init; } = GlobalIlluminationSettings.DefaultDdgiAtlasMemoryBudgetBytes;
-            public float DdgiAsyncComputeReservedBudgetFraction { get; init; } = 0.25f;
-            public float DdgiThinWallProxyThickness { get; init; } = 0.12f;
             public float DdgiThinWallLeakClampStrength { get; init; } = 0.9f;
             public float DdgiSelfShadowBiasScale { get; init; } = 1.0f;
-            public float DdgiHysteresisResponse { get; init; } = 1.0f;
-            public float DdgiRelocationTargetSurfaceDistanceFraction { get; init; } = 0.15f;
-            public float DdgiRelocationMinSurfaceDistance { get; init; } = 0.08f;
-            public float DdgiRelocationMaxDistanceFraction { get; init; } = 0.40f;
-            public float DdgiRelocationBlendAlpha { get; init; } = 0.20f;
             public float ResolutionScale { get; init; } = 0.5f;
             public float MaxBounceDistance { get; init; } = 6.0f;
-            public float SsgiMaxDistance { get; init; } = 3.0f;
-            public float SsgiThickness { get; init; } = 0.04f;
-            public float SsgiHitNormalThreshold { get; init; } = 0.15f;
             public bool TemporalEnabled { get; init; } = true;
             public bool DenoiserEnabled { get; init; } = true;
             public float HistoryResponsiveness { get; init; } = 0.18f;
@@ -5214,29 +4457,19 @@ namespace Njulf.Rendering.Data
                     EmergencyGiFallbackEnabled = settings.EmergencyGiFallbackEnabled,
                     IndirectIntensity = settings.IndirectIntensity,
                     EnvironmentFallbackIntensity = settings.EnvironmentFallbackIntensity,
-                    UseSsgi = settings.UseSsgi,
                     UseDdgi = settings.UseDdgi,
                     UseRayQueryBackend = settings.UseRayQueryBackend,
                     DdgiQualityTier = settings.DdgiQualityTier,
                     GiMaterialTransportV2 = settings.GiMaterialTransportV2,
-                    GiHybridCompositionV2 = settings.GiHybridCompositionV2,
                     GiEmissiveMeshSampling = settings.GiEmissiveMeshSampling,
                     DdgiProbeClassificationEnabled = settings.DdgiProbeClassificationEnabled,
                     DdgiProbeRelocationEnabled = settings.DdgiProbeRelocationEnabled,
                     DdgiProbeL1MetadataEnabled = settings.DdgiProbeL1MetadataEnabled,
                     DdgiCameraRelativeEnabled = settings.DdgiCameraRelativeEnabled,
                     DdgiAdaptiveBudgetingEnabled = settings.DdgiAdaptiveBudgetingEnabled,
-                    DdgiSchedulerMode = settings.DdgiSchedulerMode,
-                    DdgiGpuSchedulerReadbackValidationEnabled = settings.DdgiGpuSchedulerReadbackValidationEnabled,
-                    DdgiCompareModeUseGpuQueueForRendering = settings.DdgiCompareModeUseGpuQueueForRendering,
-                    DdgiExhaustiveGatherFallbackEnabled = settings.DdgiExhaustiveGatherFallbackEnabled,
-                    DdgiRawAtlasRadianceConventionEnabled = settings.DdgiRawAtlasRadianceConventionEnabled,
-                    DdgiAllowForwardWithoutDepthPrePass = settings.DdgiAllowForwardWithoutDepthPrePass,
-                    DdgiDebugForceProbeActive = settings.DdgiDebugForceProbeActive,
                     DdgiThinWallPolicyEnabled = settings.DdgiThinWallPolicyEnabled,
-                    DdgiRoomSpacingScaledBiasEnabled = settings.DdgiRoomSpacingScaledBiasEnabled,
                     DdgiAlphaMaskedTransportEnabled = settings.DdgiAlphaMaskedTransportEnabled,
-                    DdgiSimpleEnabled = settings.DdgiSimpleEnabled,
+                    SimpleDdgiSchedulerMode = settings.SimpleDdgiSchedulerMode.Sanitize(),
                     SimpleDdgiAuthoredVolumes = settings.SimpleDdgiAuthoredVolumes
                         .Take(GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount)
                         .Select(SimpleDdgiAuthoredVolumeFile.FromSettings)
@@ -5336,73 +4569,15 @@ namespace Njulf.Rendering.Data
                     GiAccelerationStructureStaticResidentDistance = settings.GiAccelerationStructureStaticResidentDistance,
                     GiAccelerationStructureMaximumStaticInstances = settings.GiAccelerationStructureMaximumStaticInstances,
                     GiAccelerationStructureEvictionGraceFrames = settings.GiAccelerationStructureEvictionGraceFrames,
-                    DdgiClipmapCascadeCount = settings.DdgiClipmapCascadeCount,
-                    DdgiClipmapProbeCountX = settings.DdgiClipmapProbeCountX,
-                    DdgiClipmapProbeCountY = settings.DdgiClipmapProbeCountY,
-                    DdgiClipmapProbeCountZ = settings.DdgiClipmapProbeCountZ,
-                    DdgiClipmapBaseSpacing = settings.DdgiClipmapBaseSpacing,
-                    DdgiClipmapSpacingScale = settings.DdgiClipmapSpacingScale,
-                    DdgiClipmapVerticalCenterOffset = settings.DdgiClipmapVerticalCenterOffset,
-                    DdgiCascade0VerticalCenterOffset = settings.DdgiCascade0VerticalCenterOffset,
-                    DdgiCascade1VerticalCenterOffset = settings.DdgiCascade1VerticalCenterOffset,
-                    DdgiCascade2VerticalCenterOffset = settings.DdgiCascade2VerticalCenterOffset,
-                    DdgiCascade3VerticalCenterOffset = settings.DdgiCascade3VerticalCenterOffset,
-                    DdgiClipmapEdgeBlendFraction = settings.DdgiClipmapEdgeBlendFraction,
-                    DdgiClipmapSafetyMarginCells = settings.DdgiClipmapSafetyMarginCells,
-                    DdgiFrustumPriorityWeight = settings.DdgiFrustumPriorityWeight,
-                    DdgiOutOfFrustumMinimumUpdateFraction = settings.DdgiOutOfFrustumMinimumUpdateFraction,
-                    DdgiNewProbeUpdateBoost = settings.DdgiNewProbeUpdateBoost,
-                    DdgiProbeUpdateTimeBudgetMilliseconds = settings.DdgiProbeUpdateTimeBudgetMilliseconds,
-                    DdgiGpuScheduleTimeBudgetMilliseconds = settings.DdgiGpuScheduleTimeBudgetMilliseconds,
-                    DdgiGpuTotalUpdateTimeBudgetMilliseconds = settings.DdgiGpuTotalUpdateTimeBudgetMilliseconds,
-                    DdgiAdaptiveBudgetHysteresisFraction = settings.DdgiAdaptiveBudgetHysteresisFraction,
-                    DdgiEmergencyDegradeGpuTimeMultiplier = settings.DdgiEmergencyDegradeGpuTimeMultiplier,
-                    DdgiTeleportResetDistance = settings.DdgiTeleportResetDistance,
-                    DdgiCameraCutResetEnabled = settings.DdgiCameraCutResetEnabled,
                     DdgiAsyncComputeEnabled = settings.DdgiAsyncComputeEnabled,
-                    DdgiMaxActiveProbes = settings.DdgiMaxActiveProbes,
-                    DdgiMaxProbeUpdatesPerFrame = settings.DdgiMaxProbeUpdatesPerFrame,
-                    DdgiGpuSchedulerMaxDirtyRegions = settings.DdgiGpuSchedulerMaxDirtyRegions,
-                    DdgiGpuSchedulerCandidateBucketCount = settings.DdgiGpuSchedulerCandidateBucketCount,
-                    DdgiGpuSchedulerLocalScanFraction = settings.DdgiGpuSchedulerLocalScanFraction,
-                    DdgiGpuSchedulerCascade0ScanFraction = settings.DdgiGpuSchedulerCascade0ScanFraction,
-                    DdgiGpuSchedulerSafetyScanFraction = settings.DdgiGpuSchedulerSafetyScanFraction,
-                    DdgiGpuSchedulerDirtyScanFraction = settings.DdgiGpuSchedulerDirtyScanFraction,
-                    DdgiGpuSchedulerFallbackOnValidationFailure = settings.DdgiGpuSchedulerFallbackOnValidationFailure,
-                    DdgiGpuSchedulerForceCpuFallback = settings.DdgiGpuSchedulerForceCpuFallback,
-                    DdgiGpuSchedulerAutoRetryAfterFallback = settings.DdgiGpuSchedulerAutoRetryAfterFallback,
-                    DdgiGpuSchedulerValidationFailureThreshold = settings.DdgiGpuSchedulerValidationFailureThreshold,
-                    DdgiGpuSchedulerFallbackRetryStableFrames = settings.DdgiGpuSchedulerFallbackRetryStableFrames,
                     DdgiProbeUpdatePrimaryRayBudget = settings.DdgiProbeUpdatePrimaryRayBudget,
-                    DdgiColdStartMaxProbeUpdatesPerFrame = settings.DdgiColdStartMaxProbeUpdatesPerFrame,
-                    DdgiColdStartPrimaryRayBudget = settings.DdgiColdStartPrimaryRayBudget,
-                    DdgiMinimumProbeRefreshFrames = settings.DdgiMinimumProbeRefreshFrames,
-                    DdgiMaxRaysPerProbe = settings.DdgiMaxRaysPerProbe,
-                    DdgiCascade0RaysPerProbe = settings.DdgiCascade0RaysPerProbe,
-                    DdgiCascade1RaysPerProbe = settings.DdgiCascade1RaysPerProbe,
-                    DdgiCascade2RaysPerProbe = settings.DdgiCascade2RaysPerProbe,
-                    DdgiCascade3RaysPerProbe = settings.DdgiCascade3RaysPerProbe,
-                    DdgiCascade0MaxRayDistance = settings.DdgiCascade0MaxRayDistance,
-                    DdgiCascade1MaxRayDistance = settings.DdgiCascade1MaxRayDistance,
-                    DdgiCascade2MaxRayDistance = settings.DdgiCascade2MaxRayDistance,
-                    DdgiCascade3MaxRayDistance = settings.DdgiCascade3MaxRayDistance,
                     DdgiMaxShadedLights = settings.DdgiMaxShadedLights,
                     DdgiMaterialTextureMaxCascade = settings.DdgiMaterialTextureMaxCascade,
                     DdgiAtlasMemoryBudgetBytes = settings.DdgiAtlasMemoryBudgetBytes,
-                    DdgiAsyncComputeReservedBudgetFraction = settings.DdgiAsyncComputeReservedBudgetFraction,
-                    DdgiThinWallProxyThickness = settings.DdgiThinWallProxyThickness,
                     DdgiThinWallLeakClampStrength = settings.DdgiThinWallLeakClampStrength,
                     DdgiSelfShadowBiasScale = settings.DdgiSelfShadowBiasScale,
-                    DdgiHysteresisResponse = settings.DdgiHysteresisResponse,
-                    DdgiRelocationTargetSurfaceDistanceFraction = settings.DdgiRelocationTargetSurfaceDistanceFraction,
-                    DdgiRelocationMinSurfaceDistance = settings.DdgiRelocationMinSurfaceDistance,
-                    DdgiRelocationMaxDistanceFraction = settings.DdgiRelocationMaxDistanceFraction,
-                    DdgiRelocationBlendAlpha = settings.DdgiRelocationBlendAlpha,
                     ResolutionScale = settings.ResolutionScale,
                     MaxBounceDistance = settings.MaxBounceDistance,
-                    SsgiMaxDistance = settings.SsgiMaxDistance,
-                    SsgiThickness = settings.SsgiThickness,
-                    SsgiHitNormalThreshold = settings.SsgiHitNormalThreshold,
                     TemporalEnabled = settings.TemporalEnabled,
                     DenoiserEnabled = settings.DenoiserEnabled,
                     HistoryResponsiveness = settings.HistoryResponsiveness,
@@ -5420,29 +4595,19 @@ namespace Njulf.Rendering.Data
                 settings.EmergencyGiFallbackEnabled = EmergencyGiFallbackEnabled;
                 settings.IndirectIntensity = IndirectIntensity;
                 settings.EnvironmentFallbackIntensity = EnvironmentFallbackIntensity;
-                settings.UseSsgi = UseSsgi;
                 settings.UseDdgi = UseDdgi;
                 settings.UseRayQueryBackend = UseRayQueryBackend;
                 settings.DdgiQualityTier = DdgiQualityTier;
                 settings.GiMaterialTransportV2 = GiMaterialTransportV2;
-                settings.GiHybridCompositionV2 = GiHybridCompositionV2;
                 settings.GiEmissiveMeshSampling = GiEmissiveMeshSampling;
                 settings.DdgiProbeClassificationEnabled = DdgiProbeClassificationEnabled;
                 settings.DdgiProbeRelocationEnabled = DdgiProbeRelocationEnabled;
                 settings.DdgiProbeL1MetadataEnabled = DdgiProbeL1MetadataEnabled;
                 settings.DdgiCameraRelativeEnabled = DdgiCameraRelativeEnabled;
                 settings.DdgiAdaptiveBudgetingEnabled = DdgiAdaptiveBudgetingEnabled;
-                settings.DdgiSchedulerMode = DdgiSchedulerMode;
-                settings.DdgiGpuSchedulerReadbackValidationEnabled = DdgiGpuSchedulerReadbackValidationEnabled;
-                settings.DdgiCompareModeUseGpuQueueForRendering = DdgiCompareModeUseGpuQueueForRendering;
-                settings.DdgiExhaustiveGatherFallbackEnabled = DdgiExhaustiveGatherFallbackEnabled;
-                settings.DdgiRawAtlasRadianceConventionEnabled = DdgiRawAtlasRadianceConventionEnabled;
-                settings.DdgiAllowForwardWithoutDepthPrePass = DdgiAllowForwardWithoutDepthPrePass;
-                settings.DdgiDebugForceProbeActive = DdgiDebugForceProbeActive;
                 settings.DdgiThinWallPolicyEnabled = DdgiThinWallPolicyEnabled;
-                settings.DdgiRoomSpacingScaledBiasEnabled = DdgiRoomSpacingScaledBiasEnabled;
                 settings.DdgiAlphaMaskedTransportEnabled = DdgiAlphaMaskedTransportEnabled;
-                settings.DdgiSimpleEnabled = DdgiSimpleEnabled;
+                settings.SimpleDdgiSchedulerMode = SimpleDdgiSchedulerMode.Sanitize();
                 settings.SimpleDdgiAuthoredVolumes.Clear();
                 foreach (SimpleDdgiAuthoredVolumeFile? authoredVolume in
                     (SimpleDdgiAuthoredVolumes ?? Array.Empty<SimpleDdgiAuthoredVolumeFile>())
@@ -5546,77 +4711,15 @@ namespace Njulf.Rendering.Data
                 settings.GiAccelerationStructureStaticResidentDistance = GiAccelerationStructureStaticResidentDistance;
                 settings.GiAccelerationStructureMaximumStaticInstances = GiAccelerationStructureMaximumStaticInstances;
                 settings.GiAccelerationStructureEvictionGraceFrames = GiAccelerationStructureEvictionGraceFrames;
-                settings.DdgiClipmapCascadeCount = DdgiClipmapCascadeCount;
-                settings.DdgiClipmapProbeCountX = DdgiClipmapProbeCountX;
-                settings.DdgiClipmapProbeCountY = DdgiClipmapProbeCountY;
-                settings.DdgiClipmapProbeCountZ = DdgiClipmapProbeCountZ;
-                settings.DdgiClipmapBaseSpacing = DdgiClipmapBaseSpacing;
-                settings.DdgiClipmapSpacingScale = DdgiClipmapSpacingScale;
-                settings.DdgiClipmapVerticalCenterOffset = DdgiClipmapVerticalCenterOffset;
-                if (DdgiCascade0VerticalCenterOffset.HasValue)
-                    settings.DdgiCascade0VerticalCenterOffset = DdgiCascade0VerticalCenterOffset.Value;
-                if (DdgiCascade1VerticalCenterOffset.HasValue)
-                    settings.DdgiCascade1VerticalCenterOffset = DdgiCascade1VerticalCenterOffset.Value;
-                if (DdgiCascade2VerticalCenterOffset.HasValue)
-                    settings.DdgiCascade2VerticalCenterOffset = DdgiCascade2VerticalCenterOffset.Value;
-                if (DdgiCascade3VerticalCenterOffset.HasValue)
-                    settings.DdgiCascade3VerticalCenterOffset = DdgiCascade3VerticalCenterOffset.Value;
-                settings.DdgiClipmapEdgeBlendFraction = DdgiClipmapEdgeBlendFraction;
-                settings.DdgiClipmapSafetyMarginCells = DdgiClipmapSafetyMarginCells;
-                settings.DdgiFrustumPriorityWeight = DdgiFrustumPriorityWeight;
-                settings.DdgiOutOfFrustumMinimumUpdateFraction = DdgiOutOfFrustumMinimumUpdateFraction;
-                settings.DdgiNewProbeUpdateBoost = DdgiNewProbeUpdateBoost;
-                settings.DdgiProbeUpdateTimeBudgetMilliseconds = DdgiProbeUpdateTimeBudgetMilliseconds;
-                settings.DdgiGpuScheduleTimeBudgetMilliseconds = DdgiGpuScheduleTimeBudgetMilliseconds;
-                settings.DdgiGpuTotalUpdateTimeBudgetMilliseconds = DdgiGpuTotalUpdateTimeBudgetMilliseconds;
-                settings.DdgiAdaptiveBudgetHysteresisFraction = DdgiAdaptiveBudgetHysteresisFraction;
-                settings.DdgiEmergencyDegradeGpuTimeMultiplier = DdgiEmergencyDegradeGpuTimeMultiplier;
-                settings.DdgiTeleportResetDistance = DdgiTeleportResetDistance;
-                settings.DdgiCameraCutResetEnabled = DdgiCameraCutResetEnabled;
                 settings.DdgiAsyncComputeEnabled = DdgiAsyncComputeEnabled;
-                settings.DdgiMaxActiveProbes = DdgiMaxActiveProbes;
-                settings.DdgiMaxProbeUpdatesPerFrame = DdgiMaxProbeUpdatesPerFrame;
-                settings.DdgiGpuSchedulerMaxDirtyRegions = DdgiGpuSchedulerMaxDirtyRegions;
-                settings.DdgiGpuSchedulerCandidateBucketCount = DdgiGpuSchedulerCandidateBucketCount;
-                settings.DdgiGpuSchedulerLocalScanFraction = DdgiGpuSchedulerLocalScanFraction;
-                settings.DdgiGpuSchedulerCascade0ScanFraction = DdgiGpuSchedulerCascade0ScanFraction;
-                settings.DdgiGpuSchedulerSafetyScanFraction = DdgiGpuSchedulerSafetyScanFraction;
-                settings.DdgiGpuSchedulerDirtyScanFraction = DdgiGpuSchedulerDirtyScanFraction;
-                settings.DdgiGpuSchedulerFallbackOnValidationFailure = DdgiGpuSchedulerFallbackOnValidationFailure;
-                settings.DdgiGpuSchedulerForceCpuFallback = DdgiGpuSchedulerForceCpuFallback;
-                settings.DdgiGpuSchedulerAutoRetryAfterFallback = DdgiGpuSchedulerAutoRetryAfterFallback;
-                settings.DdgiGpuSchedulerValidationFailureThreshold = DdgiGpuSchedulerValidationFailureThreshold;
-                settings.DdgiGpuSchedulerFallbackRetryStableFrames = DdgiGpuSchedulerFallbackRetryStableFrames;
                 settings.DdgiProbeUpdatePrimaryRayBudget = DdgiProbeUpdatePrimaryRayBudget;
-                settings.DdgiColdStartMaxProbeUpdatesPerFrame = DdgiColdStartMaxProbeUpdatesPerFrame;
-                settings.DdgiColdStartPrimaryRayBudget = DdgiColdStartPrimaryRayBudget;
-                settings.DdgiMinimumProbeRefreshFrames = DdgiMinimumProbeRefreshFrames;
-                settings.DdgiMaxRaysPerProbe = DdgiMaxRaysPerProbe;
-                settings.DdgiCascade0RaysPerProbe = DdgiCascade0RaysPerProbe;
-                settings.DdgiCascade1RaysPerProbe = DdgiCascade1RaysPerProbe;
-                settings.DdgiCascade2RaysPerProbe = DdgiCascade2RaysPerProbe;
-                settings.DdgiCascade3RaysPerProbe = DdgiCascade3RaysPerProbe;
-                settings.DdgiCascade0MaxRayDistance = DdgiCascade0MaxRayDistance;
-                settings.DdgiCascade1MaxRayDistance = DdgiCascade1MaxRayDistance;
-                settings.DdgiCascade2MaxRayDistance = DdgiCascade2MaxRayDistance;
-                settings.DdgiCascade3MaxRayDistance = DdgiCascade3MaxRayDistance;
                 settings.DdgiMaxShadedLights = DdgiMaxShadedLights;
                 settings.DdgiMaterialTextureMaxCascade = DdgiMaterialTextureMaxCascade;
                 settings.DdgiAtlasMemoryBudgetBytes = DdgiAtlasMemoryBudgetBytes;
-                settings.DdgiAsyncComputeReservedBudgetFraction = DdgiAsyncComputeReservedBudgetFraction;
-                settings.DdgiThinWallProxyThickness = DdgiThinWallProxyThickness;
                 settings.DdgiThinWallLeakClampStrength = DdgiThinWallLeakClampStrength;
                 settings.DdgiSelfShadowBiasScale = DdgiSelfShadowBiasScale;
-                settings.DdgiHysteresisResponse = DdgiHysteresisResponse;
-                settings.DdgiRelocationTargetSurfaceDistanceFraction = DdgiRelocationTargetSurfaceDistanceFraction;
-                settings.DdgiRelocationMinSurfaceDistance = DdgiRelocationMinSurfaceDistance;
-                settings.DdgiRelocationMaxDistanceFraction = DdgiRelocationMaxDistanceFraction;
-                settings.DdgiRelocationBlendAlpha = DdgiRelocationBlendAlpha;
                 settings.ResolutionScale = ResolutionScale;
                 settings.MaxBounceDistance = MaxBounceDistance;
-                settings.SsgiMaxDistance = SsgiMaxDistance;
-                settings.SsgiThickness = SsgiThickness;
-                settings.SsgiHitNormalThreshold = SsgiHitNormalThreshold;
                 settings.TemporalEnabled = TemporalEnabled;
                 settings.DenoiserEnabled = DenoiserEnabled;
                 settings.HistoryResponsiveness = HistoryResponsiveness;
@@ -5687,16 +4790,11 @@ namespace Njulf.Rendering.Data
             public bool? Enabled { get; init; }
             public bool HiZBuildEnabled { get; init; } = true;
             public bool AmbientOcclusionBlurEnabled { get; init; } = true;
-            // Keep partially specified settings files from scheduling SSGI unexpectedly.
-            public bool SsgiChainEnabled { get; init; }
             public bool FogEnabled { get; init; } = true;
             public bool BloomEnabled { get; init; } = true;
             public bool SimpleDdgiUpdateEnabled { get; init; } = true;
-            public bool FullDdgiUpdateEnabled { get; init; } = true;
             public bool FarFieldClipmapBakeEnabled { get; init; } = true;
             public bool GpuParticlesEnabled { get; init; } = true;
-            [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-            public bool? DdgiUpdateEnabled { get; init; }
             public int AutoMinimumSampleCount { get; init; } = 30;
             public int AutoWarmupFrameCount { get; init; } = 60;
             public float AutoMinimumAbsoluteBenefitMilliseconds { get; init; } = 0.25f;
@@ -5710,11 +4808,9 @@ namespace Njulf.Rendering.Data
                     Mode = settings.Mode,
                     HiZBuildEnabled = settings.HiZBuildEnabled,
                     AmbientOcclusionBlurEnabled = settings.AmbientOcclusionBlurEnabled,
-                    SsgiChainEnabled = settings.SsgiChainEnabled,
                     FogEnabled = settings.FogEnabled,
                     BloomEnabled = settings.BloomEnabled,
                     SimpleDdgiUpdateEnabled = settings.SimpleDdgiUpdateEnabled,
-                    FullDdgiUpdateEnabled = settings.FullDdgiUpdateEnabled,
                     FarFieldClipmapBakeEnabled = settings.FarFieldClipmapBakeEnabled,
                     GpuParticlesEnabled = settings.GpuParticlesEnabled,
                     AutoMinimumSampleCount = settings.AutoMinimumSampleCount,
@@ -5738,12 +4834,9 @@ namespace Njulf.Rendering.Data
                             : AsyncComputeMode.Auto;
                 settings.HiZBuildEnabled = HiZBuildEnabled;
                 settings.AmbientOcclusionBlurEnabled = AmbientOcclusionBlurEnabled;
-                settings.SsgiChainEnabled = SsgiChainEnabled;
                 settings.FogEnabled = FogEnabled;
                 settings.BloomEnabled = BloomEnabled;
-                bool legacyDdgiEnabled = DdgiUpdateEnabled.GetValueOrDefault(true);
-                settings.SimpleDdgiUpdateEnabled = SimpleDdgiUpdateEnabled && legacyDdgiEnabled;
-                settings.FullDdgiUpdateEnabled = FullDdgiUpdateEnabled && legacyDdgiEnabled;
+                settings.SimpleDdgiUpdateEnabled = SimpleDdgiUpdateEnabled;
                 settings.FarFieldClipmapBakeEnabled = FarFieldClipmapBakeEnabled;
                 settings.GpuParticlesEnabled = GpuParticlesEnabled;
                 settings.AutoMinimumSampleCount = Math.Clamp(AutoMinimumSampleCount, 1, 4_096);

@@ -189,43 +189,29 @@ const int FORWARD_VISIBILITY_COUNTER_BUFFER_BASE_INDEX = 148;
 const int FORWARD_VISIBILITY_COUNTER_BUFFER_FRAME1_INDEX = 149;
 const int FORWARD_VISIBILITY_INDIRECT_DISPATCH_BUFFER_BASE_INDEX = 150;
 const int FORWARD_VISIBILITY_INDIRECT_DISPATCH_BUFFER_FRAME1_INDEX = 151;
-const int DDGI_PROBE_VOLUME_BUFFER_INDEX = 152;
-const int DDGI_PROBE_STATE_BUFFER_INDEX = 153;
-const int DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX = 154;
-const int DDGI_PROBE_RELOCATION_CLASSIFICATION_BUFFER_INDEX = 155;
-const int DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX = 156;
-const int DDGI_VISIBILITY_ATLAS_BUFFER_INDEX = 157;
-const int DDGI_RAY_RESULT_SCRATCH_BUFFER_INDEX = 158;
-const int DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX = 159;
-const int DDGI_EMISSIVE_SOURCE_BUFFER_INDEX = 160;
-const int DDGI_GATHER_TILE_BUFFER_INDEX = 161;
-const int DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX = 162;
-const int DDGI_DIRTY_REGION_BUFFER_INDEX = 163;
-const int DDGI_PROBE_CANDIDATE_BUFFER_INDEX = 164;
-const int DDGI_SCHEDULER_GROUP_COUNT_BUFFER_INDEX = 165;
-const int DDGI_SCHEDULER_PREFIX_BUFFER_INDEX = 166;
-const int DDGI_SCHEDULER_COUNTER_BUFFER_INDEX = 167;
-const int DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX = 168;
-const int SIMPLE_DDGI_PARAMS_BUFFER_INDEX = 169;
-const int SIMPLE_DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX = 170;
-const int SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX = 171;
-const int SIMPLE_DDGI_RAY_RESULT_SCRATCH_BUFFER_INDEX = 172;
-const int SIMPLE_DDGI_PROBE_STATE_BUFFER_INDEX = 173;
-const int SIMPLE_DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX = 174;
-const int SIMPLE_DDGI_RELOCATION_CLASSIFICATION_BUFFER_INDEX = 175;
-const int SIMPLE_DDGI_TRANSPORT_IRRADIANCE_ATLAS_BUFFER_INDEX = 176;
-const int SIMPLE_DDGI_TRANSPORT_SOURCE_CACHE_BUFFER_INDEX = 177;
-const int FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX = 178;
-const int FAR_FIELD_CLIPMAP_VOXEL_BUFFER_INDEX = 179;
-const int FAR_FIELD_CLIPMAP_INSTANCE_BUFFER_INDEX = 180;
-const int FAR_FIELD_CLIPMAP_BAKE_VOXEL_BUFFER_INDEX = 181;
-const int FAR_FIELD_CLIPMAP_DISTANCE_BUFFER_INDEX = 182;
-const int FAR_FIELD_CLIPMAP_JUMP_FLOOD_SCRATCH0_BUFFER_INDEX = 183;
-const int FAR_FIELD_CLIPMAP_JUMP_FLOOD_SCRATCH1_BUFFER_INDEX = 184;
-const int FAR_FIELD_CLIPMAP_PAGE_TABLE_BUFFER_INDEX = 185;
-const int ENVIRONMENT_PREFILTER_DATA_BUFFER_INDEX = 186;
-const int ENVIRONMENT_GI_DATA_BUFFER_INDEX = 187;
-const int STATIC_BUFFER_COUNT = 188;
+const int SIMPLE_DDGI_PARAMS_BUFFER_INDEX = 152;
+const int SIMPLE_DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX = 153;
+const int SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX = 154;
+const int SIMPLE_DDGI_RAY_RESULT_SCRATCH_BUFFER_INDEX = 155;
+const int SIMPLE_DDGI_PROBE_STATE_BUFFER_INDEX = 156;
+const int SIMPLE_DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX = 157;
+const int SIMPLE_DDGI_RELOCATION_CLASSIFICATION_BUFFER_INDEX = 158;
+const int SIMPLE_DDGI_TRANSPORT_IRRADIANCE_ATLAS_BUFFER_INDEX = 159;
+const int SIMPLE_DDGI_TRANSPORT_SOURCE_CACHE_BUFFER_INDEX = 160;
+const int SIMPLE_DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX = 161;
+const int SIMPLE_DDGI_EMISSIVE_SOURCE_BUFFER_INDEX = 162;
+const int FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX = 163;
+const int FAR_FIELD_CLIPMAP_VOXEL_BUFFER_INDEX = 164;
+const int FAR_FIELD_CLIPMAP_INSTANCE_BUFFER_INDEX = 165;
+const int FAR_FIELD_CLIPMAP_BAKE_VOXEL_BUFFER_INDEX = 166;
+const int FAR_FIELD_CLIPMAP_DISTANCE_BUFFER_INDEX = 167;
+const int FAR_FIELD_CLIPMAP_JUMP_FLOOD_SCRATCH0_BUFFER_INDEX = 168;
+const int FAR_FIELD_CLIPMAP_JUMP_FLOOD_SCRATCH1_BUFFER_INDEX = 169;
+const int FAR_FIELD_CLIPMAP_PAGE_TABLE_BUFFER_INDEX = 170;
+const int ENVIRONMENT_PREFILTER_DATA_BUFFER_INDEX = 171;
+const int ENVIRONMENT_GI_DATA_BUFFER_INDEX = 172;
+const int SIMPLE_DDGI_SCHEDULER_ARENA_BUFFER_INDEX = 173;
+const int STATIC_BUFFER_COUNT = 174;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -268,39 +254,27 @@ const int PREFILTERED_ENVIRONMENT_TEXTURE_INDEX = 22;
 const int BRDF_LUT_TEXTURE_INDEX = 23;
 const int AMBIENT_OCCLUSION_RAW_TEXTURE_INDEX = 24;
 const int AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX = 25;
-const int SCENE_NORMAL_TEXTURE_INDEX = 26;
-const int SCENE_MATERIAL_TEXTURE_INDEX = 27;
-const int SSGI_TRACE_SOURCE_TEXTURE_INDEX = 28;
-const int SSGI_RAW_TEXTURE_INDEX = 29;
-const int SSGI_HIT_DISTANCE_TEXTURE_INDEX = 30;
-const int SSGI_FILTERED_TEXTURE_INDEX = 31;
-const int SSGI_HISTORY_TEXTURE_INDEX = 32;
-const int SSGI_PREVIOUS_DEPTH_TEXTURE_INDEX = 33;
-const int SSGI_PREVIOUS_NORMAL_TEXTURE_INDEX = 34;
-const int SSGI_MOMENTS_TEXTURE_INDEX = 35;
-const int SSGI_HISTORY_LENGTH_TEXTURE_INDEX = 36;
-const int GI_FINAL_DIFFUSE_TEXTURE_INDEX = 37;
-const int LDR_SCENE_COLOR_TEXTURE_INDEX = 38;
-const int SMAA_EDGES_TEXTURE_INDEX = 39;
-const int SMAA_BLEND_WEIGHTS_TEXTURE_INDEX = 40;
-const int SMAA_AREA_TEXTURE_INDEX = 41;
-const int SMAA_SEARCH_TEXTURE_INDEX = 42;
-const int MOTION_VECTOR_TEXTURE_INDEX = 43;
-const int TAA_HISTORY_TEXTURE_INDEX = 44;
-const int FOGGED_SCENE_COLOR_TEXTURE_INDEX = 45;
-const int REFLECTION_PROBE_CUBEMAP_ARRAY_TEXTURE_INDEX = 46;
-const int REFLECTION_PROBE_DEBUG_TEXTURE_INDEX = 47;
-const int WEIGHTED_OIT_ACCUMULATION_TEXTURE_INDEX = 48;
-const int WEIGHTED_OIT_REVEALAGE_TEXTURE_INDEX = 49;
-const int MATERIAL_TRANSPORT_PROVENANCE_TEXTURE_INDEX = 50;
-const int PREFILTERED_ENVIRONMENT_NEXT_TEXTURE_INDEX = 51;
+const int LDR_SCENE_COLOR_TEXTURE_INDEX = 26;
+const int SMAA_EDGES_TEXTURE_INDEX = 27;
+const int SMAA_BLEND_WEIGHTS_TEXTURE_INDEX = 28;
+const int SMAA_AREA_TEXTURE_INDEX = 29;
+const int SMAA_SEARCH_TEXTURE_INDEX = 30;
+const int MOTION_VECTOR_TEXTURE_INDEX = 31;
+const int TAA_HISTORY_TEXTURE_INDEX = 32;
+const int FOGGED_SCENE_COLOR_TEXTURE_INDEX = 33;
+const int REFLECTION_PROBE_CUBEMAP_ARRAY_TEXTURE_INDEX = 34;
+const int REFLECTION_PROBE_DEBUG_TEXTURE_INDEX = 35;
+const int WEIGHTED_OIT_ACCUMULATION_TEXTURE_INDEX = 36;
+const int WEIGHTED_OIT_REVEALAGE_TEXTURE_INDEX = 37;
+const int MATERIAL_TRANSPORT_PROVENANCE_TEXTURE_INDEX = 38;
+const int PREFILTERED_ENVIRONMENT_NEXT_TEXTURE_INDEX = 39;
 // Optional sampled-image Simple-DDGI atlas migration. The two bounded ranges
 // stay fixed so the runtime can use device-safe 2D-array groups without
 // consuming dynamically allocated material texture slots.
 const int SIMPLE_DDGI_SAMPLED_ATLAS_TEXTURE_GROUP_COUNT = 128;
-const int SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX = 52;
-const int SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX = 180;
-const int FIRST_DYNAMIC_TEXTURE_INDEX = 308;
+const int SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX = 40;
+const int SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX = 168;
+const int FIRST_DYNAMIC_TEXTURE_INDEX = 296;
 
 // ============================================
 // GPU STRUCT DEFINITIONS
@@ -1361,13 +1335,6 @@ const int SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION = 48;
 const int SIZEOF_GPU_DDGI_RAY_QUERY_INSTANCE = 80;
 const int SIZEOF_GPU_DDGI_RAY_RESULT = 80;
 const int SIZEOF_GPU_DDGI_EMISSIVE_SOURCE = 64;
-const int SIZEOF_GPU_DDGI_GATHER_TILE_HEADER = 16;
-const int SIZEOF_GPU_DDGI_GATHER_TILE = 32;
-const int SIZEOF_GPU_DDGI_SCHEDULER_CONSTANTS = 168;
-const int SIZEOF_GPU_DDGI_DIRTY_REGION = 32;
-const int SIZEOF_GPU_DDGI_SCHEDULER_COUNTERS = 124;
-const int SIZEOF_GPU_DDGI_PROBE_CANDIDATE = 40;
-const int SIZEOF_GPU_DDGI_TRACE_INDIRECT_DISPATCH = 12;
 const int SIZEOF_GPU_DDGI_UPDATE_PUSH_CONSTANTS = 148;
 const int SIZEOF_GPU_FOG_PUSH_CONSTANTS = 224;
 const int SIZEOF_GPU_ANTI_ALIASING_PUSH_CONSTANTS = 100;
@@ -1381,12 +1348,6 @@ const int OFFSET_GPU_DDGI_PROBE_STATE_QUALITY_AND_REASON = 48;
 const int OFFSET_GPU_DDGI_PROBE_STATE_UPDATE_METADATA = 64;
 const int OFFSET_GPU_DDGI_PROBE_STATE_REPRESENTATION_METADATA = 80;
 
-const int OFFSET_GPU_DDGI_GATHER_TILE_LOCAL_VOLUME_INDEX = 0;
-const int OFFSET_GPU_DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VOLUME_INDEX = 4;
-const int OFFSET_GPU_DDGI_GATHER_TILE_SECONDARY_CLIPMAP_VOLUME_INDEX = 8;
-const int OFFSET_GPU_DDGI_GATHER_TILE_FLAGS = 12;
-const int OFFSET_GPU_DDGI_GATHER_TILE_BLEND_WEIGHTS = 16;
-
 const uint DIAGNOSTIC_DEPTH_CANDIDATES = 0u;
 const uint DIAGNOSTIC_DEPTH_FRUSTUM_CULLED = 1u;
 const uint DIAGNOSTIC_DEPTH_EMITTED = 2u;
@@ -1395,7 +1356,7 @@ const uint DIAGNOSTIC_FORWARD_FRUSTUM_CULLED = 4u;
 const uint DIAGNOSTIC_FORWARD_OCCLUSION_CULLED = 5u;
 const uint DIAGNOSTIC_FORWARD_EMITTED = 6u;
 const uint DIAGNOSTIC_FORWARD_OCCLUSION_TESTED = 7u;
-const uint DIAGNOSTIC_SSGI_HISTORY_REJECTED = 8u;
+const uint DIAGNOSTIC_RESERVED_8 = 8u;
 
 const uint MATERIAL_FEATURE_CLEARCOAT = 1u << 0;
 const uint MATERIAL_FEATURE_CLEARCOAT_TEXTURE = 1u << 1;
@@ -1736,66 +1697,6 @@ const int OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_X = 16;
 const int OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_Y = 20;
 const int OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_Z = 24;
 const int OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_FRAME_SERIAL = 28;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_ACTIVE_PROBE_COUNT = 0;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_VOLUME_COUNT = 4;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_REQUEST_BUDGET = 8;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_PRIMARY_RAY_BUDGET = 12;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_DIRTY_REGION_COUNT = 16;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_PRIORITY_BUCKET_COUNT = 20;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_FRAME_SERIAL = 24;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_FLAGS = 28;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_CAMERA_POSITION_NEAR_PLANE = 32;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_FORWARD_FAR_PLANE = 48;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_RIGHT_TAN_HALF_FOV_X = 64;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_UP_TAN_HALF_FOV_Y = 80;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_CAMERA_VELOCITY_SAFETY_RADIUS = 96;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_FRUSTUM_PRIORITY_WEIGHT = 112;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_NEW_PROBE_UPDATE_BOOST = 116;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_OUT_OF_FRUSTUM_MINIMUM_UPDATE_FRACTION = 120;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_MINIMUM_PROBE_REFRESH_FRAMES = 124;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_WARMUP_STATE = 128;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_WARMUP_LOCAL_BUDGET = 132;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_WARMUP_CASCADE0_BUDGET = 136;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_WARMUP_NEW_CELL_BUDGET = 140;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_WARMUP_SAFETY_BUDGET = 144;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_SCAN_PROBE_COUNT = 148;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_CANDIDATE_OUTPUT_OFFSET = 152;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_CANDIDATE_OUTPUT_CAPACITY = 156;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_SCHEDULER_SCAN_MODE = 160;
-const int OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_RAY_CAPACITY_PER_PROBE = 164;
-const int OFFSET_GPU_DDGI_DIRTY_REGION_MIN_REASON = 0;
-const int OFFSET_GPU_DDGI_DIRTY_REGION_MAX_PADDING = 16;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_REQUEST_COUNT = 0;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIMARY_RAY_COUNT = 4;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_COUNT = 8;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_OVERFLOW_COUNT = 12;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_DUPLICATE_REQUEST_COUNT = 16;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_BUDGET_REJECTED_COUNT = 20;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_INVALID_PROBE_COUNT = 24;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_DIRTY_REGION_COUNT = 28;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_VISIBLE_FRUSTUM_COUNT = 32;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_SAFETY_SHELL_COUNT = 36;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_AGE_REFRESH_COUNT = 40;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_HIGH_VARIANCE_COUNT = 44;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_LOW_CONFIDENCE_COUNT = 48;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_STABLE_SKIPPED_COUNT = 52;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY0_REQUEST_COUNT = 56;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY1_REQUEST_COUNT = 60;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY2_REQUEST_COUNT = 64;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY3_REQUEST_COUNT = 68;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_VISIBLE_PROBE_COUNT = 72;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_WARMED_VISIBLE_PROBE_COUNT = 76;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_LOCAL_PROBE_COUNT = 80;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_WARMED_LOCAL_PROBE_COUNT = 84;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_CASCADE0_PROBE_COUNT = 88;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_WARMED_CASCADE0_PROBE_COUNT = 92;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_BUFFER_OVERFLOW_COUNT = 96;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PER_BUCKET_OVERFLOW_COUNT = 100;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_REQUEST_BUDGET_REJECTED_COUNT = 104;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIMARY_RAY_BUDGET_REJECTED_COUNT = 108;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_SCAN_PROBE_COUNT = 112;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_OUTPUT_CAPACITY = 116;
-const int OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY_BUCKET_MISMATCH_SKIP_COUNT = 120;
 const uint FAR_FIELD_COUNTER_BASE = 99u;
 const uint FAR_FIELD_RAY_COUNTER = FAR_FIELD_COUNTER_BASE + 0u;
 const uint FAR_FIELD_HIT_COUNTER = FAR_FIELD_COUNTER_BASE + 1u;
@@ -1959,19 +1860,6 @@ const uint DECAL_ESTIMATED_SHADOW_EVALUATION_COUNTER = DECAL_FRAGMENT_ATTRIBUTIO
 const float DDGI_THIN_LUMINANCE_SCALE = 4096.0;
 const float DDGI_SHADOW_VISIBILITY_HIT_DISTANCE_SCALE = 256.0;
 const float DIRECTIONAL_SHADOW_RECEIVER_DEPTH_QUANTIZATION_SCALE = 65535.0;
-const int OFFSET_GPU_DDGI_PROBE_CANDIDATE_PROBE_INDEX = 0;
-const int OFFSET_GPU_DDGI_PROBE_CANDIDATE_VOLUME_INDEX = 4;
-const int OFFSET_GPU_DDGI_PROBE_CANDIDATE_PRIORITY = 8;
-const int OFFSET_GPU_DDGI_PROBE_CANDIDATE_REASON_FLAGS = 12;
-const int OFFSET_GPU_DDGI_PROBE_CANDIDATE_LOGICAL_CELL_X = 16;
-const int OFFSET_GPU_DDGI_PROBE_CANDIDATE_LOGICAL_CELL_Y = 20;
-const int OFFSET_GPU_DDGI_PROBE_CANDIDATE_LOGICAL_CELL_Z = 24;
-const int OFFSET_GPU_DDGI_PROBE_CANDIDATE_PRIMARY_RAY_COST = 28;
-const int OFFSET_GPU_DDGI_PROBE_CANDIDATE_SCORE_KEY = 32;
-const int OFFSET_GPU_DDGI_PROBE_CANDIDATE_RESERVED0 = 36;
-const int OFFSET_GPU_DDGI_TRACE_INDIRECT_DISPATCH_GROUP_COUNT_X = 0;
-const int OFFSET_GPU_DDGI_TRACE_INDIRECT_DISPATCH_GROUP_COUNT_Y = 4;
-const int OFFSET_GPU_DDGI_TRACE_INDIRECT_DISPATCH_GROUP_COUNT_Z = 8;
 const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_VERTEX_OFFSET = 0;
 const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_INDEX_OFFSET = 4;
 const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_MATERIAL_INDEX = 8;
@@ -2150,298 +2038,6 @@ mat4 ReadStorageMat4(uint bufferIndex, uint wordOffset)
         ReadStorageVec4(bufferIndex, wordOffset + 4u),
         ReadStorageVec4(bufferIndex, wordOffset + 8u),
         ReadStorageVec4(bufferIndex, wordOffset + 12u));
-}
-
-int DdgiPositiveModulo(int value, int divisor)
-{
-    int result = value % divisor;
-    return result < 0 ? result + divisor : result;
-}
-
-uint DdgiCalculateLocalPhysicalProbeIndex(
-    ivec3 logicalCell,
-    ivec3 gridMinCell,
-    ivec3 ringOffset,
-    uvec3 probeCounts)
-{
-    uvec3 safeCounts = max(probeCounts, uvec3(1u));
-    ivec3 relative = logicalCell - gridMinCell;
-    uint wrappedX = uint(DdgiPositiveModulo(relative.x + ringOffset.x, int(safeCounts.x)));
-    uint wrappedY = uint(DdgiPositiveModulo(relative.y + ringOffset.y, int(safeCounts.y)));
-    uint wrappedZ = uint(DdgiPositiveModulo(relative.z + ringOffset.z, int(safeCounts.z)));
-    return wrappedX + wrappedY * safeCounts.x + wrappedZ * safeCounts.x * safeCounts.y;
-}
-
-uint DdgiCalculatePhysicalProbeIndex(
-    ivec3 logicalCell,
-    ivec3 gridMinCell,
-    ivec3 ringOffset,
-    uvec3 probeCounts,
-    uint physicalFirstProbeIndex)
-{
-    return physicalFirstProbeIndex + DdgiCalculateLocalPhysicalProbeIndex(
-        logicalCell,
-        gridMinCell,
-        ringOffset,
-        probeCounts);
-}
-
-ivec3 DdgiDecodeLogicalCellFromPhysicalProbeIndex(
-    uint physicalProbeIndex,
-    ivec3 gridMinCell,
-    ivec3 ringOffset,
-    uvec3 probeCounts,
-    uint physicalFirstProbeIndex)
-{
-    uvec3 safeCounts = max(probeCounts, uvec3(1u));
-    uint localIndex = physicalProbeIndex - physicalFirstProbeIndex;
-    uint wrappedX = localIndex % safeCounts.x;
-    uint wrappedY = (localIndex / safeCounts.x) % safeCounts.y;
-    uint wrappedZ = localIndex / (safeCounts.x * safeCounts.y);
-    return ivec3(
-        gridMinCell.x + DdgiPositiveModulo(int(wrappedX) - ringOffset.x, int(safeCounts.x)),
-        gridMinCell.y + DdgiPositiveModulo(int(wrappedY) - ringOffset.y, int(safeCounts.y)),
-        gridMinCell.z + DdgiPositiveModulo(int(wrappedZ) - ringOffset.z, int(safeCounts.z)));
-}
-
-const uint DDGI_AMBIENT_ENABLED_FLAG = 1u << 0u;
-const uint DDGI_AMBIENT_VOLUME_KIND_AUTHORED = 0u;
-const uint DDGI_AMBIENT_VOLUME_KIND_CAMERA_CLIPMAP = 1u;
-const float DDGI_IRRADIANCE_ATLAS_MAX = 64.0;
-const float DDGI_IRRADIANCE_ATLAS_GAMMA = 5.0;
-
-struct DdgiAmbientVolumeInfo
-{
-    uint firstProbe;
-    uint kind;
-    uvec3 probeCounts;
-    ivec3 gridMinCell;
-    ivec3 ringOffset;
-    vec3 origin;
-    vec3 spacing;
-    float normalBias;
-    float edgeFade;
-};
-
-vec4 ReadDdgiAmbientPackedHalf4(uint bufferIndex, uint wordOffset)
-{
-    vec2 xy = unpackHalf2x16(ReadStorageWord(bufferIndex, wordOffset + 0u));
-    vec2 zw = unpackHalf2x16(ReadStorageWord(bufferIndex, wordOffset + 1u));
-    return vec4(xy, zw);
-}
-
-vec3 EncodeDdgiIrradianceAtlasRgb(vec3 irradiance)
-{
-    return pow(clamp(irradiance, vec3(0.0), vec3(DDGI_IRRADIANCE_ATLAS_MAX)), vec3(1.0 / DDGI_IRRADIANCE_ATLAS_GAMMA));
-}
-
-vec4 DecodeDdgiIrradianceAtlasSqrtSample(vec4 encodedSample)
-{
-    vec3 sqrtIrradiance = pow(max(encodedSample.rgb, vec3(0.0)), vec3(DDGI_IRRADIANCE_ATLAS_GAMMA * 0.5));
-    return vec4(clamp(sqrtIrradiance, vec3(0.0), vec3(sqrt(DDGI_IRRADIANCE_ATLAS_MAX))), clamp(encodedSample.w, 0.0, 1.0));
-}
-
-vec4 ResolveDdgiIrradianceAtlasSqrtBlend(vec4 sqrtSample)
-{
-    vec3 irradiance = sqrtSample.rgb * sqrtSample.rgb;
-    return vec4(clamp(irradiance, vec3(0.0), vec3(DDGI_IRRADIANCE_ATLAS_MAX)), clamp(sqrtSample.w, 0.0, 1.0));
-}
-
-vec2 DdgiAmbientSignNotZero(vec2 value)
-{
-    return vec2(
-        value.x >= 0.0 ? 1.0 : -1.0,
-        value.y >= 0.0 ? 1.0 : -1.0);
-}
-
-vec2 DdgiAmbientOctahedralEncode(vec3 direction)
-{
-    vec3 n = direction / max(abs(direction.x) + abs(direction.y) + abs(direction.z), 0.0001);
-    vec2 encoded = n.xy;
-    if (n.z < 0.0)
-        encoded = (1.0 - abs(encoded.yx)) * DdgiAmbientSignNotZero(encoded);
-    return encoded * 0.5 + 0.5;
-}
-
-float ResolveDdgiAmbientRoundedBoxEdgeFade(vec3 edgeDistance, vec3 blendDistance)
-{
-    vec3 safeBlendDistance = max(blendDistance, vec3(0.0001));
-    vec3 axisFade = clamp(edgeDistance / safeBlendDistance, vec3(0.0), vec3(1.0));
-    float perAxisFade = min(axisFade.x, min(axisFade.y, axisFade.z));
-    float cornerPressure = clamp(length(vec3(1.0) - axisFade) * 0.70710678, 0.0, 1.0);
-    float roundedBoxFade = perAxisFade * mix(1.0, 1.0 - cornerPressure * 0.25, perAxisFade);
-    return clamp(roundedBoxFade, 0.0, 1.0);
-}
-
-bool ReadDdgiAmbientVolumeInfo(uint volumeIndex, vec3 worldPosition, out DdgiAmbientVolumeInfo info)
-{
-    uint volumeBaseWord = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME_HEADER) / 4u;
-    uint volumeStrideWords = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME) / 4u;
-    uint baseWord = volumeBaseWord + volumeIndex * volumeStrideWords;
-    vec4 originAndFirst = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_ORIGIN_AND_FIRST_PROBE_INDEX) / 4u);
-    vec4 sizeAndCountX = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_SIZE_AND_PROBE_COUNT_X) / 4u);
-    vec4 spacingAndCountY = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_PROBE_SPACING_AND_PROBE_COUNT_Y) / 4u);
-    vec4 biasAndCountZ = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_BIAS_AND_PROBE_COUNT_Z) / 4u);
-    vec4 gridMinAndKind = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_GRID_MIN_AND_KIND) / 4u);
-    vec4 ringOffsetAndCascade = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_RING_OFFSET_AND_CASCADE) / 4u);
-    vec4 blendAndFlags = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_BLEND_AND_FLAGS) / 4u);
-
-    info.firstProbe = uint(originAndFirst.w);
-    info.kind = uint(round(gridMinAndKind.w));
-    info.probeCounts = uvec3(
-        max(uint(sizeAndCountX.w), 2u),
-        max(uint(spacingAndCountY.w), 2u),
-        max(uint(biasAndCountZ.w), 2u));
-    info.gridMinCell = ivec3(round(gridMinAndKind.xyz));
-    info.ringOffset = ivec3(round(ringOffsetAndCascade.xyz));
-    info.origin = originAndFirst.xyz;
-    info.spacing = max(spacingAndCountY.xyz, vec3(0.0001));
-    info.normalBias = max(biasAndCountZ.x, 0.0);
-
-    if (info.kind == DDGI_AMBIENT_VOLUME_KIND_CAMERA_CLIPMAP)
-    {
-        vec3 logicalPosition = worldPosition / info.spacing;
-        vec3 minLogical = vec3(info.gridMinCell);
-        vec3 maxLogical = minLogical + vec3(info.probeCounts - uvec3(1u));
-        if (any(lessThan(logicalPosition, minLogical - vec3(0.5))) ||
-            any(greaterThan(logicalPosition, maxLogical + vec3(0.5))))
-        {
-            return false;
-        }
-
-        vec3 logicalGridPosition = clamp(logicalPosition, minLogical, maxLogical);
-        vec3 logicalEdgeDistance = min(logicalGridPosition - minLogical, maxLogical - logicalGridPosition);
-        float shortestAxisCells = min(min(float(info.probeCounts.x), float(info.probeCounts.y)), float(info.probeCounts.z));
-        float minEdgeBlendCells = min(2.0, max(shortestAxisCells * 0.125, 1.0));
-        float edgeBlendCells = max(blendAndFlags.x * shortestAxisCells, minEdgeBlendCells);
-        float edgeBlendDistance = max(blendAndFlags.y / max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.0001), edgeBlendCells);
-        info.edgeFade = ResolveDdgiAmbientRoundedBoxEdgeFade(logicalEdgeDistance, vec3(edgeBlendDistance));
-    }
-    else
-    {
-        vec3 latticeMax = info.origin + info.spacing * vec3(info.probeCounts - uvec3(1u));
-        vec3 influenceMin = info.origin - info.spacing * 0.5;
-        vec3 influenceMax = latticeMax + info.spacing * 0.5;
-        if (any(lessThan(worldPosition, influenceMin)) || any(greaterThan(worldPosition, influenceMax)))
-            return false;
-
-        vec3 influenceEdgeDistance = min(worldPosition - influenceMin, influenceMax - worldPosition);
-        info.edgeFade = ResolveDdgiAmbientRoundedBoxEdgeFade(influenceEdgeDistance, info.spacing * 0.5);
-    }
-
-    return info.edgeFade > 0.000001;
-}
-
-vec3 DdgiAmbientSurfaceProbeSamplePosition(DdgiAmbientVolumeInfo info, vec3 worldPosition, vec3 normal)
-{
-    float minProbeSpacing = max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.001);
-    float surfaceBias = clamp(max(info.normalBias, minProbeSpacing * 0.16), 0.0, minProbeSpacing * 0.45);
-    return worldPosition + normal * surfaceBias;
-}
-
-uint DdgiAmbientNearestProbeIndex(DdgiAmbientVolumeInfo info, vec3 worldPosition)
-{
-    if (info.kind == DDGI_AMBIENT_VOLUME_KIND_CAMERA_CLIPMAP)
-    {
-        vec3 minLogical = vec3(info.gridMinCell);
-        vec3 maxLogical = minLogical + vec3(info.probeCounts - uvec3(1u));
-        ivec3 logicalCell = ivec3(round(clamp(worldPosition / info.spacing, minLogical, maxLogical)));
-        return DdgiCalculatePhysicalProbeIndex(
-            logicalCell,
-            info.gridMinCell,
-            info.ringOffset,
-            info.probeCounts,
-            info.firstProbe);
-    }
-
-    vec3 local = clamp((worldPosition - info.origin) / info.spacing, vec3(0.0), vec3(info.probeCounts - uvec3(1u)));
-    uvec3 localCoord = uvec3(round(local));
-    return info.firstProbe + localCoord.x + localCoord.y * info.probeCounts.x + localCoord.z * info.probeCounts.x * info.probeCounts.y;
-}
-
-vec4 SampleDdgiAmbientProbeIrradiance(uint probeIndex, vec3 normal)
-{
-    uint stateBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
-    vec4 stateIrradiance = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase);
-    vec4 relocationAndClassification = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + uint(OFFSET_GPU_DDGI_PROBE_STATE_RELOCATION_AND_CLASSIFICATION) / 4u);
-    vec4 qualityAndReason = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + uint(OFFSET_GPU_DDGI_PROBE_STATE_QUALITY_AND_REASON) / 4u);
-    float probeActive = clamp(min(stateIrradiance.w, relocationAndClassification.w), 0.0, 1.0);
-    if (probeActive <= 0.001)
-        return vec4(0.0);
-
-    uint texelsPerProbe = max(ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 10u), 1u);
-    uint texelCount = texelsPerProbe * texelsPerProbe;
-    uint wordsPerProbe = texelCount * 2u;
-    vec2 uv = clamp(DdgiAmbientOctahedralEncode(normal), vec2(0.0), vec2(1.0));
-    uvec2 texel = uvec2(clamp(floor(uv * float(texelsPerProbe)), vec2(0.0), vec2(float(texelsPerProbe - 1u))));
-    vec4 irradiance = ReadDdgiAmbientPackedHalf4(
-        uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX),
-        probeIndex * wordsPerProbe + (texel.y * texelsPerProbe + texel.x) * 2u);
-    irradiance = ResolveDdgiIrradianceAtlasSqrtBlend(DecodeDdgiIrradianceAtlasSqrtSample(irradiance));
-    float atlasConfidence = clamp(irradiance.w, 0.0, 1.0);
-    float qualityConfidence = clamp(max(qualityAndReason.x, 0.25) * max(qualityAndReason.y, atlasConfidence) * max(qualityAndReason.z, 0.25), 0.0, 1.0);
-    float confidence = probeActive * atlasConfidence * qualityConfidence;
-    return vec4(clamp(irradiance.rgb, vec3(0.0), vec3(64.0)), confidence);
-}
-
-vec4 SampleDdgiAmbientIrradiance(vec3 worldPosition, vec3 normal, uint maxVolumeSamples)
-{
-    uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
-    uint volumeCount = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 0u);
-    if ((flags & DDGI_AMBIENT_ENABLED_FLAG) == 0u || volumeCount == 0u)
-        return vec4(0.0);
-
-    float globalIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 12u), 0.0, 8.0);
-    vec3 accumulated = vec3(0.0);
-    float coverage = 0.0;
-    float remainingCoverage = 1.0;
-    uint volumeLimit = min(min(volumeCount, maxVolumeSamples), 16u);
-
-    for (uint pass = 0u; pass < 2u && remainingCoverage > 0.001; pass++)
-    {
-        bool sampleAuthored = pass == 0u;
-        for (uint volumeIndex = 0u; volumeIndex < volumeLimit && remainingCoverage > 0.001; volumeIndex++)
-        {
-            DdgiAmbientVolumeInfo info;
-            if (!ReadDdgiAmbientVolumeInfo(volumeIndex, worldPosition, info))
-                continue;
-
-            bool isAuthored = info.kind == DDGI_AMBIENT_VOLUME_KIND_AUTHORED;
-            if (isAuthored != sampleAuthored)
-                continue;
-
-            vec3 probeSamplePosition = DdgiAmbientSurfaceProbeSamplePosition(info, worldPosition, normal);
-            vec3 selectedProbeSamplePosition = worldPosition;
-            DdgiAmbientVolumeInfo biasedInfo;
-            if (ReadDdgiAmbientVolumeInfo(volumeIndex, probeSamplePosition, biasedInfo))
-            {
-                info = biasedInfo;
-                selectedProbeSamplePosition = probeSamplePosition;
-            }
-
-            uint probeIndex = DdgiAmbientNearestProbeIndex(info, selectedProbeSamplePosition);
-            vec4 probeIrradiance = SampleDdgiAmbientProbeIrradiance(probeIndex, normal);
-            float candidateCoverage = clamp(probeIrradiance.w * info.edgeFade, 0.0, 1.0);
-            if (candidateCoverage <= 0.000001)
-                continue;
-
-            float blendWeight = clamp(candidateCoverage * remainingCoverage, 0.0, remainingCoverage);
-            accumulated += probeIrradiance.rgb * blendWeight;
-            coverage += blendWeight;
-            remainingCoverage = clamp(remainingCoverage - blendWeight, 0.0, 1.0);
-        }
-    }
-
-    if (coverage <= 0.000001)
-        return vec4(0.0);
-
-    return vec4(clamp((accumulated / max(coverage, 0.000001)) * globalIntensity, vec3(0.0), vec3(64.0)), clamp(coverage, 0.0, 1.0));
-}
-
-vec3 SampleDdgiAmbientDiffuse(vec3 worldPosition, vec3 normal, vec3 albedo, float intensity, uint maxVolumeSamples)
-{
-    vec4 irradiance = SampleDdgiAmbientIrradiance(worldPosition, normal, maxVolumeSamples);
-    return irradiance.rgb * (albedo / 3.14159265359) * clamp(intensity, 0.0, 4.0) * irradiance.a;
 }
 
 vec4 TransformRowMajorPoint(vec3 position, uint bufferIndex, uint matrixWordOffset)
@@ -3386,7 +2982,7 @@ GPUDdgiEmissiveSource ReadDdgiEmissiveSource(uint sourceIndex)
 {
     uint baseWord = sourceIndex * uint(SIZEOF_GPU_DDGI_EMISSIVE_SOURCE / 4);
     GPUDdgiEmissiveSource source;
-    uint sourceBufferIndex = uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX);
+    uint sourceBufferIndex = uint(SIMPLE_DDGI_EMISSIVE_SOURCE_BUFFER_INDEX);
     source.Vertex0Area = ReadStorageAlignedVec4Uniform(sourceBufferIndex, baseWord + 0u);
     source.Edge1AliasProbability = ReadStorageAlignedVec4Uniform(sourceBufferIndex, baseWord + 4u);
     source.Edge2AliasFlags = ReadStorageAlignedVec4Uniform(sourceBufferIndex, baseWord + 8u);

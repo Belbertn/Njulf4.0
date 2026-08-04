@@ -22,14 +22,12 @@ namespace Njulf.Rendering.Data
     public enum AsyncComputePath
     {
         SimpleDdgiUpdate = 0,
-        FullDdgiUpdate = 1,
-        FarFieldClipmapBake = 2,
-        AmbientOcclusionBlur = 3,
-        HiZBuild = 4,
-        SsgiChain = 5,
-        Fog = 6,
-        Bloom = 7,
-        GpuParticles = 8
+        FarFieldClipmapBake = 1,
+        AmbientOcclusionBlur = 2,
+        HiZBuild = 3,
+        Fog = 4,
+        Bloom = 5,
+        GpuParticles = 6
     }
 
     /// <summary>
@@ -63,7 +61,8 @@ namespace Njulf.Rendering.Data
         bool Active,
         AsyncComputePathStatus Status,
         string Reason,
-        IReadOnlyList<string> Passes);
+        IReadOnlyList<string> Passes,
+        string EvidenceRevision = "");
 
     /// <summary>One planned submission segment and its timeline-edge summary.</summary>
     public sealed record AsyncComputeSegmentDiagnostic(
@@ -87,11 +86,9 @@ namespace Njulf.Rendering.Data
             return path switch
             {
                 AsyncComputePath.SimpleDdgiUpdate => settings.SimpleDdgiUpdateEnabled,
-                AsyncComputePath.FullDdgiUpdate => settings.FullDdgiUpdateEnabled,
                 AsyncComputePath.FarFieldClipmapBake => settings.FarFieldClipmapBakeEnabled,
                 AsyncComputePath.AmbientOcclusionBlur => settings.AmbientOcclusionBlurEnabled,
                 AsyncComputePath.HiZBuild => settings.HiZBuildEnabled,
-                AsyncComputePath.SsgiChain => settings.SsgiChainEnabled,
                 AsyncComputePath.Fog => settings.FogEnabled,
                 AsyncComputePath.Bloom => settings.BloomEnabled,
                 AsyncComputePath.GpuParticles => settings.GpuParticlesEnabled,

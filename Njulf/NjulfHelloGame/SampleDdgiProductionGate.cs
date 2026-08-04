@@ -21,10 +21,6 @@ public sealed record SampleDdgiProductionGateCriterion(
 
 public static class SampleDdgiProductionGate
 {
-    public const double DdgiLowUpdateP95BudgetMilliseconds = 0.75;
-    public const double DdgiMediumUpdateP95BudgetMilliseconds = 1.0;
-    public const double DdgiHighUpdateP95BudgetMilliseconds = 1.5;
-    public const double DdgiUltraUpdateP95BudgetMilliseconds = 2.5;
     public const double SimpleDdgiTransportBlendP95BudgetMilliseconds = 2.25;
     public const double SimpleDdgiUploadP95BudgetMilliseconds = 2.0;
     public const double SimpleDdgiCapacityP95BudgetMilliseconds = 0.1;
@@ -40,8 +36,6 @@ public static class SampleDdgiProductionGate
     public const float MinimumPhase9EmissiveBounceLuminance = 0.01f;
     public const float MaximumPhase9ThinWallLeakAttenuation = 0.98f;
     public const float WarmupCompletionTarget = 0.80f;
-    public const long MaximumPhase10CpuSchedulerP95Microseconds = 300;
-    public const long MaximumPhase10GpuSchedulerP95Microseconds = 250;
 
     private static readonly HashSet<SamplePerformanceScenario> RequiredScenarios =
         SampleDdgiBenchmarkSuite.RequiredProductionGateScenes
@@ -54,15 +48,12 @@ public static class SampleDdgiProductionGate
             throw new ArgumentNullException(nameof(report));
 
         RendererDiagnostics diagnostics = report.LastDiagnostics ?? RendererDiagnostics.Empty;
-        SampleBenchmarkTimingStats? ddgiTracePass = FindGpuPass(report, "DdgiTracePass");
-        SampleBenchmarkTimingStats? ddgiBlendPass = FindGpuPass(report, "DdgiBlendPass");
-        SampleBenchmarkTimingStats? ddgiRelocateClassifyPass = FindGpuPass(report, "DdgiRelocateClassifyPass");
-        SampleBenchmarkTimingStats? ddgiPublishPass = FindGpuPass(report, "DdgiPublishPass");
-        SampleBenchmarkTimingStats? ddgiSchedulePass = FindGpuPass(report, "DdgiSchedulePass");
+        SampleBenchmarkTimingStats? simpleDdgiTracePass = FindGpuPass(report, "SimpleDdgiTracePass");
         SampleBenchmarkTimingStats? simpleDdgiTransportPass = FindGpuPass(report, "SimpleDdgiTransportPass");
         SampleBenchmarkTimingStats? simpleDdgiBlendPass = FindGpuPass(report, "SimpleDdgiBlendPass");
+        SampleBenchmarkTimingStats? simpleDdgiRelocateClassifyPass = FindGpuPass(report, "SimpleDdgiRelocateClassifyPass");
+        SampleBenchmarkTimingStats? simpleDdgiPublishPass = FindGpuPass(report, "SimpleDdgiPublishPass");
         bool simpleDdgiActive = diagnostics.SimpleDdgiActive != 0;
-        double updateP95BudgetMilliseconds = GetDdgiUpdateP95BudgetMilliseconds(diagnostics.DdgiQualityTier);
         var criteria = new List<SampleDdgiProductionGateCriterion>
         {
             Criterion(
@@ -79,37 +70,19 @@ public static class SampleDdgiProductionGate
                 diagnostics.GlobalIlluminationEnabled != 0 &&
                 diagnostics.GlobalIlluminationMode == GlobalIlluminationMode.Ddgi &&
                 diagnostics.GlobalIlluminationDdgiActive != 0 &&
-                diagnostics.GlobalIlluminationRayQueryActive != 0 &&
-                diagnostics.GlobalIlluminationSsgiActive == 0,
-                $"enabled={diagnostics.GlobalIlluminationEnabled}, mode={diagnostics.GlobalIlluminationMode}, ddgi={diagnostics.GlobalIlluminationDdgiActive}, ssgi={diagnostics.GlobalIlluminationSsgiActive}, rayQuery={diagnostics.GlobalIlluminationRayQueryActive}"),
-            Criterion(
-                "no-ssgi-resources",
-                diagnostics.SsgiRenderTargetBytes == 0 &&
-                diagnostics.SsgiWidth == 0 &&
-                diagnostics.SsgiHeight == 0 &&
-                diagnostics.SsgiRayCount == 0,
-                $"ssgiBytes={diagnostics.SsgiRenderTargetBytes}, size={diagnostics.SsgiWidth}x{diagnostics.SsgiHeight}, rays={diagnostics.SsgiRayCount}"),
-            Criterion(
-                "no-ssgi-passes",
-                !HasSsgiPass(report, diagnostics),
-                "SSGI pass names are absent from benchmark, production pipeline, and render graph diagnostics"),
+                diagnostics.GlobalIlluminationRayQueryActive != 0,
+                $"enabled={diagnostics.GlobalIlluminationEnabled}, mode={diagnostics.GlobalIlluminationMode}, ddgi={diagnostics.GlobalIlluminationDdgiActive}, rayQuery={diagnostics.GlobalIlluminationRayQueryActive}"),
             Criterion(
                 "ddgi-split-passes-present",
                 diagnostics.DdgiProbesUpdated <= 0 ||
-                (simpleDdgiActive
-                    ? ddgiTracePass != null &&
-                      simpleDdgiTransportPass != null &&
-                      simpleDdgiBlendPass != null &&
-                      ddgiRelocateClassifyPass != null &&
-                      ddgiPublishPass != null
-                    : ddgiSchedulePass != null &&
-                      ddgiTracePass != null &&
-                      ddgiBlendPass != null &&
-                      ddgiRelocateClassifyPass != null &&
-                      ddgiPublishPass != null),
-                $"simple={simpleDdgiActive}, schedule={ddgiSchedulePass != null}, trace={ddgiTracePass != null}, " +
-                $"transport={simpleDdgiTransportPass != null}, blend={(simpleDdgiActive ? simpleDdgiBlendPass != null : ddgiBlendPass != null)}, " +
-                $"relocateClassify={ddgiRelocateClassifyPass != null}, publish={ddgiPublishPass != null}"),
+                (simpleDdgiTracePass != null &&
+                 simpleDdgiTransportPass != null &&
+                 simpleDdgiBlendPass != null &&
+                 simpleDdgiRelocateClassifyPass != null &&
+                 simpleDdgiPublishPass != null),
+                $"simple={simpleDdgiActive}, trace={simpleDdgiTracePass != null}, " +
+                $"transport={simpleDdgiTransportPass != null}, blend={simpleDdgiBlendPass != null}, " +
+                $"relocateClassify={simpleDdgiRelocateClassifyPass != null}, publish={simpleDdgiPublishPass != null}"),
             Criterion(
                 "no-recursive-ddgi-copy",
                 diagnostics.DdgiRayScratchBytes == 0 ||
@@ -171,18 +144,6 @@ public static class SampleDdgiProductionGate
                 diagnostics.DdgiCascadeCount > 0,
                 $"simple={simpleDdgiActive}, volumes={diagnostics.DdgiProbeVolumeCount}, cascades={diagnostics.DdgiCascadeCount}"),
             Criterion(
-                "ddgi-gather-tiles-valid",
-                diagnostics.GlobalIlluminationDdgiActive == 0 ||
-                (diagnostics.DdgiGatherTileCount > 0 &&
-                 diagnostics.DdgiGatherFallbackTileCount == 0 &&
-                 (diagnostics.DdgiCascadeCount <= 0 || diagnostics.DdgiGatherSelectedClipmapTileCount > 0)),
-                $"tiles={diagnostics.DdgiGatherTileCount}, clipmapTiles={diagnostics.DdgiGatherSelectedClipmapTileCount}, fallbackTiles={diagnostics.DdgiGatherFallbackTileCount}"),
-            Criterion(
-                "ddgi-forward-exhaustive-fallback-unused",
-                diagnostics.GlobalIlluminationDdgiActive == 0 ||
-                diagnostics.DdgiForwardGatherFallbackUsed == 0,
-                $"used={diagnostics.DdgiForwardGatherFallbackUsed}, disabled={diagnostics.DdgiForwardGatherFallbackDisabled}, emptyTiles={diagnostics.DdgiForwardGatherTileEmpty}"),
-            Criterion(
                 "phase10-forward-metrics-valid",
                 IsPhase10ForwardMetricsHealthy(diagnostics),
                 $"detailedCompiled={diagnostics.DdgiDetailedCountersCompiled}, readback={diagnostics.DdgiForwardEstimateCountersReadbackValid}, spatial={diagnostics.DdgiAverageSpatialCoverageEstimate:F3}, support={diagnostics.DdgiAverageSupportCoverageEstimate:F3}, data={diagnostics.DdgiAverageDataConfidenceEstimate:F3}, visibility={diagnostics.DdgiAverageVisibilityConfidenceEstimate:F3}, effective={diagnostics.DdgiAverageEffectiveContributionEstimate:F3}, zeroSupportSpatial={GetZeroVisibleCoveredFraction(diagnostics):F3}, sampledIrrLuma={diagnostics.DdgiForwardEstimateSampledIrradianceLuminance:F3}, ddgiDiffuseLuma={diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F3}, hybridFinalLuma={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F3}"),
@@ -215,29 +176,11 @@ public static class SampleDdgiProductionGate
                 IsSimpleDdgiProbeLifecycleBounded(diagnostics),
                 $"target={diagnostics.SimpleDdgiProbeLifecycleLatencyTargetFrames}, oldestUnsupported={diagnostics.SimpleDdgiOldestVisibleUnsupportedProbeAge}, overTarget={diagnostics.SimpleDdgiVisibleUnsupportedProbeCountAboveLatencyTarget}, maxFresh={diagnostics.SimpleDdgiMaximumFreshProbeAge}, maxScroll={diagnostics.SimpleDdgiMaximumScrollExposedProbeAge}, maxRelocation={diagnostics.SimpleDdgiMaximumRelocationPendingProbeAge}, maxUnpublished={diagnostics.SimpleDdgiMaximumUnpublishedProbeAge}, findings={diagnostics.SimpleDdgiProbeLifecycleBoundExceededCount}"),
             Criterion(
-                "phase10-scheduler-p95-budget",
-                IsPhase10SchedulerP95WithinBudget(diagnostics),
-                $"mode={diagnostics.DdgiSchedulerMode}, cpuP95={diagnostics.CpuDdgiSchedulerP95Microseconds}us, gpuP95={diagnostics.GpuDdgiScheduleP95Microseconds}us, overBudget={diagnostics.DdgiSchedulerP95OverBudget}/{diagnostics.GpuDdgiScheduleOverBudget}"),
-            Criterion(
-                "phase10-scheduler-overflow-free",
-                IsPhase10SchedulerOverflowFree(diagnostics),
-                $"mode={diagnostics.DdgiSchedulerMode}, candidates={diagnostics.DdgiGpuSchedulerCandidateCount}, requests={diagnostics.DdgiGpuSchedulerRequestCount}, hardOverflow={diagnostics.DdgiGpuSchedulerOverflowCount}, candidateBufferOverflow={diagnostics.DdgiGpuSchedulerCandidateBufferOverflowCount}, bucketCapDrop={diagnostics.DdgiGpuSchedulerPerBucketOverflowCount}, stableSkipped={diagnostics.DdgiGpuSchedulerStableSkippedCount}"),
-            Criterion(
-                "phase10-scheduler-equivalence",
-                IsPhase10SchedulerEquivalenceValid(diagnostics),
-                $"mode={diagnostics.DdgiSchedulerMode}, readback={diagnostics.DdgiGpuSchedulerReadbackValid}, valid={diagnostics.DdgiGpuSchedulerValidationValid}, cpu={diagnostics.DdgiGpuSchedulerValidationCpuRequestCount}, gpu={diagnostics.DdgiGpuSchedulerValidationGpuRequestCount}, compared={diagnostics.DdgiGpuSchedulerValidationComparedRequestCount}, mismatches={diagnostics.DdgiGpuSchedulerValidationMismatchCount}, invalid={diagnostics.DdgiGpuSchedulerInvalidProbeCount}, duplicates={diagnostics.DdgiGpuSchedulerDuplicateRequestCount}, first='{diagnostics.DdgiGpuSchedulerValidationFirstMismatch}'"),
-            Criterion(
                 "gpu-timing-valid",
                 report.GpuTimingSupported != 0 &&
                 report.GpuTimingValidSampleCount > 0 &&
                 report.GpuTimingValidSampleCount >= Math.Max(1, report.MeasurementFrameCount),
                 $"supported={report.GpuTimingSupported}, validSamples={report.GpuTimingValidSampleCount}, measured={report.MeasurementFrameCount}, reason={report.GpuTimingUnavailableReason}"),
-            Criterion(
-                "ddgi-update-p95-budget",
-                IsDdgiUpdateWithinBudget(report, diagnostics),
-                simpleDdgiActive
-                    ? $"not-applicable=simple-ddgi, fullP95={CalculateDdgiTotalUpdateP95Milliseconds(report):F3}ms"
-                    : $"tier={diagnostics.DdgiQualityTier}, p95={CalculateDdgiTotalUpdateP95Milliseconds(report):F3}ms, budget={updateP95BudgetMilliseconds:F3}ms"),
             Criterion(
                 "simple-ddgi-transport-blend-p95-budget",
                 IsSimpleDdgiTransportBlendWithinBudget(report, diagnostics),
@@ -279,8 +222,8 @@ public static class SampleDdgiProductionGate
             Criterion(
                 "phase10-ddgi-memory-diagnostics",
                 diagnostics.GlobalIlluminationDdgiActive == 0 ||
-                diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes + diagnostics.DdgiGpuSchedulerBufferBytes > 0,
-                $"textureBytes={diagnostics.DdgiTextureBytes}, bufferBytes={diagnostics.DdgiBufferBytes}, schedulerBytes={diagnostics.DdgiGpuSchedulerBufferBytes}, atlasBytes={diagnostics.DdgiCurrentIrradianceAtlasBytes + diagnostics.DdgiCurrentVisibilityAtlasBytes}"),
+                diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes > 0,
+                $"textureBytes={diagnostics.DdgiTextureBytes}, bufferBytes={diagnostics.DdgiBufferBytes}, atlasBytes={diagnostics.DdgiCurrentIrradianceAtlasBytes + diagnostics.DdgiCurrentVisibilityAtlasBytes}"),
             Criterion(
                 "tracked-memory-headroom-20-percent",
                 HasRequiredTrackedMemoryHeadroom(diagnostics),
@@ -324,17 +267,6 @@ public static class SampleDdgiProductionGate
             criteria);
     }
 
-    public static double GetDdgiUpdateP95BudgetMilliseconds(DdgiQualityTier tier)
-    {
-        return tier switch
-        {
-            DdgiQualityTier.DdgiLow => DdgiLowUpdateP95BudgetMilliseconds,
-            DdgiQualityTier.DdgiMedium => DdgiMediumUpdateP95BudgetMilliseconds,
-            DdgiQualityTier.DdgiUltra => DdgiUltraUpdateP95BudgetMilliseconds,
-            _ => DdgiHighUpdateP95BudgetMilliseconds
-        };
-    }
-
     public static ulong GetDdgiAtlasMemoryBudgetBytes(DdgiQualityTier tier)
     {
         return tier switch
@@ -349,48 +281,11 @@ public static class SampleDdgiProductionGate
     private static SampleDdgiProductionGateCriterion Criterion(string name, bool passed, string detail) =>
         new(name, passed, detail);
 
-    private static bool HasSsgiPass(SampleBenchmarkReport report, RendererDiagnostics diagnostics)
-    {
-        return report.GpuPasses.Any(pass => IsSsgiName(pass.Name)) ||
-            diagnostics.ProductionPipelineActivePasses.Any(IsSsgiName) ||
-            diagnostics.Graph.Passes.Any(pass => IsSsgiName(pass.Name)) ||
-            diagnostics.Graph.Resources.Any(resource => IsSsgiName(resource.Id) || IsSsgiName(resource.DebugName));
-    }
-
-    private static bool IsSsgiName(string? name)
-    {
-        return !string.IsNullOrWhiteSpace(name) &&
-            name.IndexOf("Ssgi", StringComparison.OrdinalIgnoreCase) >= 0 &&
-            name.IndexOf("SsgiComposite", StringComparison.OrdinalIgnoreCase) < 0;
-    }
-
     private static bool IsStaticScene(SamplePerformanceScenario scenario)
     {
         return scenario is not SamplePerformanceScenario.GiMovingPointLight
             and not SamplePerformanceScenario.GiMovingRigidObject
             and not SamplePerformanceScenario.ForestFoliage;
-    }
-
-    private static bool IsDdgiUpdateWithinBudget(SampleBenchmarkReport report, RendererDiagnostics diagnostics)
-    {
-        if (diagnostics.SimpleDdgiActive != 0)
-            return true;
-
-        SampleBenchmarkTimingStats? ddgiTrace = FindGpuPass(report, "DdgiTracePass");
-        SampleBenchmarkTimingStats? ddgiBlend = FindGpuPass(report, "DdgiBlendPass");
-        SampleBenchmarkTimingStats? ddgiRelocateClassify = FindGpuPass(report, "DdgiRelocateClassifyPass");
-        SampleBenchmarkTimingStats? ddgiPublish = FindGpuPass(report, "DdgiPublishPass");
-        SampleBenchmarkTimingStats? ddgiSchedule = FindGpuPass(report, "DdgiSchedulePass");
-        if (diagnostics.DdgiProbesUpdated <= 0 && ddgiSchedule == null && ddgiTrace == null && ddgiBlend == null && ddgiRelocateClassify == null && ddgiPublish == null)
-            return true;
-
-        double totalP95 = CalculateDdgiTotalUpdateP95Milliseconds(report);
-        return ddgiSchedule != null &&
-            ddgiTrace != null &&
-            ddgiBlend != null &&
-            ddgiRelocateClassify != null &&
-            ddgiPublish != null &&
-            totalP95 <= GetDdgiUpdateP95BudgetMilliseconds(diagnostics.DdgiQualityTier);
     }
 
     private static bool IsPhase8EmergencyDegradeHealthy(RendererDiagnostics diagnostics)
@@ -541,52 +436,6 @@ public static class SampleDdgiProductionGate
             diagnostics.SimpleDdgiProbeLifecycleBoundExceededCount == 0;
     }
 
-    private static bool IsPhase10SchedulerP95WithinBudget(RendererDiagnostics diagnostics)
-    {
-        if (diagnostics.GlobalIlluminationDdgiActive == 0)
-            return true;
-
-        bool schedulerSamplesHealthy = diagnostics.DdgiSchedulerTimingSampleCount <= 0 ||
-            diagnostics.DdgiSchedulerP95OverBudget == 0;
-        bool cpuHealthy = diagnostics.CpuDdgiSchedulerP95Microseconds <= 0 ||
-            diagnostics.CpuDdgiSchedulerP95Microseconds <= MaximumPhase10CpuSchedulerP95Microseconds;
-        bool gpuHealthy = diagnostics.GpuDdgiScheduleP95Microseconds <= 0 ||
-            diagnostics.GpuDdgiScheduleP95Microseconds <= MaximumPhase10GpuSchedulerP95Microseconds;
-
-        return schedulerSamplesHealthy &&
-            cpuHealthy &&
-            gpuHealthy &&
-            diagnostics.GpuDdgiScheduleOverBudget == 0;
-    }
-
-    private static bool IsPhase10SchedulerOverflowFree(RendererDiagnostics diagnostics)
-    {
-        if (diagnostics.GlobalIlluminationDdgiActive == 0 ||
-            diagnostics.DdgiSchedulerMode == DdgiSchedulerMode.CpuReference)
-        {
-            return true;
-        }
-
-        return diagnostics.DdgiGpuSchedulerOverflowCount == 0;
-    }
-
-    private static bool IsPhase10SchedulerEquivalenceValid(RendererDiagnostics diagnostics)
-    {
-        if (diagnostics.GlobalIlluminationDdgiActive == 0 ||
-            diagnostics.DdgiSchedulerMode != DdgiSchedulerMode.CpuGpuCompare)
-        {
-            return true;
-        }
-
-        SampleGiSchedulerEquivalenceContract contract = SampleGlobalIlluminationValidation.Phase10SchedulerEquivalence;
-        int requestDelta = Math.Abs(diagnostics.DdgiGpuSchedulerValidationCpuRequestCount - (int)diagnostics.DdgiGpuSchedulerValidationGpuRequestCount);
-        return diagnostics.DdgiGpuSchedulerReadbackValid != 0 &&
-            diagnostics.DdgiGpuSchedulerValidationValid != 0 &&
-            diagnostics.DdgiGpuSchedulerValidationMismatchCount == 0 &&
-            requestDelta <= contract.MaxRequestCountDelta &&
-            diagnostics.DdgiGpuSchedulerInvalidProbeCount <= contract.MaxInvalidProbeCount &&
-            diagnostics.DdgiGpuSchedulerDuplicateRequestCount <= contract.MaxDuplicateRequestCount;
-    }
 
     private static float GetZeroVisibleCoveredFraction(RendererDiagnostics diagnostics)
     {
@@ -601,15 +450,6 @@ public static class SampleDdgiProductionGate
     private static float Ratio(float numerator, float denominator)
     {
         return denominator > 0.000001f ? numerator / denominator : 0.0f;
-    }
-
-    private static double CalculateDdgiTotalUpdateP95Milliseconds(SampleBenchmarkReport report)
-    {
-        return (FindGpuPass(report, "DdgiSchedulePass")?.P95Milliseconds ?? 0.0) +
-            (FindGpuPass(report, "DdgiTracePass")?.P95Milliseconds ?? 0.0) +
-            (FindGpuPass(report, "DdgiBlendPass")?.P95Milliseconds ?? 0.0) +
-            (FindGpuPass(report, "DdgiRelocateClassifyPass")?.P95Milliseconds ?? 0.0) +
-            (FindGpuPass(report, "DdgiPublishPass")?.P95Milliseconds ?? 0.0);
     }
 
     private static bool IsSimpleDdgiTransportBlendWithinBudget(

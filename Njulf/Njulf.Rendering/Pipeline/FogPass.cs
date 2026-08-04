@@ -85,8 +85,8 @@ namespace Njulf.Rendering.Pipeline
             if (!enabled)
                 return;
 
-            _renderTargets.SceneColor.TransitionToShaderRead(cmd);
-            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
+            _renderTargets.SceneColor.TransitionToComputeShaderRead(cmd);
+            _renderTargets.SceneDepth.TransitionToComputeDepthReadOnly(cmd);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
 
@@ -132,7 +132,7 @@ namespace Njulf.Rendering.Pipeline
 
             Extent2D extent = _renderTargets.FoggedSceneColor.Extent;
             _context.Api.CmdDispatch(cmd, (extent.Width + 7u) / 8u, (extent.Height + 7u) / 8u, 1);
-            _renderTargets.FoggedSceneColor.TransitionToShaderRead(cmd);
+            _renderTargets.FoggedSceneColor.TransitionToComputeShaderRead(cmd);
             sceneData.ActiveSceneColorTextureIndex = BindlessIndex.FoggedSceneColorTexture;
         }
 

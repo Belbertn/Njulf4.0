@@ -30,7 +30,6 @@ internal sealed class SampleStressSceneBuilder
     private readonly List<StaticInstanceBatch> _staticBatches = new();
     private readonly List<FoliagePatch> _foliagePatches = new();
     private readonly List<FoliagePrototype> _foliagePrototypes = new();
-    private readonly List<GlobalIlluminationProbeVolume> _giProbeVolumes = new();
     private readonly List<ParticleEffectInstance> _particleEffects = new();
     private readonly List<IUpdateable> _updateables = new();
     private readonly List<RenderObject> _hiddenRenderObjects = new();
@@ -78,6 +77,15 @@ internal sealed class SampleStressSceneBuilder
             SamplePerformanceScenario.GiSponzaRightWallStationary => ExistingSceneValidationSummary(
                 SamplePerformanceScenario.GiSponzaRightWallStationary,
                 "Sponza Plaza right-wall fixed-camera GI baseline"),
+            SamplePerformanceScenario.GiSponzaAnimatedAtmosphere => ExistingSceneValidationSummary(
+                SamplePerformanceScenario.GiSponzaAnimatedAtmosphere,
+                "Sponza animated astronomical atmosphere with bounded DDGI source cohorts"),
+            SamplePerformanceScenario.GiSponzaFreezeAfterAtmosphereStep => ExistingSceneValidationSummary(
+                SamplePerformanceScenario.GiSponzaFreezeAfterAtmosphereStep,
+                "Sponza atmosphere advances one quantized sun step, then freezes for convergence"),
+            SamplePerformanceScenario.GiSponzaReflectionProbeLifecycle => ExistingSceneValidationSummary(
+                SamplePerformanceScenario.GiSponzaReflectionProbeLifecycle,
+                "Sponza authored local-probe capture, recapture, deletion/re-add lifecycle"),
             SamplePerformanceScenario.GiSimpleDdgiFurnace => BuildGiSimpleDdgiFurnace(),
             SamplePerformanceScenario.GiCornellRoom => BuildGiCornellRoom(),
             SamplePerformanceScenario.GiQualityInterior => BuildGiQualityInterior(),
@@ -782,7 +790,6 @@ internal sealed class SampleStressSceneBuilder
         };
         _scene.Add(probe);
         _probes.Add(probe);
-        AddValidationProbeVolume("GI.QualityInterior.DDGI", new CoreVector3(-3.25f, -0.15f, -8.75f), new CoreVector3(6.5f, 4.4f, 6.5f), 9, 5, 9);
 
         return new SamplePerformanceScenarioSummary(
             SamplePerformanceScenario.GiQualityInterior,
@@ -826,7 +833,6 @@ internal sealed class SampleStressSceneBuilder
             Range = 4.5f,
             CastsShadows = false
         });
-        AddValidationProbeVolume("GI.ThinWall.DDGI", new CoreVector3(-4.4f, -0.2f, -8.25f), new CoreVector3(8.8f, 3.9f, 5.5f), 10, 4, 7);
 
         return ValidationSummary(SamplePerformanceScenario.GiThinWallLeakTest, "Two rooms split by a thin opaque wall for leak testing");
     }
@@ -1052,7 +1058,6 @@ internal sealed class SampleStressSceneBuilder
             Range = 6.0f,
             CastsShadows = false
         });
-        AddValidationProbeVolume("GI.BrightExterior.DDGI", new CoreVector3(-3.1f, -0.2f, -8.4f), new CoreVector3(6.2f, 4.0f, 6.1f), 8, 4, 8);
 
         return ValidationSummary(SamplePerformanceScenario.GiBrightExteriorRoom, "Small enclosed room with bright exterior window");
     }
@@ -1099,8 +1104,6 @@ internal sealed class SampleStressSceneBuilder
             Range = 6.5f,
             CastsShadows = false
         });
-        AddValidationProbeVolume("GI.LongCorridor.NearDDGI", new CoreVector3(-2.4f, -0.1f, -9.5f), new CoreVector3(4.8f, 3.6f, 12.0f), 6, 4, 12);
-        AddValidationProbeVolume("GI.LongCorridor.FarDDGI", new CoreVector3(-2.4f, -0.1f, -25.0f), new CoreVector3(4.8f, 3.6f, 12.0f), 6, 4, 12);
 
         return ValidationSummary(SamplePerformanceScenario.GiLongCorridorOcclusion, "Long corridor with alternating occluders and far-end falloff");
     }
@@ -1142,9 +1145,6 @@ internal sealed class SampleStressSceneBuilder
         AddValidationRoom("GI.Streaming.LeftRoom", centerZ: -6.0f, width: 5.0f, height: 3.4f, depth: 5.0f, warmMaterial, wallMaterial, wallMaterial, includeFrontWall: false, centerX: -3.0f);
         AddValidationRoom("GI.Streaming.RightRoom", centerZ: -6.0f, width: 5.0f, height: 3.4f, depth: 5.0f, wallMaterial, coolMaterial, wallMaterial, includeFrontWall: false, centerX: 3.0f);
         AddValidationWall("GI.Streaming.DoorDivider", wallMaterial, new CoreVector3(0.0f, 1.7f, -8.5f), CoreMatrix4x4.Identity, new CoreVector3(2.0f, 3.4f, 1.0f));
-        AddValidationProbeVolume("GI.Streaming.LeftVolume", new CoreVector3(-5.6f, -0.1f, -8.7f), new CoreVector3(5.2f, 3.8f, 5.4f), 7, 4, 7);
-        AddValidationProbeVolume("GI.Streaming.RightVolume", new CoreVector3(0.4f, -0.1f, -8.7f), new CoreVector3(5.2f, 3.8f, 5.4f), 7, 4, 7);
-        AddValidationProbeVolume("GI.Streaming.DoorBlendVolume", new CoreVector3(-1.6f, 0.0f, -8.8f), new CoreVector3(3.2f, 3.6f, 5.6f), 5, 4, 7);
 
         _lightManager.AddLight(new Light
         {
@@ -1175,7 +1175,6 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildGiFastTraversalTeleport()
     {
         SamplePerformanceScenarioSummary corridor = BuildGiLongCorridorOcclusion();
-        AddValidationProbeVolume("GI.Teleport.ArrivalVolume", new CoreVector3(-3.0f, -0.1f, -34.0f), new CoreVector3(6.0f, 3.8f, 7.0f), 8, 4, 8);
         _lightManager.AddLight(new Light
         {
             Type = LightType.Point,
@@ -1421,34 +1420,6 @@ internal sealed class SampleStressSceneBuilder
         return renderObject;
     }
 
-    private void AddValidationProbeVolume(
-        string name,
-        CoreVector3 origin,
-        CoreVector3 size,
-        int countX,
-        int countY,
-        int countZ)
-    {
-        var volume = new GlobalIlluminationProbeVolume
-        {
-            Name = name,
-            Origin = origin,
-            Size = size,
-            ProbeCountX = countX,
-            ProbeCountY = countY,
-            ProbeCountZ = countZ,
-            RaysPerProbe = 256,
-            MaxProbeUpdatesPerFrame = checked(countX * countY * countZ),
-            MaxRayDistance = size.Length(),
-            NormalBias = 0.02f,
-            ViewBias = 0.03f,
-            Intensity = 1.0f,
-            Hysteresis = 0.86f
-        };
-        _scene.Add(volume);
-        _giProbeVolumes.Add(volume);
-    }
-
     private MaterialHandle RegisterValidationMaterial(CoreVector3 albedo, float roughness, CoreVector3? emissive = null)
     {
         CoreVector3 emissiveRadiance = emissive ?? CoreVector3.Zero;
@@ -1550,8 +1521,6 @@ internal sealed class SampleStressSceneBuilder
             _scene.Remove(patch);
         foreach (FoliagePrototype prototype in _foliagePrototypes)
             _scene.Remove(prototype);
-        foreach (GlobalIlluminationProbeVolume volume in _giProbeVolumes)
-            _scene.Remove(volume);
         foreach (ParticleEffectInstance effect in _particleEffects)
             _scene.Remove(effect);
         foreach (IUpdateable updateable in _updateables)
@@ -1562,7 +1531,6 @@ internal sealed class SampleStressSceneBuilder
         _staticBatches.Clear();
         _foliagePatches.Clear();
         _foliagePrototypes.Clear();
-        _giProbeVolumes.Clear();
         _particleEffects.Clear();
         _updateables.Clear();
 

@@ -32,7 +32,7 @@ public enum SampleMaterialGiSceneFixtureCategory : byte
     UnlitSurface = 8,
     NearCompactFarTransitionCorridor = 9,
     LiveEditMaterialWall = 10,
-    SsgiDdgiOverlap = 11,
+    SimpleDdgiReceiver = 11,
     SupplementalOracleSurface = 12,
     WindingSidednessAndAlphaEvidence = 13
 }
@@ -184,7 +184,7 @@ public static class SampleMaterialGiConformanceSceneLayout
             SampleMaterialGiSceneFixtureCategory.UnlitSurface,
             SampleMaterialGiSceneFixtureCategory.NearCompactFarTransitionCorridor,
             SampleMaterialGiSceneFixtureCategory.LiveEditMaterialWall,
-            SampleMaterialGiSceneFixtureCategory.SsgiDdgiOverlap,
+            SampleMaterialGiSceneFixtureCategory.SimpleDdgiReceiver,
             SampleMaterialGiSceneFixtureCategory.WindingSidednessAndAlphaEvidence
         ]);
 
@@ -208,7 +208,7 @@ public static class SampleMaterialGiConformanceSceneLayout
             coloredWalls: true);
         AddTransitionCorridor(fixtures);
         AddLiveEditWall(fixtures);
-        AddHybridOverlapFixture(fixtures);
+        AddSimpleDdgiReceiverFixture(fixtures);
         AddWindingSidednessAndAlphaEvidence(fixtures);
 
         for (int index = 0; index < cases.Count; index++)
@@ -542,15 +542,15 @@ public static class SampleMaterialGiConformanceSceneLayout
         }
     }
 
-    private static void AddHybridOverlapFixture(ICollection<SampleMaterialGiSceneFixture> fixtures)
+    private static void AddSimpleDdgiReceiverFixture(ICollection<SampleMaterialGiSceneFixture> fixtures)
     {
         SampleMaterialGiSceneFixtureCategory category =
-            SampleMaterialGiSceneFixtureCategory.SsgiDdgiOverlap;
+            SampleMaterialGiSceneFixtureCategory.SimpleDdgiReceiver;
         AddContext(
             fixtures, "hybrid-overlap.receiver", category,
             SampleMaterialGiSceneMaterialPreset.HybridReceiver,
             new CoreVector3(3.95f, 0.08f, 3.25f), new CoreVector3(1.35f, 0.12f, 1.55f),
-            "Shared SSGI/DDGI diffuse receiver.");
+            "Simple DDGI diffuse receiver.");
         AddContext(
             fixtures, "hybrid-overlap.thin-blocker", category,
             SampleMaterialGiSceneMaterialPreset.HybridBlocker,
@@ -1133,7 +1133,6 @@ internal static class SampleMaterialGiConformanceScene
             throw new InvalidOperationException("The deterministic live-edit wall is incomplete.");
 
         scene.Add(new SampleMaterialGiLiveEditController(materialManager, liveEditTargets));
-        scene.Add(CreateProbeVolume());
         ValidateBuiltScene(scene);
 
         return new SampleMaterialGiConformanceSceneBuildSummary(
@@ -1161,45 +1160,6 @@ internal static class SampleMaterialGiConformanceScene
             if (!actualIds.Contains(expected))
                 throw new InvalidOperationException($"Scene did not instantiate fixture '{fixture.StableId}'.");
         }
-        if (scene.GlobalIlluminationProbeVolumes.Count != 1 ||
-            scene.GlobalIlluminationProbeVolumes[0].Id !=
-            SampleMaterialGiConformanceSceneLayout.CreateStableEntityId(
-                SampleMaterialGiConformanceSceneLayout.ProbeVolumeStableId))
-        {
-            throw new InvalidOperationException("The deterministic material/GI probe volume is absent.");
-        }
-    }
-
-    private static GlobalIlluminationProbeVolume CreateProbeVolume()
-    {
-        SampleMaterialGiProbeVolumeFixture contract =
-            SampleMaterialGiConformanceSceneLayout.ProbeVolume;
-        return new GlobalIlluminationProbeVolume
-        {
-            Id = SampleMaterialGiConformanceSceneLayout.CreateStableEntityId(
-                contract.StableId),
-            Name = contract.StableId,
-            Origin = contract.Origin,
-            Size = contract.Size,
-            ProbeCountX = contract.ProbeCountX,
-            ProbeCountY = contract.ProbeCountY,
-            ProbeCountZ = contract.ProbeCountZ,
-            RaysPerProbe = contract.RaysPerProbe,
-            DirtyRaysPerProbe = contract.DirtyRaysPerProbe,
-            MaxProbeUpdatesPerFrame = contract.MaxProbeUpdatesPerFrame,
-            MaxRayDistance = contract.MaxRayDistance,
-            NormalBias = contract.NormalBias,
-            ViewBias = contract.ViewBias,
-            Intensity = contract.Intensity,
-            Hysteresis = contract.Hysteresis,
-            SteadyHysteresis = contract.SteadyHysteresis,
-            DirtyHysteresis = contract.DirtyHysteresis,
-            Interior = true,
-            QualityClass = GlobalIlluminationProbeVolumeQualityClass.High,
-            Priority = contract.Priority,
-            UpdatePriority = contract.UpdatePriority,
-            BlendDistance = contract.BlendDistance
-        };
     }
 
     private static MaterialDefinition CreateCaseMaterial(

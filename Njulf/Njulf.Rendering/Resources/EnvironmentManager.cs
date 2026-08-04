@@ -283,13 +283,22 @@ namespace Njulf.Rendering.Resources
 
         public GiAtmosphereAdmissionDecision ApplyGiAtmosphereAdmission(
             in GiAtmosphereCohortFeedback cohort,
-            bool hardInvalidation = false)
+            bool hardInvalidation = false,
+            uint currentVolumeResourceGeneration = 0U,
+            uint currentSourceCohortGeneration = 0U,
+            uint currentPropagationGeneration = 0U)
         {
             if (_requestedGiLightingSignature == 0UL)
                 return default;
 
             GiAtmosphereAdmissionDecision decision = _giAdmissionController.Update(
-                new GiAtmosphereAdmissionInput(_requestedGiLightingSignature, cohort, hardInvalidation));
+                new GiAtmosphereAdmissionInput(
+                    _requestedGiLightingSignature,
+                    cohort,
+                    hardInvalidation,
+                    currentVolumeResourceGeneration,
+                    currentSourceCohortGeneration,
+                    currentPropagationGeneration));
             if (decision.Action is not (GiAtmosphereAdmissionAction.AdmitPendingCandidate or
                 GiAtmosphereAdmissionAction.HardRestartWithCandidate) ||
                 (decision.Action != GiAtmosphereAdmissionAction.HardRestartWithCandidate &&

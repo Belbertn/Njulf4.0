@@ -82,12 +82,12 @@ namespace Njulf.Rendering.Pipeline
                 ? _extractSets[1]
                 : _extractSets[0];
 
-            activeSceneColor.TransitionToShaderRead(cmd);
+            activeSceneColor.TransitionToComputeShaderRead(cmd);
 
             long stageStart = Stopwatch.GetTimestamp();
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _extractPipeline);
             Dispatch(cmd, extractSet, activeSceneColor.Extent, _renderTargets.BloomMipChain[0].Extent, "BloomExtractPass", mode: 0);
-            _renderTargets.BloomMipChain[0].TransitionToShaderRead(cmd);
+            _renderTargets.BloomMipChain[0].TransitionToComputeShaderRead(cmd);
             sceneData.CpuBloomExtractRecordMicroseconds = ElapsedMicroseconds(stageStart);
 
             stageStart = Stopwatch.GetTimestamp();
@@ -102,7 +102,7 @@ namespace Njulf.Rendering.Pipeline
                     destination.Extent,
                     $"BloomDownsamplePass Mip {mip}",
                     mode: 0);
-                destination.TransitionToShaderRead(cmd);
+                destination.TransitionToComputeShaderRead(cmd);
             }
             sceneData.CpuBloomDownsampleRecordMicroseconds = ElapsedMicroseconds(stageStart);
 
@@ -111,7 +111,7 @@ namespace Njulf.Rendering.Pipeline
             for (int mip = mipCount - 2; mip >= 0; mip--)
             {
                 RenderTarget destination = _renderTargets.BloomMipChain[mip];
-                destination.TransitionToStorageReadWrite(cmd);
+                destination.TransitionToComputeStorageReadWrite(cmd);
                 Dispatch(
                     cmd,
                     _upsampleSets[mip],
@@ -119,7 +119,7 @@ namespace Njulf.Rendering.Pipeline
                     destination.Extent,
                     $"BloomUpsamplePass Mip {mip}",
                     mode: 0);
-                destination.TransitionToShaderRead(cmd);
+                destination.TransitionToComputeShaderRead(cmd);
             }
             sceneData.CpuBloomUpsampleRecordMicroseconds = ElapsedMicroseconds(stageStart);
         }

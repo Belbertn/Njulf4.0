@@ -106,15 +106,12 @@ void main()
     vec3 particleDdgiNormal = centerViewLength > 0.0001 ? centerViewVector / centerViewLength : vec3(0.0, 1.0, 0.0);
     vec3 particleAlbedo = max(particle.Color.rgb, vec3(0.0));
     SimpleDdgiParams simpleParams = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    outDdgiAmbient = vec3(0.0);
     if ((simpleParams.flags & (SIMPLE_DDGI_FLAG_ENABLED | SIMPLE_DDGI_FLAG_PARTICLE_ENABLED)) ==
         (SIMPLE_DDGI_FLAG_ENABLED | SIMPLE_DDGI_FLAG_PARTICLE_ENABLED) &&
         simpleParams.probeCount > 0u)
     {
         outDdgiAmbient = SampleSimpleDdgiIrradiance(center, particleDdgiNormal, particleDdgiNormal) * particleAlbedo * 0.75 / SIMPLE_DDGI_PI;
-    }
-    else
-    {
-        outDdgiAmbient = SampleDdgiAmbientDiffuse(center, particleDdgiNormal, particleAlbedo, 0.75, 4u);
     }
 
     uint columns = max(particle.FlipbookColumns, 1u);

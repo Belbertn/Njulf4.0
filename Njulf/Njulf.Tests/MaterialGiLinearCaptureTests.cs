@@ -210,7 +210,7 @@ public sealed class MaterialGiLinearCaptureTests
         Assert.That(
             captured,
             Is.EqualTo(SampleMaterialGiConformanceCatalog.RequiredOutputs.Select(static output => output.Signal)));
-        Assert.That(captured, Has.Count.EqualTo(11));
+        Assert.That(captured, Has.Count.EqualTo(SampleMaterialGiConformanceCatalog.RequiredOutputs.Count));
     }
 
     [Test]
@@ -287,7 +287,7 @@ public sealed class MaterialGiLinearCaptureTests
     }
 
     [Test]
-    public void CaptureProfile_EnablesHybridGiAndDisablesNondeterministicPresentationFeatures()
+    public void CaptureProfile_EnablesSimpleDdgiAndDisablesNondeterministicPresentationFeatures()
     {
         var settings = new RenderSettings();
         SampleMaterialGiCaptureRunner.ApplyLockedSettings(settings);
@@ -303,15 +303,11 @@ public sealed class MaterialGiLinearCaptureTests
             Assert.That(settings.AntiAliasing.JitterEnabled, Is.False);
             Assert.That(settings.AsyncCompute.Mode, Is.EqualTo(AsyncComputeMode.Disabled));
             Assert.That(settings.GlobalIllumination.Enabled, Is.True);
-            Assert.That(settings.GlobalIllumination.Mode, Is.EqualTo(GlobalIlluminationMode.Hybrid));
+            Assert.That(settings.GlobalIllumination.Mode, Is.EqualTo(GlobalIlluminationMode.Ddgi));
             Assert.That(settings.GlobalIllumination.UseDdgi, Is.True);
-            Assert.That(settings.GlobalIllumination.UseSsgi, Is.True);
             Assert.That(
                 settings.GlobalIllumination.ActiveMaterialGiV2Features,
                 Is.EqualTo(MaterialGiV2Feature.All));
-            Assert.That(
-                settings.GlobalIllumination.DdgiSchedulerMode,
-                Is.EqualTo(DdgiSchedulerMode.Gpu));
             Assert.That(settings.GlobalIllumination.DdgiAdaptiveBudgetingEnabled, Is.False);
             Assert.That(settings.GlobalIllumination.FarFieldClipmapEnabled, Is.True);
             Assert.That(settings.GlobalIllumination.FarFieldForceAll, Is.False);
@@ -350,7 +346,8 @@ public sealed class MaterialGiLinearCaptureTests
                 () => SampleMaterialGiArtifactPublisher.ValidateCompleteArtifactSet(
                     directory,
                     Array.Empty<SampleMaterialGiArtifact>()),
-                Throws.TypeOf<InvalidDataException>().With.Message.Contains("exactly 11"));
+                Throws.TypeOf<InvalidDataException>().With.Message.Contains(
+                    $"exactly {SampleMaterialGiConformanceCatalog.RequiredOutputs.Count}"));
 
             SampleMaterialGiArtifact[] records =
                 SampleMaterialGiConformanceCatalog.RequiredOutputs

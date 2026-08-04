@@ -5,11 +5,6 @@ namespace Njulf.Rendering.Pipeline
 {
     internal static class GlobalIlluminationPassExecutionPolicy
     {
-        public const uint ForwardDebugViewNone = 0u;
-        public const uint ForwardDebugViewGlobalIlluminationFirst = 80u;
-        public const uint ForwardDebugViewGlobalIlluminationFinalIndirect = 80u;
-        public const uint ForwardDebugViewGlobalIlluminationLast = 125u;
-
         public static bool IsDdgiDebugView(GlobalIlluminationDebugView view)
         {
             return view is GlobalIlluminationDebugView.DdgiIrradiance
@@ -31,7 +26,6 @@ namespace Njulf.Rendering.Pipeline
                 or GlobalIlluminationDebugView.DdgiSuppressionMask
                 or GlobalIlluminationDebugView.DdgiEffectiveWeight
                 or GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight
-                or GlobalIlluminationDebugView.DdgiRelocationNormalized
                 or GlobalIlluminationDebugView.DdgiClassificationInvalidScore
                 or GlobalIlluminationDebugView.DdgiVisibilityMoments
                 or GlobalIlluminationDebugView.DdgiSpatialCoverage
@@ -54,63 +48,5 @@ namespace Njulf.Rendering.Pipeline
                 or GlobalIlluminationDebugView.FarFieldSunShadow;
         }
 
-        public static bool IsSsgiDebugView(GlobalIlluminationDebugView view)
-        {
-            return view is GlobalIlluminationDebugView.SsgiRaw
-                or GlobalIlluminationDebugView.SsgiFiltered
-                or GlobalIlluminationDebugView.SsgiHistory
-                or GlobalIlluminationDebugView.SsgiRayHitMask
-                or GlobalIlluminationDebugView.SsgiHistoryRejection
-                or GlobalIlluminationDebugView.MaterialTransportSourceOwnership
-                or GlobalIlluminationDebugView.HybridEstimatorOwnership
-                or GlobalIlluminationDebugView.HybridFinalComposition
-                or GlobalIlluminationDebugView.MaterialTransportHitProvenance;
-        }
-
-        public static bool ShouldRunSsgiProducer(GlobalIlluminationSettings gi)
-        {
-            if (gi == null)
-                throw new ArgumentNullException(nameof(gi));
-
-            return gi.EffectiveUseSsgi;
-        }
-
-        public static bool ShouldRunSsgiProducer(GlobalIlluminationSettings gi, uint forwardDebugViewMode)
-        {
-            return ShouldRunSsgiProducer(gi) && IsForwardDebugViewCompatibleWithSsgiProducer(forwardDebugViewMode);
-        }
-
-        public static bool ShouldCompositeSsgi(GlobalIlluminationSettings gi)
-        {
-            if (gi == null)
-                throw new ArgumentNullException(nameof(gi));
-
-            if (gi.DebugView == GlobalIlluminationDebugView.MaterialTransportHitProvenance)
-                return gi.EffectiveUseDdgi || gi.EffectiveUseSimpleDdgi;
-
-            return gi.EffectiveUseSsgi &&
-                gi.DebugView is GlobalIlluminationDebugView.None
-                    or GlobalIlluminationDebugView.FinalIndirect
-                    or GlobalIlluminationDebugView.MaterialTransportSourceOwnership
-                    or GlobalIlluminationDebugView.HybridEstimatorOwnership
-                    or GlobalIlluminationDebugView.HybridFinalComposition;
-        }
-
-        public static bool ShouldCompositeSsgi(GlobalIlluminationSettings gi, uint forwardDebugViewMode)
-        {
-            return ShouldCompositeSsgi(gi) && IsForwardDebugViewCompatibleWithSsgiComposite(forwardDebugViewMode);
-        }
-
-        public static bool IsForwardDebugViewCompatibleWithSsgiComposite(uint forwardDebugViewMode)
-        {
-            return forwardDebugViewMode is ForwardDebugViewNone or ForwardDebugViewGlobalIlluminationFinalIndirect;
-        }
-
-        public static bool IsForwardDebugViewCompatibleWithSsgiProducer(uint forwardDebugViewMode)
-        {
-            return forwardDebugViewMode == ForwardDebugViewNone ||
-                (forwardDebugViewMode >= ForwardDebugViewGlobalIlluminationFirst &&
-                    forwardDebugViewMode <= ForwardDebugViewGlobalIlluminationLast);
-        }
     }
 }

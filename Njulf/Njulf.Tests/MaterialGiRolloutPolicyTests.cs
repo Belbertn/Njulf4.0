@@ -26,7 +26,6 @@ public sealed class MaterialGiRolloutPolicyTests
             Assert.That(settings.GlobalIllumination.GiMaterialTransportV2, Is.False);
             Assert.That(settings.GlobalIllumination.GiEmissiveMeshSampling, Is.False);
             Assert.That(settings.GlobalIllumination.GiFarFieldMaterialV2, Is.False);
-            Assert.That(settings.GlobalIllumination.GiHybridCompositionV2, Is.False);
             Assert.That(
                 settings.GlobalIllumination.ActiveMaterialGiV2Features,
                 Is.EqualTo(MaterialGiV2Feature.None));
@@ -55,7 +54,6 @@ public sealed class MaterialGiRolloutPolicyTests
             Assert.That(settings.GlobalIllumination.GiMaterialTransportV2, Is.True);
             Assert.That(settings.GlobalIllumination.GiFarFieldMaterialV2, Is.True);
             Assert.That(settings.GlobalIllumination.GiEmissiveMeshSampling, Is.False);
-            Assert.That(settings.GlobalIllumination.GiHybridCompositionV2, Is.False);
             Assert.That(
                 settings.GlobalIllumination.ActiveMaterialGiV2Features,
                 Is.EqualTo(
@@ -233,9 +231,6 @@ public sealed class MaterialGiRolloutPolicyTests
                 Is.True);
             Assert.That(
                 settings.GlobalIllumination.EffectiveGiFarFieldMaterialV2,
-                Is.True);
-            Assert.That(
-                settings.GlobalIllumination.EffectiveGiHybridCompositionV2,
                 Is.True);
             Assert.That(evaluation.ApprovalId, Is.EqualTo("material-gi-release-2026-07"));
             Assert.That(
@@ -1860,8 +1855,7 @@ public sealed class MaterialGiRolloutPolicyTests
                   "GlobalIllumination": {
                     "GiMaterialTransportV2": true,
                     "GiEmissiveMeshSampling": true,
-                    "GiFarFieldMaterialV2": true,
-                    "GiHybridCompositionV2": true
+                    "GiFarFieldMaterialV2": true
                   }
                 }
                 """);
@@ -1895,8 +1889,7 @@ public sealed class MaterialGiRolloutPolicyTests
                   "GlobalIllumination": {
                     "GiMaterialTransportV2": true,
                     "GiEmissiveMeshSampling": true,
-                    "GiFarFieldMaterialV2": true,
-                    "GiHybridCompositionV2": true
+                    "GiFarFieldMaterialV2": true
                   }
                 }
                 """);
@@ -1943,8 +1936,6 @@ public sealed class MaterialGiRolloutPolicyTests
             source.GlobalIllumination.GiEmissiveMeshSampling;
         copy.GlobalIllumination.GiFarFieldMaterialV2 =
             source.GlobalIllumination.GiFarFieldMaterialV2;
-        copy.GlobalIllumination.GiHybridCompositionV2 =
-            source.GlobalIllumination.GiHybridCompositionV2;
 
         Assert.Multiple(() =>
         {
@@ -3022,7 +3013,7 @@ internal sealed class SyntheticMaterialGiQualification : IDisposable
                     hash),
                 CreateApprovedHdrRoi(
                     "hybrid-low-frequency-mean",
-                    "HybridLowFrequencyMean",
+                    "LowFrequencyMean",
                     "FinalComposedIndirect",
                     "relative low-frequency mean difference",
                     0.02,
@@ -3143,7 +3134,6 @@ internal sealed class SyntheticMaterialGiQualification : IDisposable
                 "DirectSpecular",
                 "RawDdgiIrradiance",
                 "FinalDdgiDiffuse",
-                "RawSsgiEstimate",
                 "FinalComposedIndirect",
                 "MaterialDiffuseReflectance",
                 "CompiledEmission",
@@ -3237,7 +3227,6 @@ internal sealed class SyntheticMaterialGiQualification : IDisposable
             MaterialUploadP95Microseconds = 50,
             GlobalIlluminationEnabled = 1,
             GlobalIlluminationDdgiActive = 1,
-            GlobalIlluminationSsgiActive = 0,
             GlobalIlluminationRayQuerySupported = 1,
             GlobalIlluminationRayQueryActive = 1,
             SimpleDdgiActive = 1,
@@ -3374,18 +3363,15 @@ internal sealed class SyntheticMaterialGiQualification : IDisposable
             "required-production-scene",
             "ddgi-high-profile",
             "ddgi-only-ray-query-active",
-            "no-ssgi-resources",
-            "no-ssgi-passes",
             "ddgi-split-passes-present",
             "no-recursive-ddgi-copy",
             "ddgi-async-compute-state-consistent",
             "no-static-frame-full-as-rebuild",
+            "blas-compaction-settled-and-lossless",
             "ddgi-ray-query-scene-complete",
             "ddgi-static-ray-coverage-complete",
             "requested-paged-far-field-active",
             "clipmaps-preserved-with-authored-volumes",
-            "ddgi-gather-tiles-valid",
-            "ddgi-forward-exhaustive-fallback-unused",
             "phase10-forward-metrics-valid",
             "phase9-raw-atlas-to-final-energy",
             "phase9-environment-fallback-not-dominant",
@@ -3393,11 +3379,8 @@ internal sealed class SyntheticMaterialGiQualification : IDisposable
             "phase9-thin-wall-leak-policy-active",
             "phase10-cache-warmup-steady",
             "phase10-warmup-progress-valid",
-            "phase10-scheduler-p95-budget",
-            "phase10-scheduler-overflow-free",
-            "phase10-scheduler-equivalence",
+            "simple-ddgi-probe-lifecycle-bounded",
             "gpu-timing-valid",
-            "ddgi-update-p95-budget",
             "simple-ddgi-transport-blend-p95-budget",
             "simple-ddgi-upload-p95-budget",
             "simple-ddgi-capacity-p95-budget",

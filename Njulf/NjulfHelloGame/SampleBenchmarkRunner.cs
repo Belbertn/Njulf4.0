@@ -427,19 +427,9 @@ public sealed class SampleBenchmarkAnalyzer
         new("AmbientOcclusionBlurPass", d => d.GpuAmbientOcclusionBlurMicroseconds),
         new("AccelerationStructureBlasPass", d => d.GpuAccelerationStructureBlasMicroseconds),
         new("AccelerationStructureTlasPass", d => d.GpuAccelerationStructureTlasMicroseconds),
-        new("SsgiTracePass", d => d.GpuSsgiTraceMicroseconds),
-        new("SsgiTemporalPass", d => d.GpuSsgiTemporalMicroseconds),
-        new("SsgiDenoisePass", d => d.GpuSsgiDenoiseMicroseconds),
-        new("DdgiTracePass", d => d.GpuDdgiTraceMicroseconds),
-        new("DdgiBlendPass", d =>
-            d.GpuSimpleDdgiTransportMicroseconds > 0 ||
-            d.GpuSimpleDdgiBlendMicroseconds > 0
-                ? 0
-                : d.GpuDdgiBlendMicroseconds),
+        new("SimpleDdgiTracePass", d => d.GpuSimpleDdgiTraceMicroseconds),
         new("SimpleDdgiTransportPass", d => d.GpuSimpleDdgiTransportMicroseconds),
         new("SimpleDdgiBlendPass", d => d.GpuSimpleDdgiBlendMicroseconds),
-        new("DdgiRelocateClassifyPass", d => d.GpuDdgiRelocateClassifyMicroseconds),
-        new("DdgiPublishPass", d => d.GpuDdgiPublishMicroseconds),
         new("GlobalIlluminationCompositePass", d => d.GpuGiCompositeMicroseconds),
         new("TiledLightCullingPass", d => d.GpuLightCullMicroseconds),
         new("ForwardPlusPass", d => d.GpuForwardOpaqueMicroseconds),
@@ -911,10 +901,7 @@ public sealed class SampleBenchmarkAnalyzer
             return double.NaN;
         }
 
-        long microseconds = diagnostics.GpuSsgiTraceMicroseconds +
-            diagnostics.GpuSsgiTemporalMicroseconds +
-            diagnostics.GpuSsgiDenoiseMicroseconds +
-            diagnostics.GpuDdgiUpdateMicroseconds +
+        long microseconds = diagnostics.GpuDdgiUpdateMicroseconds +
             diagnostics.GpuGiCompositeMicroseconds +
             diagnostics.GpuFarFieldUpdateMicroseconds +
             diagnostics.GpuAccelerationStructureBlasMicroseconds +

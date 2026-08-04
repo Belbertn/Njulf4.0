@@ -23,7 +23,6 @@ public enum SampleMaterialGiCaptureSignal : byte
     DirectSpecular = 1,
     RawDdgiIrradiance = 2,
     FinalDdgiDiffuse = 3,
-    RawSsgiEstimate = 4,
     FinalComposedIndirect = 5,
     MaterialDiffuseReflectance = 6,
     CompiledEmission = 7,
@@ -96,7 +95,6 @@ public sealed record SampleMaterialGiRendererSettings(
     RenderQualityPreset QualityPreset,
     bool GlobalIlluminationEnabled,
     bool DdgiEnabled,
-    bool SsgiEnabled,
     bool FarFieldEnabled,
     string CaptureColorSpace,
     bool ExposureAppliedToLinearArtifacts,
@@ -180,7 +178,6 @@ public static class SampleMaterialGiConformanceCatalog
         RenderQualityPreset.DdgiHigh,
         GlobalIlluminationEnabled: true,
         DdgiEnabled: true,
-        SsgiEnabled: true,
         FarFieldEnabled: true,
         CaptureColorSpace: "linear-scRGB-float",
         ExposureAppliedToLinearArtifacts: false,
@@ -217,13 +214,6 @@ public static class SampleMaterialGiConformanceCatalog
                 GlobalIlluminationDebugView.DdgiFinalDiffuse,
                 MaterialDebugView.None,
                 "Final DDGI diffuse after the canonical receiver response."),
-            new(
-                SampleMaterialGiCaptureSignal.RawSsgiEstimate,
-                "ssgi-raw",
-                "renderer-debug-view",
-                GlobalIlluminationDebugView.SsgiRaw,
-                MaterialDebugView.None,
-                "Raw SSGI diffuse estimate."),
             new(
                 SampleMaterialGiCaptureSignal.FinalComposedIndirect,
                 "indirect-composed",
@@ -761,7 +751,6 @@ public static class SampleMaterialGiConformanceCatalog
         Append(builder, RendererSettings.QualityPreset.ToString());
         Append(builder, RendererSettings.GlobalIlluminationEnabled ? 1 : 0);
         Append(builder, RendererSettings.DdgiEnabled ? 1 : 0);
-        Append(builder, RendererSettings.SsgiEnabled ? 1 : 0);
         Append(builder, RendererSettings.FarFieldEnabled ? 1 : 0);
         Append(builder, RendererSettings.CaptureColorSpace);
         Append(builder, RendererSettings.ExposureAppliedToLinearArtifacts ? 1 : 0);

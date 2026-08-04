@@ -23,7 +23,6 @@ public sealed record SampleSmokeOptions(
     bool EnableFarFieldClipmap,
     bool EnableFarFieldForceAll,
     string? BaselineSnapshotDirectory,
-    DdgiSchedulerMode? DdgiSchedulerModeOverride = null,
     SampleSceneKind SceneKind = SampleSceneKind.GlobalIlluminationTest,
     TransparencyMode TransparencyMode = Njulf.Rendering.Data.TransparencyMode.SortedAlphaBlend,
     SampleBenchmarkOptions? Benchmark = null,
@@ -39,7 +38,8 @@ public sealed record SampleSmokeOptions(
     double LongRunMinutes = 0.0,
     SampleKhronosMaterialGiRenderedGateOptions? KhronosMaterialGiRenderedGate = null,
     string? MaterialGiQualificationManifestPath = null,
-    AsyncComputePath? AsyncComputeValidationPath = null)
+    AsyncComputePath? AsyncComputeValidationPath = null,
+    SimpleDdgiSchedulerMode? SimpleDdgiSchedulerModeOverride = null)
 {
     public SampleBenchmarkOptions Benchmark { get; init; } = Benchmark ?? SampleBenchmarkOptions.Disabled;
 
@@ -51,10 +51,10 @@ public sealed record SampleSmokeOptions(
         TransparencyMode != Njulf.Rendering.Data.TransparencyMode.SortedAlphaBlend ||
         EnableAsyncCompute ||
         AsyncComputeModeOverride.HasValue ||
+        SimpleDdgiSchedulerModeOverride.HasValue ||
         QualityPresetOverride.HasValue ||
         EnableFarFieldClipmap ||
         EnableFarFieldForceAll ||
-        DdgiSchedulerModeOverride.HasValue ||
         !string.IsNullOrWhiteSpace(BaselineSnapshotDirectory) ||
         !string.IsNullOrWhiteSpace(SponzaGiCaptureDirectory) ||
         !string.IsNullOrWhiteSpace(MaterialGiCaptureDirectory) ||

@@ -17,7 +17,7 @@ public enum SampleMaterialGiVisualRoiGateKind : byte
     // reserved so stale numeric manifests fail with a precise diagnostic;
     // binary visibility is qualified by the standalone Vulkan gate instead.
     LegacyRadianceThresholdAlphaProxy = 3,
-    HybridLowFrequencyMean = 4,
+    LowFrequencyMean = 4,
     TemporalStability = 5
 }
 
@@ -321,7 +321,7 @@ public static class SampleMaterialGiApprovedHdrComparer
     public const double MaximumFlipP95 = 0.08;
     public const double MaximumUniformLuminanceDifference = 0.05;
     public const double MaximumTransitionStep = 0.10;
-    public const double MaximumHybridLowFrequencyMeanDifference = 0.02;
+    public const double MaximumLowFrequencyMeanDifference = 0.02;
     public const double MaximumTemporalP95 = 0.03;
     public const int MaximumTemporalFrameCount = 120;
     public const long MaximumTemporalSampleBufferBytes = 256L * 1024L * 1024L;
@@ -664,8 +664,8 @@ public static class SampleMaterialGiApprovedHdrComparer
                         throw new InvalidDataException(
                             "Radiance-threshold alpha proxies are not release evidence. " +
                             "Use an authenticated material-gi-alpha-visibility Vulkan report."),
-                    SampleMaterialGiVisualRoiGateKind.HybridLowFrequencyMean =>
-                        EvaluateHybridMean(
+                    SampleMaterialGiVisualRoiGateKind.LowFrequencyMean =>
+                        EvaluateLowFrequencyMean(
                             manifest,
                             roi,
                             gate,
@@ -786,7 +786,7 @@ public static class SampleMaterialGiApprovedHdrComparer
         [
             SampleMaterialGiVisualRoiGateKind.UniformLuminance,
             SampleMaterialGiVisualRoiGateKind.TransitionStep,
-            SampleMaterialGiVisualRoiGateKind.HybridLowFrequencyMean
+            SampleMaterialGiVisualRoiGateKind.LowFrequencyMean
         ];
         SampleMaterialGiVisualRoiGateKind[] missing =
             alwaysRequired.Where(kind => !observedKinds.Contains(kind)).ToArray();
@@ -942,7 +942,7 @@ public static class SampleMaterialGiApprovedHdrComparer
             candidateStep <= gate.MaximumRelativeDifference!.Value);
     }
 
-    private static SampleMaterialGiApprovedRoiGateResult EvaluateHybridMean(
+    private static SampleMaterialGiApprovedRoiGateResult EvaluateLowFrequencyMean(
         SampleMaterialGiApprovedHdrReferenceManifest manifest,
         SampleMaterialGiApprovedRoi roi,
         SampleMaterialGiApprovedRoiGate gate,
@@ -977,7 +977,7 @@ public static class SampleMaterialGiApprovedHdrComparer
             referenceDifference,
             candidateDifference,
             candidateDifference,
-            "abs(hybridMeanLuminance-ddgiMeanLuminance) / max(abs(ddgiMeanLuminance), 1e-6)",
+            "abs(composedMeanLuminance-ddgiMeanLuminance) / max(abs(ddgiMeanLuminance), 1e-6)",
             PixelCount(roi.Bounds),
             [
                 GetEvidenceHash(referenceHashes, composedSignal),
@@ -1372,8 +1372,8 @@ public static class SampleMaterialGiApprovedHdrComparer
                 throw new InvalidDataException(
                     $"ROI '{roi.Name}' uses the retired radiance-threshold alpha proxy. " +
                     "Use an authenticated material-gi-alpha-visibility Vulkan report."),
-            SampleMaterialGiVisualRoiGateKind.HybridLowFrequencyMean =>
-                MaximumHybridLowFrequencyMeanDifference,
+            SampleMaterialGiVisualRoiGateKind.LowFrequencyMean =>
+                MaximumLowFrequencyMeanDifference,
             SampleMaterialGiVisualRoiGateKind.TemporalStability =>
                 MaximumTemporalP95,
             _ => throw new InvalidDataException($"ROI '{roi.Name}' has an unsupported gate.")
@@ -1426,12 +1426,12 @@ public static class SampleMaterialGiApprovedHdrComparer
                 throw new InvalidDataException(
                     $"ROI '{roi.Name}' uses the retired radiance-threshold alpha proxy. " +
                     "Use an authenticated material-gi-alpha-visibility Vulkan report.");
-            case SampleMaterialGiVisualRoiGateKind.HybridLowFrequencyMean:
+            case SampleMaterialGiVisualRoiGateKind.LowFrequencyMean:
                 if (gate.Signal != SampleMaterialGiCaptureSignal.FinalComposedIndirect ||
                     gate.ComparisonSignal != SampleMaterialGiCaptureSignal.FinalDdgiDiffuse)
                 {
                     throw new InvalidDataException(
-                        $"ROI '{roi.Name}' hybrid gate must compare FinalComposedIndirect to FinalDdgiDiffuse.");
+                        $"ROI '{roi.Name}' low-frequency gate must compare FinalComposedIndirect to FinalDdgiDiffuse.");
                 }
                 if (gate.TransitionSamples != null ||
                     gate.CoverageThreshold.HasValue ||
@@ -1439,7 +1439,7 @@ public static class SampleMaterialGiApprovedHdrComparer
                     gate.TemporalWarmupFrameCount.HasValue)
                 {
                     throw new InvalidDataException(
-                        $"ROI '{roi.Name}' hybrid gate contains incompatible metadata.");
+                        $"ROI '{roi.Name}' low-frequency gate contains incompatible metadata.");
                 }
                 break;
             case SampleMaterialGiVisualRoiGateKind.TemporalStability:

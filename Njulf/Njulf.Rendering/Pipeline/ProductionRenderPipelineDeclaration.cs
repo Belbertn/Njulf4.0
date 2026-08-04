@@ -22,27 +22,19 @@ internal sealed class ProductionRenderPipelineDeclaration
         "MotionVectorPass",
         "HiZBuildPass",
         "ForwardVisibilityCompactionPass",
-        "SceneSurfacePass",
         "AmbientOcclusionPass",
         "AmbientOcclusionBlurPass",
         "TiledLightCullingPass",
         "EnvironmentPrefilterPass",
         "ForwardPlusPass",
-        "SsgiTracePass",
-        "SsgiTemporalPass",
-        "SsgiDenoisePass",
-        "SsgiCompositePass",
         "FarFieldClipmapBakePass",
+        "SimpleDdgiSchedulePass",
         "SimpleDdgiTracePass",
         "SimpleDdgiRelocateClassifyPass",
         "SimpleDdgiTransportPass",
         "SimpleDdgiBlendPass",
         "SimpleDdgiPublishPass",
-        "DdgiSchedulePass",
-        "DdgiTracePass",
-        "DdgiBlendPass",
-        "DdgiRelocateClassifyPass",
-        "DdgiPublishPass",
+        "SimpleDdgiSchedulerCommitPass",
         "SkyboxPass",
         "TransparentForwardPass",
         "WeightedTransparentPass",
@@ -69,9 +61,9 @@ internal sealed class ProductionRenderPipelineDeclaration
     public string Name => PipelineName;
 
     public IReadOnlyList<RenderGraphPassResourceDeclaration> PassResourceDeclarations =>
-        CreatePassResourceDeclarations(includeSsgi: true);
+        CreatePassResourceDeclarations();
 
-    public IReadOnlyList<RenderGraphPassResourceDeclaration> CreatePassResourceDeclarations(bool includeSsgi)
+    public IReadOnlyList<RenderGraphPassResourceDeclaration> CreatePassResourceDeclarations()
     {
         var declarations = new List<RenderGraphPassResourceDeclaration>
         {
@@ -107,16 +99,6 @@ internal sealed class ProductionRenderPipelineDeclaration
             WriteComputeBuffer(RenderGraphResourceId.ForwardVisibilityBuffers))
         };
 
-        if (includeSsgi)
-        {
-            declarations.Add(Pass("SceneSurfacePass",
-                ReadDepth(RenderGraphResourceId.SceneDepth),
-                Read(RenderGraphResourceId.HiZPyramid),
-                Read(RenderGraphResourceId.SceneSubmissionBuffers),
-                WriteColorAttachment(RenderGraphResourceId.SceneNormal),
-                WriteColorAttachment(RenderGraphResourceId.SceneMaterial)));
-        }
-
         declarations.AddRange([
             Pass("AmbientOcclusionPass",
             ReadDepth(RenderGraphResourceId.SceneDepth),
@@ -136,8 +118,8 @@ internal sealed class ProductionRenderPipelineDeclaration
             ReadComputeBuffer(RenderGraphResourceId.EnvironmentData))
         ]);
 
-        declarations.Add(includeSsgi
-            ? Pass("ForwardPlusPass",
+        declarations.Add(
+            Pass("ForwardPlusPass",
                 ReadDepthAttachment(RenderGraphResourceId.SceneDepth),
                 Read(RenderGraphResourceId.SceneSubmissionBuffers),
                 Read(RenderGraphResourceId.ForwardVisibilityBuffers),
@@ -157,89 +139,8 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
                 ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
                 ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiProbeState),
-                ReadGraphicsStorage(RenderGraphResourceId.FullDdgiAtlases),
-                ReadGraphicsStorage(RenderGraphResourceId.FullDdgiState),
                 ReadWriteGraphicsStorage(RenderGraphResourceId.RendererDiagnosticsBuffer),
-                WriteColorAttachment(RenderGraphResourceId.SceneColor),
-                WriteColorAttachment(RenderGraphResourceId.SsgiTraceSource),
-                WriteColorAttachment(RenderGraphResourceId.GiFinalDiffuse),
-                WriteColorAttachment(RenderGraphResourceId.MaterialTransportProvenance))
-            : Pass("ForwardPlusPass",
-                ReadDepthAttachment(RenderGraphResourceId.SceneDepth),
-                Read(RenderGraphResourceId.SceneSubmissionBuffers),
-                Read(RenderGraphResourceId.ForwardVisibilityBuffers),
-                Read(RenderGraphResourceId.FoliageBuffers),
-                Read(RenderGraphResourceId.LightTiles),
-                ReadFragmentSampled(RenderGraphResourceId.AmbientOcclusionBlurred),
-                Read(RenderGraphResourceId.DirectionalShadowMap),
-                Read(RenderGraphResourceId.SpotShadowAtlas),
-                Read(RenderGraphResourceId.PointShadowCubemapArray),
-                Read(RenderGraphResourceId.ReflectionProbeCubemaps),
-                Read(RenderGraphResourceId.EnvironmentMaps),
-                ReadGraphicsStorage(RenderGraphResourceId.MeshGeometryBuffers),
-                ReadGraphicsStorage(RenderGraphResourceId.MaterialBuffers),
-                ReadFragmentSampled(RenderGraphResourceId.MaterialTextures),
-                ReadGraphicsStorage(RenderGraphResourceId.LightBuffers),
-                ReadGraphicsStorage(RenderGraphResourceId.EnvironmentData),
-                ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
-                ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
-                ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiProbeState),
-                ReadGraphicsStorage(RenderGraphResourceId.FullDdgiAtlases),
-                ReadGraphicsStorage(RenderGraphResourceId.FullDdgiState),
-                ReadWriteGraphicsStorage(RenderGraphResourceId.RendererDiagnosticsBuffer),
-                WriteColorAttachment(RenderGraphResourceId.SceneColor),
-                WriteColorAttachment(RenderGraphResourceId.MaterialTransportProvenance)));
-
-        if (includeSsgi)
-        {
-            declarations.AddRange([
-                Pass("SsgiTracePass",
-                    ReadComputeSampled(RenderGraphResourceId.SsgiTraceSource),
-                    ReadComputeDepth(RenderGraphResourceId.SceneDepth),
-                    ReadComputeSampled(RenderGraphResourceId.SceneNormal),
-                    ReadComputeSampled(RenderGraphResourceId.SceneMaterial),
-                    WriteComputeStorage(RenderGraphResourceId.SsgiRaw, ImageLayout.ShaderReadOnlyOptimal),
-                    WriteComputeStorage(RenderGraphResourceId.SsgiHitDistance, ImageLayout.ShaderReadOnlyOptimal)),
-                Pass("SsgiTemporalPass",
-                    ReadComputeSampled(RenderGraphResourceId.SsgiRaw),
-                    ReadComputeDepth(RenderGraphResourceId.SceneDepth),
-                    ReadComputeSampled(RenderGraphResourceId.SceneNormal),
-                    ReadComputeSampled(RenderGraphResourceId.MotionVectors),
-                    ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer),
-                    ReadWriteComputeStorage(RenderGraphResourceId.SsgiHistory, ImageLayout.ShaderReadOnlyOptimal),
-                    ReadWriteComputeStorage(RenderGraphResourceId.SsgiDepthHistory, ImageLayout.ShaderReadOnlyOptimal),
-                    ReadWriteComputeStorage(RenderGraphResourceId.SsgiNormalHistory, ImageLayout.ShaderReadOnlyOptimal),
-                    ReadWriteComputeStorage(RenderGraphResourceId.SsgiMoments, ImageLayout.ShaderReadOnlyOptimal),
-                    ReadWriteComputeStorage(RenderGraphResourceId.SsgiHistoryLength, ImageLayout.ShaderReadOnlyOptimal),
-                    WriteComputeStorage(RenderGraphResourceId.SsgiFiltered, ImageLayout.ShaderReadOnlyOptimal)),
-                Pass("SsgiDenoisePass",
-                    ReadComputeSampled(RenderGraphResourceId.SsgiRaw),
-                    ReadComputeSampled(RenderGraphResourceId.SsgiHitDistance),
-                    ReadComputeSampled(RenderGraphResourceId.SsgiFiltered),
-                    ReadComputeDepth(RenderGraphResourceId.SceneDepth),
-                    ReadComputeSampled(RenderGraphResourceId.SceneNormal),
-                    ReadComputeSampled(RenderGraphResourceId.SsgiMoments),
-                    ReadComputeSampled(RenderGraphResourceId.SsgiHistoryLength),
-                    // SsgiTraceSource is dead after tracing and is deliberately
-                    // phase-reused for the full-resolution denoised estimator.
-                    WriteComputeStorage(RenderGraphResourceId.SsgiTraceSource, ImageLayout.ShaderReadOnlyOptimal)),
-            Pass("SsgiCompositePass",
-                ReadFragmentSampled(RenderGraphResourceId.GiFinalDiffuse),
-                ReadFragmentSampled(RenderGraphResourceId.SsgiTraceSource),
-                ReadFragmentSampled(RenderGraphResourceId.SceneMaterial),
-                ReadFragmentSampled(RenderGraphResourceId.MaterialTransportProvenance),
-                ReadWriteColorAttachment(RenderGraphResourceId.SceneColor))
-            ]);
-        }
-        else
-        {
-            // The compact provenance diagnostic is emitted directly by the
-            // forward pass and remains available in DDGI-only configurations.
-            declarations.Add(
-                Pass("SsgiCompositePass",
-                    ReadFragmentSampled(RenderGraphResourceId.MaterialTransportProvenance),
-                    ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)));
-        }
+                WriteColorAttachment(RenderGraphResourceId.SceneColor)));
 
         // DDGI update runs after ForwardPlusPass and publishes cache data for subsequent frames.
         // DDGI paths deliberately declare every concrete storage family they touch. A scheduler
@@ -255,6 +156,11 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteComputeBuffer(RenderGraphResourceId.FarFieldJumpFlood),
                 ReadWriteComputeBuffer(RenderGraphResourceId.FarFieldPageTable),
                 ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)),
+            Pass("SimpleDdgiSchedulePass",
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue)),
             Pass("SimpleDdgiTracePass",
                 ReadComputeAccelerationStructure(RenderGraphResourceId.TlasStorage),
                 ReadComputeBuffer(RenderGraphResourceId.RayQueryInstanceMetadata),
@@ -278,13 +184,15 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRelocationData),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
                 ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)),
             Pass("SimpleDdgiRelocateClassifyPass",
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiRayScratch),
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
-                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRelocationData)),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRelocationData),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler)),
             Pass("SimpleDdgiTransportPass",
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
@@ -293,6 +201,7 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRayScratch),
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
                 ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)),
             Pass("SimpleDdgiBlendPass",
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
@@ -303,6 +212,7 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRelocationData),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
                 ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)),
             Pass("SimpleDdgiPublishPass",
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
@@ -310,36 +220,12 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiTransportAtlas),
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
-                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue)),
-            Pass("DdgiSchedulePass",
-                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiScheduler),
-                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiState)),
-            Pass("DdgiTracePass",
-                ReadComputeAccelerationStructure(RenderGraphResourceId.TlasStorage),
-                ReadComputeBuffer(RenderGraphResourceId.RayQueryInstanceMetadata),
-                ReadComputeBuffer(RenderGraphResourceId.MeshGeometryBuffers),
-                ReadComputeBuffer(RenderGraphResourceId.MaterialBuffers),
-                ReadComputeSampled(RenderGraphResourceId.MaterialTextures),
-                ReadComputeBuffer(RenderGraphResourceId.LightBuffers),
-                ReadComputeBuffer(RenderGraphResourceId.DdgiEmissiveSources),
-                ReadComputeBuffer(RenderGraphResourceId.EnvironmentData),
-                ReadComputeSampled(RenderGraphResourceId.EnvironmentMaps),
-                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiScheduler),
-                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiRayResources),
-                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiAtlases),
-                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiState),
-                ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)),
-            Pass("DdgiBlendPass",
-                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiRayResources),
-                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiAtlases),
-                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiState),
-                ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)),
-            Pass("DdgiRelocateClassifyPass",
-                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiAtlases),
-                ReadWriteComputeBuffer(RenderGraphResourceId.FullDdgiState)),
-            Pass("DdgiPublishPass",
-                ReadComputeBuffer(RenderGraphResourceId.FullDdgiAtlases),
-                ReadComputeBuffer(RenderGraphResourceId.FullDdgiState)),
+                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler)),
+            Pass("SimpleDdgiSchedulerCommitPass",
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue)),
             Pass("SkyboxPass",
             ReadDepth(RenderGraphResourceId.SceneDepth),
                 ReadFragmentSampled(RenderGraphResourceId.EnvironmentMaps),
@@ -360,8 +246,6 @@ internal sealed class ProductionRenderPipelineDeclaration
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiProbeState),
-            ReadGraphicsStorage(RenderGraphResourceId.FullDdgiAtlases),
-            ReadGraphicsStorage(RenderGraphResourceId.FullDdgiState),
             ReadWriteGraphicsStorage(RenderGraphResourceId.RendererDiagnosticsBuffer),
             ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)),
             Pass("WeightedTransparentPass",
@@ -379,8 +263,6 @@ internal sealed class ProductionRenderPipelineDeclaration
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiProbeState),
-            ReadGraphicsStorage(RenderGraphResourceId.FullDdgiAtlases),
-            ReadGraphicsStorage(RenderGraphResourceId.FullDdgiState),
             ReadWriteGraphicsStorage(RenderGraphResourceId.RendererDiagnosticsBuffer),
             WriteColorAttachment(RenderGraphResourceId.WeightedOitAccumulation),
             WriteColorAttachment(RenderGraphResourceId.WeightedOitRevealage)),
@@ -457,14 +339,6 @@ internal sealed class ProductionRenderPipelineDeclaration
         Format depthFormat,
         Format swapchainColorFormat)
     {
-        return CreateResourceDescriptors(depthFormat, swapchainColorFormat, includeSsgi: true);
-    }
-
-    public IReadOnlyList<RenderGraphResourceDescriptor> CreateResourceDescriptors(
-        Format depthFormat,
-        Format swapchainColorFormat,
-        bool includeSsgi)
-    {
         return
         [
             ImageResource(RenderGraphResourceId.SceneColor, "Scene color", RenderTargetManager.SceneColorFormat, RenderGraphResourceSizePolicy.SceneResolution),
@@ -475,12 +349,6 @@ internal sealed class ProductionRenderPipelineDeclaration
             OwnedImageResource(RenderGraphResourceId.AmbientOcclusionRaw, "Ambient occlusion raw", RenderTargetManager.AmbientOcclusionFormat, RenderGraphResourceSizePolicy.HalfResolution),
             OwnedImageResource(RenderGraphResourceId.AmbientOcclusionBlurred, "Ambient occlusion blurred", RenderTargetManager.AmbientOcclusionFormat, RenderGraphResourceSizePolicy.HalfResolution),
             OwnedImageResource(RenderGraphResourceId.AmbientOcclusionScratch, "Ambient occlusion scratch", RenderTargetManager.AmbientOcclusionFormat, RenderGraphResourceSizePolicy.HalfResolution),
-            .. CreateSsgiResourceDescriptors(includeSsgi),
-            OwnedImageResource(
-                RenderGraphResourceId.MaterialTransportProvenance,
-                "Material transport provenance",
-                RenderTargetManager.MaterialTransportProvenanceFormat,
-                RenderGraphResourceSizePolicy.SceneResolution),
             BufferSetResource(RenderGraphResourceId.DdgiProbeResources, "DDGI probe resources"),
             BufferSetResource(RenderGraphResourceId.TlasStorage, "TLAS storage"),
             BufferSetResource(RenderGraphResourceId.RayQueryInstanceMetadata, "Ray-query instance metadata"),
@@ -505,11 +373,7 @@ internal sealed class ProductionRenderPipelineDeclaration
             BufferSetResource(RenderGraphResourceId.SimpleDdgiProbeState, "Simple DDGI probe state"),
             BufferSetResource(RenderGraphResourceId.SimpleDdgiUpdateQueue, "Simple DDGI update queue"),
             BufferSetResource(RenderGraphResourceId.SimpleDdgiRelocationData, "Simple DDGI relocation and classification"),
-            BufferSetResource(RenderGraphResourceId.FullDdgiScheduler, "Full DDGI scheduler"),
-            BufferSetResource(RenderGraphResourceId.FullDdgiRayResources, "Full DDGI ray resources"),
-            BufferSetResource(RenderGraphResourceId.FullDdgiAtlases, "Full DDGI atlases"),
-            BufferSetResource(RenderGraphResourceId.FullDdgiState, "Full DDGI state"),
-            BufferSetResource(RenderGraphResourceId.FullDdgiPublishResources, "Full DDGI publish resources"),
+            BufferSetResource(RenderGraphResourceId.SimpleDdgiScheduler, "Simple DDGI GPU scheduler arena"),
             OwnedImageResource(RenderGraphResourceId.FogOutput, "Fog output", RenderTargetManager.FoggedSceneColorFormat, RenderGraphResourceSizePolicy.Swapchain),
             ImageResource(RenderGraphResourceId.DirectionalShadowMap, "Directional shadow map", depthFormat, RenderGraphResourceSizePolicy.ShadowMap),
             ImageResource(RenderGraphResourceId.SpotShadowAtlas, "Spot shadow atlas", depthFormat, RenderGraphResourceSizePolicy.ShadowMap),
@@ -552,28 +416,18 @@ internal sealed class ProductionRenderPipelineDeclaration
 
     public void RegisterResources(RenderGraph graph, Format depthFormat, Format swapchainColorFormat)
     {
-        RegisterResources(graph, depthFormat, swapchainColorFormat, includeSsgi: true);
-    }
-
-    public void RegisterResources(RenderGraph graph, Format depthFormat, Format swapchainColorFormat, bool includeSsgi)
-    {
         if (graph == null)
             throw new ArgumentNullException(nameof(graph));
 
-        graph.RegisterResources(CreateResourceDescriptors(depthFormat, swapchainColorFormat, includeSsgi));
+        graph.RegisterResources(CreateResourceDescriptors(depthFormat, swapchainColorFormat));
     }
 
     public void DeclarePassResources(RenderGraph graph)
     {
-        DeclarePassResources(graph, includeSsgi: true);
-    }
-
-    public void DeclarePassResources(RenderGraph graph, bool includeSsgi)
-    {
         if (graph == null)
             throw new ArgumentNullException(nameof(graph));
 
-        foreach (RenderGraphPassResourceDeclaration declaration in CreatePassResourceDeclarations(includeSsgi))
+        foreach (RenderGraphPassResourceDeclaration declaration in CreatePassResourceDeclarations())
             graph.DeclarePassResources(declaration.PassName, declaration.Usages);
     }
 
@@ -584,19 +438,9 @@ internal sealed class ProductionRenderPipelineDeclaration
 
     public IReadOnlyList<string> GetActivePasses(RenderFeatureIsolationMode featureIsolation, TransparencyMode transparencyMode)
     {
-        return GetActivePasses(featureIsolation, transparencyMode, includeSsgi: true);
-    }
-
-    public IReadOnlyList<string> GetActivePasses(
-        RenderFeatureIsolationMode featureIsolation,
-        TransparencyMode transparencyMode,
-        bool includeSsgi)
-    {
         var activePasses = new List<string>(PassOrder.Count);
         foreach (string passName in PassOrder)
         {
-            if (!includeSsgi && IsSsgiOnlyPass(passName))
-                continue;
             if (passName == "TransparentForwardPass" && transparencyMode != TransparencyMode.SortedAlphaBlend)
                 continue;
             if ((passName == "WeightedTransparentPass" || passName == "WeightedOitCompositePass") &&
@@ -611,11 +455,6 @@ internal sealed class ProductionRenderPipelineDeclaration
 
     public void RegisterPasses(RenderGraph graph, IReadOnlyDictionary<string, RenderPassBase> passes)
     {
-        RegisterPasses(graph, passes, includeSsgi: true);
-    }
-
-    public void RegisterPasses(RenderGraph graph, IReadOnlyDictionary<string, RenderPassBase> passes, bool includeSsgi)
-    {
         if (graph == null)
             throw new ArgumentNullException(nameof(graph));
         if (passes == null)
@@ -623,9 +462,6 @@ internal sealed class ProductionRenderPipelineDeclaration
 
         foreach (string passName in PassOrder)
         {
-            if (!includeSsgi && IsSsgiOnlyPass(passName))
-                continue;
-
             if (!passes.TryGetValue(passName, out RenderPassBase? pass))
                 throw new InvalidOperationException($"Production pipeline pass '{passName}' was not provided by the renderer.");
 
@@ -635,15 +471,10 @@ internal sealed class ProductionRenderPipelineDeclaration
 
     public void ValidatePassOrder(IReadOnlyList<string> actualPassOrder)
     {
-        ValidatePassOrder(actualPassOrder, includeSsgi: true);
-    }
-
-    public void ValidatePassOrder(IReadOnlyList<string> actualPassOrder, bool includeSsgi)
-    {
         if (actualPassOrder == null)
             throw new ArgumentNullException(nameof(actualPassOrder));
 
-        IReadOnlyList<string> expectedPassOrder = GetPassOrder(includeSsgi);
+        IReadOnlyList<string> expectedPassOrder = PassOrder;
         if (actualPassOrder.Count != expectedPassOrder.Count)
             throw new InvalidOperationException(
                 $"Render graph pass count changed. Expected {string.Join(", ", expectedPassOrder)}; actual {string.Join(", ", actualPassOrder)}.");
@@ -656,52 +487,6 @@ internal sealed class ProductionRenderPipelineDeclaration
                     $"Render graph pass order changed. Expected {string.Join(", ", expectedPassOrder)}; actual {string.Join(", ", actualPassOrder)}.");
             }
         }
-    }
-
-    public IReadOnlyList<string> GetPassOrder(bool includeSsgi)
-    {
-        if (includeSsgi)
-            return PassOrder;
-
-        var passOrder = new List<string>(PassOrder.Count);
-        foreach (string passName in PassOrder)
-        {
-            if (!IsSsgiOnlyPass(passName))
-                passOrder.Add(passName);
-        }
-
-        return passOrder;
-    }
-
-    private static IReadOnlyList<RenderGraphResourceDescriptor> CreateSsgiResourceDescriptors(bool includeSsgi)
-    {
-        if (!includeSsgi)
-            return [];
-
-        return
-        [
-            OwnedImageResource(RenderGraphResourceId.SceneNormal, "Scene normal", RenderTargetManager.SceneNormalFormat, RenderGraphResourceSizePolicy.SceneResolution),
-            OwnedImageResource(RenderGraphResourceId.SceneMaterial, "Scene material", RenderTargetManager.SceneMaterialFormat, RenderGraphResourceSizePolicy.SceneResolution),
-            OwnedImageResource(RenderGraphResourceId.SsgiTraceSource, "SSGI trace source", RenderTargetManager.SsgiTraceSourceFormat, RenderGraphResourceSizePolicy.SceneResolution),
-            OwnedImageResource(RenderGraphResourceId.SsgiRaw, "SSGI raw", RenderTargetManager.SsgiFormat, RenderGraphResourceSizePolicy.HalfResolution),
-            OwnedImageResource(RenderGraphResourceId.SsgiHitDistance, "SSGI hit distance", RenderTargetManager.SsgiHitDistanceFormat, RenderGraphResourceSizePolicy.HalfResolution),
-            OwnedImageResource(RenderGraphResourceId.SsgiFiltered, "SSGI filtered", RenderTargetManager.SsgiFormat, RenderGraphResourceSizePolicy.HalfResolution),
-            OwnedImageChainResource(RenderGraphResourceId.SsgiHistory, "SSGI history", RenderTargetManager.SsgiFormat, RenderGraphResourceSizePolicy.HalfResolution),
-            OwnedImageChainResource(RenderGraphResourceId.SsgiDepthHistory, "SSGI depth history", RenderTargetManager.SsgiDepthHistoryFormat, RenderGraphResourceSizePolicy.HalfResolution),
-            OwnedImageChainResource(RenderGraphResourceId.SsgiNormalHistory, "SSGI normal history", RenderTargetManager.SsgiNormalHistoryFormat, RenderGraphResourceSizePolicy.HalfResolution),
-            OwnedImageChainResource(RenderGraphResourceId.SsgiMoments, "SSGI moments", RenderTargetManager.SsgiMomentsFormat, RenderGraphResourceSizePolicy.HalfResolution),
-            OwnedImageChainResource(RenderGraphResourceId.SsgiHistoryLength, "SSGI history length", RenderTargetManager.SsgiHistoryLengthFormat, RenderGraphResourceSizePolicy.HalfResolution),
-            OwnedImageResource(RenderGraphResourceId.GiFinalDiffuse, "GI final diffuse", RenderTargetManager.GiFinalDiffuseFormat, RenderGraphResourceSizePolicy.SceneResolution)
-        ];
-    }
-
-    private static bool IsSsgiOnlyPass(string passName)
-    {
-        return passName is
-            "SceneSurfacePass" or
-            "SsgiTracePass" or
-            "SsgiTemporalPass" or
-            "SsgiDenoisePass";
     }
 
     private static RenderGraphPassResourceDeclaration Pass(string passName, params RenderGraphResourceUsage[] usages)

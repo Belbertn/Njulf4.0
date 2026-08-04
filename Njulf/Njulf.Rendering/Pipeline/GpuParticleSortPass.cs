@@ -52,7 +52,11 @@ namespace Njulf.Rendering.Pipeline
             CreatePipeline();
         }
 
-        public void Execute(CommandBuffer commandBuffer, int frameIndex, SceneRenderingData sceneData)
+        public void Execute(
+            CommandBuffer commandBuffer,
+            int frameIndex,
+            SceneRenderingData sceneData,
+            bool isComputeQueue = false)
         {
             if (sceneData.GpuParticlesEnabled == 0 || sceneData.GpuParticleEmitterCount <= 0)
                 return;
@@ -87,7 +91,7 @@ namespace Njulf.Rendering.Pipeline
             }
 
             Dispatch(commandBuffer, CreatePushConstants(frameIndex, particleCapacity, ModeReorder), checked(particleCapacity * BlendBucketCount));
-            RecordFinalBarriers(commandBuffer, buffers);
+            RecordFinalBarriers(commandBuffer, buffers, isComputeQueue);
         }
 
         private static GPUParticleSortPushConstants CreatePushConstants(
@@ -140,12 +144,24 @@ namespace Njulf.Rendering.Pipeline
             ExecuteBufferBarriers(commandBuffer, barriers);
         }
 
-        private void RecordFinalBarriers(CommandBuffer commandBuffer, GpuParticleRuntimeBuffers buffers)
+        private void RecordFinalBarriers(
+            CommandBuffer commandBuffer,
+            GpuParticleRuntimeBuffers buffers,
+            bool isComputeQueue)
         {
             Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[4];
             int count = 0;
-            AddBarrier(barriers, ref count, buffers.RenderInstanceBuffer, PipelineStageFlags2.VertexShaderBit, AccessFlags2.ShaderStorageReadBit);
-            AddBarrier(barriers, ref count, buffers.IndirectDrawBuffer, PipelineStageFlags2.DrawIndirectBit, AccessFlags2.IndirectCommandReadBit);
+            PipelineStageFlags2 renderConsumerStage = isComputeQueue
+                ? PipelineStageFlags2.ComputeShaderBit
+                : PipelineStageFlags2.VertexShaderBit;
+            PipelineStageFlags2 indirectConsumerStage = isComputeQueue
+                ? PipelineStageFlags2.ComputeShaderBit
+                : PipelineStageFlags2.DrawIndirectBit;
+            AccessFlags2 indirectConsumerAccess = isComputeQueue
+                ? AccessFlags2.ShaderStorageReadBit
+                : AccessFlags2.IndirectCommandReadBit;
+            AddBarrier(barriers, ref count, buffers.RenderInstanceBuffer, renderConsumerStage, AccessFlags2.ShaderStorageReadBit);
+            AddBarrier(barriers, ref count, buffers.IndirectDrawBuffer, indirectConsumerStage, indirectConsumerAccess);
             AddBarrier(barriers, ref count, buffers.CounterBuffer, PipelineStageFlags2.TransferBit, AccessFlags2.TransferReadBit);
             AddBarrier(barriers, ref count, buffers.SortKeyBuffer, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit);
 
