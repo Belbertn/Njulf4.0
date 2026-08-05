@@ -111,6 +111,7 @@ public sealed class SampleLifecycleSmokeRunner
                 RunLongRun(frameIndex);
                 break;
             case SampleSmokeMode.QualitySwitch:
+            case SampleSmokeMode.DdgiResidencySwitch:
             case SampleSmokeMode.TextureHotReload:
                 // These bounded state machines own completion, timeout, and
                 // exit. Their frame requirements include asynchronous GPU

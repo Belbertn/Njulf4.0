@@ -84,6 +84,11 @@ public readonly record struct SimpleDdgiTransportTailSummary
     public uint ExcludedNotVisibleCount { get; init; }
     public uint ExcludedStaleSourceCount { get; init; }
     public uint ExcludedInvalidCacheCount { get; init; }
+    public uint CacheIdentityFailureCount { get; init; }
+    public uint CacheCardinalityFailureCount { get; init; }
+    public uint CacheSourceGenerationFailureCount { get; init; }
+    public uint CacheSourceEpochFailureCount { get; init; }
+    public uint CachePhysicalGenerationFailureCount { get; init; }
     public uint NonFiniteCount { get; init; }
     public uint CounterOverflowCount { get; init; }
     public uint AuditedTexelCount { get; init; }

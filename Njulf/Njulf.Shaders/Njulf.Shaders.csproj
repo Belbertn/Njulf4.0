@@ -23,7 +23,7 @@
       <FoliageForwardFragmentShader Include="foliage_forward.frag" />
       <MaterialTransportProvenanceShaderVariant Include="forward_opaque_ddgi_provenance.frag">
         <Source>forward.frag</Source>
-        <Defines>-DNJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT=1</Defines>
+        <Defines>-DFORWARD_OPAQUE=1 -DNJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT=1</Defines>
       </MaterialTransportProvenanceShaderVariant>
       <MaterialTransportProvenanceShaderVariant Include="forward_opaque_simple_ddgi_provenance.frag">
         <Source>forward.frag</Source>
@@ -57,6 +57,24 @@
       <NjulfShaderCompileOptions>$(NjulfShaderOptimizationOptions) $(NjulfShaderDebugOptions) $(NjulfShaderDetailedDiagnosticsOptions)</NjulfShaderCompileOptions>
     </PropertyGroup>
 
+    <Target Name="RemoveObsoleteGiShaderArtifacts"
+            BeforeTargets="CompileNjulfShaders">
+      <ItemGroup>
+        <!-- Clean every previously built configuration, not just the active
+             output folder. This prevents removed SSGI or pre-specialization
+             forward binaries from surviving in an old ProfileSymbols or
+             DetailedInvestigation directory and being picked up by packaging. -->
+        <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\*ssgi*.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\*ssgi*.spv" />
+        <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\forward_opaque.frag.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\forward_opaque.frag.spv" />
+        <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\forward_opaque_provenance.frag.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\forward_opaque_provenance.frag.spv" />
+        <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\forward_opaque_simple.frag.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\forward_opaque_simple.frag.spv" />
+        <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\forward_opaque_simple_provenance.frag.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\forward_opaque_simple_provenance.frag.spv" />
+        <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\forward_opaque_simple_full_input.frag.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\forward_opaque_simple_full_input.frag.spv" />
+        <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\forward_opaque_simple_full_input_provenance.frag.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\forward_opaque_simple_full_input_provenance.frag.spv" />
+      </ItemGroup>
+      <Delete Files="@(ObsoleteGiShaderArtifact)" />
+    </Target>
+
     <Target Name="CompileNjulfShaders"
             BeforeTargets="AssignTargetPaths"
             Inputs="@(ShaderSource);@(ShaderInclude);$(MSBuildProjectFullPath)"
@@ -84,7 +102,7 @@
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
-      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_ddgi.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_OPAQUE=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_ddgi.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
@@ -192,6 +210,9 @@
             AfterTargets="CompileNjulfShaders"
             Condition="'$(Configuration)' == 'Release' or '$(Configuration)' == 'ShippingPerformance' or '$(Configuration)' == 'ProfileSymbols'">
       <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\VerifyProductionDiagnosticAtomics.ps1&quot; -ShaderDirectory &quot;$(IntermediateOutputPath)Shaders&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+      <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\VerifySimpleDdgiReceiverContract.ps1&quot; -ShaderDirectory &quot;$(IntermediateOutputPath)Shaders&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
     </Target>

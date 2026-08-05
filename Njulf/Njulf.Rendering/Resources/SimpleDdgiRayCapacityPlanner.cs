@@ -22,6 +22,26 @@ public readonly record struct SimpleDdgiRayCapacityResult(
 /// </summary>
 public static class SimpleDdgiRayCapacityPlanner
 {
+    /// <summary>
+    /// Returns this tier's deterministic probe allotment for one frame. Across
+    /// any complete target-frame cycle the allotments sum to the exact probe
+    /// count, including tiers whose per-frame average is fractional.
+    /// </summary>
+    public static int ResolveTierProbeTarget(
+        int participatingProbeCount,
+        int targetFrames,
+        uint frameIndex)
+    {
+        int probes = Math.Max(0, participatingProbeCount);
+        int frames = Math.Max(1, targetFrames);
+        int baseTarget = probes / frames;
+        int remainder = probes % frames;
+        int phase = (int)(frameIndex % (uint)frames);
+        long before = (long)phase * remainder / frames;
+        long after = (long)(phase + 1) * remainder / frames;
+        return checked(baseTarget + (int)(after - before));
+    }
+
     public static SimpleDdgiRayCapacityResult Evaluate(
         ReadOnlySpan<SimpleDdgiRayTier> tiers,
         int targetFrames,

@@ -53,7 +53,7 @@ namespace Njulf.Rendering.Resources
         public const int MaterialGiCounterCount = 10;
         public const int SimpleDdgiGatherRejectionCounterBase = MaterialGiCounterBase + MaterialGiCounterCount;
         public const int SimpleDdgiGatherRoleCount = 3;
-        public const int SimpleDdgiGatherRejectionReasonCount = 9;
+        public const int SimpleDdgiGatherRejectionReasonCount = 10;
         public const int SimpleDdgiGatherRejectionCounterCount =
             SimpleDdgiGatherRoleCount * SimpleDdgiGatherRejectionReasonCount;
         public const int SimpleDdgiGatherAllFailedCounterBase =

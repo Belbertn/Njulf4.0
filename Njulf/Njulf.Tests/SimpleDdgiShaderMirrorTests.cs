@@ -593,7 +593,7 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("float thicknessCap = max(0.002, p.architecturalThickness * 0.25);"));
                 Assert.That(shared, Does.Contain("float totalBiasCap = min(p.maximumWorldBias, thicknessCap);"));
                 Assert.That(shared, Does.Contain("float viewCap = min(max(totalBiasCap - normalBias, 0.0), max(0.0, spacing * 0.35));"));
-                Assert.That(shared, Does.Contain("const uint SIMPLE_DDGI_HEADER_WORDS = 52u;"));
+                Assert.That(shared, Does.Contain("const uint SIMPLE_DDGI_HEADER_WORDS = 60u;"));
             });
         }
 
@@ -1127,12 +1127,12 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("uint validProbeCount;"));
                 Assert.That(shared, Does.Contain("SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 viewDir)"));
                 Assert.That(shared, Does.Contain("bool SimpleDdgiProbeSupportsGather(SimpleDdgiProbeState state, vec4 irradiance, vec4 visibility)"));
-                Assert.That(shared, Does.Contain("result.irradiance = result.validProbeCount > 0u && directionalMass > 0.000001"));
+                Assert.That(shared, Does.Contain("result.irradiance = directionalMass > 0.000001"));
                 Assert.That(shared, Does.Contain("accumulated / directionalMass"));
                 Assert.That(shared, Does.Contain("bool SimpleDdgiCanSampleAtlasImage(SimpleDdgiParams p, uint bufferIndex, uint probeIndex)"));
                 Assert.That(shared, Does.Contain("vec4 SampleSimpleDdgiAtlasImage("));
                 Assert.That(shared, Does.Contain("vec4 SampleSimpleDdgiAtlasBilinear("));
-                Assert.That(shared, Does.Contain("At octahedral seams retain the SSBO mirror lookup"));
+                Assert.That(shared, Does.Contain("SimpleDdgiMirrorOctTexelIndex(base"));
                 Assert.That(shared, Does.Contain("float directionalWeight = max(halfLambert * halfLambert, 1.0e-4);"));
                 Assert.That(shared, Does.Contain("result.visibilityMomentMean = mean;"));
                 Assert.That(shared, Does.Contain("result.visibilityMomentVariance = variance;"));
@@ -1263,7 +1263,7 @@ namespace Njulf.Tests
                 Assert.That(transportOperator, Does.Contain("if (max(reflected.r, max(reflected.g, reflected.b)) > 0.0)"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_TRANSPORT_RAY_CACHE_STRIDE_WORDS = 9u"));
-                Assert.That(shared, Does.Contain("SIMPLE_DDGI_TRANSPORT_RAY_CACHE_ABI_VERSION = 2u"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_TRANSPORT_RAY_CACHE_ABI_VERSION = 4u"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_FLAG_THIN_SURFACE_TRANSMISSION = 1u << 20"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_SECOND_VOLUME_OWNERSHIP_THRESHOLD_MASK = 0xffu << SIMPLE_DDGI_SECOND_VOLUME_OWNERSHIP_THRESHOLD_SHIFT"));
                 Assert.That(shared, Does.Contain("vec3 transmittedDiffuseReflectance;"));
@@ -1274,9 +1274,13 @@ namespace Njulf.Tests
                 Assert.That(trace, Does.Contain("MarkSimpleDdgiProbeSourceCacheInvalid(pc.ProbeStateBufferIndex, probeIndex);"));
                 Assert.That(trace, Does.Contain("ClearSimpleDdgiProbeSourceCacheInvalid(pc.ProbeStateBufferIndex, probeIndex);"));
                 Assert.That(transport, Does.Contain("MarkSimpleDdgiProbeSourceCacheInvalid(pc.ProbeStateBufferIndex, update.probeIndex);"));
+                Assert.That(transport, Does.Contain("if (gpuScheduler)"));
+                Assert.That(transport, Does.Contain("the frozen\n        // participant field"));
+                Assert.That(transport, Does.Contain("update.outcomeIndex,\n                1u << 3u"));
                 Assert.That(trace, Does.Contain("vec4 rayRotation = SimpleDdgiPerProbeRayRotation(probeIndex, params.rayRotation);"));
                 Assert.That(trace, Does.Contain("SimpleDdgiFibonacciDirection(directionRayIndex, params.raysPerProbe, rayRotation)"));
-                Assert.That(trace, Does.Contain("if (!SimpleDdgiUpdateMatchesProbeGeneration(update, probeState))"));
+                Assert.That(trace, Does.Contain(
+                    "if (!SimpleDdgiUpdateMatchesProbeGenerationAndRecord("));
                 Assert.That(trace, Does.Contain("vec3 probePosition = SimpleDdgiProbeLogicalPosition(volume, localProbeIndex) + probeState.relocation;"));
                 Assert.That(trace, Does.Contain("surface.GeometricNormal * max(0.03, volume.spacing * 0.02)"));
                 Assert.That(trace, Does.Contain("vec3 emissiveDiffuse = surface.EmissiveRadiance + emissiveProxyDiffuse;"));
@@ -1349,7 +1353,8 @@ namespace Njulf.Tests
                 Assert.That(blend, Does.Contain("vec2 ReadCachedSimpleRayVisibilityHit("));
                 Assert.That(blend, Does.Contain("ReadSimpleRayVisibilityHit(rayResultIndex)"));
                 Assert.That(blend, Does.Contain("UnpackSimpleDdgiRayVisibilityHit("));
-                Assert.That(blend, Does.Contain("bool refreshVisibility = !transportV2Active ||"));
+                Assert.That(blend, Does.Contain("bool refreshVisibility ="));
+                Assert.That(blend, Does.Contain("!transportV2Active ||"));
                 Assert.That(blend, Does.Contain("SimpleDdgiUpdateRequiresSourceRefresh(update)"));
                 Assert.That(blend, Does.Contain("if (refreshVisibility)"));
                 Assert.That(blend, Does.Contain("void LoadSimpleRayCache(SimpleDdgiParams params, uint localProbeOffset, uint activeRayCount)"));
@@ -1366,7 +1371,12 @@ namespace Njulf.Tests
                 Assert.That(blend, Does.Contain("bool sharedRayCacheEnabled = (pc.Flags & SIMPLE_DDGI_BLEND_FLAG_SHARED_RAY_CACHE) != 0u || reducedComplexityEnabled;"));
                 Assert.That(blend, Does.Contain(": SimpleDdgiCadenceAdjustedHysteresis(params, update);"));
                 Assert.That(blend, Does.Contain("bool maintenanceUpdate = SimpleDdgiUpdateIsMaintenance(update);"));
-                Assert.That(blend, Does.Contain("bool freshUpdate = sweepIndex == 0u &&"));
+                Assert.That(blend, Does.Contain("bool firstSweepFirstColor ="));
+                Assert.That(blend, Does.Contain("sweepIndex == 0u &&"));
+                Assert.That(blend, Does.Contain("bool freshUpdate = firstSweepFirstColor &&"));
+                Assert.That(blend, Does.Contain("(firstSweepFirstColor &&"));
+                Assert.That(blend, Does.Not.Contain("firstSolveColor &&"));
+                Assert.That(blend, Does.Not.Contain("SimpleDdgiSolveIsFinalColor(pc.Flags)"));
                 Assert.That(blend, Does.Contain("(initialState.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u"));
                 Assert.That(blend, Does.Contain("initialState.flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING"));
                 Assert.That(blend, Does.Contain("Publishing the probe state is the commit point for gather."));
@@ -1412,7 +1422,7 @@ namespace Njulf.Tests
                 Assert.That(forward, Does.Contain("bool simpleDdgiConfigured = (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_ENABLED) != 0u && simpleDdgiParams.probeCount > 0u;"));
                 Assert.That(forward, Does.Contain("(simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) != 0u;"));
                 Assert.That(forward, Does.Contain("else if (simpleDdgiActive)"));
-                Assert.That(forward, Does.Contain("finalDiffuseIndirect = diffuseIbl * fallbackWeight * indirectAo;"));
+                Assert.That(forward, Does.Contain("finalDiffuseIndirect = diffuseIbl * simpleDisabledFallbackWeight * indirectAo;"));
                 Assert.That(forward, Does.Contain("SimpleDdgiGatherResult simpleGather = SampleSimpleDdgiGather("));
                 Assert.That(forward, Does.Contain("simpleDdgiParams,"));
                 Assert.That(forward, Does.Contain("simpleDdgiSecondaryContributionWeight"));
@@ -1497,6 +1507,9 @@ namespace Njulf.Tests
             string audit = ReadRepoText(
                 "Njulf.Shaders",
                 "ddgi_simple_transport_audit.comp");
+            string feedback = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_simple_schedule_feedback.comp");
 
             Assert.Multiple(() =>
             {
@@ -1506,15 +1519,159 @@ namespace Njulf.Tests
                 Assert.That(audit, Does.Contain("schedulerSourceLightingGeneration"));
                 Assert.That(audit, Does.Contain("schedulerSourceEpoch"));
                 Assert.That(audit, Does.Contain("schedulerVolumeTableGeneration"));
+                Assert.That(audit, Does.Contain("SimpleDdgiRequiredSourceRayCount"));
+                Assert.That(audit, Does.Contain("sourceRayCount != requiredSourceRayCount"));
+                Assert.That(audit, Does.Contain("rawSourceRayCount != requiredSourceRayCount"));
+                Assert.That(audit, Does.Contain("rawSourceLightingGeneration !="));
+                Assert.That(audit, Does.Contain("rawSourceEpoch != schedulerSourceEpoch"));
+                Assert.That(audit, Does.Not.Contain("rawSourceEpoch != pc.AuditSourceEpochGeneration"));
+                Assert.That(audit, Does.Contain("SIMPLE_DDGI_AUDIT_CACHE_IDENTITY_FAILURE_WORD"));
+                Assert.That(audit, Does.Contain("SIMPLE_DDGI_AUDIT_CACHE_CARDINALITY_FAILURE_WORD"));
+                Assert.That(audit, Does.Contain("SIMPLE_DDGI_AUDIT_CACHE_SOURCE_GENERATION_FAILURE_WORD"));
+                Assert.That(audit, Does.Contain("SIMPLE_DDGI_AUDIT_CACHE_SOURCE_EPOCH_FAILURE_WORD"));
+                Assert.That(audit, Does.Contain("SIMPLE_DDGI_AUDIT_CACHE_PHYSICAL_GENERATION_FAILURE_WORD"));
                 Assert.That(audit, Does.Contain("SIMPLE_DDGI_AUDIT_QUANTIZATION_FLOOR_WORD"));
                 Assert.That(audit, Does.Contain("SIMPLE_DDGI_AUDIT_EXCLUDED_INACTIVE_WORD"));
                 Assert.That(audit, Does.Contain("SIMPLE_DDGI_AUDIT_EXCLUDED_NOT_VISIBLE_WORD"));
                 Assert.That(audit, Does.Contain("SIMPLE_DDGI_AUDIT_EXCLUDED_STALE_SOURCE_WORD"));
+                Assert.That(audit, Does.Not.Contain("SIMPLE_DDGI_AUDIT_PROBE_META_VISIBLE"));
                 Assert.That(audit, Does.Contain("packHalf2x16(vec2(value, 0.0))"));
                 Assert.That(audit, Does.Contain("unpackHalf2x16(previousBits)"));
                 Assert.That(audit, Does.Not.Contain("rayQueryEXT"));
                 Assert.That(audit, Does.Not.Contain("TraceSimpleDdgi"));
                 Assert.That(audit, Does.Not.Contain("EvaluateEnvironment"));
+                Assert.That(feedback, Does.Contain("bool participating ="));
+                Assert.That(feedback, Does.Contain("sourceReady &&"));
+                Assert.That(feedback, Does.Contain("!hasFresh &&"));
+                Assert.That(feedback, Does.Contain("!hasExposed &&"));
+                Assert.That(feedback, Does.Contain("!hasRelocation &&"));
+                Assert.That(feedback, Does.Contain("shared uint feedbackReduction"));
+                Assert.That(feedback, Does.Contain("probeIndex = localIndex"));
+                Assert.That(feedback, Does.Contain("probeIndex += gl_WorkGroupSize.x"));
+                Assert.That(feedback, Does.Contain("atomicAdd(feedbackReduction"));
+                Assert.That(feedback, Does.Not.Contain(
+                    "if (gl_GlobalInvocationID.x != 0u)"));
+                Assert.That(
+                    feedback,
+                    Does.Not.Contain("(!SchedulerTailCertification() || visible)"));
+            });
+        }
+
+        [Test]
+        public void ResidentSourceRefresh_UsesCompleteSequenceAndExactWorkCounters()
+        {
+            string admit = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_simple_schedule_admit.comp");
+            string feedback = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_simple_schedule_feedback.comp");
+            string classify = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_simple_schedule_classify.comp");
+            string commitLocal = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_simple_schedule_commit_local.comp");
+            string trace = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_simple_trace.comp");
+            string transport = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_simple_transport.comp");
+            string blend = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_simple_blend.comp");
+            string common = ReadRepoText(
+                "Njulf.Shaders",
+                "common.glsl");
+            string shared = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_simple_schedule_shared.glsl");
+            string transportShared = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_simple_shared.glsl");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(admit, Does.Contain("if (sourceWork)"));
+                Assert.That(admit, Does.Contain("uint requiredSourceRayCount = clamp("));
+                Assert.That(admit, Does.Contain("sourceRayCount = SchedulerTransportV2()"));
+                Assert.That(admit, Does.Contain("if (SchedulerTransportV2() || sourceWork)"));
+                Assert.That(admit, Does.Contain("activeRayCount = requiredSourceRayCount;"));
+                Assert.That(classify, Does.Contain("SchedulerTransportV2() || sourceWork ? fullRays : 0u"));
+                Assert.That(admit, Does.Contain("sourceVolumeBudgets[volume]"));
+                Assert.That(admit, Does.Contain("sourceVolumeUsage[volumeIndex]"));
+                Assert.That(admit, Does.Contain("uint sourcePhase = SchedulerFrameIndex() % sourceInterval;"));
+                Assert.That(admit, Does.Contain("bool tailSourceCohortPhase ="));
+                Assert.That(admit, Does.Contain("phase == 10u || tailSourceCohortPhase"));
+                Assert.That(admit, Does.Contain("sourceWork && !tailSourceCohortPhase"));
+                Assert.That(admit, Does.Contain("uint tailSourceReasonMask ="));
+                Assert.That(admit, Does.Contain("candidateReasons & tailSourceReasonMask"));
+                Assert.That(admit, Does.Contain("SIMPLE_DDGI_SCHEDULER_REASON_RELOCATION_RETRY"));
+                Assert.That(admit, Does.Contain("SIMPLE_DDGI_SCHEDULER_COUNTER_TRANSPORT_USED"));
+                Assert.That(admit, Does.Contain("SIMPLE_DDGI_SCHEDULER_COUNTER_SOURCE_PROBE_USED"));
+                Assert.That(feedback, Does.Contain("sourceRays == requiredSourceRays"));
+                Assert.That(feedback, Does.Contain("SchedulerVolumeFullRays(sourceVolumeIndex)"));
+                Assert.That(feedback, Does.Contain("SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR) == 0u"));
+                Assert.That(feedback, Does.Contain("SIMPLE_DDGI_SCHEDULER_COUNTER_PENDING_TAIL_SOURCE"));
+                Assert.That(classify, Does.Contain("sourceRays == requiredSourceRays"));
+                Assert.That(classify, Does.Not.Contain("sourceRays != 0u"));
+                Assert.That(classify, Does.Contain("if (!sourceReady)"));
+                Assert.That(classify, Does.Contain("reasons |= SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID"));
+                Assert.That(classify, Does.Contain("else if (!sourceReady || sourceInvalid"));
+                Assert.That(classify, Does.Contain("if (invalidate)"));
+                Assert.That(classify, Does.Contain("Do not leak those signals into a cached-solver candidate"));
+                Assert.That(common, Does.Contain("uint NextSimpleDdgiPhysicalGeneration(uint generation)"));
+                Assert.That(trace, Does.Contain("uint sourceCacheProbeGeneration ="));
+                Assert.That(trace, Does.Contain("NextSimpleDdgiPhysicalGeneration(sourceCacheProbeGeneration)"));
+                Assert.That(trace, Does.Contain("if (transportV2 && sourceRefresh)"));
+                Assert.That(trace, Does.Not.Contain("if (transportV2)\n    {\n        WriteSimpleDdgiTransportRayCache("));
+                Assert.That(transport, Does.Contain("uint sourceCacheProbeGeneration ="));
+                Assert.That(transport, Does.Contain("NextSimpleDdgiPhysicalGeneration(sourceCacheProbeGeneration)"));
+                Assert.That(transport, Does.Contain("sourceCacheProbeGeneration,\n            source)"));
+                Assert.That(transport, Does.Contain("SimpleDdgiSolveIsFinalSweep("));
+                Assert.That(transport, Does.Not.Contain("if (SimpleDdgiSolveIsFinalColor(pc.Flags))"));
+                Assert.That(transportShared, Does.Contain("bool SimpleDdgiSolveIsFinalSweep("));
+                Assert.That(transportShared, Does.Contain("sweepIndex + 1u >= max(acceleratedSweepCount, 1u)"));
+                Assert.That(blend, Does.Contain("including probes whose irradiance parity"));
+                Assert.That(blend, Does.Contain("if (gpuScheduler && firstSweepFirstColor && local == 0u)"));
+                Assert.That(commitLocal, Does.Contain("NextSimpleDdgiPhysicalGeneration(currentGeneration)"));
+                Assert.That(commitLocal, Does.Contain("bool SealCommittedSourceCache("));
+                Assert.That(commitLocal, Does.Contain("cachedSourceRayCount != sourceRayCount"));
+                Assert.That(
+                    commitLocal,
+                    Does.Contain("uint appliedMarker = SchedulerArenaRead(stateBase + 8u);"));
+                Assert.That(commitLocal, Does.Contain("invalidatingUpdate && !sourceRefresh"));
+                Assert.That(commitLocal, Does.Contain("uint committedSourceEpoch = SchedulerArenaRead(stateBase + 3u);"));
+                Assert.That(commitLocal, Does.Contain("? SchedulerAdvanceSourceEpoch(committedSourceEpoch)"));
+                Assert.That(commitLocal, Does.Not.Contain("SchedulerArenaRead(outcomeBase + 12u)"));
+                Assert.That(commitLocal, Does.Contain("SchedulerArenaWrite(stateBase + 3u, sourceEpoch)"));
+                Assert.That(
+                    commitLocal,
+                    Does.Not.Contain("SchedulerArenaWrite(stateBase + 3u, SchedulerSourceEpoch())"));
+                Assert.That(shared, Does.Contain("SchedulerArenaWrite(base + 12u, 0u);"));
+                Assert.That(shared, Does.Contain("outcome words 12 and 13 are producer completion counters"));
+                Assert.That(shared, Does.Contain("uint committedSourceEpoch = SchedulerArenaRead(stateBase + 3u);"));
+                Assert.That(shared, Does.Contain("? SchedulerAdvanceSourceEpoch(committedSourceEpoch)"));
+                Assert.That(classify, Does.Contain("bool stableTailParticipant ="));
+                Assert.That(classify, Does.Contain("SchedulerSolveEpoch() != 0u &&"));
+                Assert.That(classify, Does.Contain("!stableTailParticipant"));
+                Assert.That(classify, Does.Contain("SchedulerSolveEpoch() == 0u"));
+                Assert.That(classify, Does.Contain("!SchedulerGlobalConvergence()"));
+                Assert.That(classify, Does.Contain("SchedulerSolveEpoch() == 0u &&"));
+                Assert.That(classify, Does.Contain("!routineDue"));
+                Assert.That(classify, Does.Contain("failed pre-epoch work can set the private"));
+                Assert.That(feedback, Does.Contain("SchedulerArenaWrite(base + 21u, transportUsed)"));
+                Assert.That(feedback, Does.Contain("SchedulerArenaWrite(base + 62u, sourceProbeUsed)"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_SCHEDULER_COUNTER_TRANSPORT_USED = 11u"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_SCHEDULER_COUNTER_SOURCE_PROBE_USED = 12u"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_SCHEDULER_COUNTER_HARD_SOURCE_PROBE_USED = 13u"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_SCHEDULER_COUNTER_ROUTINE_SOURCE_PROBE_USED = 14u"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_SCHEDULER_COUNTER_CACHED_SOLVER_PROBE_USED = 15u"));
+                Assert.That(shared, Does.Contain("SIMPLE_DDGI_SCHEDULER_COUNTER_PENDING_TAIL_SOURCE = 48u"));
+                Assert.That(classify, Does.Contain("bool atlasFresh = SchedulerAtlasFresh();"));
+                Assert.That(classify, Does.Contain("topologyInvalid || exposed || atlasFresh"));
+                Assert.That(commitLocal, Does.Contain("SIMPLE_DDGI_SCHEDULER_REASON_FRESH |"));
             });
         }
 

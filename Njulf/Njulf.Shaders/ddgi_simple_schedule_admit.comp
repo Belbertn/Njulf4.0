@@ -28,15 +28,25 @@ void main()
 
     uint quotas[16];
     uint volumeUsage[16];
+    uint sourceVolumeBudgets[16];
+    uint sourceVolumeUsage[16];
     uint pendingByClass[16 * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES];
     uint classReservations[16 * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES];
     uint classUsage[16 * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES];
     uint minimumTotal = 0u;
     uint quotaTotal = 0u;
+    // Distribute each volume's fractional source cadence independently. Over
+    // one complete interval every volume receives exactly its probe count,
+    // preventing a high-ray near ring from consuming the shared target before
+    // a lower-ray offscreen ring can be admitted.
+    uint sourceInterval = clamp(SchedulerFrame(29u), 1u, 65535u);
+    uint sourcePhase = SchedulerFrameIndex() % sourceInterval;
     for (uint volume = 0u; volume < SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES; volume++)
     {
         quotas[volume] = 0u;
         volumeUsage[volume] = 0u;
+        sourceVolumeBudgets[volume] = 0u;
+        sourceVolumeUsage[volume] = 0u;
         for (uint workClass = 0u; workClass < SIMPLE_DDGI_SCHEDULER_WORK_CLASSES; workClass++)
         {
             pendingByClass[volume * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES + workClass] = 0u;
@@ -46,6 +56,16 @@ void main()
         if (volume >= activeVolumes)
             continue;
         uint capacity = SchedulerVolumeProbeCount(volume);
+        uint baseSourceTarget = capacity / sourceInterval;
+        uint sourceRemainder = capacity % sourceInterval;
+        uint sourceBefore = sourcePhase * sourceRemainder / sourceInterval;
+        uint sourceAfter = (sourcePhase + 1u) * sourceRemainder / sourceInterval;
+        uint volumeSourceProbeTarget = baseSourceTarget + sourceAfter - sourceBefore;
+        sourceVolumeBudgets[volume] = volumeSourceProbeTarget *
+            clamp(
+                SchedulerVolumeFullRays(volume),
+                1u,
+                SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
         uint minimum = min(SchedulerVolumeWord(volume, 26u), capacity);
         uint maximum = min(max(SchedulerVolumeWord(volume, 27u), minimum), capacity);
         quotas[volume] = minimum;
@@ -251,9 +271,19 @@ void main()
     uint accepted = 0u;
     uint primaryUsed = 0u;
     uint sourceUsed = 0u;
-    // 0..3 are the visible urgent classes, followed by the source cohort,
-    // routine source validation, cached solver, near/mid/far maintenance, and
-    // finally the deterministic return of every unused reservation.
+    uint transportUsed = 0u;
+    uint sourceProbeUsed = 0u;
+    uint hardSourceProbeUsed = 0u;
+    uint routineSourceProbeUsed = 0u;
+    uint cachedSolverProbeUsed = 0u;
+    // Tail mode gives phase zero to the incomplete source cohort. It may use
+    // the volume quota directly because a complete current cache is a
+    // certificate prerequisite. Hard repair uses the global request and
+    // primary-ray limits instead of the periodic source cadence; otherwise a
+    // cohort paced across the entire refresh interval leaves no solve/audit
+    // opportunity before its oldest entry expires. Phases 1..4 then retain
+    // visible-class priority. Non-tail mode preserves the legacy 0..3 class
+    // ordering and phase-four hard-source fallback used by the CPU oracle.
     for (uint phase = 0u; phase <= 10u; phase++)
     {
         for (uint workClass = 0u; workClass < SIMPLE_DDGI_SCHEDULER_WORK_CLASSES; workClass++)
@@ -264,11 +294,20 @@ void main()
                 {
                     for (uint volumeIndex = 0u; volumeIndex < SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES; volumeIndex++)
                     {
+                        bool tailSourceCohortPhase =
+                            SchedulerTailCertification() && phase == 0u;
                         bool phaseMatches = phase == 10u;
-                        if (phase <= 3u)
+                        if (SchedulerTailCertification() && phase <= 4u)
+                        {
+                            phaseMatches = phase == 0u
+                                ? transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE
+                                : workClass == phase - 1u &&
+                                    transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE;
+                        }
+                        else if (!SchedulerTailCertification() && phase <= 3u)
                             phaseMatches = workClass == phase &&
                                 transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE;
-                        else if (phase == 4u)
+                        else if (!SchedulerTailCertification() && phase == 4u)
                             phaseMatches = transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE;
                         else if (phase == 5u)
                             phaseMatches = transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
@@ -335,12 +374,22 @@ void main()
                                 candidateRayTier != rayTier ||
                                 candidateVolumeIndex != volumeIndex)
                                 continue;
+                            uint tailSourceReasonMask =
+                                SIMPLE_DDGI_SCHEDULER_REASON_FRESH |
+                                SIMPLE_DDGI_SCHEDULER_REASON_SCROLL |
+                                SIMPLE_DDGI_SCHEDULER_REASON_REGIONAL_DIRTY |
+                                SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY |
+                                SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID |
+                                SIMPLE_DDGI_SCHEDULER_REASON_RELOCATION_RETRY;
+                            if (tailSourceCohortPhase &&
+                                (candidateReasons & tailSourceReasonMask) == 0u)
+                                continue;
                             if (accepted >= requestBudget || volumeIndex >= activeVolumes ||
                                 volumeUsage[volumeIndex] >= quotas[volumeIndex])
                                 continue;
 
                             uint classBase = volumeIndex * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES;
-                            uint classLimit = phase == 10u
+                            uint classLimit = phase == 10u || tailSourceCohortPhase
                                 ? quotas[volumeIndex]
                                 : classReservations[classBase + workClass];
                             if (classUsage[classBase + workClass] >= classLimit)
@@ -348,9 +397,26 @@ void main()
 
                             bool sourceWork = candidateTransport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE ||
                                 candidateTransport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
-                            sourceRayCount = sourceWork
-                                ? clamp(SchedulerVolumeFullRays(volumeIndex), 1u, SIMPLE_DDGI_SCHEDULER_MAX_RAYS)
-                                : 0u;
+                            uint requiredSourceRayCount = clamp(
+                                SchedulerVolumeFullRays(volumeIndex),
+                                1u,
+                                SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
+                            // A V2 cached update must evaluate the same complete
+                            // directional sequence that the certificate audits.
+                            // SourceRayCount describes the immutable cache
+                            // cardinality and activeRayCount describes cached
+                            // transport work. Cached work never consumes the
+                            // primary/source-ray budgets below.
+                            sourceRayCount = SchedulerTransportV2()
+                                ? requiredSourceRayCount
+                                : (sourceWork ? requiredSourceRayCount : 0u);
+                            // A source refresh is an atomic replacement of the
+                            // complete cache sequence. A maintenance-tier subset
+                            // may be used only by cached solver work; accepting it
+                            // as a source refresh would leave unaudited stale
+                            // entries behind while publishing a current epoch.
+                            if (SchedulerTransportV2() || sourceWork)
+                                activeRayCount = requiredSourceRayCount;
                             if (sourceWork && (primaryBudget == 0u ||
                                 activeRayCount > primaryBudget - min(primaryUsed, primaryBudget)))
                             {
@@ -360,8 +426,12 @@ void main()
                                     SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_REJECTED) + 1u);
                                 continue;
                             }
-                            if (sourceWork && sourceBudgetLimited &&
-                                (sourceRayCount > sourceBudget - min(sourceUsed, sourceBudget)))
+                            uint volumeSourceBudget = sourceVolumeBudgets[volumeIndex];
+                            if (sourceWork && !tailSourceCohortPhase &&
+                                sourceBudgetLimited &&
+                                (sourceRayCount > volumeSourceBudget - min(
+                                    sourceVolumeUsage[volumeIndex],
+                                    volumeSourceBudget)))
                             {
                                 SchedulerArenaWrite(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE);
                                 SchedulerArenaWrite(pc.CountersOffsetWords +
@@ -399,6 +469,11 @@ void main()
                             uint schedulingAge = ReadStorageWordUniform(
                                 pc.ProbeStateBufferIndex,
                                 publicStateBase + 5u);
+                            uint schedulerStateBase = pc.SchedulerProbeStateOffsetWords +
+                                probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+                            uint updateSourceGeneration = sourceWork
+                                ? SchedulerSourceGeneration()
+                                : SchedulerArenaRead(schedulerStateBase + 2u);
                             SchedulerWriteUpdate(
                                 accepted,
                                 probeIndex,
@@ -407,16 +482,34 @@ void main()
                                 expectedGeneration,
                                 schedulingAge,
                                 sourceRayCount,
-                                sourceWork ? SchedulerSourceGeneration() : 0u,
+                                updateSourceGeneration,
                                 candidateReasons);
                             SchedulerArenaWrite(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE);
                             accepted++;
                             volumeUsage[volumeIndex]++;
                             classUsage[classBase + workClass]++;
+                            transportUsed += activeRayCount;
                             if (sourceWork)
                             {
                                 primaryUsed += activeRayCount;
                                 sourceUsed += sourceRayCount;
+                                sourceVolumeUsage[volumeIndex] += sourceRayCount;
+                                sourceProbeUsed++;
+                            }
+                            if (candidateTransport ==
+                                SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE)
+                            {
+                                hardSourceProbeUsed++;
+                            }
+                            else if (candidateTransport ==
+                                SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE)
+                            {
+                                routineSourceProbeUsed++;
+                            }
+                            else if (candidateTransport ==
+                                SIMPLE_DDGI_SCHEDULER_TRANSPORT_CACHED_SOLVER)
+                            {
+                                cachedSolverProbeUsed++;
                             }
                             SchedulerArenaWrite(pc.CountersOffsetWords +
                                 SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED, accepted);
@@ -424,6 +517,19 @@ void main()
                                 SIMPLE_DDGI_SCHEDULER_COUNTER_PRIMARY_USED, primaryUsed);
                             SchedulerArenaWrite(pc.CountersOffsetWords +
                                 SIMPLE_DDGI_SCHEDULER_COUNTER_SOURCE_USED, sourceUsed);
+                            SchedulerArenaWrite(pc.CountersOffsetWords +
+                                SIMPLE_DDGI_SCHEDULER_COUNTER_TRANSPORT_USED, transportUsed);
+                            SchedulerArenaWrite(pc.CountersOffsetWords +
+                                SIMPLE_DDGI_SCHEDULER_COUNTER_SOURCE_PROBE_USED, sourceProbeUsed);
+                            SchedulerArenaWrite(pc.CountersOffsetWords +
+                                SIMPLE_DDGI_SCHEDULER_COUNTER_HARD_SOURCE_PROBE_USED,
+                                hardSourceProbeUsed);
+                            SchedulerArenaWrite(pc.CountersOffsetWords +
+                                SIMPLE_DDGI_SCHEDULER_COUNTER_ROUTINE_SOURCE_PROBE_USED,
+                                routineSourceProbeUsed);
+                            SchedulerArenaWrite(pc.CountersOffsetWords +
+                                SIMPLE_DDGI_SCHEDULER_COUNTER_CACHED_SOLVER_PROBE_USED,
+                                cachedSolverProbeUsed);
                             SchedulerArenaWrite(pc.CountersOffsetWords +
                                 SIMPLE_DDGI_SCHEDULER_COUNTER_VOLUME_USAGE_BASE + volumeIndex,
                                 volumeUsage[volumeIndex]);

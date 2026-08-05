@@ -269,6 +269,39 @@ public sealed class GiFeatureStateFactoryTests
         });
     }
 
+    [TestCase(false, false)]
+    [TestCase(true, true)]
+    public void Create_FrozenSparseResidencyIsFallbackNotActive(
+        bool stateValid,
+        bool sparseAuthoritative)
+    {
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            SimpleDdgiProbeResidency = new SimpleDdgiProbeResidencyTelemetry(
+                IsAvailable: true,
+                Mode: SimpleDdgiProbeResidencyMode.SparseNearRing,
+                SparseAuthoritative: sparseAuthoritative,
+                FallbackReason: stateValid
+                    ? "residency validation stopped mutation"
+                    : "residency mapping invalid")
+            {
+                MutationFrozen = true,
+                ResidencyStateValid = stateValid
+            }
+        };
+
+        GiFeatureState state = GiFeatureStateFactory.Create(diagnostics)
+            .Single(feature => feature.Name == "simple-ddgi-probe-residency");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.Requested, Is.True);
+            Assert.That(state.Active, Is.False);
+            Assert.That(state.Status, Is.EqualTo(GiFeatureStateStatus.Fallback));
+            Assert.That(state.Reason, Does.Contain("residency"));
+        });
+    }
+
     [Test]
     public void LayoutTelemetryFactory_RetainsRejectedRequestedBytesIncludingSampledAtlasReservation()
     {

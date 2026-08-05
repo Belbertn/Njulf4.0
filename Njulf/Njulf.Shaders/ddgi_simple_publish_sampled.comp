@@ -21,6 +21,7 @@ layout(push_constant) uniform SimpleDdgiPublishPushBlock
     uint IrradianceAtlasBufferIndex;
     uint VisibilityAtlasBufferIndex;
     uint ProbeStateBufferIndex;
+    uint ReceiverProbeBufferIndex;
     uint ProbeUpdateQueueBufferIndex;
     uint TransportIrradianceAtlasBufferIndex;
     uint PrivateVisibilityAtlasOffsetWords;
@@ -66,7 +67,8 @@ void main()
             SIMPLE_DDGI_SCHEDULER_FAILURE_PUBLICATION_GUARD);
         return;
     }
-    if (update.probeIndex >= params.probeCount)
+    if (update.probeIndex >= params.probeCount ||
+        !SimpleDdgiUpdateMatchesLiveAddress(params, update))
     {
         SimpleDdgiSchedulerFailOutcome(
             pc.SchedulerArenaBufferIndex,
@@ -78,7 +80,10 @@ void main()
 
     SimpleDdgiProbeState state =
         ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, update.probeIndex);
-    if (!SimpleDdgiUpdateMatchesProbeGeneration(update, state))
+    if (!SimpleDdgiUpdateMatchesProbeGenerationAndRecord(
+            params,
+            update,
+            state))
     {
         SimpleDdgiSchedulerFailOutcome(
             pc.SchedulerArenaBufferIndex,
@@ -88,8 +93,8 @@ void main()
         return;
     }
 
-    uint groupIndex = update.probeIndex / pc.SampledAtlasLayersPerTexture;
-    uint layerIndex = update.probeIndex - groupIndex * pc.SampledAtlasLayersPerTexture;
+    uint groupIndex = update.physicalProbeIndex / pc.SampledAtlasLayersPerTexture;
+    uint layerIndex = update.physicalProbeIndex - groupIndex * pc.SampledAtlasLayersPerTexture;
     if (groupIndex >= min(pc.SampledAtlasGroupCount, SIMPLE_DDGI_PUBLISH_MAX_IMAGE_GROUPS))
     {
         SimpleDdgiSchedulerFailOutcome(
@@ -110,12 +115,12 @@ void main()
         vec4 value = residentTransaction
             ? ReadSimpleDdgiAtlasTexel(
                 pc.TransportIrradianceAtlasBufferIndex,
-                update.probeIndex,
+                update.physicalProbeIndex,
                 texel,
                 params.irradianceTexels)
             : ReadSimpleDdgiAtlasTexel(
                 pc.IrradianceAtlasBufferIndex,
-                update.probeIndex,
+                update.physicalProbeIndex,
                 texel,
                 params.irradianceTexels);
         imageStore(
@@ -135,12 +140,12 @@ void main()
             ? ReadSimpleDdgiAtlasTexelAtOffset(
                 pc.TransportIrradianceAtlasBufferIndex,
                 pc.PrivateVisibilityAtlasOffsetWords,
-                update.probeIndex,
+                update.physicalProbeIndex,
                 texel,
                 params.visibilityTexels)
             : ReadSimpleDdgiAtlasTexel(
                 pc.VisibilityAtlasBufferIndex,
-                update.probeIndex,
+                update.physicalProbeIndex,
                 texel,
                 params.visibilityTexels);
         imageStore(

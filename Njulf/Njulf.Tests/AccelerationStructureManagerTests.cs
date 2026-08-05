@@ -515,6 +515,20 @@ public sealed unsafe class AccelerationStructureManagerTests
     }
 
     [Test]
+    public void TlasInstanceUpload_IsVisibleAsBuildInputShaderRead()
+    {
+        string source = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "AccelerationStructureManager.cs"));
+
+        Assert.That(source, Does.Contain(
+            "PipelineStageFlags2.AccelerationStructureBuildBitKhr,\n" +
+            "                    AccessFlags2.ShaderReadBit |\n" +
+            "                    AccessFlags2.AccelerationStructureReadBitKhr"));
+    }
+
+    [Test]
     public void AccelerationStructureManager_NeverPublishesAHolePunchedResidentSet()
     {
         string source = File.ReadAllText(FindSourceFile("Njulf.Rendering", "Resources", "AccelerationStructureManager.cs"));

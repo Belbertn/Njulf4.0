@@ -10,6 +10,7 @@ namespace Njulf.Tests;
 public sealed class SampleLifecycleSmokeRunnerTests
 {
     [TestCase(SampleSmokeMode.QualitySwitch)]
+    [TestCase(SampleSmokeMode.DdgiResidencySwitch)]
     [TestCase(SampleSmokeMode.TextureHotReload)]
     public void SpecializedProductionSmoke_OwnsExitBeyondGenericFrameBudget(
         SampleSmokeMode mode)

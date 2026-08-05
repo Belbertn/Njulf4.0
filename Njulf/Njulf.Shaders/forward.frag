@@ -8,6 +8,10 @@
 // layers before the depth comparison rejects them.
 layout(early_fragment_tests) in;
 
+#ifndef NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
+#define NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT 0
+#endif
+
 #include "common.glsl"
 #include "gi_material_transport.glsl"
 #include "material_coverage.glsl"
@@ -15,16 +19,38 @@ layout(early_fragment_tests) in;
 // contended atomic per shaded fragment.  Preserve an estimated full-resolution
 // count while sampling one pixel from each 16x16 screen tile.
 #define SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT ((((uint(gl_FragCoord.x) & 15u) == 0u) && ((uint(gl_FragCoord.y) & 15u) == 0u)) ? 256u : 0u)
+#if defined(FORWARD_WEIGHTED_OIT)
+#define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE (((uint(gl_FragCoord.x) & 1u) == 0u) && ((uint(gl_FragCoord.y) & 1u) == 0u))
+#define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 1
+#define SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 1u
+#define SIMPLE_DDGI_OPAQUE_GATHER_ORACLE 0
+#elif defined(FORWARD_OPAQUE) || defined(FORWARD_SIMPLE_OPAQUE)
+#define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE (((uint(gl_FragCoord.x) & 7u) == 0u) && ((uint(gl_FragCoord.y) & 7u) == 0u))
+// Current opaque depth owns proactive resident-page retention. Opaque forward
+// contributes only compact-publication misses; avoiding resident-touch atomics
+// here keeps the authoritative gather path read-only in the common case.
+#define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 0
+#define SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 0u
+#define SIMPLE_DDGI_OPAQUE_GATHER_ORACLE 1
+#else
+// The generic forward artifact is the sorted-transparent pipeline.
+#define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE (((uint(gl_FragCoord.x) & 1u) == 0u) && ((uint(gl_FragCoord.y) & 1u) == 0u))
+#define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 1
+#define SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 1u
+#define SIMPLE_DDGI_OPAQUE_GATHER_ORACLE 0
+#endif
+#define NJULF_SIMPLE_DDGI_SOURCE_CACHE_DIAGNOSTIC 1
 #include "ddgi_simple_shared.glsl"
+#undef NJULF_SIMPLE_DDGI_SOURCE_CACHE_DIAGNOSTIC
+#undef SIMPLE_DDGI_OPAQUE_GATHER_ORACLE
+#undef SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET
+#undef SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT
+#undef SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE
 #undef SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT
 #include "farfield_clipmap.glsl"
 
 #ifndef FORWARD_SIMPLE_VERTEX_INPUT
 #define FORWARD_SIMPLE_VERTEX_INPUT 0
-#endif
-
-#ifndef NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
-#define NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT 0
 #endif
 
 #if FORWARD_SIMPLE_VERTEX_INPUT
@@ -176,6 +202,10 @@ const uint GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SKY_VISIBILITY = 122u;
 const uint GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SUN_SHADOW = 123u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_DIRECTIONAL_SUPPORT = 124u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_SOURCE_CACHE_RADIANCE = 125u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RESIDENCY = 126u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_RESIDENCY_FALLBACK = 127u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PAGE_AGE = 128u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PHYSICAL_PAGE = 129u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -400,7 +430,7 @@ const uint DDGI_SAMPLED_PROBE_STALE_AGE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_
 // Appended after all pre-existing renderer diagnostic families. Each receiver
 // owns sample count, sampled-irradiance luminance, and delivered diffuse
 // luminance, in that order.
-const uint DDGI_LAYERED_RECEIVER_COUNTER_BASE = 297u;
+const uint DDGI_LAYERED_RECEIVER_COUNTER_BASE = 300u;
 const uint DDGI_TRANSPARENT_RECEIVER_SAMPLE_COUNT_COUNTER = DDGI_LAYERED_RECEIVER_COUNTER_BASE + 0u;
 const uint DDGI_TRANSPARENT_RECEIVER_IRRADIANCE_LUMINANCE_COUNTER = DDGI_LAYERED_RECEIVER_COUNTER_BASE + 1u;
 const uint DDGI_TRANSPARENT_RECEIVER_FINAL_LUMINANCE_COUNTER = DDGI_LAYERED_RECEIVER_COUNTER_BASE + 2u;
@@ -2211,7 +2241,7 @@ float forwardDebugOutputAlpha;
 bool IsDdgiDebugView(uint view)
 {
     return view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE &&
-           view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_SOURCE_CACHE_RADIANCE;
+           view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_PHYSICAL_PAGE;
 }
 
 vec3 DdgiDebugCategoryColor(uint view)
@@ -2228,7 +2258,9 @@ vec3 DdgiDebugCategoryColor(uint view)
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPORT_COVERAGE ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_COVERAGE ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_EFFECTIVE_WEIGHT ||
-        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK)
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RESIDENCY ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_PAGE_AGE)
         return vec3(0.10, 0.85, 1.0);
 
     if (view == GLOBAL_ILLUMINATION_DEBUG_DDGI_DATA_CONFIDENCE ||
@@ -2249,6 +2281,7 @@ vec3 DdgiDebugCategoryColor(uint view)
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP_BLEND_WEIGHT ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_FALLBACK ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_RESIDENCY_FALLBACK ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_SELECTION ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_BLEND_WEIGHT ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_UPDATE_REASONS ||
@@ -2261,7 +2294,8 @@ vec3 DdgiDebugCategoryColor(uint view)
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_RELOCATION_NORMALIZED ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_LOGICAL_POSITION ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATED_POSITION ||
-        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION_DIRECTION)
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION_DIRECTION ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_PHYSICAL_PAGE)
         return vec3(0.85, 0.85, 0.10);
 
     if (view == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_OCCUPANCY_SLICE ||
@@ -2341,6 +2375,7 @@ uint ResolveSimpleDdgiMaterialTransportProvenance(
     SimpleDdgiGatherResult gather,
     SimpleDdgiParams params)
 {
+#if NJULF_SIMPLE_DDGI_GATHER_ATTRIBUTION
     if (SimpleDdgiRadiometricOwnership(gather) <= 0.000001)
         return MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN;
 
@@ -2364,6 +2399,9 @@ uint ResolveSimpleDdgiMaterialTransportProvenance(
     return sourceVolume.kind == SIMPLE_DDGI_VOLUME_KIND_AUTHORED
         ? MATERIAL_TRANSPORT_PROVENANCE_DETAILED_MESH
         : MATERIAL_TRANSPORT_PROVENANCE_COMPACT_PRIMITIVE;
+#else
+    return MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN;
+#endif
 }
 
 void main()
@@ -3116,6 +3154,7 @@ void main()
     bool simpleDdgiConfigured = (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_ENABLED) != 0u && simpleDdgiParams.probeCount > 0u;
     bool simpleDdgiActive = simpleDdgiConfigured &&
         (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) != 0u;
+#if NJULF_DDGI_DETAILED_COUNTERS
     DdgiSampleResult ddgiSample = EmptyDdgiSampleResult();
     vec3 simpleDdgiContributingVolumeColor = vec3(0.0);
     vec3 simpleDdgiSourceCacheIrradiance = vec3(0.0);
@@ -3126,29 +3165,40 @@ void main()
     float simpleDdgiSecondaryContributionWeight = 0.0;
     uint simpleDdgiCombinedRejectionMask = 0u;
     uint simpleDdgiFirstRejectionReason = SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT;
-    vec3 ddgiDiffuse = vec3(0.0);
-    vec3 finalDdgiDiffuse = vec3(0.0);
-    float ddgiCoverage = 0.0;
+    uint simpleDdgiNonResidentProbeCount = 0u;
+    uint simpleDdgiResidencyTableFlags = 0u;
+    uint simpleDdgiResidencyHistoryFlags = 0u;
+    uint simpleDdgiResidencyDemandMask = 0u;
+    uint simpleDdgiPhysicalPageIndex = 0xffffffffu;
+    uint simpleDdgiPageMappingGeneration = 0u;
+    float simpleDdgiPageAgeNormalized = 0.0;
     float fallbackWeight = 0.0;
     float nearContactSuppression = 0.0;
-    vec3 finalDiffuseIndirect = vec3(0.0);
     vec3 hybridDebugDiffuse = vec3(0.0);
     vec3 hybridSuppressionMask = vec3(0.0);
     float hybridEffectiveDdgiWeight = 0.0;
+#endif
+    vec3 ddgiDiffuse = vec3(0.0);
+    vec3 finalDdgiDiffuse = vec3(0.0);
+    vec3 finalDiffuseIndirect = vec3(0.0);
+#if !FORWARD_WEIGHTED_OIT && NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
     uint materialTransportProvenance =
         MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN;
+#endif
 
     if (!globalIlluminationEnabled)
     {
         // Preserve inexpensive environment diffuse for transparent materials
         // while avoiding DDGI/legacy probe work that the pass explicitly opted
         // out of.  This also gives feature-isolated rendering a stable fallback.
-        fallbackWeight = 1.0;
         finalDiffuseIndirect = diffuseIbl * indirectAo;
+#if NJULF_DDGI_DETAILED_COUNTERS
+        fallbackWeight = 1.0;
         // This view intentionally removes Simple-DDGI ownership/support and
         // environment substitution so it cannot alias FinalIndirect.
         hybridDebugDiffuse = ddgiDiffuse;
         hybridSuppressionMask = vec3(0.0);
+#endif
     }
     else if (simpleDdgiActive)
     {
@@ -3171,6 +3221,7 @@ void main()
         // coverage, so it must not be refilled with the environment complement.
         float simpleFallback = (1.0 - simpleRadiometricOwnership) * simpleDdgiParams.environmentFallbackIntensity;
         vec3 simpleIrradiance = simpleGather.irradiance;
+#if NJULF_DDGI_DETAILED_COUNTERS
         simpleDdgiContributingVolumeColor = simpleGather.contributingVolumeColor;
         simpleDdgiSourceCacheIrradiance = simpleGather.sourceCacheIrradiance;
         simpleDdgiPrimaryVolume = simpleGather.selectedVolume;
@@ -3180,6 +3231,7 @@ void main()
         simpleDdgiSecondaryContributionWeight = simpleGather.secondaryContributionWeight;
         simpleDdgiCombinedRejectionMask = simpleGather.combinedRejectionMask;
         simpleDdgiFirstRejectionReason = simpleGather.firstRejectionReason;
+        simpleDdgiNonResidentProbeCount = simpleGather.nonResidentProbeCount;
         ddgiSample.irradiance = simpleIrradiance;
         ddgiSample.coverage = simpleGather.spatialCoverage;
         ddgiSample.spatialCoverage = simpleGather.spatialCoverage;
@@ -3201,10 +3253,12 @@ void main()
         ddgiSample.leakClamp = simpleGather.transportVisibility;
         ddgiSample.irradianceAtlasConfidence = simpleSupport;
         ddgiSample.qualityConfidence = simpleDirectionalSupport;
+#endif
 
         // Diagnostic sampling is intentionally opt-in.  It rereads probe state and
         // atlases, so doing it per shaded fragment made normal production frames
         // pay the cost of a second gather.
+#if NJULF_DDGI_DETAILED_COUNTERS
         float simpleDiagnosticVisibility = simpleGather.transportVisibility;
         float simpleDiagnosticVisibilityMean = 0.0;
         if (IsDdgiDebugView(debugViewMode) || DdgiForwardEstimateDiagnosticPixel())
@@ -3223,6 +3277,12 @@ void main()
             ddgiSample.visibilityMaxRayDistance = simpleDebug.visibilityMaxRayDistance;
             simpleDiagnosticVisibility = simpleDebug.visibility;
             simpleDiagnosticVisibilityMean = simpleDebug.visibilityMomentMean;
+            simpleDdgiResidencyTableFlags = simpleDebug.residencyTableFlags;
+            simpleDdgiResidencyHistoryFlags = simpleDebug.residencyHistoryFlags;
+            simpleDdgiResidencyDemandMask = simpleDebug.residencyDemandMask;
+            simpleDdgiPhysicalPageIndex = simpleDebug.physicalPageIndex;
+            simpleDdgiPageMappingGeneration = simpleDebug.pageMappingGeneration;
+            simpleDdgiPageAgeNormalized = simpleDebug.pageAgeNormalized;
         }
         AccumulateDdgiVisibilityMomentDiagnostics(
             ddgiSample.visibilityMomentMean,
@@ -3231,6 +3291,7 @@ void main()
             ddgiSample.visibilityMaxRayDistance,
             simpleDiagnosticVisibility,
             ddgiSample.irradianceAtlasConfidence);
+#endif
 
         // Once valid probe data produces a normalized estimate, DDGI owns the
         // spatially covered share. Probe-validity mass selects that estimate but
@@ -3258,16 +3319,21 @@ void main()
                 DdgiSparseDiagnosticSampleWeight());
         }
         finalDiffuseIndirect = finalDdgiDiffuse + simpleEnvironmentFallback * simpleFallback * indirectAo;
-        ddgiCoverage = simpleGather.spatialCoverage;
+#if NJULF_DDGI_DETAILED_COUNTERS
         fallbackWeight = simpleFallback;
+        nearContactSuppression = 1.0 - simpleLeakAttenuation;
         hybridDebugDiffuse = finalDiffuseIndirect;
         hybridSuppressionMask = vec3(simpleSupport, simpleLeakAttenuation, simpleDirectionalSupport);
         hybridEffectiveDdgiWeight = simpleOwnership;
+#endif
+#if !FORWARD_WEIGHTED_OIT && NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
         materialTransportProvenance =
             ResolveSimpleDdgiMaterialTransportProvenance(
                 simpleGather,
                 simpleDdgiParams);
+#endif
 
+#if NJULF_DDGI_DETAILED_COUNTERS
         HybridDiffuseGiResult simpleHybridDiagnostics;
         simpleHybridDiagnostics.diffuse = finalDiffuseIndirect;
         simpleHybridDiagnostics.ddgiCoverage = simpleGather.spatialCoverage;
@@ -3293,16 +3359,19 @@ void main()
             finalDdgiDiffuse,
             diffuseIbl,
             finalDiffuseIndirect);
+#endif
     }
     else
     {
         // Simple DDGI is the only dynamic-GI backend. During startup, recovery,
         // or unsupported ray-query frames, use its configured environment
         // fallback instead of sampling a second probe implementation.
-        fallbackWeight = simpleDdgiConfigured
+        float simpleDisabledFallbackWeight = simpleDdgiConfigured
             ? simpleDdgiParams.environmentFallbackIntensity
             : 1.0;
-        finalDiffuseIndirect = diffuseIbl * fallbackWeight * indirectAo;
+        finalDiffuseIndirect = diffuseIbl * simpleDisabledFallbackWeight * indirectAo;
+#if NJULF_DDGI_DETAILED_COUNTERS
+        fallbackWeight = simpleDisabledFallbackWeight;
         hybridDebugDiffuse = finalDiffuseIndirect;
         hybridSuppressionMask = vec3(0.0);
         HybridDiffuseGiResult simpleFallbackDiagnostics;
@@ -3333,9 +3402,12 @@ void main()
                 diffuseIbl,
                 finalDiffuseIndirect);
         }
+#endif
     }
 
+#if !FORWARD_WEIGHTED_OIT && NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
     WriteMaterialTransportProvenance(materialTransportProvenance);
+#endif
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT)
     {
         WriteForwardColor(vec4(finalDiffuseIndirect, 1.0));
@@ -3399,6 +3471,7 @@ void main()
         return;
     }
 
+#if NJULF_DDGI_DETAILED_COUNTERS
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE)
     {
         // A logarithmic, reference-white-normalized presentation keeps exact
@@ -3444,6 +3517,101 @@ void main()
         WriteDdgiDebugColor(
             GLOBAL_ILLUMINATION_DEBUG_DDGI_SOURCE_CACHE_RADIANCE,
             presentedSource);
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RESIDENCY)
+    {
+        bool suppressed =
+            (simpleDdgiResidencyTableFlags &
+                SIMPLE_DDGI_PAGE_TABLE_SUPPRESSED_EMPTY) != 0u ||
+            (simpleDdgiResidencyHistoryFlags &
+                SIMPLE_DDGI_PAGE_HISTORY_SUPPRESSED) != 0u;
+        bool resident = simpleDdgiPhysicalPageIndex != 0xffffffffu &&
+            (simpleDdgiResidencyTableFlags &
+                SIMPLE_DDGI_PAGE_TABLE_VALID) != 0u;
+        bool published = resident &&
+            (simpleDdgiResidencyTableFlags &
+                SIMPLE_DDGI_PAGE_TABLE_PUBLISHED) != 0u &&
+            (simpleDdgiResidencyTableFlags &
+                SIMPLE_DDGI_PAGE_TABLE_INITIALIZING) == 0u;
+        bool demandedMissing = simpleDdgiResidencyDemandMask != 0u &&
+            !published;
+        vec3 residencyColor = suppressed
+            ? vec3(0.85, 0.10, 0.85)
+            : (demandedMissing
+                ? vec3(1.0, 0.08, 0.02)
+                : (!resident
+                    ? vec3(0.18)
+                    : (!published
+                        ? vec3(1.0, 0.72, 0.05)
+                        : (simpleDdgiResidencyDemandMask == 0u &&
+                           simpleDdgiPageAgeNormalized > 0.0
+                            ? vec3(0.05, 0.45, 1.0)
+                            : vec3(0.05, 0.95, 0.20)))));
+        WriteDdgiDebugColor(
+            GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RESIDENCY,
+            residencyColor);
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_RESIDENCY_FALLBACK)
+    {
+        float missingShare = clamp(
+            float(simpleDdgiNonResidentProbeCount) /
+                float(SIMPLE_DDGI_PROBES_PER_PAGE),
+            0.0,
+            1.0);
+        bool suppliedByCoarser = missingShare > 0.0 &&
+            simpleDdgiSecondVolumeUsed > 0.5 &&
+            simpleDdgiSecondaryContributionWeight > 0.000001;
+        vec3 supplierColor = suppliedByCoarser
+            ? MeshletDebugColor(simpleDdgiSecondaryVolume + 1u)
+            : vec3(0.0);
+        vec3 residencyFallbackColor = missingShare <= 0.0
+            ? vec3(0.04, 0.65, 0.10)
+            : (suppliedByCoarser
+                ? mix(supplierColor, vec3(1.0, 0.05, 0.02),
+                    0.35 + 0.35 * missingShare)
+                : vec3(1.0, 0.0, 0.0));
+        WriteDdgiDebugColor(
+            GLOBAL_ILLUMINATION_DEBUG_DDGI_RESIDENCY_FALLBACK,
+            residencyFallbackColor);
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_PAGE_AGE)
+    {
+        bool resident = simpleDdgiPhysicalPageIndex != 0xffffffffu &&
+            (simpleDdgiResidencyTableFlags &
+                SIMPLE_DDGI_PAGE_TABLE_VALID) != 0u;
+        bool suppressed =
+            (simpleDdgiResidencyTableFlags &
+                SIMPLE_DDGI_PAGE_TABLE_SUPPRESSED_EMPTY) != 0u ||
+            (simpleDdgiResidencyHistoryFlags &
+                SIMPLE_DDGI_PAGE_HISTORY_SUPPRESSED) != 0u;
+        vec3 ageColor = !resident
+            ? (suppressed ? vec3(0.85, 0.10, 0.85) : vec3(0.08))
+            : mix(
+                vec3(0.0, 0.85, 1.0),
+                vec3(1.0, 0.08, 0.0),
+                simpleDdgiPageAgeNormalized);
+        WriteDdgiDebugColor(
+            GLOBAL_ILLUMINATION_DEBUG_DDGI_PAGE_AGE,
+            ageColor);
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_PHYSICAL_PAGE)
+    {
+        vec3 pageColor = simpleDdgiPhysicalPageIndex == 0xffffffffu
+            ? vec3(0.12)
+            : MeshletDebugColor(
+                simpleDdgiPhysicalPageIndex ^
+                (simpleDdgiPageMappingGeneration * 0x9e3779b9u));
+        WriteDdgiDebugColor(
+            GLOBAL_ILLUMINATION_DEBUG_DDGI_PHYSICAL_PAGE,
+            pageColor);
         return;
     }
 
@@ -3739,6 +3907,7 @@ void main()
             vec3(fallback, 1.0 - fallback, 0.0));
         return;
     }
+#endif
 
     vec3 color = finalDiffuseIndirect + specularIbl + directLighting + emissive;
 

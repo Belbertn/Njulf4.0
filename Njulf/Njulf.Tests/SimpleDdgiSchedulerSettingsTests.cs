@@ -37,6 +37,40 @@ public sealed class SimpleDdgiSchedulerSettingsTests
             Assert.That(gi.SimpleDdgiStructuredGatherEnabled, Is.True);
             Assert.That(gi.SimpleDdgiToroidalScrollingEnabled, Is.True);
             Assert.That(gi.SimpleDdgiRegionalInvalidationEnabled, Is.True);
+            Assert.That(gi.SimpleDdgiSchedulerReentryStableFrameCount, Is.EqualTo(120));
+            Assert.That(gi.SimpleDdgiProbeResidencyMode,
+                Is.EqualTo(SimpleDdgiProbeResidencyMode.SparseNearRing));
+            Assert.That(gi.SimpleDdgiSparsePhysicalPageBudget, Is.EqualTo(960));
+            Assert.That(gi.SimpleDdgiSparseMinimumPhysicalPageBudget, Is.EqualTo(768));
+            Assert.That(gi.SimpleDdgiSparseRetentionFrames, Is.EqualTo(120));
+            Assert.That(gi.SimpleDdgiSparseMaximumAdmissionsPerFrame, Is.EqualTo(64));
+            Assert.That(gi.SimpleDdgiSparseMaximumReceiverFeedbackRequests, Is.EqualTo(2_048));
+            Assert.That(gi.SimpleDdgiSparseInactiveRetryFrames, Is.EqualTo(300));
+        });
+    }
+
+    [TestCase(DdgiQualityTier.DdgiLow, SimpleDdgiProbeResidencyMode.Dense, 0, 0)]
+    [TestCase(DdgiQualityTier.DdgiMedium, SimpleDdgiProbeResidencyMode.Dense, 0, 0)]
+    [TestCase(DdgiQualityTier.DdgiHigh, SimpleDdgiProbeResidencyMode.SparseNearRing, 960, 768)]
+    [TestCase(DdgiQualityTier.DdgiUltra, SimpleDdgiProbeResidencyMode.SparseNearRing, 1_440, 1_152)]
+    public void QualityTiersSelectExplicitResidencyPolicy(
+        DdgiQualityTier tier,
+        SimpleDdgiProbeResidencyMode expectedMode,
+        int expectedBudget,
+        int expectedMinimumBudget)
+    {
+        GlobalIlluminationSettings gi = new();
+
+        gi.ApplyDdgiQualityTier(tier);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gi.SimpleDdgiProbeResidencyMode, Is.EqualTo(expectedMode));
+            Assert.That(gi.SimpleDdgiSparsePhysicalPageBudget, Is.EqualTo(expectedBudget));
+            Assert.That(gi.SimpleDdgiSparseMinimumPhysicalPageBudget, Is.EqualTo(expectedMinimumBudget));
+            Assert.That(gi.SimpleDdgiSparseMaximumReceiverFeedbackRequests,
+                Is.EqualTo(tier == DdgiQualityTier.DdgiUltra ? 4_096 : 2_048));
+            Assert.That(gi.SimpleDdgiSparseInactiveRetryFrames, Is.EqualTo(300));
         });
     }
 
@@ -50,12 +84,41 @@ public sealed class SimpleDdgiSchedulerSettingsTests
         {
             var settings = new RenderSettings();
             settings.GlobalIllumination.SimpleDdgiSchedulerMode = SimpleDdgiSchedulerMode.GpuResident;
+            settings.GlobalIllumination.SimpleDdgiSchedulerReentryStableFrameCount = 240;
+            settings.GlobalIllumination.SimpleDdgiProbeResidencyMode =
+                SimpleDdgiProbeResidencyMode.Shadow;
+            settings.GlobalIllumination.SimpleDdgiSparsePhysicalPageBudget = 777;
+            settings.GlobalIllumination.SimpleDdgiSparseMinimumPhysicalPageBudget = 640;
+            settings.GlobalIllumination.SimpleDdgiSparseRetentionFrames = 180;
+            settings.GlobalIllumination.SimpleDdgiSparseMaximumAdmissionsPerFrame = 48;
+            settings.GlobalIllumination.SimpleDdgiSparseMaximumReceiverFeedbackRequests = 999;
+            settings.GlobalIllumination.SimpleDdgiSparseInactiveRetryFrames = 450;
             settings.Save(path);
 
             RenderSettings loaded = RenderSettings.Load(path);
-            Assert.That(
-                loaded.GlobalIllumination.SimpleDdgiSchedulerMode,
-                Is.EqualTo(SimpleDdgiSchedulerMode.GpuResident));
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    loaded.GlobalIllumination.SimpleDdgiSchedulerMode,
+                    Is.EqualTo(SimpleDdgiSchedulerMode.GpuResident));
+                Assert.That(
+                    loaded.GlobalIllumination.SimpleDdgiSchedulerReentryStableFrameCount,
+                    Is.EqualTo(240));
+                Assert.That(loaded.GlobalIllumination.SimpleDdgiProbeResidencyMode,
+                    Is.EqualTo(SimpleDdgiProbeResidencyMode.Shadow));
+                Assert.That(loaded.GlobalIllumination.SimpleDdgiSparsePhysicalPageBudget,
+                    Is.EqualTo(777));
+                Assert.That(loaded.GlobalIllumination.SimpleDdgiSparseMinimumPhysicalPageBudget,
+                    Is.EqualTo(640));
+                Assert.That(loaded.GlobalIllumination.SimpleDdgiSparseRetentionFrames,
+                    Is.EqualTo(180));
+                Assert.That(loaded.GlobalIllumination.SimpleDdgiSparseMaximumAdmissionsPerFrame,
+                    Is.EqualTo(48));
+                Assert.That(loaded.GlobalIllumination.SimpleDdgiSparseMaximumReceiverFeedbackRequests,
+                    Is.EqualTo(999));
+                Assert.That(loaded.GlobalIllumination.SimpleDdgiSparseInactiveRetryFrames,
+                    Is.EqualTo(450));
+            });
         }
         finally
         {
@@ -75,6 +138,34 @@ public sealed class SimpleDdgiSchedulerSettingsTests
             Assert.That(options.SimpleDdgiSchedulerModeOverride, Is.EqualTo(SimpleDdgiSchedulerMode.GpuResident));
             Assert.That(options.Enabled, Is.True);
             Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+        });
+    }
+
+    [Test]
+    public void SparseResidencyPolicyHasCompleteSmokeOverrides()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--simple-ddgi-residency-mode=shadow",
+            "--simple-ddgi-sparse-page-budget=777",
+            "--simple-ddgi-sparse-min-page-budget=640",
+            "--simple-ddgi-sparse-retention-frames=180",
+            "--simple-ddgi-sparse-max-admissions=48",
+            "--simple-ddgi-sparse-max-feedback=999",
+            "--simple-ddgi-sparse-inactive-retry-frames=450"
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.SimpleDdgiProbeResidencyModeOverride,
+                Is.EqualTo(SimpleDdgiProbeResidencyMode.Shadow));
+            Assert.That(options.SimpleDdgiSparsePhysicalPageBudgetOverride, Is.EqualTo(777));
+            Assert.That(options.SimpleDdgiSparseMinimumPhysicalPageBudgetOverride, Is.EqualTo(640));
+            Assert.That(options.SimpleDdgiSparseRetentionFramesOverride, Is.EqualTo(180));
+            Assert.That(options.SimpleDdgiSparseMaximumAdmissionsOverride, Is.EqualTo(48));
+            Assert.That(options.SimpleDdgiSparseMaximumReceiverFeedbackOverride, Is.EqualTo(999));
+            Assert.That(options.SimpleDdgiSparseInactiveRetryFramesOverride, Is.EqualTo(450));
+            Assert.That(options.Enabled, Is.True);
         });
     }
 }

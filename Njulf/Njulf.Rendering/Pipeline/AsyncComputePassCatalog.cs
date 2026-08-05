@@ -54,6 +54,9 @@ public static class AsyncComputePassCatalog
         Graphics("ForwardVisibilityCompactionPass", "Hi-Z and scene submissions", "Forward+ mesh dispatch", "Immediate forward consumer leaves no useful overlap window."),
         Graphics("TiledLightCullingPass", "Depth", "Forward+", "Immediate consumer and shared light-tile buffer retain graphics-queue execution."),
         Graphics("AmbientOcclusionPass", "Depth", "AO blur/forward", "Producer is retained with graphics; only the blur chain is independently profitable."),
+        Graphics("SimpleDdgiPageDemandPass", "Depth and receiver feedback", "Simple DDGI page reconciliation", "Demand collection opens the serial sparse-residency transaction immediately before mutation."),
+        Graphics("SimpleDdgiPageResidencyPass", "Simple DDGI page demand and retained mappings", "Simple DDGI scheduler and physical payload consumers", "Page-table mutation and every same-frame payload consumer remain in one graphics-queue ownership segment."),
+        Graphics("SimpleDdgiPageFeedbackPass", "Simple DDGI scheduler commit and page publication", "Delayed residency feedback readback", "Feedback closes the serial sparse-residency transaction after all publication writes."),
         Graphics("AutoExposurePass", "Scene/fog color", "Bloom/tone-map", "Current exposure state and immediate post-processing consumers retain graphics-queue execution."),
         Graphics("FoliageCullPass", "Foliage/scene uploads", "Shadow/depth/forward", "Recorded before graph segments and shares graphics submission resources."),
         Graphics("SkinningPass", "Animation uploads", "Mesh/shadow/depth/forward", "Current skinning buffers are consumed across early graphics passes with no modeled ownership split.")

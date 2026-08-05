@@ -61,13 +61,17 @@ void main()
     SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(
         pc.ProbeUpdateQueueBufferIndex,
         queueOffset);
-    if (update.probeIndex >= params.probeCount)
+    if (update.probeIndex >= params.probeCount ||
+        !SimpleDdgiUpdateMatchesLiveAddress(params, update))
         return;
 
     SimpleDdgiProbeState state = ReadSimpleDdgiProbeState(
         pc.ProbeStateBufferIndex,
         update.probeIndex);
-    if (!SimpleDdgiUpdateMatchesProbeGeneration(update, state))
+    if (!SimpleDdgiUpdateMatchesProbeGenerationAndRecord(
+            params,
+            update,
+            state))
         return;
 
     SimpleDdgiVolume volume;
@@ -95,12 +99,12 @@ void main()
     {
         vec4 value = ReadSimpleDdgiAtlasTexel(
             pc.TransportWriteIrradianceAtlasBufferIndex,
-            update.probeIndex,
+            update.physicalProbeIndex,
             texel,
             params.irradianceTexels);
         WriteSimpleDdgiAtlasTexel(
             pc.IrradianceAtlasBufferIndex,
-            update.probeIndex,
+            update.physicalProbeIndex,
             texel,
             params.irradianceTexels,
             value);

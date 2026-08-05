@@ -11,6 +11,67 @@ namespace Njulf.Tests;
 public sealed class SimpleDdgiLayoutCompilerTests
 {
     [Test]
+    public void SparseHighPlan_ChargesPhysicalCapacityAndClearsMinimumSavingGate()
+    {
+        const int nearProbes = 28 * 14 * 28;
+        const int denseOuterProbes = 18 * 10 * 18 + 12 * 8 * 12;
+        const int virtualProbes = nearProbes + denseOuterProbes;
+        const int virtualPages = 14 * 7 * 14;
+        const int physicalPages = 960;
+        SimpleDdgiMemoryPlan sparse = SimpleDdgiMemoryPlan.Create(
+            probeCount: virtualProbes,
+            updateRequestCapacity: 2_048,
+            rayCapacity: 128,
+            sampledAtlasRequested: true,
+            concreteTransportBuffers: true,
+            readbackBufferCount: 0,
+            residentPrivateTargets: true,
+            schedulerMode: SimpleDdgiSchedulerMode.GpuResident,
+            schedulerActiveVolumeCount: 3,
+            residencyMode: SimpleDdgiProbeResidencyMode.SparseNearRing,
+            densePayloadProbeCount: denseOuterProbes,
+            sparseVirtualProbeCount: nearProbes,
+            sparseVirtualPageCount: virtualPages,
+            sparsePhysicalPageCapacity: physicalPages,
+            maximumPageAdmissionsPerFrame: 64);
+        SimpleDdgiMemoryPlan dense = SimpleDdgiMemoryPlan.Create(
+            virtualProbes,
+            2_048,
+            128,
+            sampledAtlasRequested: true,
+            concreteTransportBuffers: true,
+            readbackBufferCount: 0,
+            residentPrivateTargets: true,
+            schedulerMode: SimpleDdgiSchedulerMode.GpuResident,
+            schedulerActiveVolumeCount: 3);
+
+        Assert.Multiple(() =>
+        {
+            // Same-binary fixture after the resident scheduler and 48-byte
+            // generation-complete update queue became part of the live plan.
+            Assert.That(dense.LiveBytes, Is.EqualTo(201_263_392UL));
+            Assert.That(sparse.LiveBytes, Is.EqualTo(160_821_296UL));
+            Assert.That(dense.LiveBytes - sparse.LiveBytes,
+                Is.EqualTo(40_442_096UL));
+            Assert.That(sparse.VirtualProbeCount, Is.EqualTo(15_368));
+            Assert.That(sparse.DensePayloadProbeCount, Is.EqualTo(4_392));
+            Assert.That(sparse.SparseVirtualPageCount, Is.EqualTo(1_372));
+            Assert.That(sparse.PhysicalProbeCapacity,
+                Is.EqualTo(denseOuterProbes + physicalPages * 8));
+            Assert.That(sparse.SparsePagePaddingProbeCount, Is.Zero);
+            Assert.That(sparse.SampledAtlasPhysicalProbeCapacity, Is.EqualTo(12_288));
+            Assert.That(sparse.SampledAtlasPaddingProbeCount, Is.EqualTo(216));
+            Assert.That(sparse.SampledAtlasPaddingBytes,
+                Is.EqualTo(216UL * (512UL + 2_048UL)));
+            Assert.That(sparse.ResidencyArenaBytes,
+                Is.LessThanOrEqualTo(SimpleDdgiProbePageLayout.CurrentProfileOverheadGateBytes));
+            Assert.That(sparse.ResidencyArenaBytes, Is.EqualTo(139_024UL));
+            Assert.That(dense.LiveBytes - sparse.LiveBytes,
+                Is.GreaterThanOrEqualTo(16UL * 1024UL * 1024UL));
+        });
+    }
+
+    [Test]
     public void MemoryPlan_ZeroProbeManagerStillChargesConcreteBindingFloor()
     {
         SimpleDdgiMemoryPlan plan = SimpleDdgiMemoryPlan.Create(
@@ -24,18 +85,23 @@ public sealed class SimpleDdgiLayoutCompilerTests
         Assert.Multiple(() =>
         {
             Assert.That(plan.ProbeCount, Is.Zero);
-            Assert.That(plan.ParamsBytes, Is.EqualTo(1_744UL));
+            Assert.That(plan.ParamsBytes, Is.EqualTo(
+                SimpleDdgiMemoryPlan.ParamsHeaderBytes +
+                (ulong)GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount *
+                (SimpleDdgiMemoryPlan.VolumeBytes +
+                    SimpleDdgiMemoryPlan.VolumePagingBytes)));
             Assert.That(plan.IrradianceAtlasBytes, Is.EqualTo(16UL));
             Assert.That(plan.VisibilityAtlasBytes, Is.EqualTo(16UL));
             Assert.That(plan.TransportIrradianceBytes, Is.EqualTo(16UL));
             Assert.That(plan.TransportSourceCacheBytes, Is.EqualTo(16UL));
             Assert.That(plan.ProbeStateBytes, Is.EqualTo(16UL));
+            Assert.That(plan.ReceiverProbeBytes, Is.EqualTo(16UL));
             Assert.That(plan.UpdateQueueBytes, Is.EqualTo(16UL));
             Assert.That(plan.RelocationClassificationBytes, Is.EqualTo(16UL));
             Assert.That(plan.RayScratchBytes, Is.EqualTo(16UL));
             Assert.That(plan.ProbeStateReadbackBytes, Is.EqualTo(32UL));
             Assert.That(plan.SampledAtlasImageBytes, Is.Zero);
-            Assert.That(plan.LiveBytes, Is.EqualTo(1_904UL));
+            Assert.That(plan.LiveBytes, Is.EqualTo(2_464UL));
         });
     }
 
@@ -67,10 +133,13 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(
                 SimpleDdgiMemoryPlan.TransportRayCacheBytes,
                 Is.EqualTo((ulong)Marshal.SizeOf<GPUSimpleDdgiTransportRayCache>()));
-            Assert.That(SimpleDdgiMemoryPlan.TransportRayCacheAbiVersion, Is.EqualTo(2u));
+            Assert.That(SimpleDdgiMemoryPlan.TransportRayCacheAbiVersion, Is.EqualTo(4u));
             Assert.That(
                 SimpleDdgiMemoryPlan.ProbeStateBytesPerProbe,
                 Is.EqualTo((ulong)Marshal.SizeOf<GPUSimpleDdgiProbeState>()));
+            Assert.That(
+                SimpleDdgiMemoryPlan.ReceiverProbeBytesPerProbe,
+                Is.EqualTo((ulong)Marshal.SizeOf<GPUSimpleDdgiReceiverProbe>()));
             Assert.That(
                 SimpleDdgiMemoryPlan.ProbeUpdateBytes,
                 Is.EqualTo((ulong)Marshal.SizeOf<GPUSimpleDdgiProbeUpdate>()));
@@ -79,7 +148,11 @@ public sealed class SimpleDdgiLayoutCompilerTests
                 Is.EqualTo((ulong)Marshal.SizeOf<GPUSimpleDdgiRelocationClassification>()));
             Assert.That(SimpleDdgiMemoryPlan.ProbeReadbackBytesPerProbe, Is.EqualTo(80UL));
 
-            Assert.That(plan.ParamsBytes, Is.EqualTo(208UL + 16UL * 96UL));
+            Assert.That(plan.ParamsBytes, Is.EqualTo(
+                SimpleDdgiMemoryPlan.ParamsHeaderBytes +
+                (ulong)GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount *
+                (SimpleDdgiMemoryPlan.VolumeBytes +
+                    SimpleDdgiMemoryPlan.VolumePagingBytes)));
             Assert.That(plan.IrradianceAtlasBytes, Is.EqualTo((ulong)probes * 512UL));
             Assert.That(plan.VisibilityAtlasBytes, Is.EqualTo((ulong)probes * 2_048UL));
             Assert.That(plan.TransportIrradianceBytes, Is.EqualTo((ulong)probes * 512UL));
@@ -90,7 +163,9 @@ public sealed class SimpleDdgiLayoutCompilerTests
                     rays *
                     SimpleDdgiMemoryPlan.TransportRayCacheBytes));
             Assert.That(plan.ProbeStateBytes, Is.EqualTo((ulong)probes * 32UL));
-            Assert.That(plan.UpdateQueueBytes, Is.EqualTo((ulong)updates * 32UL));
+            Assert.That(plan.ReceiverProbeBytes, Is.EqualTo((ulong)probes * 16UL));
+            Assert.That(plan.UpdateQueueBytes,
+                Is.EqualTo((ulong)updates * SimpleDdgiMemoryPlan.ProbeUpdateBytes));
             Assert.That(
                 plan.RelocationClassificationBytes,
                 Is.EqualTo((ulong)probes * 48UL));
@@ -105,9 +180,91 @@ public sealed class SimpleDdgiLayoutCompilerTests
                 Is.EqualTo((ulong)updates * rays * 32UL));
             Assert.That(plan.SampledAtlasProbeCapacity, Is.EqualTo(1_024));
             Assert.That(plan.SampledAtlasImageBytes, Is.EqualTo(1_024UL * 2_560UL));
+            Assert.That(plan.SchedulerMode, Is.EqualTo(SimpleDdgiSchedulerMode.CpuReference));
+            Assert.That(plan.SchedulerBufferBytes, Is.Zero);
             Assert.That(
                 plan.LiveBytes,
                 Is.EqualTo(plan.PersistentBytes + plan.WorkBytes));
+        });
+    }
+
+    [Test]
+    public void MemoryPlan_ReportsSparsePageAndSampledAtlasPadding()
+    {
+        SimpleDdgiMemoryPlan plan = SimpleDdgiMemoryPlan.Create(
+            probeCount: 20,
+            updateRequestCapacity: 4,
+            rayCapacity: 8,
+            sampledAtlasRequested: true,
+            concreteTransportBuffers: true,
+            readbackBufferCount: 0,
+            residencyMode: SimpleDdgiProbeResidencyMode.SparseNearRing,
+            densePayloadProbeCount: 5,
+            sparseVirtualProbeCount: 15,
+            sparseVirtualPageCount: 2,
+            sparsePhysicalPageCapacity: 2,
+            maximumPageAdmissionsPerFrame: 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.PhysicalProbeCapacity, Is.EqualTo(21));
+            Assert.That(plan.SparsePagePaddingProbeCount, Is.EqualTo(1));
+            Assert.That(plan.SampledAtlasPhysicalProbeCapacity, Is.EqualTo(256));
+            Assert.That(plan.SampledAtlasPaddingProbeCount, Is.EqualTo(235));
+            Assert.That(plan.SampledAtlasPaddingBytes,
+                Is.EqualTo(235UL * (512UL + 2_048UL)));
+        });
+    }
+
+    [Test]
+    public void MemoryPlan_ChargesExactGpuSchedulerArenaAndReadbackRing()
+    {
+        const int probes = 15_368;
+        const int updates = 2_048;
+        const int volumes = 3;
+        SimpleDdgiGpuSchedulerLayout schedulerLayout =
+            SimpleDdgiGpuSchedulerLayout.Create(
+                probes,
+                updates,
+                volumes,
+                validationEnabled: true);
+        SimpleDdgiMemoryPlan plan = SimpleDdgiMemoryPlan.Create(
+            probes,
+            updates,
+            rayCapacity: 128,
+            sampledAtlasRequested: false,
+            concreteTransportBuffers: true,
+            readbackBufferCount: 0,
+            residentPrivateTargets: true,
+            schedulerMode: SimpleDdgiSchedulerMode.GpuResident,
+            schedulerActiveVolumeCount: volumes,
+            schedulerValidationEnabled: true);
+        ulong expectedFeedbackBytes = checked(
+            (ulong)RenderingConstants.FramesInFlight *
+            SimpleDdgiGpuSchedulerLayout.ShippingFeedbackBytes);
+        ulong expectedAuditBytes = checked(
+            (ulong)RenderingConstants.FramesInFlight *
+            (ulong)Marshal.SizeOf<GPUSimpleDdgiTransportAuditSummary>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.SchedulerMode,
+                Is.EqualTo(SimpleDdgiSchedulerMode.GpuResident));
+            Assert.That(plan.SchedulerActiveLaneCount,
+                Is.EqualTo(schedulerLayout.ActiveLaneCount));
+            Assert.That(plan.SchedulerArenaBytes,
+                Is.EqualTo(schedulerLayout.TotalBytes));
+            Assert.That(plan.SchedulerFeedbackReadbackBytes,
+                Is.EqualTo(expectedFeedbackBytes));
+            Assert.That(plan.SchedulerAuditReadbackBytes,
+                Is.EqualTo(expectedAuditBytes));
+            Assert.That(plan.SchedulerValidationReadbackBytes,
+                Is.EqualTo(expectedFeedbackBytes));
+            Assert.That(plan.SchedulerBufferBytes,
+                Is.EqualTo(
+                    schedulerLayout.TotalBytes +
+                    expectedFeedbackBytes +
+                    expectedAuditBytes));
         });
     }
 
@@ -299,6 +456,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
             ultra.TransportIrradianceBytes,
             ultra.TransportSourceCacheBytes,
             ultra.ProbeStateBytes,
+            ultra.ReceiverProbeBytes,
             ultra.UpdateQueueBytes,
             ultra.RelocationClassificationBytes,
             ultra.RayScratchBytes
@@ -310,6 +468,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
             low.TransportIrradianceBytes,
             low.TransportSourceCacheBytes,
             low.ProbeStateBytes,
+            low.ReceiverProbeBytes,
             low.UpdateQueueBytes,
             low.RelocationClassificationBytes,
             low.RayScratchBytes
@@ -496,6 +655,67 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(mirrored.AcceptedProbeCount, Is.Zero);
             Assert.That(mirrored.Volumes[0].Reason, Is.EqualTo("persistent-memory-budget"));
             Assert.That(mirrored.RequestedPersistentBytes, Is.GreaterThan(canonical.RequestedPersistentBytes));
+        });
+    }
+
+    [Test]
+    public void SparseCompile_FallsBackToInternallyConsistentDensePlanWithoutAcceptedCoarserRing()
+    {
+        SimpleDdgiLayoutVolumeRequest[] requests =
+        [
+            new(
+                "near-ring",
+                10_000,
+                false,
+                SimpleDdgiVolumePurpose.TransitionSupport,
+                0,
+                1.0f,
+                64)
+            {
+                GridCountX = 4,
+                GridCountY = 4,
+                GridCountZ = 4,
+                SparseNearRingEligible = true
+            },
+            new(
+                "authored-not-coarser",
+                1,
+                true,
+                SimpleDdgiVolumePurpose.ReceiverHero,
+                0,
+                2.0f,
+                32)
+        ];
+        var budget = new SimpleDdgiLayoutBudget(
+            DdgiQualityTier.DdgiHigh,
+            ProbeBudget: 64,
+            PersistentMemoryBudgetBytes: ulong.MaxValue,
+            VolumeBudget: 2);
+
+        SimpleDdgiLayoutReport report = SimpleDdgiLayoutCompiler.Compile(
+            requests,
+            budget,
+            sampledAtlasRequested: false,
+            SimpleDdgiLayoutAdmissionMode.Degrade,
+            transportV2Enabled: true,
+            transportRayCapacity: 32,
+            residentPrivateTargets: true,
+            schedulerMode: SimpleDdgiSchedulerMode.GpuResident,
+            residencyMode: SimpleDdgiProbeResidencyMode.SparseNearRing,
+            sparsePhysicalPageBudget: 4,
+            sparseMinimumPhysicalPageBudget: 1,
+            maximumPageAdmissionsPerFrame: 2);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.AcceptedMemoryPlan.ResidencyMode,
+                Is.EqualTo(SimpleDdgiProbeResidencyMode.Dense));
+            Assert.That(report.ResidencyFallbackReason,
+                Is.EqualTo("dense-coarser-ring-not-admitted"));
+            Assert.That(report.AcceptedMemoryPlan.SparseVirtualProbeCount,
+                Is.Zero);
+            Assert.That(report.AcceptedMemoryPlan.DensePayloadProbeCount,
+                Is.EqualTo(report.AcceptedProbeCount));
         });
     }
 }

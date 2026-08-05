@@ -233,6 +233,33 @@ public static class SimpleDdgiTransportTailEstimator
                MathF.Max(1.0f - contraction, 1e-6f);
     }
 
+    /// <summary>
+    /// Mirrors the audit's fail-closed source-cache identity check. A cache
+    /// entry belongs to the frozen source field only when it carries the full
+    /// volume sequence and all three ownership generations match exactly.
+    /// </summary>
+    public static bool IsCompleteCurrentSourceCacheEntry(
+        uint storedSourceRayCount,
+        uint requiredSourceRayCount,
+        uint physicalGeneration,
+        uint expectedPhysicalGeneration,
+        uint sourceLightingGeneration,
+        uint expectedSourceLightingGeneration,
+        uint sourceEpoch,
+        uint expectedSourceEpoch)
+    {
+        bool generationsValid =
+            expectedPhysicalGeneration is > 0u and <= SimpleDdgiSchedulerAbi.PhysicalGenerationMask &&
+            expectedSourceLightingGeneration != 0u &&
+            expectedSourceEpoch != 0u;
+        return requiredSourceRayCount != 0u &&
+               storedSourceRayCount == requiredSourceRayCount &&
+               generationsValid &&
+               physicalGeneration == expectedPhysicalGeneration &&
+               sourceLightingGeneration == expectedSourceLightingGeneration &&
+               sourceEpoch == expectedSourceEpoch;
+    }
+
     public static float MaxComponent(Vector3 value) =>
         MathF.Max(value.X, MathF.Max(value.Y, value.Z));
 

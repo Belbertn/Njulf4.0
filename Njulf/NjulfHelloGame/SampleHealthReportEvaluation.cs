@@ -97,8 +97,13 @@ internal readonly record struct SampleHealthReportEvaluation(
         bool durationOwnedLongRun =
             options.Mode == SampleSmokeMode.LongRun &&
             options.LongRunMinutes > 0.0;
+        bool stateMachineOwnedSmoke = options.Mode is
+            SampleSmokeMode.QualitySwitch or
+            SampleSmokeMode.DdgiResidencySwitch or
+            SampleSmokeMode.TextureHotReload;
         if (!standaloneBaselineCapture &&
             !durationOwnedLongRun &&
+            !stateMachineOwnedSmoke &&
             options.FrameCount > 0 &&
             renderedFrameCount < options.FrameCount)
         {
@@ -137,6 +142,12 @@ internal readonly record struct SampleHealthReportEvaluation(
                     ("long-run-duration", durationOwnedLongRun ? 1 : 0)),
             SampleSmokeMode.QualitySwitch =>
                 RequireExactOperationCount(operations, "quality-switch", 1, renderedFrameCount),
+            SampleSmokeMode.DdgiResidencySwitch =>
+                RequireExactOperationCount(
+                    operations,
+                    "ddgi-residency-switch",
+                    1,
+                    renderedFrameCount),
             SampleSmokeMode.TextureHotReload =>
                 RequireExactOperationCount(operations, "texture-hot-reload", 1, renderedFrameCount),
             SampleSmokeMode.All =>

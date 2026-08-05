@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
@@ -31,11 +32,12 @@ namespace Njulf.Rendering.Resources
         // adjustment while keeping the reserve below one MiB of atlas data.
         private const int CapacityGrowthQuantum = 256;
         private const ulong AtlasTexelStride = 8;
+        private const int MaxRetiredAllocationGenerations = 16;
 
         private readonly VulkanContext _context;
-        private readonly Action<RuntimeStallReason, string, Action> _recordRuntimeStall;
         private readonly int _resolvedLayersPerTexture;
         private AtlasGroup[] _groups = Array.Empty<AtlasGroup>();
+        private readonly List<RetiredAtlasAllocation> _retiredAllocations = new();
         private Sampler _sampler;
         private int _probeCapacity;
         private int _layersPerTexture;
@@ -50,7 +52,7 @@ namespace Njulf.Rendering.Resources
             Action<RuntimeStallReason, string, Action> recordRuntimeStall)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
-            _recordRuntimeStall = recordRuntimeStall ??
+            _ = recordRuntimeStall ??
                 throw new ArgumentNullException(nameof(recordRuntimeStall));
             // The physical-device limit is immutable for this context. Resolve it
             // once so the per-frame stable-capacity path never enters the driver.
@@ -68,17 +70,34 @@ namespace Njulf.Rendering.Resources
         public bool RequiresFullSync => _requiresFullSync;
         public string LastFailureReason { get; private set; } = string.Empty;
         public ulong EstimatedImageBytes { get; private set; }
+        public ulong RetiredImageBytes { get; private set; }
         public ulong AllocationGeneration => _allocationGeneration;
 
-        public bool EnsureCapacity(int requiredProbeCount) =>
-            EnsureCapacity(requiredProbeCount, deviceAlreadyIdle: false);
+        public bool EnsureCapacity(int requiredProbeCount)
+        {
+            if (IsReady && RequiresCapacityTransition(requiredProbeCount))
+            {
+                throw new InvalidOperationException(
+                    "A sampled-atlas resize requires renderer completion progress.");
+            }
 
-        internal bool EnsureCapacity(int requiredProbeCount, bool deviceAlreadyIdle)
+            return EnsureCapacity(
+                requiredProbeCount,
+                lastUseFrameFenceValue: 0UL,
+                completedFrameFenceValue: 0UL,
+                priorGenerationComplete: true);
+        }
+
+        internal bool EnsureCapacity(
+            int requiredProbeCount,
+            ulong lastUseFrameFenceValue,
+            ulong completedFrameFenceValue,
+            bool priorGenerationComplete)
         {
             ThrowIfDisposed();
             if (requiredProbeCount <= 0)
             {
-                Release(deviceAlreadyIdle);
+                Release(lastUseFrameFenceValue, completedFrameFenceValue);
                 return false;
             }
 
@@ -88,7 +107,7 @@ namespace Njulf.Rendering.Resources
             {
                 LastFailureReason =
                     $"sampled-atlas-needs-{requiredProbeCount}-probe-layers-exceeding-{maxProbeCapacity}";
-                Release(deviceAlreadyIdle);
+                Release(lastUseFrameFenceValue, completedFrameFenceValue);
                 return false;
             }
 
@@ -98,14 +117,14 @@ namespace Njulf.Rendering.Resources
             {
                 LastFailureReason =
                     $"sampled-atlas-needs-{requiredGroups}-gpu-publish-groups-exceeding-{MaxGpuPublishTextureGroups}";
-                Release(deviceAlreadyIdle);
+                Release(lastUseFrameFenceValue, completedFrameFenceValue);
                 return false;
             }
             if (requiredGroups > MaxTextureGroups)
             {
                 LastFailureReason =
                     $"sampled-atlas-needs-{requiredGroups}-texture-groups-exceeding-{MaxTextureGroups}";
-                Release(deviceAlreadyIdle);
+                Release(lastUseFrameFenceValue, completedFrameFenceValue);
                 return false;
             }
 
@@ -119,12 +138,22 @@ namespace Njulf.Rendering.Resources
                 return true;
             }
 
-            // Allocation changes are exceptional (tier or scene-topology changes).
-            // Retire all previously submitted image work before rebinding fixed
-            // descriptors to new image views.
-            if (IsReady && !deviceAlreadyIdle)
-                WaitForDeviceIdle("Simple DDGI sampled-atlas resize");
-            DestroyImageResources();
+            bool hadPriorAllocation = IsReady;
+            if (hadPriorAllocation &&
+                !priorGenerationComplete &&
+                _retiredAllocations.Count >= MaxRetiredAllocationGenerations)
+            {
+                LastFailureReason = "sampled-atlas-retirement-capacity-exhausted";
+                return false;
+            }
+
+            // When the exact last-use fence is complete the old images can be
+            // reclaimed before allocation, preserving the hard capacity budget.
+            // Otherwise allocate first and keep the old generation alive under
+            // its completion token so a failed optional allocation leaves the
+            // prior sampled mirror usable.
+            if (hadPriorAllocation && priorGenerationComplete)
+                DestroyImageResources();
 
             var groups = new AtlasGroup[requiredGroups];
             try
@@ -147,6 +176,18 @@ namespace Njulf.Rendering.Resources
             {
                 DestroyGroups(groups);
                 throw;
+            }
+
+            if (hadPriorAllocation && !priorGenerationComplete)
+            {
+                if (!RetireCurrentAllocation(
+                        lastUseFrameFenceValue,
+                        completedFrameFenceValue))
+                {
+                    DestroyGroups(groups);
+                    LastFailureReason = "sampled-atlas-retirement-admission-failed";
+                    return false;
+                }
             }
 
             _groups = groups;
@@ -183,6 +224,14 @@ namespace Njulf.Rendering.Resources
                 _layersPerTexture,
                 _resolvedLayersPerTexture);
         }
+
+        internal bool CanRetireCurrentAllocation(
+            ulong lastUseFrameFenceValue,
+            ulong completedFrameFenceValue) =>
+            !IsReady ||
+            lastUseFrameFenceValue == 0UL ||
+            completedFrameFenceValue >= lastUseFrameFenceValue ||
+            _retiredAllocations.Count < MaxRetiredAllocationGenerations;
 
         public void Register(BindlessHeap bindlessHeap)
         {
@@ -299,7 +348,18 @@ namespace Njulf.Rendering.Resources
             if (!IsReady || probeCount <= 0)
                 return;
 
-            int boundedProbeCount = Math.Min(probeCount, _probeCapacity);
+            // Image allocation rounds up to a descriptor-stable layer quantum,
+            // while the canonical SSBOs contain only real physical payload
+            // probes. Clamp against both source byte ranges so the final image
+            // group can never read sampled-atlas padding from beyond either
+            // buffer, even if a caller accidentally supplies a virtual count.
+            int boundedProbeCount = CalculateSafeCopyProbeCount(
+                probeCount,
+                _probeCapacity,
+                irradianceBufferBytes,
+                visibilityBufferBytes);
+            if (boundedProbeCount <= 0)
+                return;
             TransitionSourceBuffers(
                 commandBuffer,
                 irradianceBuffer,
@@ -346,30 +406,93 @@ namespace Njulf.Rendering.Resources
 
         public void Release()
         {
-            Release(deviceAlreadyIdle: false);
+            if (IsReady)
+            {
+                throw new InvalidOperationException(
+                    "Releasing a live sampled atlas requires renderer completion progress.");
+            }
         }
 
-        internal void Release(bool deviceAlreadyIdle)
+        internal bool Release(
+            ulong lastUseFrameFenceValue,
+            ulong completedFrameFenceValue)
         {
             if (!IsReady)
-                return;
+                return true;
 
-            if (!deviceAlreadyIdle)
-                WaitForDeviceIdle("Simple DDGI sampled-atlas release");
-            ReleaseAfterDeviceIdle();
+            bool released = RetireCurrentAllocation(
+                lastUseFrameFenceValue,
+                completedFrameFenceValue);
+            if (released)
+                LastFailureReason = string.Empty;
+            return released;
         }
 
         /// <summary>
-        /// Releases image capacity after the owning manager has synchronized the
-        /// device for a larger stable-capacity transition.
+        /// Releases image capacity after the owning renderer has established
+        /// device idle during terminal shutdown.
         /// </summary>
         internal void ReleaseAfterDeviceIdle()
         {
-            if (!IsReady)
-                return;
-
             DestroyImageResources();
+            DestroyRetiredAllocationsAfterDeviceIdle();
             LastFailureReason = string.Empty;
+        }
+
+        internal void CollectRetired(ulong completedFrameFenceValue)
+        {
+            for (int index = _retiredAllocations.Count - 1; index >= 0; index--)
+            {
+                RetiredAtlasAllocation retired = _retiredAllocations[index];
+                if (completedFrameFenceValue < retired.Completion.Value)
+                    continue;
+
+                DestroyGroups(retired.Groups);
+                RetiredImageBytes = retired.Bytes >= RetiredImageBytes
+                    ? 0UL
+                    : RetiredImageBytes - retired.Bytes;
+                _retiredAllocations.RemoveAt(index);
+            }
+        }
+
+        private bool RetireCurrentAllocation(
+            ulong lastUseFrameFenceValue,
+            ulong completedFrameFenceValue)
+        {
+            if (!IsReady)
+                return true;
+
+            if (lastUseFrameFenceValue == 0UL ||
+                completedFrameFenceValue >= lastUseFrameFenceValue)
+            {
+                DestroyImageResources();
+                return true;
+            }
+
+            if (_retiredAllocations.Count >= MaxRetiredAllocationGenerations)
+                return false;
+
+            AtlasGroup[] groups = _groups;
+            ulong bytes = EstimatedImageBytes;
+            _groups = Array.Empty<AtlasGroup>();
+            _probeCapacity = 0;
+            _layersPerTexture = 0;
+            _requiresFullSync = false;
+            EstimatedImageBytes = 0UL;
+            _retiredAllocations.Add(new RetiredAtlasAllocation(
+                groups,
+                bytes,
+                GpuCompletionToken.ForFrameFence(lastUseFrameFenceValue)));
+            RetiredImageBytes = checked(RetiredImageBytes + bytes);
+            return true;
+        }
+
+        private void DestroyRetiredAllocationsAfterDeviceIdle()
+        {
+            foreach (RetiredAtlasAllocation retired in _retiredAllocations)
+                DestroyGroups(retired.Groups);
+            _retiredAllocations.Clear();
+            RetiredImageBytes = 0UL;
         }
 
         private bool TryCreateGroup(int layerCount, out AtlasGroup group)
@@ -888,6 +1011,30 @@ namespace Njulf.Rendering.Resources
                  BytesPerProbe(SimpleDdgiVolumeManager.VisibilityTexelsPerProbe)));
         }
 
+        internal static int CalculateSafeCopyProbeCount(
+            int requestedProbeCount,
+            int sampledProbeCapacity,
+            ulong irradianceBufferBytes,
+            ulong visibilityBufferBytes)
+        {
+            if (requestedProbeCount <= 0 || sampledProbeCapacity <= 0)
+                return 0;
+
+            ulong irradianceCapacity = irradianceBufferBytes /
+                BytesPerProbe(SimpleDdgiVolumeManager.IrradianceTexelsPerProbe);
+            ulong visibilityCapacity = visibilityBufferBytes /
+                BytesPerProbe(SimpleDdgiVolumeManager.VisibilityTexelsPerProbe);
+            ulong sourceCapacity = Math.Min(
+                irradianceCapacity,
+                visibilityCapacity);
+            ulong bounded = Math.Min(
+                Math.Min(
+                    checked((ulong)requestedProbeCount),
+                    checked((ulong)sampledProbeCapacity)),
+                sourceCapacity);
+            return checked((int)bounded);
+        }
+
         internal static bool TryResolveProbeLayer(
             int probeIndex,
             int layersPerTexture,
@@ -923,22 +1070,18 @@ namespace Njulf.Rendering.Resources
                 return;
 
             _disposed = true;
-            if (IsReady)
-                WaitForDeviceIdle("Simple DDGI sampled-atlas dispose");
             DestroyImageResources();
+            DestroyRetiredAllocationsAfterDeviceIdle();
             if (_sampler.Handle != 0)
                 _context.Api.DestroySampler(_context.Device, _sampler, null);
             _sampler = default;
             GC.SuppressFinalize(this);
         }
 
-        private void WaitForDeviceIdle(string description)
-        {
-            _recordRuntimeStall(
-                RuntimeStallReason.ResourceResize,
-                description,
-                _context.WaitIdle);
-        }
+        private readonly record struct RetiredAtlasAllocation(
+            AtlasGroup[] Groups,
+            ulong Bytes,
+            GpuCompletionToken Completion);
 
         private sealed class AtlasGroup
         {

@@ -523,6 +523,20 @@ namespace Njulf.Rendering.Descriptors
         /// </summary>
         public const int SimpleDdgiSchedulerArenaBuffer = EnvironmentGiDataBuffer + 1;
 
+        /// <summary>
+        /// Compact receiver-only Simple-DDGI probe projection. Appended after
+        /// the scheduler arena so every previously published static index stays
+        /// stable.
+        /// </summary>
+        public const int SimpleDdgiReceiverProbeBuffer = SimpleDdgiSchedulerArenaBuffer + 1;
+
+        /// <summary>
+        /// Simple-DDGI virtual-page table, reverse owners, demand history,
+        /// deterministic reconciliation scratch, and fixed feedback summary.
+        /// Appended so all previously published static indices remain stable.
+        /// </summary>
+        public const int SimpleDdgiResidencyArenaBuffer = SimpleDdgiReceiverProbeBuffer + 1;
+
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
         // ============================================
@@ -654,7 +668,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
 
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = SimpleDdgiSchedulerArenaBuffer + 1;
+        public const int StaticBufferCount = SimpleDdgiResidencyArenaBuffer + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -844,6 +858,8 @@ namespace Njulf.Rendering.Descriptors
                     EnvironmentPrefilterDataBuffer => nameof(EnvironmentPrefilterDataBuffer),
                     EnvironmentGiDataBuffer => nameof(EnvironmentGiDataBuffer),
                     SimpleDdgiSchedulerArenaBuffer => nameof(SimpleDdgiSchedulerArenaBuffer),
+                    SimpleDdgiReceiverProbeBuffer => nameof(SimpleDdgiReceiverProbeBuffer),
+                    SimpleDdgiResidencyArenaBuffer => nameof(SimpleDdgiResidencyArenaBuffer),
                     _ => "Unknown"
                 };
             }

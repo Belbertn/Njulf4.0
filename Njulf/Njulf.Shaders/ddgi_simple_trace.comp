@@ -5,6 +5,7 @@
 
 #include "common.glsl"
 #define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
+#define SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE 1
 #include "ddgi_simple_shared.glsl"
 #include "farfield_clipmap.glsl"
 
@@ -252,6 +253,15 @@ void main()
             1u << 2u);
         return;
     }
+    if (!SimpleDdgiUpdateMatchesLiveAddress(params, update))
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 0u);
+        return;
+    }
 
     SimpleDdgiVolume volume;
     uint localProbeIndex;
@@ -265,7 +275,10 @@ void main()
         return;
     }
     SimpleDdgiProbeState probeState = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
-    if (!SimpleDdgiUpdateMatchesProbeGeneration(update, probeState))
+    if (!SimpleDdgiUpdateMatchesProbeGenerationAndRecord(
+            params,
+            update,
+            probeState))
     {
         SimpleDdgiSchedulerFailOutcome(
             pc.SchedulerArenaBufferIndex,
@@ -298,6 +311,17 @@ void main()
     vec3 direction = SimpleDdgiFibonacciDirection(directionRayIndex, params.raysPerProbe, rayRotation);
     bool transportV2 = (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u;
     bool sourceRefresh = SimpleDdgiUpdateRequiresSourceRefresh(update);
+    // Invalidating source work commits the next physical generation only
+    // after every producer completes. Stamp cache entries with that future
+    // generation now so the committed public state and complete source
+    // sequence become current atomically from the next transaction onward.
+    uint sourceCacheProbeGeneration = SimpleDdgiProbeGeneration(probeState);
+    if (sourceRefresh &&
+        (update.flags & SIMPLE_DDGI_UPDATE_INVALIDATE) != 0u)
+    {
+        sourceCacheProbeGeneration =
+            NextSimpleDdgiPhysicalGeneration(sourceCacheProbeGeneration);
+    }
     bool relocationRetryPending =
         (probeState.flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u;
     float maxDistance = max(volume.spacing * float(max(max(volume.gridCount.x, volume.gridCount.y), volume.gridCount.z)), volume.spacing);
@@ -328,7 +352,7 @@ void main()
         SimpleDdgiTransportRayCache cachedSource;
         if (ReadSimpleDdgiTransportRayCache(
                 pc.TransportSourceCacheBufferIndex,
-                probeIndex,
+                update.physicalProbeIndex,
                 directionRayIndex,
                 params,
                 SimpleDdgiProbeGeneration(probeState),
@@ -716,11 +740,15 @@ void main()
         traceSkyDiffuse,
         hitKind >= 0.5);
 
-    if (transportV2)
+    // A failed cached lookup may trace a safe scratch result for this frame,
+    // but it is not a complete source transaction. Persisting that maintenance
+    // subset would replace one cache entry with the wrong cardinality and
+    // source identity, poisoning all later solves and the frozen audit.
+    if (transportV2 && sourceRefresh)
     {
         WriteSimpleDdgiTransportRayCache(
             pc.TransportSourceCacheBufferIndex,
-            probeIndex,
+            update.physicalProbeIndex,
             directionRayIndex,
             params,
             radiance,
@@ -731,7 +759,9 @@ void main()
             cacheTransmission,
             cacheMaterialOcclusion,
             hitKind,
-            SimpleDdgiProbeGeneration(probeState),
+            sourceCacheProbeGeneration,
+            update.sourceLightingGeneration,
+            update.sourceEpoch,
             sourceRayCount);
     }
     float visibilityDistance = hitDistance;

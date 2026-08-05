@@ -246,7 +246,14 @@ AO debug views:
 | `DdgiHysteresisResponse` | Artist-facing response scale for DDGI probe lighting history. Default `1.0`; higher values converge lighting changes faster, lower values favor stability. |
 | `SimpleDdgiSampledAtlasEnabled` | Enables the optional filtered image mirror of the canonical Simple-DDGI SSBO atlases. High and Ultra request it; the runtime disables it safely if the DDGI memory budget cannot admit the extra image allocation. |
 | `SimpleDdgiReducedBlendEnabled` | Uses the SH irradiance projection on constrained tiers. Low and Medium enable it; High and Ultra use the full irradiance estimator. Visibility moments always use the exact directional ray estimator so reduced mode cannot create sparse zero-moment shadow bands. |
-| `SimpleDdgiTransportResidualThreshold` | Relative fixed-point residual required before Transport V2 can retire a probe. Default `0.025`. |
+| `SimpleDdgiProbeResidencyMode` | Selects `Dense`, `Shadow`, or `SparseNearRing`. `Shadow` collects demand while retaining dense payload addressing. `SparseNearRing` pages only the camera-relative near ring and requires structured gather, Transport V2, toroidal scrolling, the GPU-resident scheduler, and an admitted dense coarser ring. High and Ultra select sparse; Low and Medium remain dense. |
+| `SimpleDdgiSparsePhysicalPageBudget` | Immutable physical capacity of the 2×2×2 near-ring page pool. High defaults to `960`; Ultra defaults to `1440`. A demand spike never grows this allocation. |
+| `SimpleDdgiSparseMinimumPhysicalPageBudget` | Lowest capacity that `Degrade` layout admission may select. High defaults to `768`; Ultra defaults to `1152`. Falling below it rejects sparse admission before Vulkan allocation. |
+| `SimpleDdgiSparseRetentionFrames` | Retention hysteresis for recently relevant resident pages. High defaults to `120`; Ultra defaults to `150`; valid range is 1–3600 frames. |
+| `SimpleDdgiSparseMaximumAdmissionsPerFrame` | Hard per-frame page admission limit. High defaults to `64`; Ultra defaults to `96`. Camera cuts waive old-page retention only under pressure and still obey this limit. |
+| `SimpleDdgiSparseMaximumReceiverFeedbackRequests` | Bound on deduplicated supplemental receiver-page requests per epoch. High defaults to `2048`; Ultra defaults to `4096`. Opaque depth demand remains the primary producer. |
+| `SimpleDdgiSparseInactiveRetryFrames` | Retry interval for pages suppressed after repeated all-inactive classification. Default `300`; geometry/topology invalidation reactivates affected pages immediately. |
+| `SimpleDdgiTransportTailRelativeTolerance` | Relative error bound required by Transport V2 tail certification. Default `0.025`. |
 | `SimpleDdgiTransportMaximumSolverGenerations` | Legacy-named minimum cached-source Jacobi generations required before convergence can retire a probe. Default `8`; a future maximum-work cap should use a separate setting. |
 | `SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold` | Ownership threshold for skipping a containing coarser-ring gather. Default `0.95`; lower values reduce gather work while increasing transition risk, and `1.0` keeps the conservative behavior. |
 | `SimpleDdgiRingBaseSpacing`, `SimpleDdgiRingSpacingMultiplier` | Base near-ring spacing and per-ring spacing multiplier for camera-relative Simple-DDGI rings. |
@@ -262,17 +269,31 @@ AO debug views:
 
 Authored Simple-DDGI volumes are optional standalone local overrides, not required scene coverage. A normal scene starts with an empty authored-volume list and uses the quality tier's camera-relative rings. Add a volume explicitly with only its world-space bounds and desired spacing when a specific room or location needs extra probe density; phase, purpose, and priority have safe defaults for the simple case.
 
-The `DdgiHigh` Simple-DDGI profile uses three asymmetric camera-relative rings: near `28x14x28` at `1.25 m`, mid `18x10x18` at `3.75 m`, and far `12x8x12` at `11.25 m`. This is 15,368 probes total, reaching approximately `±16.9 m / ±8.1 m`, `±31.9 m / ±16.9 m`, and `±61.9 m / ±39.4 m` horizontally/vertically before authored volumes. Its global update budget is 2,048 probes per frame, with near/mid/far preferred quotas of 1,024/324/128 and 128/64/32 full-refresh rays per probe. DDGI diagnostics report each active Simple-DDGI ring's grid, spacing, reach, and exact CPU age P95.
+The `DdgiHigh` Simple-DDGI profile uses three asymmetric camera-relative rings: near `28x14x28` at `1.25 m`, mid `18x10x18` at `3.75 m`, and far `12x8x12` at `11.25 m`. This is 15,368 virtual probes total, reaching approximately `±16.9 m / ±8.1 m`, `±31.9 m / ±16.9 m`, and `±61.9 m / ±39.4 m` horizontally/vertically before authored volumes. The near ring has 1,372 fixed 2×2×2 virtual pages. Its 960-page sparse pool reserves 7,680 near payload probes alongside 4,392 dense mid/far probes; authored volumes remain dense. The exact resident-scheduler fixture is 160,821,296 live bytes versus 201,263,392 bytes for the same-binary Dense plan, a 40,442,096-byte saving, with a 139,024-byte residency arena. Its global update budget remains 2,048 probes per frame, with near/mid/far preferred quotas of 1,024/324/128 and 128/64/32 full-refresh rays per probe.
+
+The page geometry is an internal ABI constant. Sparse allocation is capacity-based, not occupancy-based: diagnostics separately report virtual pages, resident pages, physical capacity, permanently invalid edge-page padding, sampled-atlas 256-layer rounding, dense-equivalent bytes, allocated bytes, and avoided bytes. A full pool leaves excess fine demand nonresident and uses a dense coarser ring; it never reallocates opportunistically.
+
+Runtime overrides are available for controlled capture and qualification:
+
+- `--simple-ddgi-residency-mode=dense|shadow|sparse-near-ring`
+- `--simple-ddgi-sparse-page-budget=<pages>`
+- `--simple-ddgi-sparse-min-page-budget=<pages>`
+- `--simple-ddgi-sparse-retention-frames=<frames>`
+- `--simple-ddgi-sparse-max-admissions=<pages>`
+- `--simple-ddgi-sparse-max-feedback=<requests>`
+- `--simple-ddgi-sparse-inactive-retry-frames=<frames>`
+
+The corresponding environment variables are `NJULF_RENDERER_SIMPLE_DDGI_RESIDENCY_MODE`, `NJULF_RENDERER_SIMPLE_DDGI_SPARSE_PAGE_BUDGET`, `NJULF_RENDERER_SIMPLE_DDGI_SPARSE_MIN_PAGE_BUDGET`, `NJULF_RENDERER_SIMPLE_DDGI_SPARSE_RETENTION_FRAMES`, `NJULF_RENDERER_SIMPLE_DDGI_SPARSE_MAX_ADMISSIONS`, `NJULF_RENDERER_SIMPLE_DDGI_SPARSE_MAX_FEEDBACK`, and `NJULF_RENDERER_SIMPLE_DDGI_SPARSE_INACTIVE_RETRY_FRAMES`.
 
 Simple-DDGI debug views cover irradiance, coverage, update reasons, ray budget, probe state, and ring transitions.
 
 GI debug screenshots are self-identifying: Simple-DDGI views render a category-colored border, a view-id badge, and a legend strip. The sample prints a matching debug-legend line and includes the selected view in the screenshot filename.
 
-Performance snapshots report the Simple-DDGI trace, transport, blend, upload, atlas, and far-field timings alongside bounded scheduler-policy and probe-lifecycle telemetry. The production gate verifies these Simple-DDGI stages, memory budgets, ray-query readiness, and visible-probe latency.
+Performance snapshots report `SimpleDdgiPageDemandPass`, `SimpleDdgiPageResidencyPass`, and `SimpleDdgiPageFeedbackPass` separately from the Simple-DDGI scheduler, trace, transport, blend, publish, upload, atlas, and far-field timings. The production gate applies the 0.20 ms P95 demand-plus-reconciliation gate and verifies the remaining Simple-DDGI stages, memory budgets, ray-query readiness, and visible-probe latency.
 
 The production gate also includes the Phase 9 weak-bounce checks: healthy raw atlas/sample/blend energy must survive into final DDGI diffuse, high environment fallback weight must not mask weak DDGI contribution, emissive validation scenes must show emissive bounce energy, and thin-wall/leak scenes must keep leak attenuation active.
 
-Simple-DDGI debug shortcut cycle order: `FinalIndirect`, `DdgiIrradiance`, `DdgiSourceCacheRadiance`, `DdgiSampledIrradiance`, `DdgiFinalDiffuse`, `DdgiRawDiffuse`, `DdgiConfidenceBypass`, `DdgiSuppressionMask`, `DdgiEffectiveWeight`, `DdgiEnvironmentFallbackWeight`, `DdgiVisibility`, `DdgiVisibilityMoments`, `DdgiProbeIndex`, `DdgiProbeState`, `DdgiProbeRelocation`, `DdgiProbeLogicalPosition`, `DdgiProbeRelocatedPosition`, `DdgiProbeRelocationDirection`, `DdgiClassificationInvalidScore`, `DdgiLeakClamp`, `DdgiCoverage`, `DdgiSpatialCoverage`, `DdgiSupportCoverage`, `DdgiDataConfidence`, `DdgiDirectionalSupport`, `DdgiVisibilityConfidence`, `DdgiConfidenceChain`, `DdgiCascadeSelection`, `DdgiCascadeBlendWeight`, `DdgiUpdateReasons`, `DdgiRayBudget`, `DdgiGatherLocalVolume`, `DdgiGatherClipmap`, `DdgiGatherClipmapBlendWeight`, `DdgiGatherBlendWeight`, `DdgiGatherFallback`, `FarFieldOccupancySlice`, `FarFieldTraceResult`, `FarFieldSkyVisibility`, `FarFieldSunShadow`, `MaterialTransportHitProvenance`, then `None`.
+Simple-DDGI debug shortcut cycle order includes `DdgiProbeResidency`, `DdgiResidencyFallback`, `DdgiPageAge`, and `DdgiPhysicalPage` after `DdgiSourceCacheRadiance`, followed by the existing sampled, confidence, visibility, gather, far-field, and material-provenance views. The residency views preserve the logical virtual grid: nonresident probes remain visible as neutral/hollow markers, while the physical-page view shows page identity/generation only for validation.
 
 `DdgiDataConfidence` displays accepted probe-data availability. `DdgiDirectionalSupport` displays the separate geometric fraction with useful normal-facing support. `DdgiConfidenceChain` encodes availability, directional authority, and transport visibility in RGB. `DdgiIrradiance` uses a normalized logarithmic presentation so low nonzero energy remains distinguishable from exact zero; `DdgiSampledIrradiance` retains the raw linear diagnostic. `DdgiSourceCacheRadiance` uses the same logarithmic presentation for direct, emissive, and sky source-cache energy before recursive bounce.
 

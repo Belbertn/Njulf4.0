@@ -2202,7 +2202,13 @@ internal sealed class SampleInputController
             $"intensity={gi.IndirectIntensity:F2}, fallback={gi.EnvironmentFallbackIntensity:F2}, " +
             $"simpleActive={diagnostics.SimpleDdgiActive != 0}, probes={diagnostics.SimpleDdgiProbeCount}, " +
             $"updated={diagnostics.SimpleDdgiProbesUpdated}, rays={diagnostics.SimpleDdgiRaysPerFrame}, " +
-            $"rayQuery={gi.EffectiveUseRayQueryBackend}/{diagnostics.GlobalIlluminationRayQueryActive}");
+            $"rayQuery={gi.EffectiveUseRayQueryBackend}/{diagnostics.GlobalIlluminationRayQueryActive}, " +
+            $"debugAvailable={RendererBuildFeatures.IsGlobalIlluminationDebugViewAvailable(gi.DebugView)}");
+        string debugAvailabilityReason =
+            RendererBuildFeatures.GetGlobalIlluminationDebugViewAvailabilityReason(
+                gi.DebugView);
+        if (!string.IsNullOrEmpty(debugAvailabilityReason))
+            Console.WriteLine($"{prefix}: {debugAvailabilityReason}");
     }
 
     private void PrintDdgiDiagnostics(string prefix)
@@ -2228,7 +2234,7 @@ internal sealed class SampleInputController
 
         GlobalIlluminationSettings gi = _renderer.Settings.GlobalIllumination;
         ConfigureDdgiOnly(gi);
-        gi.DebugView = NextDdgiDebugView(gi.DebugView);
+        gi.DebugView = NextGlobalIlluminationDebugView(gi.DebugView);
         PrintGlobalIlluminationSettings("DDGI debug");
         PrintDdgiDebugLegend(gi.DebugView);
     }
@@ -2334,7 +2340,18 @@ internal sealed class SampleInputController
 
     internal static GlobalIlluminationDebugView NextGlobalIlluminationDebugView(GlobalIlluminationDebugView mode)
     {
-        return NextDdgiDebugView(mode);
+        GlobalIlluminationDebugView next = mode;
+        // The authored enum remains stable across configurations, but production
+        // shaders intentionally omit receiver-only diagnostics. Skip unavailable
+        // entries instead of selecting a mode whose branch does not exist.
+        for (int remaining = 64; remaining > 0; remaining--)
+        {
+            next = NextDdgiDebugView(next);
+            if (RendererBuildFeatures.IsGlobalIlluminationDebugViewAvailable(next))
+                return next;
+        }
+
+        return GlobalIlluminationDebugView.None;
     }
 
     private static GlobalIlluminationDebugView NextDdgiDebugView(GlobalIlluminationDebugView mode)
@@ -2344,7 +2361,11 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.None => GlobalIlluminationDebugView.FinalIndirect,
             GlobalIlluminationDebugView.FinalIndirect => GlobalIlluminationDebugView.DdgiIrradiance,
             GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiSourceCacheRadiance,
-            GlobalIlluminationDebugView.DdgiSourceCacheRadiance => GlobalIlluminationDebugView.DdgiSampledIrradiance,
+            GlobalIlluminationDebugView.DdgiSourceCacheRadiance => GlobalIlluminationDebugView.DdgiProbeResidency,
+            GlobalIlluminationDebugView.DdgiProbeResidency => GlobalIlluminationDebugView.DdgiResidencyFallback,
+            GlobalIlluminationDebugView.DdgiResidencyFallback => GlobalIlluminationDebugView.DdgiPageAge,
+            GlobalIlluminationDebugView.DdgiPageAge => GlobalIlluminationDebugView.DdgiPhysicalPage,
+            GlobalIlluminationDebugView.DdgiPhysicalPage => GlobalIlluminationDebugView.DdgiSampledIrradiance,
             GlobalIlluminationDebugView.DdgiSampledIrradiance => GlobalIlluminationDebugView.DdgiFinalDiffuse,
             GlobalIlluminationDebugView.DdgiFinalDiffuse => GlobalIlluminationDebugView.DdgiRawDiffuse,
             GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiConfidenceBypass,
@@ -2389,6 +2410,20 @@ internal sealed class SampleInputController
 
     private static GlobalIlluminationDebugView NextDdgiInvestigationDebugView(GlobalIlluminationDebugView mode)
     {
+        GlobalIlluminationDebugView next = mode;
+        for (int remaining = 64; remaining > 0; remaining--)
+        {
+            next = NextDdgiInvestigationDebugViewCandidate(next);
+            if (RendererBuildFeatures.IsGlobalIlluminationDebugViewAvailable(next))
+                return next;
+        }
+
+        return GlobalIlluminationDebugView.None;
+    }
+
+    private static GlobalIlluminationDebugView NextDdgiInvestigationDebugViewCandidate(
+        GlobalIlluminationDebugView mode)
+    {
         return mode switch
         {
             GlobalIlluminationDebugView.DdgiGatherClipmap => GlobalIlluminationDebugView.DdgiGatherBlendWeight,
@@ -2399,7 +2434,11 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiDirectionalSupport => GlobalIlluminationDebugView.DdgiConfidenceChain,
             GlobalIlluminationDebugView.DdgiConfidenceChain => GlobalIlluminationDebugView.DdgiIrradiance,
             GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiSourceCacheRadiance,
-            GlobalIlluminationDebugView.DdgiSourceCacheRadiance => GlobalIlluminationDebugView.DdgiSampledIrradiance,
+            GlobalIlluminationDebugView.DdgiSourceCacheRadiance => GlobalIlluminationDebugView.DdgiProbeResidency,
+            GlobalIlluminationDebugView.DdgiProbeResidency => GlobalIlluminationDebugView.DdgiResidencyFallback,
+            GlobalIlluminationDebugView.DdgiResidencyFallback => GlobalIlluminationDebugView.DdgiPageAge,
+            GlobalIlluminationDebugView.DdgiPageAge => GlobalIlluminationDebugView.DdgiPhysicalPage,
+            GlobalIlluminationDebugView.DdgiPhysicalPage => GlobalIlluminationDebugView.DdgiSampledIrradiance,
             GlobalIlluminationDebugView.DdgiSampledIrradiance => GlobalIlluminationDebugView.DdgiFinalDiffuse,
             GlobalIlluminationDebugView.DdgiFinalDiffuse => GlobalIlluminationDebugView.DdgiRawDiffuse,
             GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiConfidenceBypass,
@@ -2412,11 +2451,29 @@ internal sealed class SampleInputController
 
     private static GlobalIlluminationDebugView NextFocusedGlobalIlluminationDebugView(GlobalIlluminationDebugView mode)
     {
+        GlobalIlluminationDebugView next = mode;
+        for (int remaining = 64; remaining > 0; remaining--)
+        {
+            next = NextFocusedGlobalIlluminationDebugViewCandidate(next);
+            if (RendererBuildFeatures.IsGlobalIlluminationDebugViewAvailable(next))
+                return next;
+        }
+
+        return GlobalIlluminationDebugView.None;
+    }
+
+    private static GlobalIlluminationDebugView NextFocusedGlobalIlluminationDebugViewCandidate(
+        GlobalIlluminationDebugView mode)
+    {
         return mode switch
         {
             GlobalIlluminationDebugView.FinalIndirect => GlobalIlluminationDebugView.DdgiIrradiance,
             GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiSourceCacheRadiance,
-            GlobalIlluminationDebugView.DdgiSourceCacheRadiance => GlobalIlluminationDebugView.DdgiSampledIrradiance,
+            GlobalIlluminationDebugView.DdgiSourceCacheRadiance => GlobalIlluminationDebugView.DdgiProbeResidency,
+            GlobalIlluminationDebugView.DdgiProbeResidency => GlobalIlluminationDebugView.DdgiResidencyFallback,
+            GlobalIlluminationDebugView.DdgiResidencyFallback => GlobalIlluminationDebugView.DdgiPageAge,
+            GlobalIlluminationDebugView.DdgiPageAge => GlobalIlluminationDebugView.DdgiPhysicalPage,
+            GlobalIlluminationDebugView.DdgiPhysicalPage => GlobalIlluminationDebugView.DdgiSampledIrradiance,
             GlobalIlluminationDebugView.DdgiSampledIrradiance => GlobalIlluminationDebugView.DdgiFinalDiffuse,
             GlobalIlluminationDebugView.DdgiFinalDiffuse => GlobalIlluminationDebugView.DdgiRawDiffuse,
             GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiConfidenceBypass,
@@ -2469,6 +2526,10 @@ internal sealed class SampleInputController
             or GlobalIlluminationDebugView.DdgiDataConfidence
             or GlobalIlluminationDebugView.DdgiDirectionalSupport
             or GlobalIlluminationDebugView.DdgiSourceCacheRadiance
+            or GlobalIlluminationDebugView.DdgiProbeResidency
+            or GlobalIlluminationDebugView.DdgiResidencyFallback
+            or GlobalIlluminationDebugView.DdgiPageAge
+            or GlobalIlluminationDebugView.DdgiPhysicalPage
             or GlobalIlluminationDebugView.DdgiVisibilityConfidence
             or GlobalIlluminationDebugView.DdgiConfidenceChain
             or GlobalIlluminationDebugView.DdgiProbeLogicalPosition
@@ -2515,6 +2576,14 @@ internal sealed class SampleInputController
                 "magenta border; red = fallback, green = fast gather.",
             GlobalIlluminationDebugView.DdgiProbeLogicalPosition =>
                 "yellow border; repeated world-position bands. Useful to spot wrong clipmap addressing.",
+            GlobalIlluminationDebugView.DdgiProbeResidency =>
+                "cyan border; green = published, yellow = resident fresh, red = demanded missing, blue = retained, magenta = suppressed, grey = nonresident.",
+            GlobalIlluminationDebugView.DdgiResidencyFallback =>
+                "magenta border; green = no residency miss, red = missing fine ownership, supplier hue identifies the coarser ring.",
+            GlobalIlluminationDebugView.DdgiPageAge =>
+                "cyan border; resident pages progress cyan to red at retention expiry; magenta = suppressed and grey = nonresident.",
+            GlobalIlluminationDebugView.DdgiPhysicalPage =>
+                "yellow border; stable hash of physical page and mapping generation; grey = no physical owner.",
             _ => "DDGI debug view; border/badge encodes view category and id."
         };
     }

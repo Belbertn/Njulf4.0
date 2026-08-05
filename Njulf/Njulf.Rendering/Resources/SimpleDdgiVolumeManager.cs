@@ -137,7 +137,13 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
     uint StaticConvergedGeneration = 0U,
     bool StaticConvergencePending = false,
     ulong StaleReadbackRejectionCount = 0UL,
-    ulong ResourceGenerationRejectionCount = 0UL)
+    ulong ResourceGenerationRejectionCount = 0UL,
+    bool ResidencyFeedbackComplete = true,
+    uint ResidencyEventSourceGeneration = 0U,
+    uint ResidencyEventCohortGeneration = 0U,
+    int ResidencyAdmissionProbeCount = 0,
+    int ResidencyEvictionProbeCount = 0,
+    int ResidencyOtherGenerationEvictionProbeCount = 0)
 {
     public GiAtmosphereCohortFeedback ToAdmissionFeedback() => new(
         ConsumesSteppedAtmosphere: true,
@@ -172,7 +178,13 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         StaticConvergedGeneration,
         StaticConvergencePending,
         StaleReadbackRejectionCount,
-        ResourceGenerationRejectionCount);
+        ResourceGenerationRejectionCount,
+        ResidencyFeedbackComplete,
+        ResidencyEventSourceGeneration,
+        ResidencyEventCohortGeneration,
+        ResidencyAdmissionProbeCount,
+        ResidencyEvictionProbeCount,
+        ResidencyOtherGenerationEvictionProbeCount);
 }
 
     /// <summary>
@@ -189,6 +201,14 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         DdgiQualityTier QualityTier,
         ulong TopologyFingerprint,
         int ProbeCount,
+        SimpleDdgiProbeResidencyMode ResidencyMode,
+        int DensePayloadProbeCount,
+        int SparseVirtualProbeCount,
+        int SparseVirtualPageCount,
+        int SparsePhysicalPageCapacity,
+        int PhysicalProbeCapacity,
+        ulong ResidencyArenaBytes,
+        ulong ResidencyFeedbackReadbackBytes,
         int RayCapacity,
         int RequestCapacity,
         bool ReadbackRequired,
@@ -196,6 +216,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         bool SampledAtlasProvisioningAvailable,
         ulong SampledAtlasBudgetBytes,
         bool TransportV2Enabled,
+        SimpleDdgiSchedulerMode SchedulerMode,
+        int SchedulerActiveLaneCount,
+        ulong SchedulerArenaBytes,
+        ulong SchedulerValidationReadbackBytes,
         bool FeatureEnabled);
 
     public sealed class SimpleDdgiVolumeManager : IDisposable
@@ -209,8 +233,16 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private const int VolumeKindRing = 2;
         private static readonly ulong ParamsSize = (ulong)Marshal.SizeOf<GPUSimpleDdgiParams>();
         private static readonly ulong VolumeStride = (ulong)Marshal.SizeOf<GPUSimpleDdgiVolume>();
-        private static readonly ulong ParamsBufferSize = ParamsSize + VolumeStride * GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount;
+        private static readonly ulong VolumePagingStride =
+            (ulong)Marshal.SizeOf<GPUSimpleDdgiVolumePaging>();
+        private static readonly ulong ParamsBufferSize =
+            ParamsSize +
+            VolumeStride * GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount +
+            VolumePagingStride *
+                GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount;
         private static readonly ulong ProbeStateStride = (ulong)Marshal.SizeOf<GPUSimpleDdgiProbeState>();
+        private static readonly ulong ReceiverProbeStride =
+            (ulong)Marshal.SizeOf<GPUSimpleDdgiReceiverProbe>();
         private static readonly ulong RelocationClassificationStride =
             (ulong)Marshal.SizeOf<GPUSimpleDdgiRelocationClassification>();
         private const uint ProbeStateFreshFlag = 1u << 0;
@@ -324,11 +356,23 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private readonly BufferManager _bufferManager;
         private readonly RenderSettings _settings;
         private readonly Action<RuntimeStallReason, string, Action> _recordRuntimeStall;
+        private readonly Func<ulong> _waitForBindlessDescriptorReaders;
         private readonly SimpleDdgiGpuScheduler _gpuScheduler;
-        private readonly List<RetiredBufferResource> _retiredBuffers = new();
-        private ulong _retiredBufferBytes;
+        private readonly SimpleDdgiProbePageCache _probePageCache;
+        private const int BufferRetirementCapacity = 512;
+        private readonly GpuCompletionRetirementQueue _bufferRetirement =
+            new(BufferRetirementCapacity);
+        private readonly GpuRetirementRecord[] _bufferRetirementScratch =
+            new GpuRetirementRecord[BufferRetirementCapacity];
+        private ulong _lastSubmittedFrameFenceValue;
+        private ulong _completedFrameFenceValue;
+        private ulong _resourceLastUseFrameFenceValue;
+        private bool _capacityTransitionDeferred;
+        private string _capacityTransitionDeferredReason = string.Empty;
         private readonly List<VolumeCandidate> _volumeCandidates = new(GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount + 3);
         private readonly GPUSimpleDdgiVolume[] _volumeScratch = new GPUSimpleDdgiVolume[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
+        private readonly GPUSimpleDdgiVolumePaging[] _volumePagingScratch =
+            new GPUSimpleDdgiVolumePaging[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
         private readonly GPUSimpleDdgiVolume[] _previousVolumeScratch = new GPUSimpleDdgiVolume[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
         private readonly SimpleDdgiVolumePurpose[] _volumePurposes = new SimpleDdgiVolumePurpose[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
         private readonly int[] _volumePriorities = new int[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
@@ -353,6 +397,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private readonly GPUSimpleDdgiProbeState[] _probeStateScratch = new GPUSimpleDdgiProbeState[GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount];
         private readonly List<int> _probeStateDirtySlots = new(GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount);
         private readonly List<BufferUploadRun> _probeStateUploadRuns = new(256);
+        private readonly GPUSimpleDdgiReceiverProbe[] _receiverProbeInvalidationScratch =
+            new GPUSimpleDdgiReceiverProbe[GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount];
+        private readonly List<int> _receiverProbeInvalidationSlots =
+            new(GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount);
+        private readonly List<BufferUploadRun> _receiverProbeUploadRuns = new(256);
         private const int MaxSparseProbeStateUploadRuns = 256;
         // Diagnostics need an exact per-volume age percentile. Reusing one bounded
         // selection buffer avoids allocations and avoids sorting the whole probe pool.
@@ -500,6 +549,14 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private uint[] _probeInvalidationMarkers = Array.Empty<uint>();
         private uint _nextProbeInvalidationMarkerSerial;
         private uint _currentProbeInvalidationMarkerSerial;
+        // GPU-resident regional invalidation uses an event generation, not the
+        // CPU's per-frame deduplication serial. A dirty producer may publish the
+        // same region for several frames; advancing this value every frame would
+        // make already-committed probes look dirty again indefinitely and prevent
+        // the complete source cohort from ever entering its solve epoch.
+        private uint _gpuDirtyRegionGeneration = 1u;
+        private bool _gpuDirtyRegionsPresentLastFrame;
+        private ulong _gpuDirtyRegionSignature;
         // These mirrors make a full state upload safe during a scroll or regional
         // invalidation.  Without them, a fresh-slice upload would accidentally
         // erase relocation/classification for every preserved physical slot.
@@ -570,6 +627,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private BufferHandle _visibilityAtlasBuffer;
         private BufferHandle _rayResultScratchBuffer;
         private BufferHandle _probeStateBuffer;
+        private BufferHandle _receiverProbeBuffer;
         private BufferHandle _probeUpdateQueueBuffer;
         private BufferHandle _relocationClassificationBuffer;
         private readonly BufferHandle[] _probeStateReadbackBuffers = new BufferHandle[RenderingConstants.FramesInFlight];
@@ -606,6 +664,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private ulong _visibilityAtlasBytes;
         private ulong _rayScratchBytes;
         private ulong _probeStateBytes;
+        private ulong _receiverProbeBytes;
         private ulong _probeUpdateQueueBytes;
         private ulong _relocationClassificationBytes;
         private ulong _probeStateReadbackBufferBytes;
@@ -641,6 +700,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private bool _atlasClearedThisFrame;
         private bool _atlasFresh = true;
         private bool _probeStateUploadRequired = true;
+        private bool _receiverProbeClearRequired = true;
+        private ulong _receiverProbeInvalidationBytesThisFrame;
+        private int _receiverProbeInvalidationRunCountThisFrame;
+        private bool _receiverProbeFullClearThisFrame;
         private int _totalRecenterCount;
         private int _totalAtlasClearCount;
         private int _totalAtlasPreserveOnRecenterCount;
@@ -698,6 +761,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private int _transportPublishRegionCount;
         private int _currentTransportPublishedProbeCount;
         private int _currentTransportPublishRegionCount;
+        private int _receiverRecordsPublishedCount;
+        private int _currentReceiverRecordsPublishedCount;
         private ulong _transportPublishedProbeTotal;
         private ulong _updateTransactionAbortCount;
         private ulong _sourceCacheInvalidationCount;
@@ -709,6 +774,12 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private int _completedSourceRefreshProbeCount;
         private int _currentCompletedSourceRefreshProbeCount;
         private uint _sourceLightingGeneration = 1u;
+        // Global witness for changes to the set of per-probe source epochs.
+        // This is intentionally distinct from both the lighting generation and
+        // each probe's cache identity; frozen audits use it only to detect that
+        // their epoch set changed while the GPU compares cache entries against
+        // the owning probe's exact epoch.
+        private uint _sourceEpochGeneration = 1u;
         private bool _sourceCohortTransitionActive;
         private uint _sourceCohortTransitionStartFrame;
         private ulong _sourceCohortTransitionCount;
@@ -809,6 +880,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private SimpleDdgiCapacityResourceTelemetry _uploadCapacityTransportSourceCache;
         private SimpleDdgiCapacityResourceTelemetry _uploadCapacityRayScratch;
         private SimpleDdgiCapacityResourceTelemetry _uploadCapacityProbeState;
+        private SimpleDdgiCapacityResourceTelemetry _uploadCapacityReceiverProbes;
         private SimpleDdgiCapacityResourceTelemetry _uploadCapacityUpdateQueue;
         private SimpleDdgiCapacityResourceTelemetry _uploadCapacityRelocationClassification;
         private SimpleDdgiCapacityResourceTelemetry _uploadCapacityReadback;
@@ -847,10 +919,25 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private bool _gpuResidentProbeStateBootstrapped;
         private GPUSimpleDdgiSchedulerFeedback _lastGpuSchedulerFeedback;
         private bool _gpuSchedulerFeedbackValid;
+        private GPUSimpleDdgiResidencyFeedback _lastProbeResidencyFeedback;
+        private bool _probeResidencyFeedbackValid;
+        private ulong _probeResidencyFeedbackFrameSerial;
+        private ulong _probeResidencyFeedbackGenerationRejectionCount;
+        private uint _probeResidencyGeometryGeneration = 1u;
+        private uint _lastProbeResidencyDemandEpochResetFrame = uint.MaxValue;
+        private bool _probeResidencyMutationUnavailable;
+        private string _probeResidencyMutationFailureReason = string.Empty;
         private ulong _gpuSchedulerFeedbackFrameSerial;
         private ulong _gpuSchedulerFeedbackGenerationRejectionCount;
         private bool _gpuSchedulerFallbackLatched;
         private bool _gpuSchedulerFallbackFreshResetPending;
+        private bool _gpuSchedulerFallbackExportRequested;
+        private bool _gpuSchedulerFallbackExportSubmitted;
+        private SimpleDdgiSchedulerStateExportTag _gpuSchedulerFallbackExportTag;
+        private int _gpuSchedulerReentryStableFrameCount;
+        private ulong _gpuSchedulerStateExportSuccessCount;
+        private ulong _gpuSchedulerStateExportFailureCount;
+        private ulong _gpuSchedulerReentryCount;
         private ulong _gpuSchedulerFallbackCount;
         private int _gpuSchedulerGenerationMismatchStreak;
         private string _gpuSchedulerFallbackReason = string.Empty;
@@ -861,14 +948,22 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             VulkanContext context,
             BufferManager bufferManager,
             RenderSettings settings,
-            Action<RuntimeStallReason, string, Action> recordRuntimeStall)
+            Action<RuntimeStallReason, string, Action> recordRuntimeStall,
+            Func<ulong> waitForBindlessDescriptorReaders)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _recordRuntimeStall = recordRuntimeStall ??
                 throw new ArgumentNullException(nameof(recordRuntimeStall));
+            _waitForBindlessDescriptorReaders =
+                waitForBindlessDescriptorReaders ??
+                throw new ArgumentNullException(
+                    nameof(waitForBindlessDescriptorReaders));
             _gpuScheduler = new SimpleDdgiGpuScheduler(_context, _bufferManager);
+            _probePageCache = new SimpleDdgiProbePageCache(
+                _context,
+                _bufferManager);
 
             int schedulerQueueCount =
                 GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount * SchedulerWorkClassCount;
@@ -900,10 +995,55 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         public int ProbesToUpdate => _probesToUpdate;
         public SimpleDdgiSchedulerMode SchedulerMode => _schedulerMode;
         public ulong FrameSerial => _frameSerial;
+        public uint FrameIndex => _frameIndex;
         public SimpleDdgiGpuScheduler GpuScheduler => _gpuScheduler;
+        public SimpleDdgiProbePageCache ProbePageCache => _probePageCache;
+        public SimpleDdgiProbeResidencyMode ProbeResidencyMode =>
+            _capacityPlan.ResidencyMode.Sanitize();
+        public uint ProbeResidencyResourceGeneration =>
+            _probePageCache.ResourceGeneration;
+        public ulong ProbeResidencyArenaBytes => _probePageCache.ArenaBytes;
+        public ulong ProbeResidencyFeedbackReadbackBytes =>
+            _probePageCache.FeedbackReadbackBytes;
+        public ulong ProbeResidencyRetiredBytes => _probePageCache.RetiredBytes;
+        public bool ProbeResidencyMutationFrozen => _probePageCache.Frozen;
+        public bool ProbeResidencyDevelopmentMutationFrozen =>
+            _probePageCache.DevelopmentFrozen;
+        public bool ProbeResidencyStateValid => _probePageCache.ResidencyValid;
+        public string ProbeResidencyFailureReason => _probePageCache.FailureReason;
+        public ulong ProbeResidencyDevelopmentControlCommandCount =>
+            _probePageCache.DevelopmentControlCommandCount;
+        public int ProbeResidencyLastDevelopmentControlledVirtualPage =>
+            _probePageCache.LastDevelopmentControlledVirtualPage;
+        public bool ProbeResidencyLastDevelopmentPinState =>
+            _probePageCache.LastDevelopmentPinState;
+        public GPUSimpleDdgiResidencyFeedback LastProbeResidencyFeedback =>
+            _lastProbeResidencyFeedback;
+        public bool ProbeResidencyFeedbackValid =>
+            _capacityPlan.ResidencyMode.CollectsDemand() &&
+            _probeResidencyFeedbackValid;
+        public ulong ProbeResidencyFeedbackFrameSerial =>
+            _probeResidencyFeedbackFrameSerial;
+        public ulong ProbeResidencyFeedbackGenerationRejectionCount =>
+            _probeResidencyFeedbackGenerationRejectionCount;
+        public uint ProbeResidencyGeometryGeneration =>
+            _probeResidencyGeometryGeneration;
+        public int ProbeResidencyConfiguredPhysicalPageBudget =>
+            _settings.GlobalIllumination.SimpleDdgiSparsePhysicalPageBudget;
+        public int ProbeResidencyConfiguredMinimumPhysicalPageBudget =>
+            _settings.GlobalIllumination.SimpleDdgiSparseMinimumPhysicalPageBudget;
+        public int ProbeResidencyRetentionFrames =>
+            _settings.GlobalIllumination.SimpleDdgiSparseRetentionFrames;
+        public int ProbeResidencyMaximumAdmissionsPerFrame =>
+            _settings.GlobalIllumination.SimpleDdgiSparseMaximumAdmissionsPerFrame;
+        public int ProbeResidencyMaximumReceiverFeedbackRequests =>
+            _settings.GlobalIllumination.SimpleDdgiSparseMaximumReceiverFeedbackRequests;
+        public int ProbeResidencyInactiveRetryFrames =>
+            _settings.GlobalIllumination.SimpleDdgiSparseInactiveRetryFrames;
         public BufferHandle GpuSchedulerArenaBuffer => _gpuScheduler.ArenaBuffer;
         public ulong GpuSchedulerArenaBytes => _gpuScheduler.ArenaBytes;
         public ulong GpuSchedulerFeedbackReadbackBytes => _gpuScheduler.FeedbackReadbackBytes;
+        public ulong GpuSchedulerAuditReadbackBytes => _gpuScheduler.AuditReadbackBytes;
         public ulong GpuSchedulerRetiredBytes => _gpuScheduler.RetiredBytes;
         public GPUSimpleDdgiSchedulerFeedback LastGpuSchedulerFeedback => _lastGpuSchedulerFeedback;
         public bool GpuSchedulerFeedbackValid => _gpuSchedulerFeedbackValid;
@@ -915,6 +1055,16 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _gpuSchedulerFallbackFreshResetPending;
         public ulong GpuSchedulerFallbackCount => _gpuSchedulerFallbackCount;
         public string GpuSchedulerFallbackReason => _gpuSchedulerFallbackReason;
+        public bool GpuSchedulerFallbackExportPending =>
+            _gpuSchedulerFallbackExportRequested ||
+            _gpuSchedulerFallbackExportSubmitted;
+        public int GpuSchedulerReentryStableFrameCount =>
+            _gpuSchedulerReentryStableFrameCount;
+        public ulong GpuSchedulerStateExportSuccessCount =>
+            _gpuSchedulerStateExportSuccessCount;
+        public ulong GpuSchedulerStateExportFailureCount =>
+            _gpuSchedulerStateExportFailureCount;
+        public ulong GpuSchedulerReentryCount => _gpuSchedulerReentryCount;
         public bool GpuSchedulerFrameExecutionAvailable =>
             _gpuSchedulerFrameExecutionAvailable;
         public ReadOnlySpan<SimpleDdgiRayDispatchBatch> RayDispatchBatches =>
@@ -930,9 +1080,16 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _visibilityAtlasBytes +
             _rayScratchBytes +
             _probeStateBytes +
+            _receiverProbeBytes +
             _probeUpdateQueueBytes +
             _relocationClassificationBytes +
-            _probeStateReadbackBufferBytes;
+            _probeStateReadbackBufferBytes +
+            _gpuScheduler.ArenaBytes +
+            _gpuScheduler.FeedbackReadbackBytes +
+            _gpuScheduler.AuditReadbackBytes +
+            _gpuScheduler.FallbackStateExportBytes +
+            _probePageCache.ArenaBytes +
+            _probePageCache.FeedbackReadbackBytes;
         public ulong IrradianceAtlasBytes => _irradianceAtlasBytes;
         /// <summary>Private V2 Jacobi target; never sampled by receivers.</summary>
         public ulong TransportIrradianceAtlasBytes => _transportIrradianceAtlasBytes;
@@ -942,7 +1099,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         /// </summary>
         public uint GpuSchedulerPrivateVisibilityOffsetWords =>
             _schedulerMode == SimpleDdgiSchedulerMode.GpuResident
-                ? checked((uint)((ulong)Math.Max(0, _probeCount) *
+                ? checked((uint)((ulong)Math.Max(
+                    0,
+                    _capacityPlan.PhysicalProbeCapacity) *
                     SimpleDdgiMemoryPlan.IrradianceBytesPerProbe / sizeof(uint)))
                 : 0u;
         /// <summary>Persistent V2 direct/sky/emissive source cache allocation.</summary>
@@ -959,17 +1118,35 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         public ulong AtlasBytes => checked(AtlasBufferBytes + SampledAtlasImageBytes);
         public ulong RayScratchBytes => _rayScratchBytes;
         public ulong ProbeStateBytes => _probeStateBytes;
+        public ulong ReceiverProbeBytes => _receiverProbeBytes;
+        /// <summary>
+        /// Number of compact receiver records provisioned by the current
+        /// allocation. This includes the single fail-closed placeholder used
+        /// while Simple DDGI is inactive.
+        /// </summary>
+        public int ReceiverProbeCapacity => checked((int)(
+            _receiverProbeBytes / SimpleDdgiMemoryPlan.ReceiverProbeBytesPerProbe));
+        public ulong ReceiverProbeInvalidationBytesThisFrame =>
+            _receiverProbeInvalidationBytesThisFrame;
+        public int ReceiverProbeInvalidationRunCountThisFrame =>
+            _receiverProbeInvalidationRunCountThisFrame;
+        public bool ReceiverProbeFullClearThisFrame =>
+            _receiverProbeFullClearThisFrame;
         public ulong ProbeUpdateQueueBytes => _probeUpdateQueueBytes;
         public ulong RelocationClassificationBytes => _relocationClassificationBytes;
         public ulong ProbeStateReadbackBytes => _probeStateReadbackBufferBytes;
-        public int RetiredBufferCount => _retiredBuffers.Count;
-        public ulong RetiredBufferBytes => _retiredBufferBytes;
+        public int RetiredBufferCount => _bufferRetirement.ActiveCount;
+        public ulong RetiredBufferBytes => _bufferRetirement.ActiveBytes;
+        public bool CapacityTransitionDeferred => _capacityTransitionDeferred;
+        public string CapacityTransitionDeferredReason =>
+            _capacityTransitionDeferredReason;
         /// <summary>All non-atlas buffer allocation; never subtract image bytes from buffers.</summary>
         public ulong NonAtlasBufferBytes => BufferBytes - AtlasBufferBytes;
         public bool SampledAtlasRequested => _settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled;
         public bool SampledAtlasActive => SampledAtlasRequested &&
             _registeredBindlessHeap != null &&
-            _sampledAtlas?.IsReady == true;
+            _sampledAtlas?.IsReady == true &&
+            string.IsNullOrEmpty(_sampledAtlasFallbackReason);
         public bool SampledAtlasGpuPublicationRequired =>
             SampledAtlasActive && _sampledAtlasGpuPublicationAvailable;
         public string SampledAtlasFallbackReason => SampledAtlasActive
@@ -994,6 +1171,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         public BufferHandle VisibilityAtlasBuffer => _visibilityAtlasBuffer;
         public BufferHandle RayResultScratchBuffer => _rayResultScratchBuffer;
         public BufferHandle ProbeStateBuffer => _probeStateBuffer;
+        public BufferHandle ReceiverProbeBuffer => _receiverProbeBuffer;
         public BufferHandle ProbeUpdateQueueBuffer => _probeUpdateQueueBuffer;
         public Silk.NET.Vulkan.Buffer GetProbeUpdateQueueVkBuffer() =>
             _bufferManager.GetBuffer(_probeUpdateQueueBuffer);
@@ -1043,10 +1221,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         _sourceSweepFramesPerSecond))
                 : ResolveEffectiveTransportSourceRefreshFrames(
                     _settings.GlobalIllumination.SimpleDdgiTransportSourceRefreshFrames,
-                    _probeCount,
+                    ResolveTransportRefreshParticipantCount(),
                     _settings.GlobalIllumination.SimpleDdgiProbeUpdatesPerFrame,
-                    _settings.GlobalIllumination.SimpleDdgiTransportAcceleratedSweepCount,
-                    _settings.GlobalIllumination.SimpleDdgiStableMaintenanceUpdateCount);
+                    _probeCount,
+                    TransportAuditProbeChunkSize);
         public int SourceRefreshTargetProbeCount => _sourceRefreshTargetProbeCount;
         public int SourceRefreshCapacityShortfall => _sourceRefreshCapacityShortfall;
         /// <summary>Exact mixed-tier source-ray target, not a probe-count proxy.</summary>
@@ -1078,6 +1256,13 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _settings.Environment.SourceKind == EnvironmentSourceKind.ProceduralSky;
         public int SourceCacheReuseProbeCount => _sourceCacheReuseProbeCount;
         public int TransportPublishedProbeCount => _transportPublishedProbeCount;
+        /// <summary>
+        /// Fence-complete compact receiver publications. CPU/GPU-mirror modes
+        /// expose the preceding recorded transaction; resident mode uses the
+        /// scheduler's delayed exact commit witness.
+        /// </summary>
+        public int ReceiverRecordsPublishedCount =>
+            _receiverRecordsPublishedCount;
         public int TransportPublishRegionCount => _transportPublishRegionCount;
         public ulong TransportPublishedProbeTotal => _transportPublishedProbeTotal;
         public ulong TransportPublishRegionTotal => 0UL;
@@ -1228,6 +1413,12 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _gpuSchedulerFeedbackFrameSerial =
                 ((ulong)feedback.FrameSerialHigh << 32) | feedback.FrameSerialLow;
             _gpuSchedulerFeedbackValid = true;
+            if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
+            {
+                _receiverRecordsPublishedCount = checked((int)Math.Min(
+                    int.MaxValue,
+                    feedback.PublishedCount));
+            }
 
             if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
                 TransportV2Active &&
@@ -1240,6 +1431,18 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 // params and scheduler frame word 18 before any audit can run.
                 _transportGeneration = AdvanceSourceLightingGeneration(
                     _transportGeneration);
+            }
+
+            if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+                feedback.SourceProbeUsed != 0u)
+            {
+                // Resident probe epochs live in the scheduler arena. The
+                // delayed summary is the host's conservative witness that the
+                // epoch set may have changed; advancing once is sufficient to
+                // invalidate a frozen global tuple without pretending that all
+                // probes share one epoch value.
+                _sourceEpochGeneration = AdvanceSourceEpoch(
+                    _sourceEpochGeneration);
             }
 
             if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
@@ -1300,6 +1503,62 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         }
 
         /// <summary>
+        /// Accepts only the fixed, fence-complete residency summary. It never
+        /// rebuilds a CPU page list; generation or bijection failures freeze
+        /// mutation and leave the dense coarser rings as the safe receiver path.
+        /// </summary>
+        public bool TryConsumeProbeResidencyFeedback(
+            int frameIndex,
+            ulong completedFrameSerial)
+        {
+            if (!_capacityPlan.ResidencyMode.CollectsDemand())
+                return false;
+            if (!_probePageCache.TryReadCompletedFeedback(
+                    frameIndex,
+                    completedFrameSerial,
+                    out GPUSimpleDdgiResidencyFeedback feedback))
+            {
+                return false;
+            }
+
+            if (feedback.ResidencyResourceGeneration !=
+                    _probePageCache.ResourceGeneration ||
+                feedback.VirtualPageCount !=
+                    (uint)Math.Max(0, _capacityPlan.SparseVirtualPageCount) ||
+                feedback.SparsePhysicalPageCapacity !=
+                    (uint)Math.Max(0, _capacityPlan.SparsePhysicalPageCapacity) ||
+                feedback.PhysicalProbeCapacity !=
+                    (uint)Math.Max(0, _capacityPlan.PhysicalProbeCapacity))
+            {
+                _probeResidencyFeedbackGenerationRejectionCount =
+                    SaturatingAdd(
+                        _probeResidencyFeedbackGenerationRejectionCount,
+                        1UL);
+                _probeResidencyFeedbackValid = false;
+                return false;
+            }
+
+            _lastProbeResidencyFeedback = feedback;
+            _probeResidencyFeedbackFrameSerial =
+                ((ulong)feedback.FrameSerialHigh << 32) |
+                feedback.FrameSerialLow;
+            _probeResidencyFeedbackValid = true;
+            bool invalid = feedback.PageTableReverseDisagreementCount != 0u ||
+                feedback.DuplicateVirtualOwnerCount != 0u ||
+                feedback.DuplicatePhysicalOwnerCount != 0u ||
+                (feedback.Flags & ((1u << 1) | (1u << 2))) != 0u;
+            if (invalid)
+            {
+                ReportProbeResidencyUnavailable(
+                    "residency feedback reported an invalid mapping or generation-wrap transaction",
+                    residencyStateValid: false,
+                    requiresFreshTransaction: true);
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
         /// Records an initialization-time scheduler failure without allowing a
         /// GPU-mode request to escape into a partially initialized graph. The
         /// CPU reference path remains usable; a fresh reset is only required if
@@ -1317,14 +1576,76 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 requiresFreshReset: _schedulerMode == SimpleDdgiSchedulerMode.GpuResident);
         }
 
+        public void ReportProbeResidencyUnavailable(
+            string reason,
+            bool residencyStateValid = true,
+            bool requiresFreshTransaction = false)
+        {
+            if (!_capacityPlan.ResidencyMode.CollectsDemand() &&
+                !_settings.GlobalIllumination.SimpleDdgiProbeResidencyMode
+                    .CollectsDemand())
+            {
+                return;
+            }
+
+            string resolvedReason = string.IsNullOrWhiteSpace(reason)
+                ? "Simple-DDGI residency pipeline unavailable"
+                : reason;
+            if (!requiresFreshTransaction)
+            {
+                // Pipeline construction failures cannot recover without a new
+                // pass instance. Keep this latch across the first arena
+                // bootstrap instead of accidentally unfreezing empty mappings.
+                _probeResidencyMutationUnavailable = true;
+                _probeResidencyMutationFailureReason = resolvedReason;
+            }
+            _probePageCache.FreezeForRuntimeFailure(
+                residencyStateValid:
+                    residencyStateValid && _probePageCache.ResidencyValid,
+                reason: resolvedReason);
+            _probeResidencyFeedbackValid = false;
+            if (requiresFreshTransaction &&
+                _capacityPlan.ResidencyMode.UsesSparsePayloads())
+            {
+                RequestGpuSchedulerFallback(
+                    _probePageCache.FailureReason,
+                    requiresFreshReset: false);
+            }
+        }
+
+        /// <summary>
+        /// Explicit development tooling control. Debug views never call this;
+        /// callers must opt into residency mutation separately.
+        /// </summary>
+        public bool TrySetProbeResidencyDevelopmentPin(
+            int virtualPageIndex,
+            bool pinned) =>
+            _probePageCache.TryQueueDevelopmentPagePin(
+                virtualPageIndex,
+                pinned);
+
+        /// <summary>
+        /// Freezes or releases page-table mutation for inspection without
+        /// manufacturing a runtime failure or invalidating the frozen map.
+        /// </summary>
+        public void SetProbeResidencyDevelopmentFreeze(bool frozen) =>
+            _probePageCache.SetDevelopmentMutationFrozen(frozen);
+
         private SimpleDdgiAtmosphereCohortFeedback CreateGpuResidentAtmosphereCohortFeedbackSnapshot()
         {
-            if (!_gpuSchedulerFeedbackValid)
+            bool sparseResidencyFeedbackMissing =
+                _capacityPlan.ResidencyMode.UsesSparsePayloads() &&
+                !_probeResidencyFeedbackValid;
+            if (!_gpuSchedulerFeedbackValid || sparseResidencyFeedbackMissing)
             {
                 // A resident scheduler without a completed matching summary
                 // cannot authorize a new atmosphere cohort. Keep all current
                 // participants stale until the normal delayed ring catches up.
-                int gpuParticipants = TransportV2Active ? _probeCount : 0;
+                int gpuParticipants = TransportV2Active
+                    ? (_capacityPlan.ResidencyMode.UsesSparsePayloads()
+                        ? Math.Max(0, _capacityPlan.PhysicalProbeCapacity)
+                        : _probeCount)
+                    : 0;
                 return new SimpleDdgiAtmosphereCohortFeedback(
                     _volumeTableGeneration,
                     _sourceLightingGeneration,
@@ -1349,11 +1670,16 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     StaleReadbackRejectionCount: _staleReadbackRejectionCount +
                         _gpuScheduler.StaleFeedbackCount,
                     ResourceGenerationRejectionCount: _resourceGenerationRejectionCount +
-                        _gpuSchedulerFeedbackGenerationRejectionCount);
+                        _gpuSchedulerFeedbackGenerationRejectionCount,
+                    ResidencyFeedbackComplete: !sparseResidencyFeedbackMissing);
             }
 
             GPUSimpleDdgiSchedulerFeedback feedback = _lastGpuSchedulerFeedback;
-            int participants = TransportV2Active ? _probeCount : 0;
+            int participants = TransportV2Active
+                ? checked((int)Math.Min(
+                    int.MaxValue,
+                    feedback.SolveEpochParticipantCount))
+                : 0;
             int visibleParticipants = checked((int)Math.Min(
                 int.MaxValue,
                 feedback.VisiblePriorityParticipatingProbeCount));
@@ -1368,7 +1694,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 feedback.PendingSourceCount != 0u ||
                 feedback.SourceCapacityShortfall != 0u ||
                 feedback.SourceAchievedRays < feedback.SourceTargetRays ||
-                feedback.StaticConvergedGeneration != feedback.SourceLightingGeneration;
+                feedback.StaticConvergedGeneration != feedback.SourceLightingGeneration ||
+                (_capacityPlan.ResidencyMode.UsesSparsePayloads() &&
+                    (_lastProbeResidencyFeedback.AdmissionProbeCount != 0u ||
+                     _lastProbeResidencyFeedback
+                        .OtherGenerationEvictionProbeCount != 0u));
             bool propagationComplete =
                 feedback.StaticConvergencePending == 0u &&
                 feedback.PublishedPropagationGeneration == feedback.PropagationGeneration;
@@ -1409,10 +1739,24 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 feedback.SourceCapacityShortfall,
                 staticConverged ? feedback.StaticConvergedGeneration : 0u,
                 !staticConverged,
-                _staleReadbackRejectionCount + feedback.StaleReadbackRejectionCount,
+                _staleReadbackRejectionCount,
                 _resourceGenerationRejectionCount +
-                    feedback.ResourceGenerationRejectionCount +
-                    _gpuSchedulerFeedbackGenerationRejectionCount);
+                    _gpuSchedulerFeedbackGenerationRejectionCount,
+                ResidencyFeedbackComplete: true,
+                ResidencyEventSourceGeneration:
+                    _lastProbeResidencyFeedback.EventSourceGeneration,
+                ResidencyEventCohortGeneration:
+                    _lastProbeResidencyFeedback.EventCohortGeneration,
+                ResidencyAdmissionProbeCount: checked((int)Math.Min(
+                    int.MaxValue,
+                    _lastProbeResidencyFeedback.AdmissionProbeCount)),
+                ResidencyEvictionProbeCount: checked((int)Math.Min(
+                    int.MaxValue,
+                    _lastProbeResidencyFeedback.EvictionProbeCount)),
+                ResidencyOtherGenerationEvictionProbeCount: checked((int)Math.Min(
+                    int.MaxValue,
+                    _lastProbeResidencyFeedback
+                        .OtherGenerationEvictionProbeCount)));
         }
 
         public GiAtmosphereCohortFeedback CreateAtmosphereCohortFeedback() =>
@@ -1426,12 +1770,30 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         public bool TransportGlobalConvergencePending =>
             TransportV2Active &&
             (_transportGlobalConvergencePending ||
-             (TailCertificationEnabled && !_transportSolveController.IsCertified));
-        public bool TailCertificationEnabled =>
-            _settings.GlobalIllumination.SimpleDdgiTransportTailCertificationEnabled &&
-            _schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
-            _gpuScheduler.IsReady &&
-            _gpuSchedulerFrameExecutionAvailable;
+             (TailCertificationEnabled && !HasCurrentTransportTailCertificate));
+        private bool HasCurrentTransportTailCertificate =>
+            _transportSolveController.IsCertified &&
+            _transportTailSummary.IsCurrent(CreateTransportTailGenerations());
+        public SimpleDdgiTailCertificationAvailability TailCertificationAvailability =>
+            SimpleDdgiTransportSolveController.ResolveTailCertificationAvailability(
+                _settings.GlobalIllumination.SimpleDdgiTransportTailCertificationEnabled,
+                _schedulerMode,
+                _gpuScheduler.IsReady,
+                _gpuSchedulerFrameExecutionAvailable);
+        public bool TailCertificationEnabled => TailCertificationAvailability.Enabled;
+        public string TailCertificationFallbackReason
+        {
+            get
+            {
+                SimpleDdgiTailCertificationAvailability availability =
+                    TailCertificationAvailability;
+                return availability.Enabled ||
+                       availability.Reason ==
+                           SimpleDdgiTailCertificationFallbackReason.DisabledByConfiguration
+                    ? string.Empty
+                    : availability.Message;
+            }
+        }
         public bool TransportAccelerationEnabled =>
             _settings.GlobalIllumination.SimpleDdgiTransportAccelerationEnabled;
         private bool _transportAccelerationRuntimeAvailable;
@@ -1692,6 +2054,13 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 ExcludedStaleSourceCount = gpu.ExcludedStaleSourceCount,
                 NonFiniteCount = gpu.NonFiniteCount,
                 ExcludedInvalidCacheCount = gpu.InvalidCacheCount,
+                CacheIdentityFailureCount = gpu.CacheIdentityFailureCount,
+                CacheCardinalityFailureCount = gpu.CacheCardinalityFailureCount,
+                CacheSourceGenerationFailureCount =
+                    gpu.CacheSourceGenerationFailureCount,
+                CacheSourceEpochFailureCount = gpu.CacheSourceEpochFailureCount,
+                CachePhysicalGenerationFailureCount =
+                    gpu.CachePhysicalGenerationFailureCount,
                 FixedPointDefect = defect,
                 FieldMagnitude = fieldMagnitude,
                 ConfiguredContractionBound = q,
@@ -1792,6 +2161,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _uploadCapacityTransportSourceCache = default;
             _uploadCapacityRayScratch = default;
             _uploadCapacityProbeState = default;
+            _uploadCapacityReceiverProbes = default;
             _uploadCapacityUpdateQueue = default;
             _uploadCapacityRelocationClassification = default;
             _uploadCapacityReadback = default;
@@ -1831,6 +2201,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             TransportSourceCache = _uploadCapacityTransportSourceCache,
             RayScratch = _uploadCapacityRayScratch,
             ProbeState = _uploadCapacityProbeState,
+            ReceiverProbes = _uploadCapacityReceiverProbes,
             UpdateQueue = _uploadCapacityUpdateQueue,
             RelocationClassification = _uploadCapacityRelocationClassification,
             ReadbackBuffers = _uploadCapacityReadback,
@@ -1997,6 +2368,16 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     _transportTailSummary.ExcludedStaleSourceCount,
                 TailExcludedInvalidCacheCount =
                     _transportTailSummary.ExcludedInvalidCacheCount,
+                TailCacheIdentityFailureCount =
+                    _transportTailSummary.CacheIdentityFailureCount,
+                TailCacheCardinalityFailureCount =
+                    _transportTailSummary.CacheCardinalityFailureCount,
+                TailCacheSourceGenerationFailureCount =
+                    _transportTailSummary.CacheSourceGenerationFailureCount,
+                TailCacheSourceEpochFailureCount =
+                    _transportTailSummary.CacheSourceEpochFailureCount,
+                TailCachePhysicalGenerationFailureCount =
+                    _transportTailSummary.CachePhysicalGenerationFailureCount,
                 TailNonFiniteCount =
                     _transportTailSummary.NonFiniteCount,
                 TailCounterOverflowCount =
@@ -2022,8 +2403,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 TailAuditFinalFrameSerial = _transportTailSummary.FinalFrameSerial,
                 TailAuditChunkCount = _transportTailSummary.ChunkCount,
                 TailAuditComplete = _transportTailSummary.IsComplete,
-                TailCertificateCurrent = _transportSolveController.IsCertified &&
-                    _transportTailSummary.IsCurrent(CreateTransportTailGenerations()),
+                TailCertificateCurrent = HasCurrentTransportTailCertificate,
                 ResidualQualifiedNotConvergedProbeCount =
                     totalResidualQualifiedPending,
                 RoutineSourceRepairProbeCount =
@@ -2225,6 +2605,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         public int ProbeStateReadbackValid => _probeStateReadbackValid;
         public GPUSimpleDdgiParams LastParams => _lastParams;
         public ReadOnlySpan<GPUSimpleDdgiVolume> LastVolumes => new(_volumeScratch, 0, _volumeCount);
+        public ReadOnlySpan<GPUSimpleDdgiVolumePaging> LastVolumePaging =>
+            new(_volumePagingScratch, 0, _volumeCount);
         /// <summary>
         /// The exact requested/accepted/rejected layout compiled before the
         /// current resource allocation.  A missing report means simple DDGI was
@@ -2336,7 +2718,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     : 0;
                 float volumeCubicMeters = Math.Max(size.X * size.Y * size.Z, 0.0001f);
                 int firstProbe = FirstProbe(volume);
-                int ageCount = firstProbe >= 0 && firstProbe < _probeLastUpdatedFrames.Length
+                bool cpuStateDiagnostics = !_schedulerMode.IsGpuMode();
+                int ageCount = cpuStateDiagnostics &&
+                    firstProbe >= 0 && firstProbe < _probeLastUpdatedFrames.Length
                     ? Math.Min(probeCount, _probeLastUpdatedFrames.Length - firstProbe)
                     : 0;
                 FillProbeAgeSnapshot(
@@ -2348,11 +2732,47 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         _probeAgePercentileScratch.AsSpan(0, ageCount),
                         0.95f)
                     : 0u;
-                int inactiveProbeCount = _probeStateReadbackValid != 0
+                int inactiveProbeCount = cpuStateDiagnostics &&
+                    _probeStateReadbackValid != 0
                     ? CountInactiveProbes(_probeInactive, firstProbe, probeCount)
                     : 0;
                 int activeProbeCount = Math.Max(0, probeCount - inactiveProbeCount);
                 SimpleDdgiLayoutVolumeDecision? layoutDecision = FindLayoutDecision(SourceOrdinal(volume));
+                GPUSimpleDdgiVolumePaging paging = _volumePagingScratch[i];
+                bool gpuRingResidencyValid = _schedulerMode.IsGpuMode() &&
+                    _probeResidencyFeedbackValid &&
+                    kind == SimpleDdgiVolumeKind.CameraRing;
+                (uint ringVirtual, uint ringResident, uint ringActive,
+                    uint ringInactive, uint ringDemanded, uint ringConverged) =
+                    cascadeIndex switch
+                    {
+                        0 => (
+                            _lastProbeResidencyFeedback.NearVirtualProbeCount,
+                            _lastProbeResidencyFeedback.NearResidentProbeCount,
+                            _lastProbeResidencyFeedback.NearActiveResidentProbeCount,
+                            _lastProbeResidencyFeedback.NearInactiveResidentProbeCount,
+                            _lastProbeResidencyFeedback.NearDemandedPageCount,
+                            _lastProbeResidencyFeedback.NearConvergedResidentProbeCount),
+                        1 => (
+                            _lastProbeResidencyFeedback.MidVirtualProbeCount,
+                            _lastProbeResidencyFeedback.MidResidentProbeCount,
+                            _lastProbeResidencyFeedback.MidActiveResidentProbeCount,
+                            _lastProbeResidencyFeedback.MidInactiveResidentProbeCount,
+                            _lastProbeResidencyFeedback.MidDemandedPageCount,
+                            _lastProbeResidencyFeedback.MidConvergedResidentProbeCount),
+                        _ => (
+                            _lastProbeResidencyFeedback.FarVirtualProbeCount,
+                            _lastProbeResidencyFeedback.FarResidentProbeCount,
+                            _lastProbeResidencyFeedback.FarActiveResidentProbeCount,
+                            _lastProbeResidencyFeedback.FarInactiveResidentProbeCount,
+                            _lastProbeResidencyFeedback.FarDemandedPageCount,
+                            _lastProbeResidencyFeedback.FarConvergedResidentProbeCount)
+                    };
+                if (gpuRingResidencyValid)
+                {
+                    activeProbeCount = ClampUIntToInt(ringActive);
+                    inactiveProbeCount = ClampUIntToInt(ringInactive);
+                }
 
                 entries[i] = new DdgiVolumeDiagnosticsEntry(
                     VolumeIndex: i,
@@ -2368,7 +2788,30 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     ScheduledPrimaryRayCount: CountScheduledPrimaryRays(i),
                     MaxRayDistance: Math.Max(spacing * Math.Max(Math.Max(countX, countY), countZ), spacing))
                 {
-                    PhysicalProbeCapacity = probeCount,
+                    PhysicalProbeCapacity = paging.ResidencyMode ==
+                        (uint)SimpleDdgiProbeResidencyMode.SparseNearRing
+                            ? checked(_capacityPlan.SparsePhysicalPageCapacity *
+                                SimpleDdgiProbePageLayout.ProbesPerPage)
+                            : probeCount,
+                    ProbeResidencyMode = (SimpleDdgiProbeResidencyMode)
+                        paging.ResidencyMode,
+                    VirtualPageCount = checked((int)(paging.PageGridX *
+                        paging.PageGridY * paging.PageGridZ)),
+                    ResidentProbeCount = gpuRingResidencyValid
+                        ? ClampUIntToInt(ringResident)
+                        : probeCount,
+                    ActiveResidentProbeCount = gpuRingResidencyValid
+                        ? ClampUIntToInt(ringActive)
+                        : activeProbeCount,
+                    InactiveResidentProbeCount = gpuRingResidencyValid
+                        ? ClampUIntToInt(ringInactive)
+                        : inactiveProbeCount,
+                    DemandedPageCount = gpuRingResidencyValid
+                        ? ClampUIntToInt(ringDemanded)
+                        : 0,
+                    ConvergedResidentProbeCount = gpuRingResidencyValid
+                        ? ClampUIntToInt(ringConverged)
+                        : 0,
                     OriginX = origin.X,
                     OriginY = origin.Y,
                     OriginZ = origin.Z,
@@ -2382,7 +2825,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     MaxProbeSpacing = spacing,
                     ProbeDensityPerCubicMeter = probeCount / volumeCubicMeters,
                     ActiveProbeBudgetFraction = Math.Clamp(probeCount / (float)activeProbeBudget, 0.0f, 1.0f),
-                    ProbeStateCountsValid = _probeStateReadbackValid,
+                    ProbeStateCountsValid = gpuRingResidencyValid
+                        ? 1
+                        : cpuStateDiagnostics
+                            ? _probeStateReadbackValid
+                            : 0,
                     ActiveProbeCount = activeProbeCount,
                     InactiveProbeCount = inactiveProbeCount,
                     EstimatedAgeP95Frames = estimatedAgeP95,
@@ -2555,10 +3002,18 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _registeredBindlessHeap = bindlessHeap;
             SetGpuSchedulerMode(_settings.GlobalIllumination.SimpleDdgiSchedulerMode);
             _gpuScheduler.Register(bindlessHeap);
+            _probePageCache.Register(
+                bindlessHeap,
+                _paramsBuffer,
+                Math.Max(MinBufferSize, ParamsBufferSize));
             if (heapChanged)
                 _capacityKeyValid = false;
             RegisterBuffers(bindlessHeap);
-            UpdateSampledAtlasCapacity(_probeCount, deviceAlreadyIdle: false);
+            UpdateSampledAtlasCapacity(
+                _capacityPlan.SampledAtlasPhysicalProbeCapacity,
+                priorGenerationComplete:
+                    _resourceLastUseFrameFenceValue == 0UL ||
+                    _completedFrameFenceValue >= _resourceLastUseFrameFenceValue);
             _sampledAtlas?.Register(bindlessHeap);
         }
 
@@ -2571,8 +3026,33 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             RegisterIfValid(BindlessIndex.SimpleDdgiVisibilityAtlasBuffer, _visibilityAtlasBuffer, _visibilityAtlasBytes);
             RegisterIfValid(BindlessIndex.SimpleDdgiRayResultScratchBuffer, _rayResultScratchBuffer, _rayScratchBytes);
             RegisterIfValid(BindlessIndex.SimpleDdgiProbeStateBuffer, _probeStateBuffer, _probeStateBytes);
+            RegisterIfValid(BindlessIndex.SimpleDdgiReceiverProbeBuffer, _receiverProbeBuffer, _receiverProbeBytes);
             RegisterIfValid(BindlessIndex.SimpleDdgiProbeUpdateQueueBuffer, _probeUpdateQueueBuffer, _probeUpdateQueueBytes);
             RegisterIfValid(BindlessIndex.SimpleDdgiRelocationClassificationBuffer, _relocationClassificationBuffer, _relocationClassificationBytes);
+        }
+
+        /// <summary>
+        /// Supplies the renderer's exact graphics-fence progress. Resource
+        /// destruction is driven only by these observed completion values;
+        /// frame age is diagnostic and never authorizes reclamation.
+        /// </summary>
+        public void ObserveFrameFenceCompletion(
+            ulong lastSubmittedFrameFenceValue,
+            ulong completedFrameFenceValue)
+        {
+            if (lastSubmittedFrameFenceValue > _lastSubmittedFrameFenceValue)
+                _lastSubmittedFrameFenceValue = lastSubmittedFrameFenceValue;
+            if (completedFrameFenceValue > _completedFrameFenceValue)
+                _completedFrameFenceValue = completedFrameFenceValue;
+
+            long retirementStart = Stopwatch.GetTimestamp();
+            int destroyed = DrainRetiredResources(force: false);
+            _gpuScheduler.CollectRetired(_completedFrameFenceValue);
+            _probePageCache.CollectRetired(_completedFrameFenceValue);
+            _sampledAtlas?.CollectRetired(_completedFrameFenceValue);
+            _uploadCapacityRetiredResourceDestructionMicroseconds +=
+                ElapsedMicroseconds(retirementStart);
+            _uploadCapacityRetiredResourceDestructionCount += destroyed;
         }
 
         public void Upload(
@@ -2625,6 +3105,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 UpdateSourceSweepFrameRateEstimate();
 
                 GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+                TryCompleteGpuSchedulerFallbackExport();
+                UpdateGpuSchedulerReentry(
+                    gi.SimpleDdgiSchedulerMode,
+                    structuredGatherAvailable);
                 SetGpuSchedulerMode(gi.SimpleDdgiSchedulerMode);
                 // The manager receives the live per-frame capability result from
                 // VulkanRenderer. A resident arena may remain allocated while a
@@ -2633,10 +3117,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 // commands in that case.
                 _gpuSchedulerFrameExecutionAvailable =
                     !_schedulerMode.IsGpuMode() ||
-                    (structuredGatherAvailable &&
+                    (!_gpuSchedulerFallbackLatched &&
+                        structuredGatherAvailable &&
                         (_schedulerMode != SimpleDdgiSchedulerMode.GpuResident ||
                          _gpuResidentProbeStateBootstrapped));
-                _gpuScheduler.CollectRetired(_frameSerial);
+                _gpuScheduler.CollectRetired(_completedFrameFenceValue);
                 bool enabled = gi.EffectiveUseDdgi;
                 layoutMicroseconds += ElapsedMicroseconds(phaseStart);
                 if (!enabled)
@@ -2652,7 +3137,12 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 int previousProbeCount = _probeCount;
                 int previousVolumeCount = _volumeCount;
                 CapturePreviousVolumes();
-                BuildVolumeTable(gi, sceneBounds, cameraPosition, authoredSceneVolumes);
+                BuildVolumeTable(
+                    gi,
+                    sceneBounds,
+                    cameraPosition,
+                    structuredGatherAvailable,
+                    authoredSceneVolumes);
                 layoutMicroseconds += ElapsedMicroseconds(phaseStart);
 
                 phaseStart = Stopwatch.GetTimestamp();
@@ -2718,6 +3208,15 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     _totalRecenterCount++;
                     _framesSinceLastRecenter = 0;
                 }
+                if (ProbeResidencyGeometryChanged(
+                        dirtyReasonFlags,
+                        dirtyRegions,
+                        _recenteredThisFrame))
+                {
+                    _probeResidencyGeometryGeneration =
+                        AdvancePackedGeometryGeneration(
+                            _probeResidencyGeometryGeneration);
+                }
                 invalidationMicroseconds += ElapsedMicroseconds(phaseStart);
 
                 phaseStart = Stopwatch.GetTimestamp();
@@ -2738,11 +3237,109 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 // Atlas growth can invalidate every physical slot. Establish storage
                 // first so MarkFreshForNewOrScrolledProbes observes that invalidation;
                 // transient feedback throttling must not change persistent capacity.
-                EnsureCapacity(
-                    _probeCount,
-                    _raysPerProbe,
-                    _schedulerConfiguredRequestBudget,
+                if (!EnsureCapacity(
+                        _probeCount,
+                        _raysPerProbe,
+                        _schedulerConfiguredRequestBudget,
+                        commandBuffer))
+                {
+                    // Keep the prior generation alive and publish a disabled
+                    // control header for this submission. The next frame
+                    // retries after normal fence progress; no undersized
+                    // resource is exposed to the new topology.
+                    DisableCore(gi, stagingRing, commandBuffer);
+                    return;
+                }
+                if (_capacityPlan.ResidencyMode.CollectsDemand() &&
+                    SimpleDdgiProbePageLayout
+                        .DemandEpochRequiresResourceTransaction(_frameIndex) &&
+                    _lastProbeResidencyDemandEpochResetFrame != _frameIndex)
+                {
+                    _probePageCache.RequireFreshTransactionForDemandEpochWrap();
+                    _lastProbeResidencyDemandEpochResetFrame = _frameIndex;
+                }
+                int maximumPageAdmissions = Math.Min(
+                    gi.SimpleDdgiSparseMaximumAdmissionsPerFrame,
+                    _capacityPlan.SparsePhysicalPageCapacity);
+                bool residencyArenaTransition =
+                    _probePageCache.RequiresReplacement(
+                        _capacityPlan.ResidencyMode,
+                        _capacityPlan.SparseVirtualPageCount,
+                        _capacityPlan.SparsePhysicalPageCapacity,
+                        maximumPageAdmissions,
+                        gi.SimpleDdgiSparseRetentionFrames,
+                        gi.SimpleDdgiSparseMaximumReceiverFeedbackRequests,
+                        gi.SimpleDdgiSparseInactiveRetryFrames);
+                if (residencyArenaTransition &&
+                    !EnsureBindlessDescriptorReadersComplete(
+                        commandBuffer,
+                        "Simple DDGI residency arena generation publication"))
+                {
+                    MarkResourcesUsedByPendingSubmission();
+                    DisableCore(gi, stagingRing, commandBuffer);
+                    return;
+                }
+                bool residencyArenaReplaced =
+                    _probePageCache.EnsureCapacity(
+                        _capacityPlan.ResidencyMode,
+                        _capacityPlan.SparseVirtualPageCount,
+                        _capacityPlan.SparsePhysicalPageCapacity,
+                        maximumPageAdmissions,
+                        gi.SimpleDdgiSparseRetentionFrames,
+                        gi.SimpleDdgiSparseMaximumReceiverFeedbackRequests,
+                        gi.SimpleDdgiSparseInactiveRetryFrames,
+                        commandBuffer,
+                        _resourceLastUseFrameFenceValue);
+                if (residencyArenaReplaced)
+                {
+                    // Feedback belongs to one immutable arena generation and
+                    // mode. In particular, Sparse -> Dense releases the arena
+                    // without minting a replacement generation, so retaining
+                    // the prior validity bit would expose stale sparse owners
+                    // through Dense diagnostics until another sparse arena was
+                    // created. A new transaction must earn a new fence-complete
+                    // summary before any consumer can trust page counts again.
+                    _probeResidencyFeedbackValid = false;
+                    _lastProbeResidencyFeedback = default;
+                    _probeResidencyFeedbackFrameSerial = 0UL;
+                }
+                if (_probePageCache.BootstrapRequired)
+                {
+                    GPUSimpleDdgiResidencyHeader residencyHeader =
+                        CreateResidencyHeader(gi);
+                    _probePageCache.UploadBootstrap(
+                        stagingRing,
+                        commandBuffer,
+                        residencyHeader,
+                        new ReadOnlySpan<GPUSimpleDdgiVolumePaging>(
+                            _volumePagingScratch,
+                            0,
+                            _volumeCount));
+                }
+                _probePageCache.UploadPendingDevelopmentControl(
+                    stagingRing,
                     commandBuffer);
+                if (_probeResidencyMutationUnavailable &&
+                    _capacityPlan.ResidencyMode.CollectsDemand())
+                {
+                    _probePageCache.FreezeForRuntimeFailure(
+                        residencyStateValid: _probePageCache.ResidencyValid,
+                        reason: _probeResidencyMutationFailureReason);
+                }
+                if (residencyArenaReplaced &&
+                    _capacityPlan.ResidencyMode.UsesSparsePayloads())
+                {
+                    // The new compact payload transaction starts empty and
+                    // fail-closed. Scheduler publication must bootstrap every
+                    // admitted fine page; no old virtual freshness can certify
+                    // the new physical owners.
+                    residentBootstrap = true;
+                    _gpuResidentProbeStateBootstrapped = false;
+                    _gpuSchedulerFrameExecutionAvailable = false;
+                    _gpuSchedulerFeedbackValid = false;
+                }
+                if (volumeTableRemapped)
+                    QueueReceiverInvalidationsForVolumeRemap();
                 if (_schedulerMode.IsGpuMode() && _probeCount > 0)
                 {
                     bool schedulerArenaReplaced = _gpuScheduler.EnsureCapacity(
@@ -2751,7 +3348,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         _volumeCount,
                         SimpleDdgiGpuSchedulerLayout.MaxDirtyRegionCapacity,
                         _context.ValidationSettings.Mode != RendererValidationMode.Off,
-                        _frameSerial);
+                        _resourceLastUseFrameFenceValue);
                     if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
                         schedulerArenaReplaced)
                     {
@@ -2782,6 +3379,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     _transportResidentParticipantCount = 0;
                     _transportResidentSourceRepairProbeCount = 0;
                 }
+                if (_gpuSchedulerFallbackExportRequested)
+                    TryRecordGpuSchedulerFallbackExport(commandBuffer);
+                MarkResourcesUsedByPendingSubmission();
                 capacityMicroseconds += ElapsedMicroseconds(phaseStart);
 
                 if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
@@ -2883,6 +3483,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 PreserveToroidalAtlasData();
                 ClearAtlasBuffersIfRequired(commandBuffer);
                 SynchronizeSampledAtlasIfRequired(commandBuffer);
+                UploadReceiverProbeInvalidations(stagingRing, commandBuffer);
                 atlasMaintenanceMicroseconds += ElapsedMicroseconds(phaseStart);
 
                 phaseStart = Stopwatch.GetTimestamp();
@@ -2958,7 +3559,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         gi.SimpleDdgiTransportSolverRelaxation,
                         gi.SimpleDdgiTransportAlbedoClamp,
                         gi.SimpleDdgiTransportTailRelativeTolerance,
-                        gi.SimpleDdgiTransportAcceleratedSweepCount)
+                        gi.SimpleDdgiTransportAcceleratedSweepCount),
+                    ResidencyAndCounts = BuildResidencyAndCounts(),
+                    ResidencyControls = BuildResidencyControls()
                 };
 
                 if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
@@ -2974,7 +3577,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
                     {
                         GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
-                        volume.UpdateStartAndCount = Vector4.Zero;
+                        volume.UpdateStartAndCount = new Vector4(
+                            0.0f,
+                            0.0f,
+                            ResolveVolumeQuality(volumeIndex).FullRays,
+                            0.0f);
                         _volumeScratch[volumeIndex] = volume;
                     }
                 }
@@ -3102,7 +3709,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             // the serialized mode intact; Upload will re-enter it on the first
             // enabled frame after the bounded bootstrap.
             SetGpuSchedulerMode(SimpleDdgiSchedulerMode.CpuReference);
-            _gpuScheduler.CollectRetired(_frameSerial);
+            _gpuScheduler.CollectRetired(_completedFrameFenceValue);
             _volumeCount = 0;
             _probeCount = 0;
             _lastLayoutReport = null;
@@ -3130,6 +3737,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             // a deliberate generation transition, so stale DDGI, readback, and
             // sampled-atlas capacity cannot consume the global memory budget.
             EnsureCapacity(0, 1, 0, commandBuffer);
+            ClearReceiverProbeBufferIfRequired(commandBuffer);
             Array.Clear(_volumeScratch);
             Array.Clear(_volumePurposes);
             Array.Clear(_volumePriorities);
@@ -3201,6 +3809,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         {
             if (!CanExecutePublishTransaction)
                 return;
+
+            // Every accepted CPU/GPU-mirror update reaches the compact record
+            // publisher in both V1 and V2. Keep this receiver-specific counter
+            // independent of the V2 transport-generation telemetry below.
+            _currentReceiverRecordsPublishedCount = _probesToUpdate;
 
             if (TransportV2Active && _probesToUpdate > 0)
             {
@@ -3315,8 +3928,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                                         TransportGlobalConvergencePending);
                                 if ((uint)probeIndex < (uint)_probeSourceEpochs.Length)
                                 {
-                                    _probeSourceEpochs[probeIndex] =
-                                        AdvanceSourceEpoch(_probeSourceEpochs[probeIndex]);
+                                    uint committedSourceEpoch = update.SourceEpoch != 0u
+                                        ? update.SourceEpoch
+                                        : AdvanceSourceEpoch(_probeSourceEpochs[probeIndex]);
+                                    SetProbeSourceEpoch(probeIndex, committedSourceEpoch);
                                 }
                                 _probeSourceLightingGenerations[probeIndex] = update.SourceLightingGeneration == 0u
                                     ? _sourceLightingGeneration
@@ -3482,12 +4097,18 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _rayDispatchBatchCount = 0;
             _transportPublishedProbeCount = _currentTransportPublishedProbeCount;
             _transportPublishRegionCount = _currentTransportPublishRegionCount;
+            if (_schedulerMode != SimpleDdgiSchedulerMode.GpuResident)
+            {
+                _receiverRecordsPublishedCount =
+                    _currentReceiverRecordsPublishedCount;
+            }
             _sourceRefreshTransportInvalidationCount =
                 _currentSourceRefreshTransportInvalidationCount;
             _completedSourceRefreshProbeCount =
                 _currentCompletedSourceRefreshProbeCount;
             _currentTransportPublishedProbeCount = 0;
             _currentTransportPublishRegionCount = 0;
+            _currentReceiverRecordsPublishedCount = 0;
             _currentSourceRefreshTransportInvalidationCount = 0;
             _currentCompletedSourceRefreshProbeCount = 0;
             _currentProbeInvalidationMarkerSerial = ++_nextProbeInvalidationMarkerSerial;
@@ -3501,6 +4122,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _recenteredThisFrame = false;
             _atlasPreservedOnRecenterThisFrame = false;
             _atlasClearedThisFrame = false;
+            _receiverProbeInvalidationBytesThisFrame = 0;
+            _receiverProbeInvalidationRunCountThisFrame = 0;
+            _receiverProbeFullClearThisFrame = false;
             _newlyInvalidatedProbeCount = 0;
             _recenterRefreshProbeCount = 0;
             _dirtyRefreshProbeCount = 0;
@@ -4820,8 +5444,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     _probeLastUpdatedFrames[probeIndex] = unchecked(_frameIndex - 1u);
                     _probeSourceLightingGenerations[probeIndex] = 0u;
                     _probeLastSourceRefreshFrames[probeIndex] = 0u;
-                    _probeSourceEpochs[probeIndex] = AdvanceSourceEpoch(
-                        _probeSourceEpochs[probeIndex]);
+                    AdvanceProbeSourceEpoch(probeIndex);
                     _probeSourceRayCounts[probeIndex] = 0;
                     _probeTransportGenerationCounts[probeIndex] = 0;
                     _probeAtmosphereCohortFlags[probeIndex] = 0;
@@ -5220,6 +5843,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             uint volume = NonZeroGeneration(_volumeTableGeneration);
             uint ownership = NonZeroGeneration(_physicalOwnershipGeneration);
             uint source = NonZeroGeneration(_sourceLightingGeneration);
+            uint sourceEpoch = NonZeroGeneration(_sourceEpochGeneration);
             uint operatorGeneration = NonZeroGeneration(
                 unchecked((uint)(_lastTransportSolverCalibrationSignature ^
                     (_lastTransportSolverCalibrationSignature >> 32))));
@@ -5239,7 +5863,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 volume,
                 ownership,
                 source,
-                source,
+                sourceEpoch,
                 operatorGeneration,
                 canonical,
                 solve,
@@ -5254,6 +5878,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         {
             if (!TransportV2Active || !TailCertificationEnabled)
                 return;
+
+            // Visit stamps are indexed by global physical probe index. Their
+            // capacity is therefore the complete field capacity; the solve
+            // epoch's required count remains the active participant count.
+            _transportSolveController.EnsureParticipantCapacity(_probeCount);
 
             SimpleDdgiTransportGenerations generations = CreateTransportTailGenerations();
             if (_transportSolveController.Phase == SimpleDdgiTransportPhase.AuditFrozen)
@@ -5282,6 +5911,19 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     SimpleDdgiTransportCertificationReason.GenerationsChanged,
                     requireSourceRepair: true);
                 _transportTailSummary = _transportSolveController.LastSummary;
+                return;
+            }
+
+            // Resident participant/source-repair counts are authoritative only
+            // after a generation-matched delayed feedback packet has arrived.
+            // Treating the zero-initialized host mirror as a genuine empty
+            // field would complete a zero-participant solve epoch, freeze an
+            // audit before the first scheduler transaction, and permanently
+            // prevent fresh probes from receiving their source rays.
+            if (!CanPrepareTailSolveParticipantCounts(
+                    _schedulerMode,
+                    _gpuSchedulerFeedbackValid))
+            {
                 return;
             }
 
@@ -5314,6 +5956,12 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _transportTailSummary = _transportSolveController.LastSummary;
             }
         }
+
+        internal static bool CanPrepareTailSolveParticipantCounts(
+            SimpleDdgiSchedulerMode schedulerMode,
+            bool gpuSchedulerFeedbackValid) =>
+            schedulerMode != SimpleDdgiSchedulerMode.GpuResident ||
+            gpuSchedulerFeedbackValid;
 
         private void ApplyPendingTransportFieldConvergenceEvidenceReset()
         {
@@ -5640,6 +6288,44 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             return visibleFreshRecoveryBudget;
         }
 
+        private static bool ProbeResidencyGeometryChanged(
+            uint dirtyReasonFlags,
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions,
+            bool recentered)
+        {
+            if (recentered ||
+                (dirtyReasonFlags & VulkanRenderer.SimpleDdgiDirtyReasonDynamicGeometry) != 0u)
+            {
+                return true;
+            }
+
+            if (dirtyRegions == null)
+                return false;
+
+            for (int i = 0; i < dirtyRegions.Count; i++)
+            {
+                if (dirtyRegions[i].Reason is
+                    DdgiDirtyReason.GeometryAdded or
+                    DdgiDirtyReason.GeometryRemoved or
+                    DdgiDirtyReason.TransformChanged or
+                    DdgiDirtyReason.MaterialChanged or
+                    DdgiDirtyReason.StreamIn or
+                    DdgiDirtyReason.StreamOut or
+                    DdgiDirtyReason.Teleport)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static uint AdvancePackedGeometryGeneration(uint generation)
+        {
+            uint next = (generation + 1u) & 0xffffu;
+            return next == 0u ? 1u : next;
+        }
+
         private void RefreshProbeSchedulingImportance(
             int probeIndex,
             int volumeIndex)
@@ -5923,6 +6609,93 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                             MarkProbeFresh(FirstProbe(current) + physicalLocal, scrollExposed: true, forceGenerationAdvance: true);
                         }
             }
+        }
+
+        /// <summary>
+        /// Invalidates only physical slots whose world-cell ownership changed.
+        /// This bounded walk runs on topology changes (principally toroidal
+        /// scrolls), never on a stable frame. It is deliberately independent of
+        /// scheduler mode so opaque receivers fail closed before a resident GPU
+        /// scheduler can process the newly exposed cells later in the frame.
+        /// </summary>
+        private void QueueReceiverInvalidationsForVolumeRemap()
+        {
+            if (_probeCount <= 0 || _atlasClearRequired || _previousVolumeCount == 0)
+            {
+                _receiverProbeClearRequired = true;
+                _receiverProbeInvalidationSlots.Clear();
+                return;
+            }
+
+            for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
+            {
+                GPUSimpleDdgiVolume current = _volumeScratch[volumeIndex];
+                if (!TryGetPreviousMatchingVolume(
+                        volumeIndex,
+                        current,
+                        out GPUSimpleDdgiVolume previous) ||
+                    !TryResolveCellDelta(
+                        previous,
+                        current,
+                        out int deltaX,
+                        out int deltaY,
+                        out int deltaZ))
+                {
+                    QueueReceiverVolumeInvalidation(current);
+                    continue;
+                }
+
+                int countX = CountX(current);
+                int countY = CountY(current);
+                int countZ = CountZ(current);
+                if (Math.Abs((long)deltaX) >= countX ||
+                    Math.Abs((long)deltaY) >= countY ||
+                    Math.Abs((long)deltaZ) >= countZ)
+                {
+                    QueueReceiverVolumeInvalidation(current);
+                    continue;
+                }
+
+                if (deltaX == 0 && deltaY == 0 && deltaZ == 0)
+                    continue;
+
+                int firstProbe = FirstProbe(current);
+                for (int z = 0; z < countZ; z++)
+                for (int y = 0; y < countY; y++)
+                for (int x = 0; x < countX; x++)
+                {
+                    int oldX = x - deltaX;
+                    int oldY = y - deltaY;
+                    int oldZ = z - deltaZ;
+                    if (oldX >= 0 && oldX < countX &&
+                        oldY >= 0 && oldY < countY &&
+                        oldZ >= 0 && oldZ < countZ)
+                    {
+                        continue;
+                    }
+
+                    int physicalLocal = CalculatePhysicalProbeLocalIndex(
+                        current,
+                        x,
+                        y,
+                        z);
+                    QueueReceiverProbeInvalidation(firstProbe + physicalLocal);
+                }
+            }
+        }
+
+        private void QueueReceiverVolumeInvalidation(GPUSimpleDdgiVolume volume)
+        {
+            int firstProbe = FirstProbe(volume);
+            int end = Math.Min(_probeCount, checked(firstProbe + VolumeProbeCount(volume)));
+            for (int probeIndex = Math.Max(0, firstProbe); probeIndex < end; probeIndex++)
+                QueueReceiverProbeInvalidation(probeIndex);
+        }
+
+        private void QueueReceiverProbeInvalidation(int probeIndex)
+        {
+            if ((uint)probeIndex < (uint)_probeCount && !_receiverProbeClearRequired)
+                _receiverProbeInvalidationSlots.Add(probeIndex);
         }
 
         private int BuildUpdateQueue(int updateBudget)
@@ -7054,32 +7827,54 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
 
         internal static int ResolveEffectiveTransportSourceRefreshFrames(
             int configuredRefreshFrames,
+            int participantCount,
+            int updateBudget,
             int probeCount,
-            int probeUpdatesPerFrame,
-            int maximumSolverGenerations,
-            int stableMaintenanceUpdates)
+            int auditChunkProbeCount)
         {
+            int participants = Math.Max(0, participantCount);
             int probes = Math.Max(0, probeCount);
-            int updates = probeUpdatesPerFrame <= 0
-                ? Math.Max(probes, 1)
-                : Math.Max(1, probeUpdatesPerFrame);
-            long sweepFrames = Math.Max(
-                1L,
-                ((long)probes + updates - 1L) / updates);
-            long generations = Math.Max(1, maximumSolverGenerations);
-            long stableUpdates = Math.Max(1, stableMaintenanceUpdates);
+            int updates = updateBudget <= 0
+                ? Math.Max(participants, 1)
+                : Math.Max(1, updateBudget);
+            int auditChunk = Math.Max(1, auditChunkProbeCount);
 
-            // A periodic source cohort reopens field-wide propagation. If the
-            // next cohort becomes due before every probe can receive the required
-            // solve and stability generations, a static scene can never publish
-            // a completed fixed point. Reserve two complete windows: one for
-            // scheduling/readback skew and one for the actual Jacobi wave.
-            long convergenceQuietWindow = checked(
-                sweepFrames * (generations + stableUpdates) * 2L);
+            long sourceSweepFrames = CeilingDivide(participants, updates);
+            long solveEpochFrames = sourceSweepFrames;
+            long auditFrames = CeilingDivide(probes, auditChunk);
+            long schedulingMargin = Math.Max(sourceSweepFrames, auditFrames);
+            long requiredOpportunity = checked(
+                sourceSweepFrames +
+                solveEpochFrames +
+                auditFrames +
+                schedulingMargin);
             long effective = Math.Max(
                 Math.Max(1, configuredRefreshFrames),
-                convergenceQuietWindow);
+                requiredOpportunity);
             return (int)Math.Min(effective, int.MaxValue);
+        }
+
+        private int ResolveTransportRefreshParticipantCount()
+        {
+            if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
+            {
+                return _gpuSchedulerFeedbackValid
+                    ? Math.Max(0, _transportResidentParticipantCount)
+                    : Math.Max(0, _probeCount);
+            }
+
+            return _probeStateReadbackValid != 0
+                ? Math.Max(0, _schedulerParticipatingProbeCount)
+                : Math.Max(0, _probeCount);
+        }
+
+        private static long CeilingDivide(int value, int divisor)
+        {
+            long nonNegativeValue = Math.Max(0, value);
+            long positiveDivisor = Math.Max(1, divisor);
+            return nonNegativeValue == 0L
+                ? 0L
+                : 1L + (nonNegativeValue - 1L) / positiveDivisor;
         }
 
         internal static int ResolveGiTargetSourceSweepFrames(float targetSeconds)
@@ -7757,7 +8552,26 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 Flags = PackUpdateFlags(probeIndex, volumeIndex, effectiveFlags, requestedRays, sourceRefresh),
                 Reserved0 = PackProbeUpdateMetadata(_probeGenerations[probeIndex], GetProbeAge(probeIndex)),
                 SourceRayCount = checked((uint)Math.Clamp(sourceRayCount, 1, GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe)),
-                SourceLightingGeneration = sourceRefresh ? _sourceLightingGeneration : 0u
+                SourceLightingGeneration = sourceRefresh
+                    ? _sourceLightingGeneration
+                    : ((uint)probeIndex < (uint)_probeSourceLightingGenerations.Length
+                        ? _probeSourceLightingGenerations[probeIndex]
+                        : 0u),
+                SourceEpoch = sourceRefresh
+                    ? AdvanceSourceEpoch(
+                        (uint)probeIndex < (uint)_probeSourceEpochs.Length
+                            ? _probeSourceEpochs[probeIndex]
+                            : 0u)
+                    : ((uint)probeIndex < (uint)_probeSourceEpochs.Length
+                        ? _probeSourceEpochs[probeIndex]
+                        : 0u),
+                PhysicalProbeIndex = checked((uint)probeIndex),
+                PageMappingGeneration =
+                    SimpleDdgiProbeAddress.DenseMappingGeneration,
+                ResidencyResourceGeneration =
+                    _capacityPlan.ResidencyMode.CollectsDemand()
+                        ? _probePageCache.ResourceGeneration
+                        : 0u
             };
             _queuedWorkClassScratch[queueOffset] = (byte)workClass;
             int scheduledClassIndex = (int)workClass;
@@ -7916,6 +8730,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 forceGenerationAdvance);
             if (shouldAdvanceGeneration)
             {
+                QueueReceiverProbeInvalidation(probeIndex);
                 _probeInvalidationMarkers[probeIndex] = _currentProbeInvalidationMarkerSerial;
                 _newlyInvalidatedProbeCount++;
                 _probeGenerations[probeIndex] = AdvanceProbeGeneration(_probeGenerations[probeIndex]);
@@ -7954,7 +8769,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 if ((uint)probeIndex < (uint)_probeLastSourceRefreshFrames.Length)
                     _probeLastSourceRefreshFrames[probeIndex] = 0u;
                 if ((uint)probeIndex < (uint)_probeSourceEpochs.Length)
-                    _probeSourceEpochs[probeIndex] = AdvanceSourceEpoch(_probeSourceEpochs[probeIndex]);
+                    AdvanceProbeSourceEpoch(probeIndex);
                 if ((uint)probeIndex < (uint)_probeSourceRayCounts.Length)
                     _probeSourceRayCounts[probeIndex] = 0;
                 if ((uint)probeIndex < (uint)_probeTransportGenerationCounts.Length)
@@ -8006,7 +8821,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             if ((uint)probeIndex < (uint)_probeLastSourceRefreshFrames.Length)
                 _probeLastSourceRefreshFrames[probeIndex] = 0u;
             if ((uint)probeIndex < (uint)_probeSourceEpochs.Length)
-                _probeSourceEpochs[probeIndex] = AdvanceSourceEpoch(_probeSourceEpochs[probeIndex]);
+                AdvanceProbeSourceEpoch(probeIndex);
             if ((uint)probeIndex < (uint)_probeSourceRayCounts.Length)
                 _probeSourceRayCounts[probeIndex] = 0;
             if ((uint)probeIndex < (uint)_probeTransportGenerationCounts.Length)
@@ -8212,6 +9027,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             GlobalIlluminationSettings gi,
             BoundingBox sceneBounds,
             Vector3 cameraPosition,
+            bool structuredGatherAvailable,
             IReadOnlyList<GlobalIlluminationProbeVolume>? authoredSceneVolumes)
         {
             _volumeCandidates.Clear();
@@ -8294,7 +9110,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 return spacing != 0 ? spacing : left.SourceOrdinal.CompareTo(right.SourceOrdinal);
             });
 
-            ulong layoutFingerprint = CalculateLayoutFingerprint(gi, _volumeCandidates);
+            ulong layoutFingerprint = CalculateLayoutFingerprint(
+                gi,
+                _volumeCandidates,
+                structuredGatherAvailable);
             if (_cachedLayoutReport == null || _cachedLayoutFingerprint != layoutFingerprint)
             {
                 var layoutRequests = new SimpleDdgiLayoutVolumeRequest[_volumeCandidates.Count];
@@ -8312,8 +9131,31 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         Purpose: candidate.Purpose,
                         Priority: candidate.Priority,
                         Spacing: candidate.Spacing,
-                        ProbeCount: candidate.ProbeCount);
+                        ProbeCount: candidate.ProbeCount)
+                    {
+                        GridCountX = candidate.CountX,
+                        GridCountY = candidate.CountY,
+                        GridCountZ = candidate.CountZ,
+                        // The first camera-relative ring is the only sparse
+                        // authority in the topology-identical production
+                        // slice. Authored, legacy, mid, and far volumes remain
+                        // dense so a missing fine page always has a concrete
+                        // coarser field to compose through.
+                        SparseNearRingEligible =
+                            candidate.Kind == VolumeKindRing &&
+                            candidate.SourceOrdinal == 10_000,
+                        DenseCoarserRingEligible =
+                            candidate.Kind == VolumeKindRing &&
+                            candidate.SourceOrdinal > 10_000
+                    };
                 }
+
+                SimpleDdgiProbeResidencyMode requestedResidencyMode =
+                    ResolveProbeResidencyMode(
+                        gi,
+                        structuredGatherAvailable,
+                        _volumeCandidates,
+                        out string prerequisiteFallbackReason);
 
                 bool residentPrivateTargets =
                     _schedulerMode == SimpleDdgiSchedulerMode.GpuResident;
@@ -8337,7 +9179,27 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     lightingDirtyBoostEnabled:
                         gi.SimpleDdgiLightingDirtyBoostEnabled,
                     readbackBufferCount: layoutReadbackBufferCount,
-                    residentPrivateTargets: residentPrivateTargets);
+                    residentPrivateTargets: residentPrivateTargets,
+                    schedulerMode: _schedulerMode,
+                    schedulerValidationEnabled:
+                        _context.ValidationSettings.Mode !=
+                            RendererValidationMode.Off,
+                    residencyMode: requestedResidencyMode,
+                    sparsePhysicalPageBudget:
+                        gi.SimpleDdgiSparsePhysicalPageBudget,
+                    sparseMinimumPhysicalPageBudget:
+                        gi.SimpleDdgiSparseMinimumPhysicalPageBudget,
+                    maximumPageAdmissionsPerFrame:
+                        gi.SimpleDdgiSparseMaximumAdmissionsPerFrame);
+
+                if (!string.IsNullOrEmpty(prerequisiteFallbackReason) &&
+                    string.IsNullOrEmpty(_cachedLayoutReport.ResidencyFallbackReason))
+                {
+                    _cachedLayoutReport = _cachedLayoutReport with
+                    {
+                        ResidencyFallbackReason = prerequisiteFallbackReason
+                    };
+                }
 
                 // The sampled atlas is an optional image mirror. Resident mode
                 // keeps the canonical SSBO atlases authoritative and already
@@ -8362,7 +9224,18 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                             lightingDirtyBoostEnabled:
                                 gi.SimpleDdgiLightingDirtyBoostEnabled,
                             readbackBufferCount: layoutReadbackBufferCount,
-                            residentPrivateTargets: true);
+                            residentPrivateTargets: true,
+                            schedulerMode: _schedulerMode,
+                            schedulerValidationEnabled:
+                                _context.ValidationSettings.Mode !=
+                                    RendererValidationMode.Off,
+                            residencyMode: requestedResidencyMode,
+                            sparsePhysicalPageBudget:
+                                gi.SimpleDdgiSparsePhysicalPageBudget,
+                            sparseMinimumPhysicalPageBudget:
+                                gi.SimpleDdgiSparseMinimumPhysicalPageBudget,
+                            maximumPageAdmissionsPerFrame:
+                                gi.SimpleDdgiSparseMaximumAdmissionsPerFrame);
                     if (ShouldUseCanonicalOnlyResidentLayout(
                             residentPrivateTargets,
                             gi.SimpleDdgiSampledAtlasEnabled,
@@ -8456,11 +9329,209 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _probeCountZ = 0;
                 _gridOrigin = default;
             }
+
+            BuildVolumePagingTable();
+        }
+
+        private void BuildVolumePagingTable()
+        {
+            Array.Clear(_volumePagingScratch);
+            SimpleDdgiMemoryPlan plan =
+                _lastLayoutReport?.AcceptedMemoryPlan ??
+                SimpleDdgiMemoryPlan.Empty;
+            SimpleDdgiProbeResidencyMode globalMode =
+                plan.VirtualProbeCount == _probeCount
+                    ? plan.ResidencyMode.Sanitize()
+                    : SimpleDdgiProbeResidencyMode.Dense;
+            int pageTableCursor = 0;
+            int densePhysicalCursor = 0;
+
+            for (int volumeIndex = 0;
+                volumeIndex < _volumeCount;
+                volumeIndex++)
+            {
+                GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
+                int virtualFirst = FirstProbe(volume);
+                int countX = CountX(volume);
+                int countY = CountY(volume);
+                int countZ = CountZ(volume);
+                int probeCount = VolumeProbeCount(volume);
+                bool nearRingEligible =
+                    Kind(volume) == VolumeKindRing &&
+                    SourceOrdinal(volume) == 10_000;
+                SimpleDdgiProbeResidencyMode volumeMode =
+                    nearRingEligible && globalMode.CollectsDemand()
+                        ? globalMode
+                        : SimpleDdgiProbeResidencyMode.Dense;
+                int pageGridX = SimpleDdgiProbePageLayout.CeilDivide(
+                    countX,
+                    SimpleDdgiProbePageLayout.PageDimensionX);
+                int pageGridY = SimpleDdgiProbePageLayout.CeilDivide(
+                    countY,
+                    SimpleDdgiProbePageLayout.PageDimensionY);
+                int pageGridZ = SimpleDdgiProbePageLayout.CeilDivide(
+                    countZ,
+                    SimpleDdgiProbePageLayout.PageDimensionZ);
+
+                int densePhysicalFirst;
+                if (globalMode.UsesSparsePayloads())
+                {
+                    densePhysicalFirst = nearRingEligible
+                        ? 0
+                        : densePhysicalCursor;
+                    if (!nearRingEligible)
+                        densePhysicalCursor = checked(
+                            densePhysicalCursor + probeCount);
+                }
+                else
+                {
+                    // Dense and Shadow are the strict identity oracle.
+                    densePhysicalFirst = virtualFirst;
+                }
+
+                _volumePagingScratch[volumeIndex] =
+                    new GPUSimpleDdgiVolumePaging
+                    {
+                        VirtualFirstProbe = checked((uint)virtualFirst),
+                        PageTableFirst = checked((uint)pageTableCursor),
+                        DensePhysicalFirstProbe =
+                            checked((uint)densePhysicalFirst),
+                        ResidencyMode = checked((uint)volumeMode),
+                        PageGridX = checked((uint)pageGridX),
+                        PageGridY = checked((uint)pageGridY),
+                        PageGridZ = checked((uint)pageGridZ),
+                        SparsePoolFirstProbe = checked((uint)Math.Max(
+                            0,
+                            plan.DensePayloadProbeCount))
+                    };
+
+                if (nearRingEligible && globalMode.CollectsDemand())
+                {
+                    pageTableCursor = checked(
+                        pageTableCursor +
+                        pageGridX * pageGridY * pageGridZ);
+                }
+            }
+
+            if (globalMode.CollectsDemand() &&
+                pageTableCursor != plan.SparseVirtualPageCount)
+            {
+                throw new InvalidOperationException(
+                    $"Simple-DDGI volume paging table describes {pageTableCursor} pages; admitted layout requires {plan.SparseVirtualPageCount}.");
+            }
+            if (globalMode.UsesSparsePayloads() &&
+                densePhysicalCursor != plan.DensePayloadProbeCount)
+            {
+                throw new InvalidOperationException(
+                    $"Simple-DDGI dense fallback spans {densePhysicalCursor} probes; admitted layout requires {plan.DensePayloadProbeCount}.");
+            }
+        }
+
+        private GPUSimpleDdgiResidencyHeader CreateResidencyHeader(
+            GlobalIlluminationSettings settings)
+        {
+            SimpleDdgiMemoryPlan plan = _capacityPlan;
+            uint flags = 0u;
+            if (plan.ResidencyMode == SimpleDdgiProbeResidencyMode.Shadow)
+                flags |= 1u << 0;
+            if (plan.ResidencyMode.UsesSparsePayloads())
+                flags |= 1u << 1;
+            if (_context.ValidationSettings.Mode != RendererValidationMode.Off)
+                flags |= 1u << 2;
+
+            return new GPUSimpleDdgiResidencyHeader
+            {
+                FrameSerialLow = unchecked((uint)_frameSerial),
+                FrameSerialHigh = unchecked((uint)(_frameSerial >> 32)),
+                ResidencyResourceGeneration =
+                    _probePageCache.ResourceGeneration,
+                MappingGenerationCounter = 0u,
+                ResidencyMode = checked((uint)plan.ResidencyMode),
+                VirtualProbeCount = checked((uint)Math.Max(
+                    0,
+                    plan.VirtualProbeCount)),
+                VirtualPageCount = checked((uint)Math.Max(
+                    0,
+                    plan.SparseVirtualPageCount)),
+                DensePhysicalProbeCount = checked((uint)Math.Max(
+                    0,
+                    plan.DensePayloadProbeCount)),
+                SparsePhysicalPageCapacity = checked((uint)Math.Max(
+                    0,
+                    plan.SparsePhysicalPageCapacity)),
+                PhysicalProbeCapacity = checked((uint)Math.Max(
+                    0,
+                    plan.PhysicalProbeCapacity)),
+                VolumeCount = checked((uint)Math.Max(0, _volumeCount)),
+                RetentionFrames = checked((uint)
+                    settings.SimpleDdgiSparseRetentionFrames),
+                MaximumAdmissionsPerFrame = checked((uint)Math.Min(
+                    settings.SimpleDdgiSparseMaximumAdmissionsPerFrame,
+                    plan.SparsePhysicalPageCapacity)),
+                MaximumReceiverFeedbackRequests = checked((uint)
+                    settings.SimpleDdgiSparseMaximumReceiverFeedbackRequests),
+                InactiveRetryFrames = checked((uint)
+                    settings.SimpleDdgiSparseInactiveRetryFrames),
+                Flags = flags
+            };
+        }
+
+        private SimpleDdgiProbeResidencyMode ResolveProbeResidencyMode(
+            GlobalIlluminationSettings settings,
+            bool structuredGatherAvailable,
+            IReadOnlyList<VolumeCandidate> candidates,
+            out string fallbackReason)
+        {
+            SimpleDdgiProbeResidencyMode requested =
+                settings.SimpleDdgiProbeResidencyMode.Sanitize();
+            fallbackReason = string.Empty;
+            if (!requested.UsesSparsePayloads())
+                return requested;
+
+            if (!settings.SimpleDdgiStructuredGatherEnabled)
+                fallbackReason = "structured-gather-disabled";
+            else if (!structuredGatherAvailable)
+                fallbackReason = "structured-gather-unavailable";
+            else if (!settings.SimpleDdgiTransportV2Enabled)
+                fallbackReason = "transport-v2-required";
+            else if (!settings.SimpleDdgiToroidalScrollingEnabled)
+                fallbackReason = "toroidal-addressing-required";
+            else if (_schedulerMode != SimpleDdgiSchedulerMode.GpuResident)
+            {
+                bool frozenSparseTransaction =
+                    settings.SimpleDdgiSchedulerMode.IsGpuMode() &&
+                    _probePageCache.Frozen &&
+                    (_capacityPlan.ResidencyMode.UsesSparsePayloads() ||
+                     _probePageCache.Mode.UsesSparsePayloads());
+                if (!frozenSparseTransaction)
+                    fallbackReason = "gpu-resident-scheduler-required";
+            }
+            else
+            {
+                bool hasSparseNear = false;
+                bool hasDenseCoarserRing = false;
+                for (int index = 0; index < candidates.Count; index++)
+                {
+                    VolumeCandidate candidate = candidates[index];
+                    if (candidate.Kind != VolumeKindRing)
+                        continue;
+                    hasSparseNear |= candidate.SourceOrdinal == 10_000;
+                    hasDenseCoarserRing |= candidate.SourceOrdinal > 10_000;
+                }
+
+                if (!hasSparseNear || !hasDenseCoarserRing)
+                    fallbackReason = "dense-coarser-ring-required";
+            }
+
+            return string.IsNullOrEmpty(fallbackReason)
+                ? requested
+                : SimpleDdgiProbeResidencyMode.Dense;
         }
 
         private static ulong CalculateLayoutFingerprint(
             GlobalIlluminationSettings settings,
-            IReadOnlyList<VolumeCandidate> candidates)
+            IReadOnlyList<VolumeCandidate> candidates,
+            bool structuredGatherAvailable)
         {
             const ulong offset = 14695981039346656037UL;
             const ulong prime = 1099511628211UL;
@@ -8475,6 +9546,46 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             // CPU-to-resident transition cannot reuse a report sized for the
             // compute-only allocation.
             hash = AddLayoutFingerprintValue(hash, (ulong)settings.SimpleDdgiSchedulerMode.Sanitize(), prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                (ulong)settings.SimpleDdgiProbeResidencyMode.Sanitize(),
+                prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                (ulong)(uint)settings.SimpleDdgiSparsePhysicalPageBudget,
+                prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                (ulong)(uint)settings.SimpleDdgiSparseMinimumPhysicalPageBudget,
+                prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                (ulong)(uint)settings.SimpleDdgiSparseRetentionFrames,
+                prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                (ulong)(uint)settings.SimpleDdgiSparseMaximumAdmissionsPerFrame,
+                prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                (ulong)(uint)settings.SimpleDdgiSparseMaximumReceiverFeedbackRequests,
+                prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                (ulong)(uint)settings.SimpleDdgiSparseInactiveRetryFrames,
+                prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                settings.SimpleDdgiStructuredGatherEnabled ? 1UL : 0UL,
+                prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                structuredGatherAvailable ? 1UL : 0UL,
+                prime);
+            hash = AddLayoutFingerprintValue(
+                hash,
+                settings.SimpleDdgiToroidalScrollingEnabled ? 1UL : 0UL,
+                prime);
             hash = AddLayoutFingerprintValue(
                 hash,
                 settings.SimpleDdgiThinSurfaceTransmissionEnabled ? 1UL : 0UL,
@@ -8864,7 +9975,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             for (int i = 0; i < _volumeCount; i++)
             {
                 GPUSimpleDdgiVolume volume = _volumeScratch[i];
-                volume.UpdateStartAndCount = Vector4.Zero;
+                volume.UpdateStartAndCount = new Vector4(
+                    0.0f,
+                    0.0f,
+                    ResolveVolumeQuality(i).FullRays,
+                    0.0f);
                 _volumeScratch[i] = volume;
             }
 
@@ -8889,13 +10004,21 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             for (int i = 0; i < _volumeCount; i++)
             {
                 GPUSimpleDdgiVolume volume = _volumeScratch[i];
-                volume.UpdateStartAndCount = new Vector4(Math.Max(firstQueueOffset[i], 0), updatedCounts[i], 0.0f, 0.0f);
+                volume.UpdateStartAndCount = new Vector4(
+                    Math.Max(firstQueueOffset[i], 0),
+                    updatedCounts[i],
+                    ResolveVolumeQuality(i).FullRays,
+                    0.0f);
                 _volumeScratch[i] = volume;
             }
         }
 
         private void UploadParams(StagingRing stagingRing, CommandBuffer commandBuffer)
         {
+            UploadBarrierDescription barrier = new(
+                PipelineStageFlags2.ComputeShaderBit |
+                    PipelineStageFlags2.FragmentShaderBit,
+                AccessFlags2.ShaderStorageReadBit);
             GpuBufferUploader.UploadHeaderAndSpanToBuffer(
                 _context,
                 _bufferManager,
@@ -8904,7 +10027,21 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _paramsBuffer,
                 _lastParams,
                 new ReadOnlySpan<GPUSimpleDdgiVolume>(_volumeScratch, 0, GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount),
-                barrierDescription: new UploadBarrierDescription(PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit, AccessFlags2.ShaderStorageReadBit));
+                barrierDescription: barrier);
+            GpuBufferUploader.UploadSpanToBuffer(
+                _context,
+                _bufferManager,
+                stagingRing,
+                commandBuffer,
+                _paramsBuffer,
+                new ReadOnlySpan<GPUSimpleDdgiVolumePaging>(
+                    _volumePagingScratch,
+                    0,
+                    GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount),
+                ParamsSize +
+                    VolumeStride *
+                        GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount,
+                barrier);
         }
 
         private void UploadGpuResidentFrame(
@@ -8932,6 +10069,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             PreserveToroidalAtlasData();
             ClearAtlasBuffersIfRequired(commandBuffer);
             SynchronizeSampledAtlasIfRequired(commandBuffer);
+            UploadReceiverProbeInvalidations(stagingRing, commandBuffer);
 
             int configuredBudget = Math.Clamp(_schedulerConfiguredRequestBudget, 0, _probeCount);
             int effectiveBudget = configuredBudget;
@@ -9037,12 +10175,18 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     gi.SimpleDdgiTransportSolverRelaxation,
                     gi.SimpleDdgiTransportAlbedoClamp,
                     gi.SimpleDdgiTransportTailRelativeTolerance,
-                    gi.SimpleDdgiTransportAcceleratedSweepCount)
+                    gi.SimpleDdgiTransportAcceleratedSweepCount),
+                ResidencyAndCounts = BuildResidencyAndCounts(),
+                ResidencyControls = BuildResidencyControls()
             };
             for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
             {
                 GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
-                volume.UpdateStartAndCount = Vector4.Zero;
+                volume.UpdateStartAndCount = new Vector4(
+                    0.0f,
+                    0.0f,
+                    ResolveVolumeQuality(volumeIndex).FullRays,
+                    0.0f);
                 _volumeScratch[volumeIndex] = volume;
             }
 
@@ -9082,7 +10226,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             // The render graph must not expose schedule/consumer passes until
             // the private scheduler-state transfer has actually been recorded.
             _gpuSchedulerFrameExecutionAvailable =
-                structuredGatherAvailable && _gpuResidentProbeStateBootstrapped;
+                !_gpuSchedulerFallbackLatched &&
+                structuredGatherAvailable &&
+                _gpuResidentProbeStateBootstrapped;
 
             if (_atlasClearedThisFrame)
             {
@@ -9164,6 +10310,14 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             SimpleDdgiGpuSchedulerLayout layout = _gpuScheduler.Layout;
             int dirtyCount = BuildGpuDirtyRegions(dirtyRegions);
             bool dirtyOverflow = dirtyRegions != null && dirtyRegions.Count > dirtyCount;
+            bool fallbackQuiesced =
+                _schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+                _gpuSchedulerFallbackLatched;
+            if (fallbackQuiesced)
+            {
+                dirtyCount = 0;
+                dirtyOverflow = false;
+            }
             uint featureFlags = 0u;
             if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
                 featureFlags |= SimpleDdgiSchedulerAbi.SchedulerFeatureGpuResident;
@@ -9215,25 +10369,42 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         ? (uint)requestedBudget
                         : configuredBudget);
             }
+            if (fallbackQuiesced)
+            {
+                configuredBudget = 0u;
+                effectiveBudget = 0u;
+            }
 
-            uint sourceTargetRays = ClampToUint(_sourceRefreshTargetRayCount);
+            uint sourceTargetRays = fallbackQuiesced
+                ? 0u
+                : ClampToUint(_sourceRefreshTargetRayCount);
             uint dirtyReasons = dirtyReasonFlags | _activeDirtyReasonFlags | _regionalDirtyReasonFlags;
             if (dirtyOverflow)
                 dirtyReasons |= uint.MaxValue;
             GPUSimpleDdgiSchedulerFrame frame = new()
             {
-                ActiveProbeCount = ClampToUint(_probeCount),
-                ActiveVolumeCount = ClampToUint(_volumeCount),
+                ActiveProbeCount = fallbackQuiesced
+                    ? 0u
+                    : ClampToUint(_probeCount),
+                ActiveVolumeCount = fallbackQuiesced
+                    ? 0u
+                    : ClampToUint(_volumeCount),
                 CandidateCapacity = ClampToUint(layout.ActiveProbeCount),
                 RequestCapacity = ClampToUint(requestedBudget),
                 ConfiguredRequestBudget = configuredBudget,
                 EffectiveRequestBudget = effectiveBudget,
-                PrimaryRayBudget = ClampToUint(Math.Max(0, gi.DdgiProbeUpdatePrimaryRayBudget)),
-                SourceThroughputProbeTarget = ClampToUint(_sourceRefreshTargetProbeCount),
+                PrimaryRayBudget = fallbackQuiesced
+                    ? 0u
+                    : ClampToUint(Math.Max(0, gi.DdgiProbeUpdatePrimaryRayBudget)),
+                SourceThroughputProbeTarget = fallbackQuiesced
+                    ? 0u
+                    : ClampToUint(_sourceRefreshTargetProbeCount),
                 SourceThroughputRayTarget = sourceTargetRays,
-                SourceThroughputRayCapacity = ClampToUint(SaturatingAdd(
-                    _sourceRefreshTargetRayCount,
-                    _sourceRefreshRayCapacityShortfall)),
+                SourceThroughputRayCapacity = fallbackQuiesced
+                    ? 0u
+                    : ClampToUint(SaturatingAdd(
+                        _sourceRefreshTargetRayCount,
+                        _sourceRefreshRayCapacityShortfall)),
                 FrameIndex = _frameIndex,
                 DeterministicFlags = _schedulerDeterministicFixedBudget ? 1u : 0u,
                 FrameSerialLow = ClampToUint(_frameSerial),
@@ -9252,12 +10423,17 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     : _updateTransactionSerial,
                 SourceLightingGeneration = _sourceLightingGeneration,
                 TransportGeneration = _transportGeneration,
-                // Word 19 is the resident solve-epoch witness. Source/operator
-                // generations remain in their dedicated words above; the GPU
-                // scheduler stamps cached commits with this epoch so the audit
-                // can prove complete participant visitation without a full
-                // CPU probe walk.
-                GlobalConvergenceGeneration = _transportSolveController.SolveEpoch,
+                // Word 19 is the active resident solve-epoch witness. Keep it
+                // zero in source-repair/certified/tracking phases so periodic
+                // source replacement remains live there; while solving or
+                // auditing, a nonzero value both stamps cached commits and
+                // prevents the source-age watchdog from replacing their cache
+                // before the complete visit reduction can be observed.
+                GlobalConvergenceGeneration =
+                    _transportSolveController.Phase == SimpleDdgiTransportPhase.AcceleratedSolve ||
+                    _transportSolveController.Phase == SimpleDdgiTransportPhase.AuditFrozen
+                        ? _transportSolveController.SolveEpoch
+                        : 0u,
                 CameraPositionAndNearProximity = new Vector4(
                     cameraPosition.X,
                     cameraPosition.Y,
@@ -9270,7 +10446,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 ClassificationRetryFrames = InactiveProbeRetryFrames,
                 SourceRefreshIntervalFrames = ClampToUint(EffectiveTransportSourceRefreshFrames),
                 StableGenerationRequirement = ClampToUint(gi.SimpleDdgiStableMaintenanceUpdateCount),
-                SourceEpoch = _sourceLightingGeneration,
+                SourceEpoch = _sourceEpochGeneration,
                 RayBucket0 = rayBuckets[0],
                 RayBucket1 = rayBuckets[1],
                 RayBucket2 = rayBuckets[2],
@@ -9300,10 +10476,17 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private int BuildGpuDirtyRegions(IReadOnlyList<DdgiDirtyRegion>? dirtyRegions)
         {
             if (dirtyRegions == null || dirtyRegions.Count == 0)
+            {
+                // Clearing presence makes an identical region published after a
+                // clean gap a distinct event, while retaining a nonzero generation.
+                _gpuDirtyRegionsPresentLastFrame = false;
                 return 0;
+            }
 
             int count = Math.Min(dirtyRegions.Count, _gpuDirtyRegionScratch.Length);
-            for (int i = 0; i < count; i++)
+            ulong signatureXor = 0u;
+            ulong signatureSum = 0u;
+            for (int i = 0; i < dirtyRegions.Count; i++)
             {
                 DdgiDirtyRegion dirty = dirtyRegions[i];
                 BoundingBox bounds = dirty.InfluenceBounds;
@@ -9315,28 +10498,95 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     minimum = bounds.Min;
                     maximum = bounds.Max;
                 }
+                Vector3 normalizedMinimum = new(
+                    MathF.Min(minimum.X, maximum.X),
+                    MathF.Min(minimum.Y, maximum.Y),
+                    MathF.Min(minimum.Z, maximum.Z));
+                Vector3 normalizedMaximum = new(
+                    MathF.Max(minimum.X, maximum.X),
+                    MathF.Max(minimum.Y, maximum.Y),
+                    MathF.Max(minimum.Z, maximum.Z));
+                minimum = normalizedMinimum;
+                maximum = normalizedMaximum;
+                uint reasonFlags = dirty.ReasonFlags == 0u
+                    ? 1u << (int)dirty.Reason
+                    : dirty.ReasonFlags;
+                ulong regionSignature = HashGpuDirtyRegion(minimum, maximum, reasonFlags);
+                signatureXor ^= regionSignature;
+                signatureSum = unchecked(signatureSum +
+                    regionSignature * 0x9e3779b185ebca87UL);
+
+                if (i >= count)
+                    continue;
+
                 _gpuDirtyRegionScratch[i] = new GPUSimpleDdgiSchedulerDirtyRegion
                 {
                     Minimum = new Vector4(
-                        MathF.Min(minimum.X, maximum.X),
-                        MathF.Min(minimum.Y, maximum.Y),
-                        MathF.Min(minimum.Z, maximum.Z),
+                        minimum.X,
+                        minimum.Y,
+                        minimum.Z,
                         0.0f),
                     Maximum = new Vector4(
-                        MathF.Max(minimum.X, maximum.X),
-                        MathF.Max(minimum.Y, maximum.Y),
-                        MathF.Max(minimum.Z, maximum.Z),
+                        maximum.X,
+                        maximum.Y,
+                        maximum.Z,
                         0.0f),
-                    ReasonFlags = dirty.ReasonFlags == 0u
-                        ? 1u << (int)dirty.Reason
-                        : dirty.ReasonFlags,
-                    Generation = _volumeTableGeneration,
+                    ReasonFlags = reasonFlags,
                     Reserved0 = 0u,
                     Reserved1 = 0u
                 };
             }
+
+            ulong signature = 1469598103934665603UL;
+            signature = AddGpuDirtyRegionHash(signature, unchecked((uint)dirtyRegions.Count));
+            signature = AddGpuDirtyRegionHash(
+                signature,
+                unchecked((uint)((ulong)dirtyRegions.Count >> 32)));
+            signature = AddGpuDirtyRegionHash(signature, unchecked((uint)signatureXor));
+            signature = AddGpuDirtyRegionHash(signature, unchecked((uint)(signatureXor >> 32)));
+            signature = AddGpuDirtyRegionHash(signature, unchecked((uint)signatureSum));
+            signature = AddGpuDirtyRegionHash(signature, unchecked((uint)(signatureSum >> 32)));
+            _gpuDirtyRegionGeneration = ResolveGpuDirtyRegionGeneration(
+                _gpuDirtyRegionGeneration,
+                _gpuDirtyRegionsPresentLastFrame,
+                _gpuDirtyRegionSignature,
+                signature);
+            _gpuDirtyRegionsPresentLastFrame = true;
+            _gpuDirtyRegionSignature = signature;
+            for (int i = 0; i < count; i++)
+                _gpuDirtyRegionScratch[i].Generation = _gpuDirtyRegionGeneration;
             return count;
         }
+
+        internal static uint ResolveGpuDirtyRegionGeneration(
+            uint currentGeneration,
+            bool previousRegionsPresent,
+            ulong previousSignature,
+            ulong currentSignature)
+        {
+            uint nonZeroGeneration = NonZeroGeneration(currentGeneration);
+            return previousRegionsPresent && previousSignature == currentSignature
+                ? nonZeroGeneration
+                : AdvanceSourceLightingGeneration(nonZeroGeneration);
+        }
+
+        private static ulong HashGpuDirtyRegion(
+            Vector3 minimum,
+            Vector3 maximum,
+            uint reasonFlags)
+        {
+            ulong hash = 1469598103934665603UL;
+            hash = AddGpuDirtyRegionHash(hash, BitConverter.SingleToUInt32Bits(minimum.X));
+            hash = AddGpuDirtyRegionHash(hash, BitConverter.SingleToUInt32Bits(minimum.Y));
+            hash = AddGpuDirtyRegionHash(hash, BitConverter.SingleToUInt32Bits(minimum.Z));
+            hash = AddGpuDirtyRegionHash(hash, BitConverter.SingleToUInt32Bits(maximum.X));
+            hash = AddGpuDirtyRegionHash(hash, BitConverter.SingleToUInt32Bits(maximum.Y));
+            hash = AddGpuDirtyRegionHash(hash, BitConverter.SingleToUInt32Bits(maximum.Z));
+            return AddGpuDirtyRegionHash(hash, reasonFlags);
+        }
+
+        private static ulong AddGpuDirtyRegionHash(ulong hash, uint value) =>
+            unchecked((hash ^ value) * 1099511628211UL);
 
         private void BuildGpuVolumePolicies(
             GPUSimpleDdgiSchedulerVolumePolicy[] currentPolicies,
@@ -9432,7 +10682,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 CellDeltaX = deltaX,
                 CellDeltaY = deltaY,
                 CellDeltaZ = deltaZ,
-                DirtyGeneration = _currentProbeInvalidationMarkerSerial,
+                DirtyGeneration = _gpuDirtyRegionGeneration,
                 ProximityRadiusPadding = current.WorldMinAndEdgeFade.W
             };
         }
@@ -9562,6 +10812,132 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             };
         }
 
+        private void UploadReceiverProbeInvalidations(
+            StagingRing stagingRing,
+            CommandBuffer commandBuffer)
+        {
+            if (!_receiverProbeBuffer.IsValid)
+                return;
+            if (_receiverProbeClearRequired)
+            {
+                ClearReceiverProbeBufferIfRequired(commandBuffer);
+                return;
+            }
+            if (_receiverProbeInvalidationSlots.Count == 0 || _probeCount <= 0)
+                return;
+
+            _receiverProbeInvalidationSlots.Sort();
+            _receiverProbeUploadRuns.Clear();
+            int stagedCount = 0;
+            int previousSlot = -2;
+            GPUSimpleDdgiReceiverProbe invalid = SimpleDdgiReceiverProbeEncoding.Invalid;
+            for (int dirtyIndex = 0;
+                dirtyIndex < _receiverProbeInvalidationSlots.Count;
+                dirtyIndex++)
+            {
+                int slot = _receiverProbeInvalidationSlots[dirtyIndex];
+                if ((uint)slot >= (uint)_probeCount || slot == previousSlot)
+                    continue;
+
+                if (slot != previousSlot + 1)
+                    _receiverProbeUploadRuns.Add(new BufferUploadRun(slot, 1));
+                else
+                {
+                    BufferUploadRun prior = _receiverProbeUploadRuns[^1];
+                    _receiverProbeUploadRuns[^1] = new BufferUploadRun(
+                        prior.DestinationElementIndex,
+                        prior.ElementCount + 1);
+                }
+                _receiverProbeInvalidationScratch[stagedCount++] = invalid;
+                previousSlot = slot;
+            }
+
+            if (_receiverProbeUploadRuns.Count > MaxSparseProbeStateUploadRuns)
+            {
+                // A highly fragmented ownership change is safer and cheaper as
+                // one fail-closed transfer fill than hundreds of tiny copies.
+                // The scheduler will republish records only after matching atlas
+                // transactions complete.
+                _receiverProbeClearRequired = true;
+                ClearReceiverProbeBufferIfRequired(commandBuffer);
+                return;
+            }
+
+            if (stagedCount > 0)
+            {
+                var barrier = new UploadBarrierDescription(
+                    ReceiverConsumerStages,
+                    AccessFlags2.ShaderStorageReadBit |
+                    AccessFlags2.ShaderStorageWriteBit);
+                GpuBufferUploader.UploadRunsToBuffer(
+                    _context,
+                    _bufferManager,
+                    stagingRing,
+                    commandBuffer,
+                    _receiverProbeBuffer,
+                    new ReadOnlySpan<GPUSimpleDdgiReceiverProbe>(
+                        _receiverProbeInvalidationScratch,
+                        0,
+                        stagedCount),
+                    _receiverProbeUploadRuns,
+                    barrier);
+                _receiverProbeInvalidationBytesThisFrame = SaturatingAdd(
+                    _receiverProbeInvalidationBytesThisFrame,
+                    checked((ulong)stagedCount * ReceiverProbeStride));
+                _receiverProbeInvalidationRunCountThisFrame = SaturatingAdd(
+                    _receiverProbeInvalidationRunCountThisFrame,
+                    _receiverProbeUploadRuns.Count);
+            }
+
+            _receiverProbeInvalidationSlots.Clear();
+        }
+
+        private const PipelineStageFlags2 ReceiverConsumerStages =
+            PipelineStageFlags2.ComputeShaderBit |
+            PipelineStageFlags2.VertexShaderBit |
+            PipelineStageFlags2.TaskShaderBitExt |
+            PipelineStageFlags2.MeshShaderBitExt |
+            PipelineStageFlags2.FragmentShaderBit;
+
+        private unsafe void ClearReceiverProbeBufferIfRequired(
+            CommandBuffer commandBuffer)
+        {
+            if (!_receiverProbeClearRequired ||
+                !_receiverProbeBuffer.IsValid ||
+                _receiverProbeBytes == 0)
+            {
+                return;
+            }
+
+            Silk.NET.Vulkan.Buffer buffer =
+                _bufferManager.GetBuffer(_receiverProbeBuffer);
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                buffer,
+                0,
+                _receiverProbeBytes,
+                uint.MaxValue);
+            BufferMemoryBarrier2 barrier = BarrierBuilder.BufferBarrier(
+                buffer,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                ReceiverConsumerStages,
+                AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit,
+                0,
+                _receiverProbeBytes);
+            ExecuteBufferBarrier(commandBuffer, barrier);
+            _receiverProbeInvalidationBytesThisFrame = SaturatingAdd(
+                _receiverProbeInvalidationBytesThisFrame,
+                _receiverProbeBytes);
+            _receiverProbeInvalidationRunCountThisFrame = SaturatingAdd(
+                _receiverProbeInvalidationRunCountThisFrame,
+                1);
+            _receiverProbeFullClearThisFrame = true;
+            _receiverProbeClearRequired = false;
+            _receiverProbeInvalidationSlots.Clear();
+        }
+
         private void UploadProbeState(StagingRing stagingRing, CommandBuffer commandBuffer)
         {
             if (_probeCount <= 0 || !_probeStateBuffer.IsValid ||
@@ -9687,7 +11063,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     AccessFlags2.ShaderStorageReadBit));
         }
 
-        private void EnsureCapacity(int probeCount, int raysPerProbe, int probesToUpdate, CommandBuffer commandBuffer = default)
+        private bool EnsureCapacity(int probeCount, int raysPerProbe, int probesToUpdate, CommandBuffer commandBuffer = default)
         {
             bool readbackRequired = _schedulerMode != SimpleDdgiSchedulerMode.GpuResident &&
                 probeCount > 0 &&
@@ -9706,7 +11082,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _uploadCapacityPredicateMicroseconds += ElapsedMicroseconds(predicateStart);
                 if (_context.ValidationSettings.Mode != RendererValidationMode.Off)
                     ValidateCachedCapacityPlan(_capacityPlan, readbackRequired);
-                return;
+                return true;
             }
 
             _uploadCapacityTransitionReason |= ResolveCapacityTransitionReason(
@@ -9719,6 +11095,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             bool sampledAtlasCandidate =
                 requiredKey.SampledAtlasRequested &&
                 requiredKey.SampledAtlasProvisioningAvailable;
+            SimpleDdgiProbeResidencyMode residencyMode =
+                requiredKey.ResidencyMode.Sanitize();
             SimpleDdgiMemoryPlan allocationPlan = SimpleDdgiMemoryPlan.Create(
                 Math.Max(0, probeCount),
                 Math.Clamp(probesToUpdate, 0, Math.Max(0, probeCount)),
@@ -9732,7 +11110,21 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 readbackBufferCount: readbackRequired
                     ? RenderingConstants.FramesInFlight
                     : 0,
-                residentPrivateTargets: _schedulerMode == SimpleDdgiSchedulerMode.GpuResident);
+                residentPrivateTargets:
+                    _schedulerMode == SimpleDdgiSchedulerMode.GpuResident,
+                schedulerMode: _schedulerMode,
+                schedulerActiveVolumeCount: _volumeCount,
+                schedulerValidationEnabled:
+                    _context.ValidationSettings.Mode != RendererValidationMode.Off,
+                residencyMode: residencyMode,
+                densePayloadProbeCount: requiredKey.DensePayloadProbeCount,
+                sparseVirtualProbeCount: requiredKey.SparseVirtualProbeCount,
+                sparseVirtualPageCount: requiredKey.SparseVirtualPageCount,
+                sparsePhysicalPageCapacity:
+                    requiredKey.SparsePhysicalPageCapacity,
+                maximumPageAdmissionsPerFrame:
+                    _settings.GlobalIllumination
+                        .SimpleDdgiSparseMaximumAdmissionsPerFrame);
             long sampledBudgetStart = Stopwatch.GetTimestamp();
             bool sampledAtlasAdmitted = sampledAtlasCandidate &&
                 (requiredKey.SampledAtlasBudgetBytes == 0UL ||
@@ -9749,7 +11141,21 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     readbackBufferCount: readbackRequired
                         ? RenderingConstants.FramesInFlight
                         : 0,
-                    residentPrivateTargets: _schedulerMode == SimpleDdgiSchedulerMode.GpuResident);
+                    residentPrivateTargets:
+                        _schedulerMode == SimpleDdgiSchedulerMode.GpuResident,
+                    schedulerMode: _schedulerMode,
+                    schedulerActiveVolumeCount: _volumeCount,
+                    schedulerValidationEnabled:
+                        _context.ValidationSettings.Mode != RendererValidationMode.Off,
+                    residencyMode: residencyMode,
+                    densePayloadProbeCount: requiredKey.DensePayloadProbeCount,
+                    sparseVirtualProbeCount: requiredKey.SparseVirtualProbeCount,
+                    sparseVirtualPageCount: requiredKey.SparseVirtualPageCount,
+                    sparsePhysicalPageCapacity:
+                        requiredKey.SparsePhysicalPageCapacity,
+                    maximumPageAdmissionsPerFrame:
+                        _settings.GlobalIllumination
+                            .SimpleDdgiSparseMaximumAdmissionsPerFrame);
             }
             _uploadCapacitySampledAtlasBudgetMicroseconds +=
                 ElapsedMicroseconds(sampledBudgetStart);
@@ -9762,31 +11168,86 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     readbackRequired);
             CaptureCapacityResourceTelemetry(allocationPlan, readbackRequired);
             _uploadCapacityPredicateMicroseconds += ElapsedMicroseconds(predicateStart);
-            if (synchronizedCapacityTransition)
+            if (synchronizedCapacityTransition &&
+                !EnsureBindlessDescriptorReadersComplete(
+                    commandBuffer,
+                    "Simple DDGI capacity generation publication"))
             {
-                // Stable tier/topology changes are exceptional. Synchronize once
-                // and release old capacities before replacement so neither an
-                // upgrade nor a rollback temporarily exceeds the newly admitted
-                // hard component budget.
-                long waitStart = Stopwatch.GetTimestamp();
-                RecordCapacityDeviceWaitIdle();
-                _uploadCapacityDeviceIdleWaitMicroseconds += ElapsedMicroseconds(waitStart);
-                _uploadCapacityDeviceIdleWaitCount++;
-                if (_sampledAtlas?.IsReady == true &&
-                    _sampledAtlas.EstimatedImageBytes !=
-                        allocationPlan.SampledAtlasImageBytes)
+                // The current fail-closed submission still binds the prior
+                // generation. Extend its exact completion token before
+                // returning so a later retry cannot retire it prematurely.
+                MarkResourcesUsedByPendingSubmission();
+                return false;
+            }
+            bool priorGenerationComplete =
+                _resourceLastUseFrameFenceValue == 0UL ||
+                _completedFrameFenceValue >= _resourceLastUseFrameFenceValue;
+            bool destroyPreviousImmediately =
+                synchronizedCapacityTransition && priorGenerationComplete;
+            if (synchronizedCapacityTransition && !priorGenerationComplete)
+            {
+                CountRetiringBufferResources(
+                    allocationPlan,
+                    readbackRequired,
+                    out int retiringBufferCount,
+                    out ulong retiringBufferBytes);
+                if (retiringBufferCount > 0 &&
+                    !_bufferRetirement.CanAdmit(
+                        liveBytes: 0UL,
+                        incomingBytes: retiringBufferBytes,
+                        incomingRecordCount: retiringBufferCount,
+                        out GpuRetirementAdmissionFailure failure))
                 {
-                    // Release the old image reserve before buffer replacement.
-                    // In particular, Ultra image capacity plus High buffers is
-                    // larger than the High tier cap even though both resolved
-                    // plans independently fit.
-                    _sampledAtlas.ReleaseAfterDeviceIdle();
+                    _capacityTransitionDeferred = true;
+                    _capacityTransitionDeferredReason =
+                        $"buffer-retirement-{failure.ToString().ToLowerInvariant()}";
+                    return false;
+                }
+
+                bool sampledAtlasTransition =
+                    _sampledAtlas?.IsReady == true &&
+                    _sampledAtlas.EstimatedImageBytes !=
+                        allocationPlan.SampledAtlasImageBytes;
+                if (sampledAtlasTransition &&
+                    !_sampledAtlas!.CanRetireCurrentAllocation(
+                        _resourceLastUseFrameFenceValue,
+                        _completedFrameFenceValue))
+                {
+                    _capacityTransitionDeferred = true;
+                    _capacityTransitionDeferredReason =
+                        "sampled-atlas-retirement-capacity";
+                    return false;
+                }
+                // The DDGI component budget governs each stable generation,
+                // not the short completion-token overlap required to switch
+                // generations without DeviceWaitIdle. Gate that overlap against
+                // the plan's total tracked-memory contract instead. Adding the
+                // complete incoming plan is deliberately conservative because
+                // unchanged allocations are already present in the snapshot.
+                RenderBudgetProfile profile =
+                    _settings.PerformanceBudgets.Profile;
+                MemoryBudgetSnapshot tracked =
+                    _bufferManager.AllocationTracker.CreateSnapshot(profile);
+                ulong projectedTrackedBytes = SaturatingAdd(
+                    tracked.TotalTrackedBytes,
+                    allocationPlan.LiveBytes);
+                ulong transitionMemoryLimit =
+                    ResolveTransitionMemoryLimit(profile.GpuMemoryBudgetBytes);
+                if (projectedTrackedBytes > transitionMemoryLimit)
+                {
+                    _capacityTransitionDeferred = true;
+                    _capacityTransitionDeferredReason =
+                        "completion-pending-global-memory-budget";
+                    return false;
                 }
             }
+            _capacityTransitionDeferred = false;
+            _capacityTransitionDeferredReason = string.Empty;
             ulong irradianceBytes = allocationPlan.IrradianceAtlasBytes;
             ulong visibilityBytes = allocationPlan.VisibilityAtlasBytes;
             ulong rayBytes = allocationPlan.RayScratchBytes;
             ulong probeStateBytes = allocationPlan.ProbeStateBytes;
+            ulong receiverProbeBytes = allocationPlan.ReceiverProbeBytes;
             ulong updateQueueBytes = allocationPlan.UpdateQueueBytes;
             ulong relocationClassificationBytes =
                 allocationPlan.RelocationClassificationBytes;
@@ -9796,8 +11257,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             // to overlap outside the admitted hard budget.
             long bufferTransitionStart = Stopwatch.GetTimestamp();
             bool buffersChanged = false;
-            buffersChanged |= EnsureBuffer(ref _irradianceAtlasBuffer, ref _irradianceAtlasBytes, irradianceBytes, "Simple DDGI Irradiance Atlas", invalidateAtlas: true, commandBuffer: commandBuffer, preserveContents: false, destroyPreviousImmediately: synchronizedCapacityTransition);
-            buffersChanged |= EnsureBuffer(ref _visibilityAtlasBuffer, ref _visibilityAtlasBytes, visibilityBytes, "Simple DDGI Visibility Atlas", invalidateAtlas: true, commandBuffer: commandBuffer, preserveContents: false, destroyPreviousImmediately: synchronizedCapacityTransition);
+            buffersChanged |= EnsureBuffer(ref _irradianceAtlasBuffer, ref _irradianceAtlasBytes, irradianceBytes, "Simple DDGI Irradiance Atlas", invalidateAtlas: true, commandBuffer: commandBuffer, preserveContents: false, destroyPreviousImmediately: destroyPreviousImmediately);
+            buffersChanged |= EnsureBuffer(ref _visibilityAtlasBuffer, ref _visibilityAtlasBytes, visibilityBytes, "Simple DDGI Visibility Atlas", invalidateAtlas: true, commandBuffer: commandBuffer, preserveContents: false, destroyPreviousImmediately: destroyPreviousImmediately);
             // Keep these allocations concrete even when V1 is selected so the
             // static render-graph declaration remains valid during a live V1/V2
             // toggle. V1 never dispatches the transport pass or touches them.
@@ -9816,7 +11277,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 invalidateAtlas: false,
                 commandBuffer: commandBuffer,
                 preserveContents: false,
-                destroyPreviousImmediately: synchronizedCapacityTransition);
+                destroyPreviousImmediately: destroyPreviousImmediately);
             bool sourceCacheReallocated = EnsureBuffer(
                 ref _transportSourceCacheBuffer,
                 ref _transportSourceCacheBytes,
@@ -9825,21 +11286,35 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 invalidateAtlas: false,
                 commandBuffer: commandBuffer,
                 preserveContents: false,
-                destroyPreviousImmediately: synchronizedCapacityTransition);
+                destroyPreviousImmediately: destroyPreviousImmediately);
             if (sourceCacheReallocated || sourceCacheRayCapacityChanged)
             {
                 InvalidateTransportSourceCacheMetadata();
             }
             _transportSourceCacheRayCapacity = sourceCacheRayCapacity;
             buffersChanged |= sourceCacheReallocated;
-            buffersChanged |= EnsureBuffer(ref _rayResultScratchBuffer, ref _rayScratchBytes, rayBytes, "Simple DDGI Ray Scratch", invalidateAtlas: false, commandBuffer: commandBuffer, preserveContents: false, destroyPreviousImmediately: synchronizedCapacityTransition);
-            if (EnsureBuffer(ref _probeStateBuffer, ref _probeStateBytes, probeStateBytes, "Simple DDGI Probe State", invalidateAtlas: false, commandBuffer: commandBuffer, preserveContents: false, destroyPreviousImmediately: synchronizedCapacityTransition))
+            buffersChanged |= EnsureBuffer(ref _rayResultScratchBuffer, ref _rayScratchBytes, rayBytes, "Simple DDGI Ray Scratch", invalidateAtlas: false, commandBuffer: commandBuffer, preserveContents: false, destroyPreviousImmediately: destroyPreviousImmediately);
+            if (EnsureBuffer(ref _probeStateBuffer, ref _probeStateBytes, probeStateBytes, "Simple DDGI Probe State", invalidateAtlas: false, commandBuffer: commandBuffer, preserveContents: false, destroyPreviousImmediately: destroyPreviousImmediately))
             {
                 _probeStateUploadRequired = true;
                 buffersChanged = true;
             }
-            buffersChanged |= EnsureBuffer(ref _probeUpdateQueueBuffer, ref _probeUpdateQueueBytes, updateQueueBytes, "Simple DDGI Probe Update Queue", invalidateAtlas: false, commandBuffer: commandBuffer, preserveContents: false, destroyPreviousImmediately: synchronizedCapacityTransition);
-            buffersChanged |= EnsureBuffer(ref _relocationClassificationBuffer, ref _relocationClassificationBytes, relocationClassificationBytes, "Simple DDGI Relocation Classification", invalidateAtlas: false, commandBuffer: commandBuffer, preserveContents: false, destroyPreviousImmediately: synchronizedCapacityTransition);
+            if (EnsureBuffer(
+                    ref _receiverProbeBuffer,
+                    ref _receiverProbeBytes,
+                    receiverProbeBytes,
+                    "Simple DDGI Receiver Probes",
+                    invalidateAtlas: false,
+                    commandBuffer: commandBuffer,
+                    preserveContents: false,
+                    destroyPreviousImmediately: destroyPreviousImmediately))
+            {
+                _receiverProbeClearRequired = true;
+                _receiverProbeInvalidationSlots.Clear();
+                buffersChanged = true;
+            }
+            buffersChanged |= EnsureBuffer(ref _probeUpdateQueueBuffer, ref _probeUpdateQueueBytes, updateQueueBytes, "Simple DDGI Probe Update Queue", invalidateAtlas: false, commandBuffer: commandBuffer, preserveContents: false, destroyPreviousImmediately: destroyPreviousImmediately);
+            buffersChanged |= EnsureBuffer(ref _relocationClassificationBuffer, ref _relocationClassificationBytes, relocationClassificationBytes, "Simple DDGI Relocation Classification", invalidateAtlas: false, commandBuffer: commandBuffer, preserveContents: false, destroyPreviousImmediately: destroyPreviousImmediately);
             _uploadCapacityBufferTransitionMicroseconds +=
                 ElapsedMicroseconds(bufferTransitionStart);
 
@@ -9847,7 +11322,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             ReconcileProbeStateReadbackBuffers(
                 allocationPlan,
                 readbackRequired,
-                destroyImmediately: synchronizedCapacityTransition);
+                destroyImmediately: destroyPreviousImmediately);
             _uploadCapacityReadbackReconciliationMicroseconds +=
                 ElapsedMicroseconds(readbackStart);
 
@@ -9861,14 +11336,15 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             }
 
             UpdateSampledAtlasCapacity(
-                probeCount,
-                deviceAlreadyIdle: synchronizedCapacityTransition,
+                allocationPlan.SampledAtlasPhysicalProbeCapacity,
+                priorGenerationComplete: priorGenerationComplete,
                 sampledAtlasAdmitted: sampledAtlasAdmitted);
             _capacityPlan = allocationPlan;
             _capacityKey = requiredKey;
             _capacityKeyValid = true;
             if (_context.ValidationSettings.Mode != RendererValidationMode.Off)
                 ValidateCachedCapacityPlan(allocationPlan, readbackRequired);
+            return true;
         }
 
         private bool RequiresSynchronizedCapacityTransition(
@@ -9881,6 +11357,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 RequiresBufferTransition(_transportSourceCacheBuffer, _transportSourceCacheBytes, required.TransportSourceCacheBytes) ||
                 RequiresBufferTransition(_rayResultScratchBuffer, _rayScratchBytes, required.RayScratchBytes) ||
                 RequiresBufferTransition(_probeStateBuffer, _probeStateBytes, required.ProbeStateBytes) ||
+                RequiresBufferTransition(_receiverProbeBuffer, _receiverProbeBytes, required.ReceiverProbeBytes) ||
                 RequiresBufferTransition(_probeUpdateQueueBuffer, _probeUpdateQueueBytes, required.UpdateQueueBytes) ||
                 RequiresBufferTransition(_relocationClassificationBuffer, _relocationClassificationBytes, required.RelocationClassificationBytes))
             {
@@ -9907,13 +11384,90 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 }
             }
 
-            if (_sampledAtlas?.IsReady == true &&
-                _sampledAtlas.EstimatedImageBytes != required.SampledAtlasImageBytes)
+            ulong sampledAtlasBytes =
+                _sampledAtlas?.EstimatedImageBytes ?? 0UL;
+            if (_registeredBindlessHeap != null &&
+                sampledAtlasBytes != required.SampledAtlasImageBytes)
             {
                 return true;
             }
 
+            if (RequiresSchedulerArenaReplacement(required))
+                return true;
+
             return false;
+        }
+
+        private bool RequiresSchedulerArenaReplacement(
+            in SimpleDdgiMemoryPlan required)
+        {
+            SimpleDdgiGpuSchedulerLayout? current = _gpuScheduler.Layout;
+            if (!required.SchedulerMode.IsGpuMode())
+                return current != null;
+            if (current == null)
+                return _registeredBindlessHeap != null;
+
+            return required.ProbeCount != current.ActiveProbeCount ||
+                required.UpdateRequestCapacity != current.RequestCapacity ||
+                required.SchedulerActiveLaneCount != current.ActiveLaneCount ||
+                (required.SchedulerValidationReadbackBytes != 0UL) !=
+                    current.ValidationEnabled;
+        }
+
+        private void CountRetiringBufferResources(
+            SimpleDdgiMemoryPlan required,
+            bool readbackRequired,
+            out int count,
+            out ulong bytes)
+        {
+            int localCount = 0;
+            ulong localBytes = 0UL;
+
+            Accumulate(_irradianceAtlasBuffer, _irradianceAtlasBytes, required.IrradianceAtlasBytes);
+            Accumulate(_visibilityAtlasBuffer, _visibilityAtlasBytes, required.VisibilityAtlasBytes);
+            Accumulate(_transportIrradianceAtlasBuffer, _transportIrradianceAtlasBytes, required.TransportIrradianceBytes);
+            Accumulate(_transportSourceCacheBuffer, _transportSourceCacheBytes, required.TransportSourceCacheBytes);
+            Accumulate(_rayResultScratchBuffer, _rayScratchBytes, required.RayScratchBytes);
+            Accumulate(_probeStateBuffer, _probeStateBytes, required.ProbeStateBytes);
+            Accumulate(_receiverProbeBuffer, _receiverProbeBytes, required.ReceiverProbeBytes);
+            Accumulate(_probeUpdateQueueBuffer, _probeUpdateQueueBytes, required.UpdateQueueBytes);
+            Accumulate(
+                _relocationClassificationBuffer,
+                _relocationClassificationBytes,
+                required.RelocationClassificationBytes);
+
+            ulong requiredReadbackBytes = readbackRequired
+                ? required.ProbeStateReadbackBytesPerBuffer
+                : 0UL;
+            for (int frameIndex = 0;
+                frameIndex < _probeStateReadbackBuffers.Length;
+                frameIndex++)
+            {
+                Accumulate(
+                    _probeStateReadbackBuffers[frameIndex],
+                    _probeStateReadbackProvisionedBytes[frameIndex],
+                    requiredReadbackBytes);
+            }
+
+            count = localCount;
+            bytes = localBytes;
+
+            void Accumulate(
+                BufferHandle handle,
+                ulong provisionedBytes,
+                ulong requiredBytes)
+            {
+                if (!handle.IsValid ||
+                    !RequiresStableCapacityReallocation(
+                        provisionedBytes,
+                        requiredBytes))
+                {
+                    return;
+                }
+
+                localCount = checked(localCount + 1);
+                localBytes = SaturatingAdd(localBytes, provisionedBytes);
+            }
         }
 
         private static bool RequiresBufferTransition(
@@ -9931,11 +11485,75 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             int probes = Math.Max(0, probeCount);
+            SimpleDdgiMemoryPlan admittedLayout =
+                _lastLayoutReport?.AcceptedMemoryPlan ??
+                SimpleDdgiMemoryPlan.Empty;
+            bool admittedLayoutMatches =
+                admittedLayout.VirtualProbeCount == probes;
+            SimpleDdgiProbeResidencyMode residencyMode =
+                admittedLayoutMatches
+                    ? admittedLayout.ResidencyMode.Sanitize()
+                    : SimpleDdgiProbeResidencyMode.Dense;
+            int densePayloadProbeCount = admittedLayoutMatches
+                ? admittedLayout.DensePayloadProbeCount
+                : probes;
+            int sparseVirtualProbeCount = admittedLayoutMatches
+                ? admittedLayout.SparseVirtualProbeCount
+                : 0;
+            int sparseVirtualPageCount = admittedLayoutMatches
+                ? admittedLayout.SparseVirtualPageCount
+                : 0;
+            int sparsePhysicalPageCapacity = admittedLayoutMatches
+                ? admittedLayout.SparsePhysicalPageCapacity
+                : 0;
+            int physicalProbeCapacity = admittedLayoutMatches
+                ? admittedLayout.PhysicalProbeCapacity
+                : probes;
+            ulong residencyArenaBytes = admittedLayoutMatches
+                ? admittedLayout.ResidencyArenaBytes
+                : 0UL;
+            ulong residencyFeedbackReadbackBytes = admittedLayoutMatches
+                ? admittedLayout.ResidencyFeedbackReadbackBytes
+                : 0UL;
             bool sampledRequested = probes > 0 && SampledAtlasRequested;
+            SimpleDdgiSchedulerMode schedulerMode = _schedulerMode.Sanitize();
+            int schedulerActiveLaneCount = 0;
+            ulong schedulerArenaBytes = 0UL;
+            ulong schedulerValidationReadbackBytes = 0UL;
+            if (schedulerMode.IsGpuMode() && probes > 0)
+            {
+                SimpleDdgiGpuSchedulerLayout schedulerLayout =
+                    SimpleDdgiGpuSchedulerLayout.Create(
+                        probes,
+                        Math.Clamp(probesToUpdate, 0, probes),
+                        Math.Clamp(
+                            _volumeCount,
+                            1,
+                            GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount),
+                        SimpleDdgiGpuSchedulerLayout.MaxDirtyRegionCapacity,
+                        _context.ValidationSettings.Mode !=
+                            RendererValidationMode.Off);
+                schedulerActiveLaneCount = schedulerLayout.ActiveLaneCount;
+                schedulerArenaBytes = schedulerLayout.TotalBytes;
+                schedulerValidationReadbackBytes =
+                    schedulerLayout.ValidationEnabled
+                        ? checked(
+                            (ulong)RenderingConstants.FramesInFlight *
+                            SimpleDdgiGpuSchedulerLayout.ShippingFeedbackBytes)
+                        : 0UL;
+            }
             return new SimpleDdgiCapacityKey(
                 gi.DdgiQualityTier,
                 ComputeCapacityTopologyFingerprint(probes),
                 probes,
+                residencyMode,
+                densePayloadProbeCount,
+                sparseVirtualProbeCount,
+                sparseVirtualPageCount,
+                sparsePhysicalPageCapacity,
+                physicalProbeCapacity,
+                residencyArenaBytes,
+                residencyFeedbackReadbackBytes,
                 Math.Clamp(
                     raysPerProbe,
                     1,
@@ -9948,6 +11566,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     _context.ShaderStorageImageArrayNonUniformIndexingSupported,
                 gi.DdgiAtlasMemoryBudgetBytes,
                 gi.SimpleDdgiTransportV2Enabled,
+                schedulerMode,
+                schedulerActiveLaneCount,
+                schedulerArenaBytes,
+                schedulerValidationReadbackBytes,
                 probes > 0 && gi.EffectiveUseDdgi);
         }
 
@@ -9986,6 +11608,19 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 reason |= SimpleDdgiCapacityTransitionReason.Topology;
             if (previous.ProbeCount != required.ProbeCount)
                 reason |= SimpleDdgiCapacityTransitionReason.ProbeCapacity;
+            if (previous.ResidencyMode != required.ResidencyMode)
+                reason |= SimpleDdgiCapacityTransitionReason.ResidencyMode;
+            if (previous.DensePayloadProbeCount != required.DensePayloadProbeCount ||
+                previous.SparseVirtualProbeCount != required.SparseVirtualProbeCount ||
+                previous.SparseVirtualPageCount != required.SparseVirtualPageCount ||
+                previous.SparsePhysicalPageCapacity != required.SparsePhysicalPageCapacity ||
+                previous.PhysicalProbeCapacity != required.PhysicalProbeCapacity ||
+                previous.ResidencyArenaBytes != required.ResidencyArenaBytes ||
+                previous.ResidencyFeedbackReadbackBytes !=
+                    required.ResidencyFeedbackReadbackBytes)
+            {
+                reason |= SimpleDdgiCapacityTransitionReason.ResidencyCapacity;
+            }
             if (previous.RayCapacity != required.RayCapacity)
                 reason |= SimpleDdgiCapacityTransitionReason.RayCapacity;
             if (previous.RequestCapacity != required.RequestCapacity)
@@ -10002,6 +11637,19 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 reason |= SimpleDdgiCapacityTransitionReason.SampledAtlasBudget;
             if (previous.TransportV2Enabled != required.TransportV2Enabled)
                 reason |= SimpleDdgiCapacityTransitionReason.TransportMode;
+            if (previous.SchedulerMode != required.SchedulerMode)
+                reason |= SimpleDdgiCapacityTransitionReason.SchedulerMode;
+            if (previous.SchedulerActiveLaneCount !=
+                    required.SchedulerActiveLaneCount ||
+                previous.SchedulerArenaBytes != required.SchedulerArenaBytes)
+            {
+                reason |= SimpleDdgiCapacityTransitionReason.SchedulerCapacity;
+            }
+            if (previous.SchedulerValidationReadbackBytes !=
+                required.SchedulerValidationReadbackBytes)
+            {
+                reason |= SimpleDdgiCapacityTransitionReason.SchedulerValidation;
+            }
             if (previous.FeatureEnabled && !required.FeatureEnabled)
                 reason |= SimpleDdgiCapacityTransitionReason.FeatureDisabled;
             return reason;
@@ -10035,6 +11683,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _probeStateBuffer,
                 _probeStateBytes,
                 plan.ProbeStateBytes);
+            _uploadCapacityReceiverProbes = CreateCapacityResourceTelemetry(
+                _receiverProbeBuffer,
+                _receiverProbeBytes,
+                plan.ReceiverProbeBytes);
             _uploadCapacityUpdateQueue = CreateCapacityResourceTelemetry(
                 _probeUpdateQueueBuffer,
                 _probeUpdateQueueBytes,
@@ -10069,14 +11721,6 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 requiredBytes,
                 !handle.IsValid || provisionedBytes != requiredBytes);
 
-        private void RecordCapacityDeviceWaitIdle()
-        {
-            _recordRuntimeStall(
-                RuntimeStallReason.ResourceResize,
-                "Simple DDGI capacity generation transition",
-                _context.WaitIdle);
-        }
-
         private void ValidateCachedCapacityPlan(
             SimpleDdgiMemoryPlan plan,
             bool readbackRequired)
@@ -10105,6 +11749,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 "probe state",
                 _probeStateBuffer,
                 plan.ProbeStateBytes);
+            ValidateBufferCapacity(
+                "receiver probes",
+                _receiverProbeBuffer,
+                plan.ReceiverProbeBytes);
             ValidateBufferCapacity(
                 "update queue",
                 _probeUpdateQueueBuffer,
@@ -10303,6 +11951,18 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             ulong requiredBytes) =>
             provisionedBytes != requiredBytes;
 
+        internal static ulong ResolveTransitionMemoryLimit(
+            ulong gpuMemoryBudgetBytes)
+        {
+            if (gpuMemoryBudgetBytes == ulong.MaxValue)
+                return ulong.MaxValue;
+            ulong quotient = gpuMemoryBudgetBytes / 5UL;
+            ulong remainder = gpuMemoryBudgetBytes % 5UL;
+            return checked(
+                quotient * 4UL +
+                (remainder * 4UL) / 5UL);
+        }
+
         private void ReconcileProbeStateReadbackBuffers(
             SimpleDdgiMemoryPlan allocationPlan,
             bool readbackRequired,
@@ -10356,18 +12016,18 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         }
 
         private void UpdateSampledAtlasCapacity(
-            int probeCount,
-            bool deviceAlreadyIdle,
+            int physicalProbeCapacity,
+            bool priorGenerationComplete,
             bool sampledAtlasAdmitted = true)
         {
             long ensureStart = Stopwatch.GetTimestamp();
-            if (!SampledAtlasRequested || probeCount <= 0)
+            if (!SampledAtlasRequested || physicalProbeCapacity <= 0)
             {
                 if (_sampledAtlas != null)
                     AdvanceSampledAtlasPublicationGeneration();
-                _sampledAtlas?.Release(deviceAlreadyIdle);
-                _sampledAtlas?.Dispose();
-                _sampledAtlas = null;
+                _sampledAtlas?.Release(
+                    _resourceLastUseFrameFenceValue,
+                    _completedFrameFenceValue);
                 _sampledAtlasFallbackReason = string.Empty;
                 _sampledAtlasFailedProbeCount = -1;
                 _sampledAtlasFailureBudgetBytes = 0;
@@ -10389,19 +12049,19 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             {
                 if (_sampledAtlas != null)
                     AdvanceSampledAtlasPublicationGeneration();
-                _sampledAtlas?.Release(deviceAlreadyIdle);
-                _sampledAtlas?.Dispose();
-                _sampledAtlas = null;
+                _sampledAtlas?.Release(
+                    _resourceLastUseFrameFenceValue,
+                    _completedFrameFenceValue);
                 _sampledAtlasFallbackReason =
                     "sampled-atlas-storage-image-non-uniform-indexing-unavailable";
-                _sampledAtlasFailedProbeCount = probeCount;
+                _sampledAtlasFailedProbeCount = physicalProbeCapacity;
                 _sampledAtlasFailureBudgetBytes = configuredBudgetBytes;
                 _uploadCapacitySampledAtlasEnsureMicroseconds +=
                     ElapsedMicroseconds(ensureStart);
                 return;
             }
 
-            if (_sampledAtlasFailedProbeCount == probeCount &&
+            if (_sampledAtlasFailedProbeCount == physicalProbeCapacity &&
                 _sampledAtlasFailureBudgetBytes == configuredBudgetBytes)
             {
                 _uploadCapacitySampledAtlasEnsureMicroseconds +=
@@ -10411,9 +12071,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
 
             if (!sampledAtlasAdmitted)
             {
-                _sampledAtlas?.Release(deviceAlreadyIdle);
+                _sampledAtlas?.Release(
+                    _resourceLastUseFrameFenceValue,
+                    _completedFrameFenceValue);
                 _sampledAtlasFallbackReason = "sampled-atlas-would-exceed-ddgi-memory-budget";
-                _sampledAtlasFailedProbeCount = probeCount;
+                _sampledAtlasFailedProbeCount = physicalProbeCapacity;
                 _sampledAtlasFailureBudgetBytes = configuredBudgetBytes;
                 _uploadCapacitySampledAtlasEnsureMicroseconds +=
                     ElapsedMicroseconds(ensureStart);
@@ -10426,7 +12088,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     _context,
                     _recordRuntimeStall);
                 ulong previousGeneration = _sampledAtlas.AllocationGeneration;
-                if (_sampledAtlas.EnsureCapacity(probeCount, deviceAlreadyIdle))
+                if (_sampledAtlas.EnsureCapacity(
+                        physicalProbeCapacity,
+                        _resourceLastUseFrameFenceValue,
+                        _completedFrameFenceValue,
+                        priorGenerationComplete))
                 {
                     if (_sampledAtlas.AllocationGeneration != previousGeneration)
                     {
@@ -10442,17 +12108,23 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _sampledAtlasFallbackReason = string.IsNullOrWhiteSpace(_sampledAtlas.LastFailureReason)
                     ? "sampled-atlas-allocation-unavailable"
                     : _sampledAtlas.LastFailureReason;
-                _sampledAtlasFailedProbeCount = probeCount;
+                bool retryAfterCompletion =
+                    _sampledAtlasFallbackReason.Contains(
+                        "retirement",
+                        StringComparison.Ordinal);
+                _sampledAtlasFailedProbeCount = retryAfterCompletion
+                    ? -1
+                    : physicalProbeCapacity;
                 _sampledAtlasFailureBudgetBytes = configuredBudgetBytes;
             }
             catch (VulkanException exception)
             {
-                _sampledAtlas?.Release(deviceAlreadyIdle);
-                _sampledAtlas?.Dispose();
-                _sampledAtlas = null;
+                _sampledAtlas?.Release(
+                    _resourceLastUseFrameFenceValue,
+                    _completedFrameFenceValue);
                 AdvanceSampledAtlasPublicationGeneration();
                 _sampledAtlasFallbackReason = $"sampled-atlas-vulkan-{exception.Result}";
-                _sampledAtlasFailedProbeCount = probeCount;
+                _sampledAtlasFailedProbeCount = physicalProbeCapacity;
                 _sampledAtlasFailureBudgetBytes = configuredBudgetBytes;
             }
             finally
@@ -10516,7 +12188,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _irradianceAtlasBytes,
                 _bufferManager.GetBuffer(_visibilityAtlasBuffer),
                 _visibilityAtlasBytes,
-                _probeCount);
+                _capacityPlan.PhysicalProbeCapacity);
         }
 
         // Toroidal scrolling preserves atlas and probe-state ownership by keeping
@@ -10558,6 +12230,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             if (!_atlasClearRequired)
                 return;
 
+            _receiverProbeClearRequired = true;
             _atlasClearedThisFrame = true;
             BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[4];
             uint barrierCount = 0;
@@ -10616,8 +12289,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 Array.Clear(_probeLastSourceRefreshFrames);
             for (int probeIndex = 0; probeIndex < _probeSourceEpochs.Length; probeIndex++)
             {
-                _probeSourceEpochs[probeIndex] =
-                    AdvanceSourceEpoch(_probeSourceEpochs[probeIndex]);
+                AdvanceProbeSourceEpoch(probeIndex);
             }
             if (_probeSourceRayCounts.Length > 0)
                 Array.Clear(_probeSourceRayCounts);
@@ -10931,6 +12603,29 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             return next == 0u ? 1u : next;
         }
 
+        private void SetProbeSourceEpoch(int probeIndex, uint sourceEpoch)
+        {
+            if ((uint)probeIndex >= (uint)_probeSourceEpochs.Length)
+                return;
+
+            uint normalized = sourceEpoch == 0u ? 1u : sourceEpoch;
+            if (_probeSourceEpochs[probeIndex] == normalized)
+                return;
+
+            _probeSourceEpochs[probeIndex] = normalized;
+            _sourceEpochGeneration = AdvanceSourceEpoch(_sourceEpochGeneration);
+        }
+
+        private void AdvanceProbeSourceEpoch(int probeIndex)
+        {
+            if ((uint)probeIndex >= (uint)_probeSourceEpochs.Length)
+                return;
+
+            SetProbeSourceEpoch(
+                probeIndex,
+                AdvanceSourceEpoch(_probeSourceEpochs[probeIndex]));
+        }
+
         private static uint PackProbeStateFlags(uint flags, uint generation) =>
             (flags & ~((uint)ProbeStateGenerationValueMask << ProbeStateGenerationShift)) |
             (NormalizeProbeGeneration(generation) << ProbeStateGenerationShift);
@@ -11022,8 +12717,55 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     settings.SimpleDdgiTransportSolverRelaxation,
                     settings.SimpleDdgiTransportAlbedoClamp,
                     settings.SimpleDdgiTransportTailRelativeTolerance,
-                    settings.SimpleDdgiTransportAcceleratedSweepCount)
+                    settings.SimpleDdgiTransportAcceleratedSweepCount),
+                ResidencyAndCounts = BuildResidencyAndCounts(),
+                ResidencyControls = BuildResidencyControls()
             };
+        }
+
+        private Vector4 BuildResidencyAndCounts()
+        {
+            SimpleDdgiMemoryPlan plan = _capacityPlan;
+            uint generation = plan.ResidencyMode.CollectsDemand() &&
+                _probePageCache.IsReady
+                    ? _probePageCache.ResourceGeneration
+                    : 0u;
+            return new Vector4(
+                PackHeaderWord((uint)
+                    BindlessIndex.SimpleDdgiResidencyArenaBuffer),
+                PackHeaderWord(checked((uint)Math.Max(
+                    0,
+                    plan.SparseVirtualPageCount))),
+                PackHeaderWord(checked((uint)Math.Max(
+                    0,
+                    plan.PhysicalProbeCapacity))),
+                PackHeaderWord(generation));
+        }
+
+        private Vector4 BuildResidencyControls()
+        {
+            SimpleDdgiMemoryPlan plan = _capacityPlan;
+            uint flags = 0u;
+            if (_probePageCache.IsReady &&
+                !_probePageCache.BootstrapRequired)
+            {
+                flags |= 1u << 0;
+            }
+            if (_probePageCache.Frozen)
+                flags |= 1u << 1;
+            if (_probePageCache.ResidencyValid)
+                flags |= 1u << 2;
+            if (_context.ValidationSettings.Mode != RendererValidationMode.Off)
+                flags |= 1u << 3;
+            return new Vector4(
+                PackHeaderWord(checked((uint)plan.ResidencyMode)),
+                PackHeaderWord(checked((uint)Math.Max(
+                    0,
+                    plan.DensePayloadProbeCount))),
+                PackHeaderWord(checked((uint)Math.Max(
+                    0,
+                    plan.SparsePhysicalPageCapacity))),
+                PackHeaderWord(flags));
         }
 
         internal static float PackHeaderWord(uint value) => BitConverter.UInt32BitsToSingle(value);
@@ -11877,9 +13619,439 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _frameSerial++;
             long retirementStart = Stopwatch.GetTimestamp();
             int destroyed = DrainRetiredResources(force: false);
+            _gpuScheduler.CollectRetired(_completedFrameFenceValue);
+            _sampledAtlas?.CollectRetired(_completedFrameFenceValue);
             _uploadCapacityRetiredResourceDestructionMicroseconds +=
                 ElapsedMicroseconds(retirementStart);
             _uploadCapacityRetiredResourceDestructionCount += destroyed;
+        }
+
+        private void MarkResourcesUsedByPendingSubmission()
+        {
+            _resourceLastUseFrameFenceValue =
+                _lastSubmittedFrameFenceValue == ulong.MaxValue
+                    ? ulong.MaxValue
+                    : _lastSubmittedFrameFenceValue + 1UL;
+        }
+
+        /// <summary>
+        /// A single update-after-bind set is shared by every frame in flight.
+        /// Vulkan therefore requires all submitted readers of an element to
+        /// complete before that element is rewritten. Complete only those
+        /// frame fences and verify the renderer returned sufficient progress;
+        /// never substitute frame age or a device-wide idle.
+        /// </summary>
+        private bool EnsureBindlessDescriptorReadersComplete(
+            CommandBuffer commandBuffer,
+            string transitionDescription)
+        {
+            if (_registeredBindlessHeap == null ||
+                commandBuffer.Handle == 0 ||
+                _resourceLastUseFrameFenceValue == 0UL ||
+                _completedFrameFenceValue >= _resourceLastUseFrameFenceValue)
+            {
+                return true;
+            }
+
+            ulong completedFenceValue = _completedFrameFenceValue;
+            _recordRuntimeStall(
+                RuntimeStallReason.ResourceGenerationFenceWait,
+                transitionDescription,
+                () => completedFenceValue =
+                    _waitForBindlessDescriptorReaders());
+            ObserveFrameFenceCompletion(
+                _lastSubmittedFrameFenceValue,
+                completedFenceValue);
+
+            if (_completedFrameFenceValue >=
+                _resourceLastUseFrameFenceValue)
+            {
+                _capacityTransitionDeferred = false;
+                _capacityTransitionDeferredReason = string.Empty;
+                return true;
+            }
+
+            _capacityTransitionDeferred = true;
+            _capacityTransitionDeferredReason =
+                "bindless-descriptor-readers-pending";
+            return false;
+        }
+
+        private void TryRecordGpuSchedulerFallbackExport(
+            CommandBuffer commandBuffer)
+        {
+            if (!_gpuSchedulerFallbackExportRequested)
+                return;
+
+            if (_schedulerMode != SimpleDdgiSchedulerMode.GpuResident ||
+                !_gpuScheduler.IsReady ||
+                !_gpuResidentProbeStateBootstrapped ||
+                _probeStateUploadRequired ||
+                !_probeStateBuffer.IsValid ||
+                _probeCount <= 0)
+            {
+                FailGpuSchedulerFallbackExport();
+                return;
+            }
+
+            ulong requiredExportBytes =
+                SimpleDdgiGpuScheduler.ResolveFallbackStateExportBytes(
+                    _probeCount);
+            ulong incrementalExportBytes = requiredExportBytes >
+                    _gpuScheduler.FallbackStateExportBytes
+                ? requiredExportBytes -
+                    _gpuScheduler.FallbackStateExportBytes
+                : 0UL;
+            ulong fallbackPeakBytes = SaturatingAdd(
+                BufferBytes,
+                SaturatingAdd(
+                    SampledAtlasImageBytes,
+                    SaturatingAdd(
+                        RetiredBufferBytes,
+                        SaturatingAdd(
+                            _gpuScheduler.RetiredBytes,
+                            SaturatingAdd(
+                                _sampledAtlas?.RetiredImageBytes ?? 0UL,
+                                incrementalExportBytes)))));
+            ulong configuredBudget =
+                _settings.GlobalIllumination.DdgiAtlasMemoryBudgetBytes;
+            if (requiredExportBytes == 0UL ||
+                configuredBudget != 0UL && fallbackPeakBytes > configuredBudget)
+            {
+                // The complete export is optional recovery evidence. If its
+                // temporary overlap cannot honor the hard DDGI budget, take
+                // the already-defined complete fresh-reset CPU fallback.
+                FailGpuSchedulerFallbackExport();
+                return;
+            }
+
+            ulong pendingFenceValue =
+                _lastSubmittedFrameFenceValue == ulong.MaxValue
+                    ? ulong.MaxValue
+                    : _lastSubmittedFrameFenceValue + 1UL;
+            SimpleDdgiSchedulerStateExportTag tag = new(
+                _probeCount,
+                _gpuScheduler.ResourceGeneration,
+                NonZeroGeneration(_volumeTableGeneration),
+                NonZeroGeneration(_physicalOwnershipGeneration),
+                NonZeroGeneration(_sourceLightingGeneration),
+                NonZeroGeneration(_sourceEpochGeneration),
+                NonZeroGeneration(_transportGeneration),
+                _frameSerial);
+            bool recorded;
+            try
+            {
+                recorded = _gpuScheduler.RecordFallbackStateExport(
+                    commandBuffer,
+                    _probeStateBuffer,
+                    tag,
+                    pendingFenceValue);
+            }
+            catch (Exception exception) when (
+                exception is VulkanException or
+                InvalidOperationException or
+                OverflowException)
+            {
+                recorded = false;
+            }
+            if (!recorded)
+            {
+                FailGpuSchedulerFallbackExport();
+                return;
+            }
+
+            _gpuSchedulerFallbackExportTag = tag;
+            _gpuSchedulerFallbackExportRequested = false;
+            _gpuSchedulerFallbackExportSubmitted = true;
+        }
+
+        private void TryCompleteGpuSchedulerFallbackExport()
+        {
+            if (!_gpuSchedulerFallbackExportSubmitted)
+                return;
+
+            SimpleDdgiSchedulerStateExportReadStatus status =
+                _gpuScheduler.TryReadFallbackStateExport(
+                    _completedFrameFenceValue,
+                    _gpuResidentBootstrapStateScratch,
+                    _probeStateScratch,
+                    out SimpleDdgiSchedulerStateExportTag tag);
+            if (status == SimpleDdgiSchedulerStateExportReadStatus.Pending)
+                return;
+            if (status != SimpleDdgiSchedulerStateExportReadStatus.Complete ||
+                tag != _gpuSchedulerFallbackExportTag ||
+                !IsCurrentGpuSchedulerFallbackExport(tag) ||
+                !TryImportGpuSchedulerFallbackState(tag))
+            {
+                FailGpuSchedulerFallbackExport();
+                return;
+            }
+
+            _gpuSchedulerFallbackExportSubmitted = false;
+            _gpuSchedulerFallbackFreshResetPending = false;
+            _gpuSchedulerStateExportSuccessCount = SaturatingAdd(
+                _gpuSchedulerStateExportSuccessCount,
+                1UL);
+            _gpuSchedulerReentryStableFrameCount = 0;
+        }
+
+        private bool IsCurrentGpuSchedulerFallbackExport(
+            in SimpleDdgiSchedulerStateExportTag tag) =>
+            tag.IsInitialized &&
+            tag.ProbeCount == _probeCount &&
+            tag.SchedulerResourceGeneration == _gpuScheduler.ResourceGeneration &&
+            tag.VolumeTableGeneration == NonZeroGeneration(_volumeTableGeneration) &&
+            tag.PhysicalOwnershipGeneration ==
+                NonZeroGeneration(_physicalOwnershipGeneration) &&
+            tag.SourceLightingGeneration ==
+                NonZeroGeneration(_sourceLightingGeneration) &&
+            tag.SourceEpochGeneration == NonZeroGeneration(_sourceEpochGeneration) &&
+            tag.TransportGeneration == NonZeroGeneration(_transportGeneration);
+
+        private bool TryImportGpuSchedulerFallbackState(
+            in SimpleDdgiSchedulerStateExportTag tag)
+        {
+            int probeCount = tag.ProbeCount;
+            for (int probeIndex = 0; probeIndex < probeCount; probeIndex++)
+            {
+                if (!IsValidGpuSchedulerFallbackRecord(
+                        _gpuResidentBootstrapStateScratch[probeIndex],
+                        _probeStateScratch[probeIndex],
+                        tag.VolumeTableGeneration))
+                {
+                    return false;
+                }
+            }
+
+            EnsureCpuProbeStateCapacity(probeCount);
+            _activeProbeCount = 0;
+            _classifiedInactiveProbeCountEstimate = 0;
+            _probeRelocationCount = 0;
+            _relocationFractionSumEstimate = 0.0f;
+            for (int probeIndex = 0; probeIndex < probeCount; probeIndex++)
+            {
+                GPUSimpleDdgiSchedulerProbeState scheduler =
+                    _gpuResidentBootstrapStateScratch[probeIndex];
+                GPUSimpleDdgiProbeState state = _probeStateScratch[probeIndex];
+                uint physicalGeneration =
+                    (state.Flags >> ProbeStateGenerationShift) &
+                    ProbeStateGenerationValueMask;
+                _probeGenerations[probeIndex] = physicalGeneration;
+                _probeRelocations[probeIndex] = new Vector3(
+                    state.RelocationAndActive.X,
+                    state.RelocationAndActive.Y,
+                    state.RelocationAndActive.Z);
+                _probeActiveWeights[probeIndex] =
+                    Math.Clamp(state.RelocationAndActive.W, 0.0f, 1.0f);
+                _probeClassifications[probeIndex] = state.Classification;
+                _probeFresh[probeIndex] =
+                    (state.Flags & ProbeStateFreshFlag) != 0u ? (byte)1 : (byte)0;
+                _probeInactive[probeIndex] =
+                    (state.Flags & ProbeStateInactiveFlag) != 0u ? (byte)1 : (byte)0;
+                _probeRelocationPending[probeIndex] =
+                    (state.Flags & ProbeStateRelocationPendingFlag) != 0u
+                        ? (byte)1
+                        : (byte)0;
+
+                uint schedulerReasons = scheduler.DirtyReasonFlags;
+                _probeDirtyReasons[probeIndex] =
+                    unchecked((byte)(schedulerReasons & byte.MaxValue));
+                byte schedulingFlags = 0;
+                if ((state.Flags & ProbeStateScrollExposedFlag) != 0u ||
+                    (schedulerReasons & SimpleDdgiSchedulerAbi.ReasonScrollExposed) != 0u)
+                {
+                    schedulingFlags |= ProbeSchedulingScrollExposedFlag;
+                }
+                if ((schedulerReasons & SimpleDdgiSchedulerAbi.ReasonRegionalDirty) != 0u)
+                    schedulingFlags |= ProbeSchedulingRegionalDirtyFlag;
+                if ((schedulerReasons & SimpleDdgiSchedulerAbi.ProbeMetadataVisible) != 0u)
+                {
+                    schedulingFlags |= ProbeSchedulingVisibleFlag;
+                    _probeVisibilityImportance[probeIndex] =
+                        SchedulerVisibleImportanceThreshold;
+                }
+                else
+                {
+                    _probeVisibilityImportance[probeIndex] = 0;
+                }
+                _probeSchedulingFlags[probeIndex] = schedulingFlags;
+
+                SimpleDdgiSchedulerAbi.UnpackSchedulerProbeLifecycle(
+                    scheduler.PackedTransportAndLifecycle,
+                    out uint sourceRayCount,
+                    out uint transportGeneration,
+                    out uint stableUpdateCount,
+                    out uint routineMaintenanceState,
+                    out _);
+                bool sourceCacheInvalid =
+                    (state.Flags & ProbeStateSourceCacheInvalidFlag) != 0u;
+                _probeSourceLightingGenerations[probeIndex] = sourceCacheInvalid
+                    ? 0u
+                    : scheduler.CommittedSourceLightingGeneration;
+                _probeSourceEpochs[probeIndex] = scheduler.SourceEpoch;
+                _probeSourceRayCounts[probeIndex] = sourceCacheInvalid
+                    ? (ushort)0
+                    : checked((ushort)sourceRayCount);
+                _probeTransportGenerationCounts[probeIndex] =
+                    checked((byte)transportGeneration);
+                _probeStableUpdateCounts[probeIndex] =
+                    checked((byte)stableUpdateCount);
+                _probeRoutineMaintenancePending[probeIndex] =
+                    routineMaintenanceState != 0u
+                        ? RoutineMaintenanceConvergencePending
+                        : RoutineMaintenanceNone;
+                _probeLastUpdatedFrames[probeIndex] =
+                    scheduler.LastCommittedUpdateFrame;
+                _probeLastSourceRefreshFrames[probeIndex] =
+                    scheduler.LastCommittedSourceRefreshFrame;
+                _probeInvalidationMarkers[probeIndex] =
+                    scheduler.AppliedInvalidationMarker;
+                _probeDirtyLatencyStartFrames[probeIndex] =
+                    scheduler.DirtyStartFrame;
+                _probeDirtyLatencyStates[probeIndex] =
+                    scheduler.DirtyStartFrame != 0u ? (byte)1 : (byte)0;
+                float residual = BitConverter.UInt32BitsToSingle(state.Reserved0);
+                _probeLuminanceChangeEma[probeIndex] =
+                    float.IsFinite(residual) ? Math.Max(residual, 0.0f) : 0.0f;
+
+                bool inactive = _probeInactive[probeIndex] != 0 ||
+                    state.Classification == 1u ||
+                    state.RelocationAndActive.W <= 0.001f;
+                if (inactive)
+                    _classifiedInactiveProbeCountEstimate++;
+                else
+                    _activeProbeCount++;
+                float relocationFraction = _probeRelocations[probeIndex].Length();
+                if (relocationFraction > 0.0001f)
+                {
+                    _probeRelocationCount++;
+                    _relocationFractionSumEstimate += relocationFraction;
+                }
+            }
+
+            _averageRelocationFractionEstimate = _probeRelocationCount > 0
+                ? _relocationFractionSumEstimate / _probeRelocationCount
+                : 0.0f;
+            Array.Clear(_probeQueued);
+            Array.Clear(_probeSchedulerDirty);
+            _probeSchedulerDirtyCount = 0;
+            _probeStateReadbackValid = 0;
+            _probeConvergenceReadbackValid = 0;
+            _probeStateUploadRequired = true;
+            _schedulerGlobalStateValid = false;
+            _schedulerVisibilityFullRefreshRequired = true;
+            RequirePersistentSchedulerRebuild();
+            RecomputeDirtyLatencyOutstandingCount();
+            RebuildAtmosphereCohortCounters();
+            BeginTransportGlobalConvergence(forceFieldEvidenceReset: true);
+            return true;
+        }
+
+        internal static bool IsValidGpuSchedulerFallbackRecord(
+            in GPUSimpleDdgiSchedulerProbeState scheduler,
+            in GPUSimpleDdgiProbeState state,
+            uint expectedVolumeTableGeneration)
+        {
+            uint physicalGeneration =
+                (state.Flags >> ProbeStateGenerationShift) &
+                ProbeStateGenerationValueMask;
+            SimpleDdgiSchedulerAbi.UnpackSchedulerProbeLifecycle(
+                scheduler.PackedTransportAndLifecycle,
+                out uint sourceRayCount,
+                out _,
+                out _,
+                out _,
+                out uint transactionStatus);
+            bool finiteState =
+                float.IsFinite(state.RelocationAndActive.X) &&
+                float.IsFinite(state.RelocationAndActive.Y) &&
+                float.IsFinite(state.RelocationAndActive.Z) &&
+                float.IsFinite(state.RelocationAndActive.W);
+            return expectedVolumeTableGeneration != 0u &&
+                scheduler.OwningVolumeTableGeneration ==
+                    expectedVolumeTableGeneration &&
+                scheduler.SourceEpoch != 0u &&
+                transactionStatus == 0u &&
+                sourceRayCount <=
+                    GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe &&
+                (sourceRayCount == 0u ||
+                    scheduler.CommittedSourceLightingGeneration != 0u) &&
+                physicalGeneration != 0u &&
+                finiteState &&
+                state.RelocationAndActive.W >= 0.0f &&
+                state.RelocationAndActive.W <= 1.0f &&
+                state.Classification <= 1u;
+        }
+
+        private void FailGpuSchedulerFallbackExport()
+        {
+            _gpuSchedulerFallbackExportRequested = false;
+            _gpuSchedulerFallbackExportSubmitted = false;
+            _gpuSchedulerFallbackFreshResetPending = true;
+            _gpuSchedulerStateExportFailureCount = SaturatingAdd(
+                _gpuSchedulerStateExportFailureCount,
+                1UL);
+        }
+
+        private void UpdateGpuSchedulerReentry(
+            SimpleDdgiSchedulerMode requestedMode,
+            bool structuredGatherAvailable)
+        {
+            bool frozenSparseTransaction =
+                _schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+                _capacityPlan.ResidencyMode.UsesSparsePayloads() &&
+                _probePageCache.Frozen;
+            if (!_gpuSchedulerFallbackLatched ||
+                !requestedMode.IsGpuMode() ||
+                (_schedulerMode != SimpleDdgiSchedulerMode.CpuReference &&
+                 !frozenSparseTransaction) ||
+                _gpuSchedulerFallbackFreshResetPending ||
+                _gpuSchedulerFallbackExportRequested ||
+                _gpuSchedulerFallbackExportSubmitted)
+            {
+                _gpuSchedulerReentryStableFrameCount = 0;
+                return;
+            }
+
+            bool stable =
+                structuredGatherAvailable &&
+                _context.RayQuerySupported &&
+                _context.KhrAccelerationStructure != null &&
+                _gpuScheduler.IsReady &&
+                _probeCount > 0 &&
+                _wasSimpleDdgiEnabled &&
+                !_atlasFresh &&
+                !_capacityTransitionDeferred &&
+                !_probeStateUploadRequired &&
+                _gpuSchedulerGenerationMismatchStreak == 0;
+            if (!stable)
+            {
+                _gpuSchedulerReentryStableFrameCount = 0;
+                return;
+            }
+
+            _gpuSchedulerReentryStableFrameCount = Math.Min(
+                int.MaxValue,
+                _gpuSchedulerReentryStableFrameCount + 1);
+            int requiredFrames =
+                _settings.GlobalIllumination
+                    .SimpleDdgiSchedulerReentryStableFrameCount;
+            if (_gpuSchedulerReentryStableFrameCount < requiredFrames)
+                return;
+
+            if (frozenSparseTransaction)
+            {
+                // Never resume writes against the frozen mapping. A forced
+                // replacement advances the full residency resource identity;
+                // the normal bootstrap path then seeds an empty fail-closed map.
+                _probePageCache.RequireFreshTransactionForReentry();
+            }
+            _gpuSchedulerFallbackLatched = false;
+            _gpuSchedulerFallbackReason = string.Empty;
+            _gpuSchedulerReentryStableFrameCount = 0;
+            _gpuSchedulerReentryCount = SaturatingAdd(
+                _gpuSchedulerReentryCount,
+                1UL);
         }
 
         private void PrepareCpuFreshResetFallback()
@@ -11911,8 +14083,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _probeLastUpdatedFrames[probeIndex] = unchecked(_frameIndex - 1u);
                 _probeSourceLightingGenerations[probeIndex] = 0u;
                 _probeLastSourceRefreshFrames[probeIndex] = 0u;
-                _probeSourceEpochs[probeIndex] = AdvanceSourceEpoch(
-                    _probeSourceEpochs[probeIndex]);
+                AdvanceProbeSourceEpoch(probeIndex);
                 _probeSourceRayCounts[probeIndex] = 0;
                 _probeTransportGenerationCounts[probeIndex] = 0;
                 _probeAtmosphereCohortFlags[probeIndex] = 0;
@@ -11941,14 +14112,39 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             if (_gpuSchedulerFallbackLatched)
                 return;
 
+            string resolvedReason = string.IsNullOrWhiteSpace(reason)
+                ? "resident scheduler validation failure"
+                : reason;
+            bool freezeSparseTransaction =
+                _capacityPlan.ResidencyMode.UsesSparsePayloads() &&
+                _probePageCache.IsReady;
+            if (freezeSparseTransaction)
+            {
+                _probePageCache.FreezeForRuntimeFailure(
+                    residencyStateValid: _probePageCache.ResidencyValid,
+                    reason: resolvedReason);
+                // A CPU mirror cannot own compact sparse payload addresses.
+                // Keep the last complete GPU transaction and retry only by
+                // replacing both its resource identity and page mappings.
+                requiresFreshReset = false;
+            }
             _gpuSchedulerFallbackLatched = true;
-            _gpuSchedulerFallbackFreshResetPending = requiresFreshReset;
+            bool canExportResidentState =
+                !freezeSparseTransaction && requiresFreshReset &&
+                _schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+                _gpuScheduler.IsReady &&
+                _gpuResidentProbeStateBootstrapped &&
+                _probeStateBuffer.IsValid &&
+                _probeCount > 0;
+            _gpuSchedulerFallbackExportRequested = canExportResidentState;
+            _gpuSchedulerFallbackExportSubmitted = false;
+            _gpuSchedulerFallbackFreshResetPending =
+                requiresFreshReset && !canExportResidentState;
+            _gpuSchedulerReentryStableFrameCount = 0;
             _gpuSchedulerFallbackCount = SaturatingAdd(
                 _gpuSchedulerFallbackCount,
                 1UL);
-            _gpuSchedulerFallbackReason = string.IsNullOrWhiteSpace(reason)
-                ? "resident scheduler validation failure"
-                : reason;
+            _gpuSchedulerFallbackReason = resolvedReason;
         }
 
         private void SetGpuSchedulerMode(SimpleDdgiSchedulerMode requestedMode)
@@ -11962,6 +14158,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 // acknowledgement, so the renderer cannot oscillate modes.
                 _gpuSchedulerFallbackLatched = false;
                 _gpuSchedulerFallbackReason = string.Empty;
+                _gpuSchedulerFallbackExportRequested = false;
+                _gpuSchedulerFallbackExportSubmitted = false;
+                _gpuSchedulerReentryStableFrameCount = 0;
+                if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
+                    _gpuSchedulerFallbackFreshResetPending = true;
             }
             else if (!_context.RayQuerySupported || _context.KhrAccelerationStructure == null)
             {
@@ -11972,11 +14173,25 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 RequestGpuSchedulerFallback(
                     "GPU scheduler unavailable: ray-query acceleration-structure support is missing",
                     requiresFreshReset: _schedulerMode == SimpleDdgiSchedulerMode.GpuResident);
+                _gpuSchedulerFallbackExportRequested = false;
+                _gpuSchedulerFallbackExportSubmitted = false;
+                _gpuSchedulerFallbackFreshResetPending =
+                    _schedulerMode == SimpleDdgiSchedulerMode.GpuResident;
                 nextMode = SimpleDdgiSchedulerMode.CpuReference;
             }
             else if (_gpuSchedulerFallbackLatched)
             {
-                nextMode = SimpleDdgiSchedulerMode.CpuReference;
+                bool frozenSparseTransaction =
+                    _schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+                    _capacityPlan.ResidencyMode.UsesSparsePayloads() &&
+                    _probePageCache.Frozen;
+                bool exportInFlight =
+                    _schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+                    (_gpuSchedulerFallbackExportRequested ||
+                     _gpuSchedulerFallbackExportSubmitted);
+                nextMode = frozenSparseTransaction || exportInFlight
+                    ? SimpleDdgiSchedulerMode.GpuResident
+                    : SimpleDdgiSchedulerMode.CpuReference;
             }
             if (nextMode == _schedulerMode)
                 return;
@@ -11995,7 +14210,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             }
 
             _schedulerMode = nextMode;
-            _gpuScheduler.SetMode(nextMode, _frameSerial);
+            _gpuScheduler.SetMode(nextMode, _resourceLastUseFrameFenceValue);
             // A GPU transition is fail-closed until the current frame records
             // its public upload and, for resident mode, the distinct private
             // scheduler bootstrap.  UploadGpuSchedulerFrame/UploadGpuResidentFrame
@@ -12006,6 +14221,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _transportResidentSourceRepairProbeCount = 0;
             _lastGpuSchedulerFeedback = default;
             _gpuSchedulerFeedbackFrameSerial = 0;
+            _receiverRecordsPublishedCount = 0;
+            _currentReceiverRecordsPublishedCount = 0;
         }
 
         private void RetireBufferResource(BufferHandle buffer, ulong bytes)
@@ -12013,35 +14230,64 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             if (!buffer.IsValid)
                 return;
 
-            _retiredBuffers.Add(new RetiredBufferResource(
-                buffer,
-                _frameSerial + (ulong)RenderingConstants.FramesInFlight + 1UL,
-                bytes));
-            _retiredBufferBytes = SaturatingAdd(_retiredBufferBytes, bytes);
+            if (_resourceLastUseFrameFenceValue == 0UL ||
+                _completedFrameFenceValue >= _resourceLastUseFrameFenceValue)
+            {
+                _bufferManager.DestroyBuffer(buffer);
+                return;
+            }
+
+            ulong packedHandle = PackBufferHandle(buffer);
+            GpuRetirementRecord record = new(
+                ResourceGeneration: buffer.Generation,
+                ByteCharge: bytes,
+                EnqueuedFrame: _lastSubmittedFrameFenceValue,
+                Completion: GpuCompletionToken.ForFrameFence(
+                    _resourceLastUseFrameFenceValue),
+                Resource: new GpuRetirementResource(
+                    GpuRetirementResourceKind.Buffer,
+                    packedHandle));
+            if (!_bufferRetirement.TryEnqueue(
+                    record,
+                    liveBytes: 0UL,
+                    out GpuRetirementAdmissionFailure failure))
+            {
+                throw new InvalidOperationException(
+                    $"Simple-DDGI buffer retirement admission failed: {failure}.");
+            }
         }
 
         private int DrainRetiredResources(bool force)
         {
-            int destroyed = 0;
-            for (int i = _retiredBuffers.Count - 1; i >= 0; i--)
+            int count = force
+                ? _bufferRetirement.DrainAfterExternalDeviceIdle(
+                    _bufferRetirementScratch)
+                : _bufferRetirement.Poll(
+                    new GpuCompletionProgress(
+                        _completedFrameFenceValue,
+                        0UL,
+                        0UL),
+                    _bufferRetirementScratch,
+                    _lastSubmittedFrameFenceValue);
+            for (int index = 0; index < count; index++)
             {
-                RetiredBufferResource retired = _retiredBuffers[i];
-                if (!force && retired.RetireAfterFrameSerial > _frameSerial)
-                    continue;
-
-                if (retired.Buffer.IsValid)
-                {
-                    _bufferManager.DestroyBuffer(retired.Buffer);
-                    destroyed++;
-                }
-                _retiredBufferBytes = retired.Bytes >= _retiredBufferBytes
-                    ? 0UL
-                    : _retiredBufferBytes - retired.Bytes;
-                _retiredBuffers.RemoveAt(i);
+                GpuRetirementRecord record = _bufferRetirementScratch[index];
+                if (record.Resource.Kind != GpuRetirementResourceKind.Buffer)
+                    throw new InvalidOperationException(
+                        "Simple-DDGI retirement queue contained a non-buffer record.");
+                BufferHandle buffer = UnpackBufferHandle(record.Resource.Handle);
+                if (buffer.IsValid)
+                    _bufferManager.DestroyBuffer(buffer);
+                _bufferRetirementScratch[index] = default;
             }
-
-            return destroyed;
+            return count;
         }
+
+        private static ulong PackBufferHandle(BufferHandle buffer) =>
+            ((ulong)buffer.Generation << 32) | unchecked((uint)buffer.Index);
+
+        private static BufferHandle UnpackBufferHandle(ulong packed) =>
+            new(unchecked((int)(uint)packed), (uint)(packed >> 32));
 
         public void Dispose()
         {
@@ -12065,11 +14311,14 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _bufferManager.DestroyBuffer(_rayResultScratchBuffer);
             if (_probeStateBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_probeStateBuffer);
+            if (_receiverProbeBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_receiverProbeBuffer);
             if (_probeUpdateQueueBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_probeUpdateQueueBuffer);
             if (_relocationClassificationBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_relocationClassificationBuffer);
             _gpuScheduler.Dispose();
+            _probePageCache.Dispose();
             for (int i = 0; i < _probeStateReadbackBuffers.Length; i++)
             {
                 if (_probeStateReadbackBuffers[i].IsValid)
@@ -12092,11 +14341,6 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             int StableMaintenanceUpdateCount,
             int AcceleratedSweepCount,
             int TailToleranceBits);
-
-        private readonly record struct RetiredBufferResource(
-            BufferHandle Buffer,
-            ulong RetireAfterFrameSerial,
-            ulong Bytes);
 
         private readonly record struct SimpleDdgiRingQuality(
             int RingIndex,

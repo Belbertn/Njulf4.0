@@ -4,6 +4,7 @@
 
 #include "common.glsl"
 #include "gi_material_transport.glsl"
+#define SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE 1
 #include "ddgi_simple_shared.glsl"
 #include "ddgi_simple_transport_operator.glsl"
 
@@ -86,7 +87,16 @@ const uint SIMPLE_DDGI_AUDIT_EXCLUDED_INACTIVE_WORD = 11u;
 const uint SIMPLE_DDGI_AUDIT_EXCLUDED_NOT_VISIBLE_WORD = 12u;
 const uint SIMPLE_DDGI_AUDIT_EXCLUDED_STALE_SOURCE_WORD = 13u;
 const uint SIMPLE_DDGI_AUDIT_COUNTER_OVERFLOW_WORD = 14u;
-const uint SIMPLE_DDGI_AUDIT_PROBE_META_VISIBLE = 1u << 16u;
+const uint SIMPLE_DDGI_AUDIT_CACHE_IDENTITY_FAILURE_WORD = 15u;
+const uint SIMPLE_DDGI_AUDIT_CACHE_CARDINALITY_FAILURE_WORD = 16u;
+const uint SIMPLE_DDGI_AUDIT_CACHE_SOURCE_GENERATION_FAILURE_WORD = 17u;
+const uint SIMPLE_DDGI_AUDIT_CACHE_SOURCE_EPOCH_FAILURE_WORD = 18u;
+const uint SIMPLE_DDGI_AUDIT_CACHE_PHYSICAL_GENERATION_FAILURE_WORD = 19u;
+const uint SIMPLE_DDGI_AUDIT_CACHE_FAILURE_IDENTITY = 1u << 0u;
+const uint SIMPLE_DDGI_AUDIT_CACHE_FAILURE_CARDINALITY = 1u << 1u;
+const uint SIMPLE_DDGI_AUDIT_CACHE_FAILURE_SOURCE_GENERATION = 1u << 2u;
+const uint SIMPLE_DDGI_AUDIT_CACHE_FAILURE_SOURCE_EPOCH = 1u << 3u;
+const uint SIMPLE_DDGI_AUDIT_CACHE_FAILURE_PHYSICAL_GENERATION = 1u << 4u;
 const uint SIMPLE_DDGI_AUDIT_PROBE_STATE_WORDS = 10u;
 const uint SIMPLE_DDGI_AUDIT_TRANSIENT_FLAGS =
     SIMPLE_DDGI_PROBE_FLAG_FRESH |
@@ -102,6 +112,8 @@ shared vec3 SharedAuditDirection[SIMPLE_DDGI_MAX_RAYS_PER_PROBE];
 shared uint SharedAuditValid[SIMPLE_DDGI_MAX_RAYS_PER_PROBE];
 shared uint SharedAuditBackface[SIMPLE_DDGI_MAX_RAYS_PER_PROBE];
 shared uint SharedAuditSourceRayCount;
+shared uint SharedAuditCacheInvalid;
+shared uint SharedAuditCacheFailureMask;
 
 uint SimpleDdgiAuditWord(uint relativeWord)
 {
@@ -131,6 +143,22 @@ void SimpleDdgiAuditAtomicMax(uint relativeWord, uint value)
     if (pc.AuditSummaryBufferIndex != 0u)
         atomicMax(BindlessStorageBuffers[nonuniformEXT(pc.AuditSummaryBufferIndex)].Words[
             SimpleDdgiAuditWord(relativeWord)], value);
+}
+
+void SimpleDdgiAuditRecordCacheFailureMask(uint failureMask)
+{
+    if ((failureMask & SIMPLE_DDGI_AUDIT_CACHE_FAILURE_IDENTITY) != 0u)
+        SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_CACHE_IDENTITY_FAILURE_WORD, 1u);
+    if ((failureMask & SIMPLE_DDGI_AUDIT_CACHE_FAILURE_CARDINALITY) != 0u)
+        SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_CACHE_CARDINALITY_FAILURE_WORD, 1u);
+    if ((failureMask & SIMPLE_DDGI_AUDIT_CACHE_FAILURE_SOURCE_GENERATION) != 0u)
+        SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_CACHE_SOURCE_GENERATION_FAILURE_WORD, 1u);
+    if ((failureMask & SIMPLE_DDGI_AUDIT_CACHE_FAILURE_SOURCE_EPOCH) != 0u)
+        SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_CACHE_SOURCE_EPOCH_FAILURE_WORD, 1u);
+    if ((failureMask & SIMPLE_DDGI_AUDIT_CACHE_FAILURE_PHYSICAL_GENERATION) != 0u)
+        SimpleDdgiAuditAtomicAdd(
+            SIMPLE_DDGI_AUDIT_CACHE_PHYSICAL_GENERATION_FAILURE_WORD,
+            1u);
 }
 
 uint SimpleDdgiAuditSchedulerFrame(uint relativeWord)
@@ -237,9 +265,6 @@ void main()
     SimpleDdgiProbeState state = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
     uint schedulerStateBase = pc.AuditSchedulerProbeStateOffsetWords +
         probeIndex * SIMPLE_DDGI_AUDIT_PROBE_STATE_WORDS;
-    uint schedulerMetadata = ReadStorageWordUniform(
-        pc.SchedulerArenaBufferIndex,
-        schedulerStateBase + 5u);
     uint schedulerSourceLightingGeneration = ReadStorageWordUniform(
         pc.SchedulerArenaBufferIndex,
         schedulerStateBase + 2u);
@@ -272,13 +297,6 @@ void main()
         return;
     }
 
-    if ((schedulerMetadata & SIMPLE_DDGI_AUDIT_PROBE_META_VISIBLE) == 0u)
-    {
-        if (localTexel == 0u)
-            SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_EXCLUDED_NOT_VISIBLE_WORD, 1u);
-        return;
-    }
-
     if ((state.flags & SIMPLE_DDGI_AUDIT_TRANSIENT_FLAGS) != 0u)
     {
         if (localTexel == 0u)
@@ -297,7 +315,7 @@ void main()
     // A matching global frame is insufficient: a slot that missed a local
     // invalidation could otherwise contribute plausible but stale cache data.
     if (schedulerSourceLightingGeneration != pc.AuditSourceLightingGeneration ||
-        schedulerSourceEpoch != pc.AuditSourceEpochGeneration ||
+        schedulerSourceEpoch == 0u ||
         schedulerVolumeTableGeneration != pc.AuditVolumeTableGeneration)
     {
         if (localTexel == 0u)
@@ -313,6 +331,35 @@ void main()
             SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_NONFINITE_WORD, 1u);
         return;
     }
+    uvec3 logicalProbeCoord = SimpleDdgiProbeCoord(localProbeIndex, volume);
+    uint auditVolumeIndex = 0xffffffffu;
+    for (uint candidateVolume = 0u;
+         candidateVolume < params.volumeCount;
+         candidateVolume++)
+    {
+        SimpleDdgiVolume candidate = ReadSimpleDdgiVolume(
+            pc.ParamsBufferIndex,
+            candidateVolume);
+        if (candidate.firstProbeIndex == volume.firstProbeIndex)
+            auditVolumeIndex = candidateVolume;
+    }
+    if (auditVolumeIndex == 0xffffffffu)
+        return;
+    SimpleDdgiVolumePaging paging = ReadSimpleDdgiVolumePaging(
+        pc.ParamsBufferIndex,
+        auditVolumeIndex);
+    SimpleDdgiProbeAddress probeAddress = ResolveSimpleDdgiProbeAddress(
+        params,
+        volume,
+        paging,
+        logicalProbeCoord);
+    if (!probeAddress.published)
+    {
+        if (localTexel == 0u)
+            SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_EXCLUDED_NOT_VISIBLE_WORD, 1u);
+        return;
+    }
+    uint physicalProbeIndex = probeAddress.physicalProbeIndex;
 
     // The operator's gather reads this exact frozen canonical generation, not
     // the sampled mirror. No writes are issued by the audit kernel.
@@ -321,30 +368,79 @@ void main()
         pc.TransportReadIrradianceAtlasBufferIndex;
     auditParams.transportSourceCacheBufferIndex = pc.TransportSourceCacheBufferIndex;
 
-    // Source cohorts can use different full ray cardinalities by volume. The
-    // cardinality is stamped into the persistent cache by the source trace;
-    // using the global allocation capacity here would treat untouched cache
-    // slots as missing evidence and make mixed-ring certification impossible.
+    uint requiredSourceRayCount =
+        SimpleDdgiRequiredSourceRayCount(auditParams, volume);
     if (localTexel == 0u)
     {
-        SimpleDdgiTransportRayCache metadataSource;
-        SharedAuditSourceRayCount = ReadSimpleDdgiTransportRayCache(
+        SharedAuditCacheInvalid = 0u;
+        SharedAuditCacheFailureMask = 0u;
+        uint metadataBase = SimpleDdgiTransportRayCacheBase(
+            physicalProbeIndex,
+            0u,
+            auditParams);
+        uint rawGenerationAndFlags = ReadStorageWordUniform(
             auditParams.transportSourceCacheBufferIndex,
-            probeIndex,
+            metadataBase + 6u);
+        uint encodedSourceRayCount = ReadStorageWordUniform(
+            auditParams.transportSourceCacheBufferIndex,
+            metadataBase + 5u) >> 24u;
+        uint rawSourceRayCount = encodedSourceRayCount == 0u
+            ? 256u
+            : encodedSourceRayCount;
+        uint rawSourceLightingGeneration = ReadStorageWordUniform(
+            auditParams.transportSourceCacheBufferIndex,
+            metadataBase + 7u);
+        uint rawSourceEpoch = ReadStorageWordUniform(
+            auditParams.transportSourceCacheBufferIndex,
+            metadataBase + 8u);
+        bool cacheMarkedValid =
+            (rawGenerationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG) != 0u;
+        bool physicalGenerationMatches =
+            (rawGenerationAndFlags & SIMPLE_DDGI_UPDATE_GENERATION_MASK) ==
+                (SimpleDdgiProbeGeneration(state) & SIMPLE_DDGI_UPDATE_GENERATION_MASK);
+        SimpleDdgiTransportRayCache metadataSource;
+        bool metadataValid = ReadSimpleDdgiTransportRayCache(
+            auditParams.transportSourceCacheBufferIndex,
+            physicalProbeIndex,
             0u,
             auditParams,
             SimpleDdgiProbeGeneration(state),
-            metadataSource)
-            ? metadataSource.sourceRayCount
+            metadataSource);
+        SharedAuditSourceRayCount = rawSourceRayCount;
+        uint failureMask = !metadataValid
+            ? SIMPLE_DDGI_AUDIT_CACHE_FAILURE_IDENTITY
             : 0u;
+        // A missing valid marker is already an identity failure. Attribute the
+        // physical-generation counter only when a populated entry names the
+        // wrong physical owner, so runtime evidence distinguishes unwritten
+        // cache storage from generation drift.
+        failureMask |= cacheMarkedValid && !physicalGenerationMatches
+            ? SIMPLE_DDGI_AUDIT_CACHE_FAILURE_PHYSICAL_GENERATION
+            : 0u;
+        failureMask |= requiredSourceRayCount == 0u ||
+                rawSourceRayCount != requiredSourceRayCount
+            ? SIMPLE_DDGI_AUDIT_CACHE_FAILURE_CARDINALITY
+            : 0u;
+        failureMask |= rawSourceLightingGeneration !=
+                pc.AuditSourceLightingGeneration
+            ? SIMPLE_DDGI_AUDIT_CACHE_FAILURE_SOURCE_GENERATION
+            : 0u;
+        failureMask |= rawSourceEpoch != schedulerSourceEpoch
+            ? SIMPLE_DDGI_AUDIT_CACHE_FAILURE_SOURCE_EPOCH
+            : 0u;
+        SharedAuditCacheFailureMask = failureMask;
+        SharedAuditCacheInvalid = failureMask != 0u ? 1u : 0u;
     }
     barrier();
     uint sourceRayCount = SharedAuditSourceRayCount;
-    if (sourceRayCount == 0u || sourceRayCount > auditParams.raysPerProbe ||
-        sourceRayCount > SIMPLE_DDGI_MAX_RAYS_PER_PROBE)
+    if (SharedAuditCacheInvalid != 0u ||
+        sourceRayCount != requiredSourceRayCount)
     {
         if (localTexel == 0u)
+        {
+            SimpleDdgiAuditRecordCacheFailureMask(SharedAuditCacheFailureMask);
             SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_INVALID_CACHE_WORD, 1u);
+        }
         return;
     }
     uint expectedGeneration = SimpleDdgiProbeGeneration(state);
@@ -357,16 +453,57 @@ void main()
 
         uint directionRayIndex = ray * auditParams.raysPerProbe / sourceRayCount;
         SimpleDdgiTransportRayCache source;
-        if (!ReadSimpleDdgiTransportRayCache(
+        uint sourceBase = SimpleDdgiTransportRayCacheBase(
+            physicalProbeIndex,
+            directionRayIndex,
+            auditParams);
+        uint rawGenerationAndFlags = ReadStorageWordUniform(
+            auditParams.transportSourceCacheBufferIndex,
+            sourceBase + 6u);
+        uint encodedSourceRayCount = ReadStorageWordUniform(
+            auditParams.transportSourceCacheBufferIndex,
+            sourceBase + 5u) >> 24u;
+        uint rawSourceRayCount = encodedSourceRayCount == 0u
+            ? 256u
+            : encodedSourceRayCount;
+        uint rawSourceLightingGeneration = ReadStorageWordUniform(
+            auditParams.transportSourceCacheBufferIndex,
+            sourceBase + 7u);
+        uint rawSourceEpoch = ReadStorageWordUniform(
+            auditParams.transportSourceCacheBufferIndex,
+            sourceBase + 8u);
+        bool cacheMarkedValid =
+            (rawGenerationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG) != 0u;
+        bool physicalGenerationMatches =
+            (rawGenerationAndFlags & SIMPLE_DDGI_UPDATE_GENERATION_MASK) ==
+                (expectedGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK);
+        bool sourceValid = ReadSimpleDdgiTransportRayCache(
                 auditParams.transportSourceCacheBufferIndex,
-                probeIndex,
+                physicalProbeIndex,
                 directionRayIndex,
                 auditParams,
                 expectedGeneration,
-                source) ||
-            source.sourceRayCount != sourceRayCount)
+                source);
+        uint failureMask = !sourceValid
+            ? SIMPLE_DDGI_AUDIT_CACHE_FAILURE_IDENTITY
+            : 0u;
+        failureMask |= cacheMarkedValid && !physicalGenerationMatches
+            ? SIMPLE_DDGI_AUDIT_CACHE_FAILURE_PHYSICAL_GENERATION
+            : 0u;
+        failureMask |= rawSourceRayCount != requiredSourceRayCount
+            ? SIMPLE_DDGI_AUDIT_CACHE_FAILURE_CARDINALITY
+            : 0u;
+        failureMask |= rawSourceLightingGeneration !=
+                pc.AuditSourceLightingGeneration
+            ? SIMPLE_DDGI_AUDIT_CACHE_FAILURE_SOURCE_GENERATION
+            : 0u;
+        failureMask |= rawSourceEpoch != schedulerSourceEpoch
+            ? SIMPLE_DDGI_AUDIT_CACHE_FAILURE_SOURCE_EPOCH
+            : 0u;
+        if (failureMask != 0u)
         {
-            SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_INVALID_CACHE_WORD, 1u);
+            atomicOr(SharedAuditCacheInvalid, 1u);
+            atomicOr(SharedAuditCacheFailureMask, failureMask);
             continue;
         }
 
@@ -424,6 +561,16 @@ void main()
     }
     barrier();
 
+    if (SharedAuditCacheInvalid != 0u)
+    {
+        if (localTexel == 0u)
+        {
+            SimpleDdgiAuditRecordCacheFailureMask(SharedAuditCacheFailureMask);
+            SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_INVALID_CACHE_WORD, 1u);
+        }
+        return;
+    }
+
     if (!texelActive)
         return;
 
@@ -454,7 +601,7 @@ void main()
         weightSum);
     vec3 canonical = ReadSimpleDdgiAtlasTexel(
         pc.TransportReadIrradianceAtlasBufferIndex,
-        probeIndex,
+        physicalProbeIndex,
         localTexel,
         auditParams.irradianceTexels).rgb;
     if (!SimpleDdgiTransportFinite(candidate) ||

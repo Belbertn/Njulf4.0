@@ -299,4 +299,5 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
         };
         _context.Api.CmdPipelineBarrier2(cmd, &dependency);
     }
+
 }

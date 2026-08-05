@@ -1,0 +1,336 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
+#include "ddgi_simple_shared.glsl"
+
+// One invocation predicts one 64x64 receiver tile. Four stratified samples, a
+// conservative analytic normal-bias envelope, receiver feedback, and the exact
+// Shadow oracle cover ordinary surfaces and discontinuities without making
+// SceneNormal a paging prerequisite.
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 1) in;
+
+// A 256x256-pixel workgroup normally touches only a handful of DDGI pages, but
+// the direct implementation can issue as many as 2,048 contended global atomics
+// (64 tiles * four samples * eight gather corners). Deduplicate those requests
+// in workgroup memory first. The bounded fallback below preserves coverage if
+// an unusually discontinuous tile fills the table.
+// Sixty-four slots are enough for a 256x256-pixel workgroup at the fixed 2x2x2
+// page geometry in qualified scenes. Overflow remains lossless through the
+// direct-stamp path, while the smaller table avoids four initialization and
+// drain iterations per lane on every workgroup.
+const uint SIMPLE_DDGI_DEMAND_WORKGROUP_PAGE_CAPACITY = 64u;
+shared uint workgroupPageKeys[
+    SIMPLE_DDGI_DEMAND_WORKGROUP_PAGE_CAPACITY];
+shared uint workgroupPageDistance[
+    SIMPLE_DDGI_DEMAND_WORKGROUP_PAGE_CAPACITY];
+shared SimpleDdgiParams workgroupParams;
+shared SimpleDdgiVolume workgroupVolumes[SIMPLE_DDGI_MAX_VOLUME_COUNT];
+shared SimpleDdgiVolumePaging workgroupPaging[SIMPLE_DDGI_MAX_VOLUME_COUNT];
+
+layout(push_constant) uniform SimpleDdgiPageDemandPushBlock
+{
+    mat4 InverseViewProjectionMatrix;
+    vec4 CameraPositionAndPadding;
+    uint ScreenWidth;
+    uint ScreenHeight;
+    uint ParamsBufferIndex;
+    uint DepthTextureIndex;
+    uint DemandEpoch;
+    uint SampleCount;
+    uint Flags;
+    uint Reserved0;
+} pc;
+
+bool ReconstructDemandPosition(
+    ivec2 pixel,
+    out vec3 worldPosition)
+{
+    ivec2 extent = ivec2(int(pc.ScreenWidth), int(pc.ScreenHeight));
+    if (any(lessThan(pixel, ivec2(0))) ||
+        any(greaterThanEqual(pixel, extent)))
+    {
+        return false;
+    }
+
+    float depth = texelFetch(
+        BindlessTextures[nonuniformEXT(pc.DepthTextureIndex)],
+        pixel,
+        0).r;
+    // Njulf uses reverse-Z and clears depth to zero.
+    if (depth <= 0.000001 || isnan(depth) || isinf(depth))
+        return false;
+
+    vec2 uv = (vec2(pixel) + vec2(0.5)) /
+        vec2(max(pc.ScreenWidth, 1u), max(pc.ScreenHeight, 1u));
+    vec4 world = MulRowMajor(
+        vec4(uv * 2.0 - vec2(1.0), depth, 1.0),
+        pc.InverseViewProjectionMatrix);
+    if (abs(world.w) <= 0.000001 || isnan(world.w) || isinf(world.w))
+        return false;
+    worldPosition = world.xyz / world.w;
+    return !any(isnan(worldPosition)) && !any(isinf(worldPosition));
+}
+
+void QueueWorkgroupPageDemand(
+    SimpleDdgiParams params,
+    uint virtualPageIndex,
+    uint distanceBucket)
+{
+    uint slot = (virtualPageIndex * 2654435761u) &
+        (SIMPLE_DDGI_DEMAND_WORKGROUP_PAGE_CAPACITY - 1u);
+    for (uint attempt = 0u;
+         attempt < SIMPLE_DDGI_DEMAND_WORKGROUP_PAGE_CAPACITY;
+         attempt++)
+    {
+        uint previous = atomicCompSwap(
+            workgroupPageKeys[slot],
+            0xffffffffu,
+            virtualPageIndex);
+        if (previous == 0xffffffffu || previous == virtualPageIndex)
+        {
+            atomicMin(workgroupPageDistance[slot], distanceBucket);
+            return;
+        }
+        slot = (slot + 1u) &
+            (SIMPLE_DDGI_DEMAND_WORKGROUP_PAGE_CAPACITY - 1u);
+    }
+
+    // Never trade correctness for the optimization. A full local table is
+    // rare, and the original generation-safe global stamp remains valid.
+    SimpleDdgiStampPageDemand(
+        params,
+        virtualPageIndex,
+        SIMPLE_DDGI_DEMAND_VISIBLE,
+        pc.DemandEpoch,
+        distanceBucket);
+}
+
+bool SelectDemandVolume(
+    SimpleDdgiParams params,
+    vec3 worldPosition,
+    out uint selectedVolumeIndex,
+    out SimpleDdgiVolume selectedVolume,
+    out float selectedEdgeWeight)
+{
+    for (uint volumeIndex = 0u;
+         volumeIndex < SIMPLE_DDGI_MAX_SELECTION_VOLUME_CHECKS;
+         volumeIndex++)
+    {
+        if (volumeIndex >= params.volumeCount)
+            break;
+        SimpleDdgiVolume volume = workgroupVolumes[volumeIndex];
+        if (!SimpleDdgiContains(volume, worldPosition))
+            continue;
+        selectedVolumeIndex = volumeIndex;
+        selectedVolume = volume;
+        selectedEdgeWeight = SimpleDdgiEdgeWeight(volume, worldPosition);
+        return true;
+    }
+
+    selectedVolumeIndex = 0u;
+    selectedVolume = workgroupVolumes[0];
+    selectedEdgeWeight = 0.0;
+    return false;
+}
+
+void StampGatherPages(
+    SimpleDdgiParams params,
+    vec3 worldPosition)
+{
+    uint volumeIndex;
+    SimpleDdgiVolume volume;
+    float edgeWeight;
+    if (!SelectDemandVolume(
+            params,
+            worldPosition,
+            volumeIndex,
+            volume,
+            edgeWeight))
+    {
+        return;
+    }
+
+    SimpleDdgiVolumePaging paging = workgroupPaging[volumeIndex];
+    if (paging.residencyMode == SIMPLE_DDGI_RESIDENCY_MODE_DENSE ||
+        paging.virtualFirstProbe != volume.firstProbeIndex ||
+        any(equal(paging.pageGrid, uvec3(0u))))
+    {
+        return;
+    }
+
+    vec3 viewVector = pc.CameraPositionAndPadding.xyz - worldPosition;
+    vec3 viewDirection = dot(viewVector, viewVector) > 0.0000001
+        ? normalize(viewVector)
+        : vec3(0.0, 1.0, 0.0);
+    float spacing = max(volume.spacing, 0.0001);
+    vec2 bias = SimpleDdgiSampleBiasMagnitudes(params, spacing);
+    vec3 viewBiasedPosition = worldPosition + viewDirection * bias.y;
+    // Each component of any normalized geometric normal lies in [-1, 1].
+    // This axis-aligned envelope therefore includes the exact biased gather
+    // base for every possible surface normal. It expands only when the bounded
+    // normal bias can cross a probe-cell boundary, never by a whole-page halo.
+    ivec3 minimumBase = ivec3(floor(
+        (viewBiasedPosition - vec3(bias.x) - volume.origin) / spacing));
+    ivec3 maximumBase = ivec3(floor(
+        (viewBiasedPosition + vec3(bias.x) - volume.origin) / spacing));
+    uint distanceBucket = uint(clamp(
+        length(worldPosition - pc.CameraPositionAndPadding.xyz) /
+            spacing,
+        0.0,
+        255.0));
+
+    // The envelope's complete logical-probe union is the inclusive range from
+    // minimumBase through maximumBase + 1. Convert its at-most-three values on
+    // each axis to unique toroidal page coordinates first. This directly
+    // produces the exact page Cartesian product (including odd-grid wrap)
+    // without enumerating up to 64 duplicate base/corner combinations.
+    ivec3 minimumProbe = max(minimumBase, ivec3(0));
+    ivec3 maximumProbe = min(
+        maximumBase + ivec3(1),
+        ivec3(volume.gridCount) - ivec3(1));
+    if (any(greaterThan(minimumProbe, maximumProbe)))
+        return;
+
+    uint pageX[3];
+    uint pageY[3];
+    uint pageZ[3];
+    uint pageXCount = 0u;
+    uint pageYCount = 0u;
+    uint pageZCount = 0u;
+    for (uint offset = 0u; offset < 3u; offset++)
+    {
+        int logicalX = minimumProbe.x + int(offset);
+        if (logicalX <= maximumProbe.x)
+        {
+            uint candidate = ((uint(logicalX) + volume.physicalOffset.x) %
+                max(volume.gridCount.x, 1u)) /
+                SIMPLE_DDGI_PAGE_DIMENSIONS.x;
+            bool duplicate = false;
+            for (uint previous = 0u; previous < pageXCount; previous++)
+                duplicate = duplicate || pageX[previous] == candidate;
+            if (!duplicate)
+                pageX[pageXCount++] = candidate;
+        }
+        int logicalY = minimumProbe.y + int(offset);
+        if (logicalY <= maximumProbe.y)
+        {
+            uint candidate = ((uint(logicalY) + volume.physicalOffset.y) %
+                max(volume.gridCount.y, 1u)) /
+                SIMPLE_DDGI_PAGE_DIMENSIONS.y;
+            bool duplicate = false;
+            for (uint previous = 0u; previous < pageYCount; previous++)
+                duplicate = duplicate || pageY[previous] == candidate;
+            if (!duplicate)
+                pageY[pageYCount++] = candidate;
+        }
+        int logicalZ = minimumProbe.z + int(offset);
+        if (logicalZ <= maximumProbe.z)
+        {
+            uint candidate = ((uint(logicalZ) + volume.physicalOffset.z) %
+                max(volume.gridCount.z, 1u)) /
+                SIMPLE_DDGI_PAGE_DIMENSIONS.z;
+            bool duplicate = false;
+            for (uint previous = 0u; previous < pageZCount; previous++)
+                duplicate = duplicate || pageZ[previous] == candidate;
+            if (!duplicate)
+                pageZ[pageZCount++] = candidate;
+        }
+    }
+
+    for (uint z = 0u; z < pageZCount; z++)
+    for (uint y = 0u; y < pageYCount; y++)
+    for (uint x = 0u; x < pageXCount; x++)
+    {
+        uvec3 pageCoord = uvec3(pageX[x], pageY[y], pageZ[z]);
+        if (any(greaterThanEqual(pageCoord, paging.pageGrid)))
+            continue;
+        uint virtualPageIndex = paging.pageTableFirst +
+            SimpleDdgiFlattenPage(pageCoord, paging.pageGrid);
+        if (virtualPageIndex >= params.virtualPageCount)
+            continue;
+        QueueWorkgroupPageDemand(
+            params,
+            virtualPageIndex,
+            distanceBucket);
+    }
+}
+
+void main()
+{
+    uint localInvocation = gl_LocalInvocationIndex;
+    if (localInvocation == 0u)
+        workgroupParams = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    for (uint slot = localInvocation;
+         slot < SIMPLE_DDGI_DEMAND_WORKGROUP_PAGE_CAPACITY;
+         slot += gl_WorkGroupSize.x * gl_WorkGroupSize.y)
+    {
+        workgroupPageKeys[slot] = 0xffffffffu;
+        workgroupPageDistance[slot] = 255u;
+    }
+    memoryBarrierShared();
+    barrier();
+
+    SimpleDdgiParams params = workgroupParams;
+    uint loadedVolumeCount = max(min(
+        params.volumeCount,
+        SIMPLE_DDGI_MAX_VOLUME_COUNT), 1u);
+    if (localInvocation < loadedVolumeCount)
+    {
+        workgroupVolumes[localInvocation] = ReadSimpleDdgiVolume(
+            pc.ParamsBufferIndex,
+            localInvocation);
+        workgroupPaging[localInvocation] = ReadSimpleDdgiVolumePaging(
+            pc.ParamsBufferIndex,
+            localInvocation);
+    }
+    memoryBarrierShared();
+    barrier();
+
+    bool demandEnabled =
+        params.residencyMode != SIMPLE_DDGI_RESIDENCY_MODE_DENSE &&
+        SimpleDdgiResidencyHeaderMatches(params) &&
+        (params.residencyFlags & SIMPLE_DDGI_RESIDENCY_FLAG_FROZEN) == 0u &&
+        pc.ScreenWidth != 0u && pc.ScreenHeight != 0u;
+    if (demandEnabled)
+    {
+        int tileSize = int(max(pc.Flags, 1u));
+        ivec2 tileBase = ivec2(gl_GlobalInvocationID.xy) * tileSize;
+        int samplePhase = max(tileSize / 16, 1);
+        int sampleStride = max(tileSize / 2, 1);
+        ivec2 offsets[4] = ivec2[](
+            ivec2(samplePhase, samplePhase),
+            ivec2(samplePhase + sampleStride, samplePhase + sampleStride),
+            ivec2(samplePhase + sampleStride, samplePhase),
+            ivec2(samplePhase, samplePhase + sampleStride));
+        uint sampleCount = min(pc.SampleCount, 4u);
+        for (uint sampleIndex = 0u; sampleIndex < sampleCount; sampleIndex++)
+        {
+            ivec2 pixel = tileBase + offsets[sampleIndex];
+            vec3 worldPosition;
+            if (ReconstructDemandPosition(pixel, worldPosition))
+                StampGatherPages(params, worldPosition);
+        }
+    }
+
+    memoryBarrierShared();
+    barrier();
+    if (!demandEnabled)
+        return;
+    for (uint slot = localInvocation;
+         slot < SIMPLE_DDGI_DEMAND_WORKGROUP_PAGE_CAPACITY;
+         slot += gl_WorkGroupSize.x * gl_WorkGroupSize.y)
+    {
+        uint virtualPageIndex = workgroupPageKeys[slot];
+        if (virtualPageIndex == 0xffffffffu)
+            continue;
+        SimpleDdgiStampPageDemand(
+            params,
+            virtualPageIndex,
+            SIMPLE_DDGI_DEMAND_VISIBLE,
+            pc.DemandEpoch,
+            workgroupPageDistance[slot]);
+    }
+}

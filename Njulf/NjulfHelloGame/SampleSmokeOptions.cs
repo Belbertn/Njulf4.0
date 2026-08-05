@@ -39,7 +39,15 @@ public sealed record SampleSmokeOptions(
     SampleKhronosMaterialGiRenderedGateOptions? KhronosMaterialGiRenderedGate = null,
     string? MaterialGiQualificationManifestPath = null,
     AsyncComputePath? AsyncComputeValidationPath = null,
-    SimpleDdgiSchedulerMode? SimpleDdgiSchedulerModeOverride = null)
+    SimpleDdgiSchedulerMode? SimpleDdgiSchedulerModeOverride = null,
+    bool TailDdgiLongSoak = false,
+    SimpleDdgiProbeResidencyMode? SimpleDdgiProbeResidencyModeOverride = null,
+    int? SimpleDdgiSparsePhysicalPageBudgetOverride = null,
+    int? SimpleDdgiSparseMinimumPhysicalPageBudgetOverride = null,
+    int? SimpleDdgiSparseRetentionFramesOverride = null,
+    int? SimpleDdgiSparseMaximumAdmissionsOverride = null,
+    int? SimpleDdgiSparseMaximumReceiverFeedbackOverride = null,
+    int? SimpleDdgiSparseInactiveRetryFramesOverride = null)
 {
     public SampleBenchmarkOptions Benchmark { get; init; } = Benchmark ?? SampleBenchmarkOptions.Disabled;
 
@@ -52,6 +60,13 @@ public sealed record SampleSmokeOptions(
         EnableAsyncCompute ||
         AsyncComputeModeOverride.HasValue ||
         SimpleDdgiSchedulerModeOverride.HasValue ||
+        SimpleDdgiProbeResidencyModeOverride.HasValue ||
+        SimpleDdgiSparsePhysicalPageBudgetOverride.HasValue ||
+        SimpleDdgiSparseMinimumPhysicalPageBudgetOverride.HasValue ||
+        SimpleDdgiSparseRetentionFramesOverride.HasValue ||
+        SimpleDdgiSparseMaximumAdmissionsOverride.HasValue ||
+        SimpleDdgiSparseMaximumReceiverFeedbackOverride.HasValue ||
+        SimpleDdgiSparseInactiveRetryFramesOverride.HasValue ||
         QualityPresetOverride.HasValue ||
         EnableFarFieldClipmap ||
         EnableFarFieldForceAll ||
@@ -61,5 +76,9 @@ public sealed record SampleSmokeOptions(
         !string.IsNullOrWhiteSpace(LongRunReportPath) ||
         LongRunMinutes > 0.0 ||
         KhronosMaterialGiRenderedGate is not null ||
+        TailDdgiLongSoak ||
         Benchmark.Enabled;
+
+    public bool UsesDeterministicSimulationClock =>
+        Benchmark.Enabled || TailDdgiLongSoak;
 }

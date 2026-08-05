@@ -1,0 +1,343 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_page_residency_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    uint virtualPage = gl_GlobalInvocationID.x;
+    if (virtualPage >= params.virtualPageCount ||
+        !SimpleDdgiResidencyHeaderMatches(params))
+    {
+        return;
+    }
+
+    uint tableBase = ResidencyTableBase(virtualPage);
+    uvec4 table = ReadStorageAlignedUVec4Uniform(
+        params.residencyArenaBufferIndex,
+        tableBase);
+    uint historyBase = ResidencyHistoryBase(params, virtualPage);
+    uvec4 history = ReadStorageAlignedUVec4Uniform(
+        params.residencyArenaBufferIndex,
+        historyBase);
+    uint currentGeometry = pc.GeometryGeneration & 0xffffu;
+    uint historyGeometry = history.w >> 16u;
+    uint historyFlags = history.w & 0xffffu;
+    if (historyGeometry != currentGeometry)
+    {
+        // Explicit development pins are transaction-local controls, not
+        // suppression evidence, and survive ordinary geometry invalidation.
+        historyFlags &= SIMPLE_DDGI_PAGE_HISTORY_DEVELOPMENT_PIN;
+        table.z &= ~SIMPLE_DDGI_PAGE_TABLE_SUPPRESSED_EMPTY;
+        ResidencyWrite(params, tableBase + 2u, table.z);
+    }
+
+    uint counters = SimpleDdgiDemandCountersOffsetWords(params);
+    uint developmentControl = counters +
+        SIMPLE_DDGI_RESIDENCY_DEVELOPMENT_CONTROL_WORD;
+    uint developmentCommandSerial = ResidencyRead(
+        params,
+        developmentControl + 0u);
+    uint developmentVirtualPagePlusOne = ResidencyRead(
+        params,
+        developmentControl + 1u);
+    uint developmentFlags = ResidencyRead(
+        params,
+        developmentControl + 2u);
+    if (developmentCommandSerial != 0u &&
+        developmentVirtualPagePlusOne == virtualPage + 1u &&
+        (developmentFlags &
+            SIMPLE_DDGI_RESIDENCY_DEVELOPMENT_CONTROL_VALID) != 0u)
+    {
+        if ((developmentFlags &
+                SIMPLE_DDGI_RESIDENCY_DEVELOPMENT_CONTROL_PIN) != 0u)
+        {
+            historyFlags |= SIMPLE_DDGI_PAGE_HISTORY_DEVELOPMENT_PIN;
+        }
+        else
+        {
+            historyFlags &= ~SIMPLE_DDGI_PAGE_HISTORY_DEVELOPMENT_PIN;
+        }
+    }
+
+    bool visible = SimpleDdgiDemandStampEpoch(history.x) == pc.DemandEpoch;
+    uint previousDemandEpoch = pc.DemandEpoch > 1u
+        ? pc.DemandEpoch - 1u
+        : SIMPLE_DDGI_DEMAND_EPOCH_MASK - 1u;
+    uint receiverEpoch = SimpleDdgiDemandStampEpoch(history.y);
+    // Late transparent/fog/foliage consumers execute after this frame's
+    // reconciliation. Accept their previous-epoch stamp exactly once on the
+    // next frame; forward demand may consequently retain a page for one extra
+    // frame, which is bounded by the declared retention policy.
+    bool receiver = receiverEpoch == pc.DemandEpoch ||
+        receiverEpoch == previousDemandEpoch;
+    uint demandClass = visible
+        ? SIMPLE_DDGI_PAGE_DEMAND_CLASS_VISIBLE_SURFACE
+        : (receiver
+            ? SIMPLE_DDGI_PAGE_DEMAND_CLASS_RECEIVER_MISS
+            : SIMPLE_DDGI_PAGE_DEMAND_CLASS_NONE);
+    uint distanceBucket = visible
+        ? SimpleDdgiDemandStampDistanceBucket(history.x)
+        : (receiver
+            ? SimpleDdgiDemandStampDistanceBucket(history.y)
+            : 255u);
+    bool developmentPinned = (historyFlags &
+        SIMPLE_DDGI_PAGE_HISTORY_DEVELOPMENT_PIN) != 0u;
+    if (developmentPinned)
+    {
+        demandClass = SIMPLE_DDGI_PAGE_DEMAND_CLASS_DEVELOPMENT_PIN;
+        distanceBucket = 0u;
+    }
+
+    uint physicalPage;
+    bool tableClaimsResident = table.x != 0u ||
+        (table.z & SIMPLE_DDGI_PAGE_TABLE_VALID) != 0u;
+    bool resident = ResidencyPageIdentityValid(
+        params,
+        virtualPage,
+        table,
+        physicalPage);
+    uint classFlags = 0u;
+    if (tableClaimsResident && !resident)
+    {
+        classFlags |= SIMPLE_DDGI_PAGE_CLASS_INVALID_MAPPING;
+        ResidencyWrite(params, tableBase + 0u, 0u);
+        ResidencyWrite(params, tableBase + 1u, 0u);
+        ResidencyWrite(params, tableBase + 2u, 0u);
+        if (params.residencyMode != SIMPLE_DDGI_RESIDENCY_MODE_SHADOW)
+            ResidencyWrite(params, tableBase + 3u, 0u);
+        ResidencyAtomicAdd(
+            params,
+            ResidencyCounterWord(
+                params,
+                SIMPLE_DDGI_RESIDENCY_COUNTER_MAPPING_ERRORS),
+            1u);
+        table = uvec4(0u);
+    }
+
+    bool suppressed =
+        (historyFlags & SIMPLE_DDGI_PAGE_HISTORY_SUPPRESSED) != 0u;
+    uint emptyConfirmations = (historyFlags &
+        SIMPLE_DDGI_PAGE_HISTORY_EMPTY_CONFIRMATION_MASK) >>
+        SIMPLE_DDGI_PAGE_HISTORY_EMPTY_CONFIRMATION_SHIFT;
+    if (developmentPinned)
+    {
+        suppressed = false;
+        emptyConfirmations = 0u;
+    }
+    uint physicalFlags = resident
+        ? ResidencyRead(params,
+            ResidencyPhysicalBase(params, physicalPage) + 3u)
+        : 0u;
+    uint inFlightCount = (physicalFlags &
+        SIMPLE_DDGI_PHYSICAL_PAGE_IN_FLIGHT_COUNT_MASK) >>
+        SIMPLE_DDGI_PHYSICAL_PAGE_IN_FLIGHT_COUNT_SHIFT;
+    bool pinned = developmentPinned ||
+        (physicalFlags & SIMPLE_DDGI_PHYSICAL_PAGE_PINNED) != 0u;
+    if (resident)
+    {
+        uint desiredPhysicalFlags = developmentPinned
+            ? physicalFlags | SIMPLE_DDGI_PHYSICAL_PAGE_PINNED
+            : physicalFlags & ~SIMPLE_DDGI_PHYSICAL_PAGE_PINNED;
+        if (desiredPhysicalFlags != physicalFlags)
+        {
+            ResidencyWrite(
+                params,
+                ResidencyPhysicalBase(params, physicalPage) + 3u,
+                desiredPhysicalFlags);
+            physicalFlags = desiredPhysicalFlags;
+        }
+    }
+    bool published = resident &&
+        (table.z & SIMPLE_DDGI_PAGE_TABLE_PUBLISHED) != 0u &&
+        (table.z & SIMPLE_DDGI_PAGE_TABLE_INITIALIZING) == 0u;
+
+    uint volumeIndex;
+    uint localPage;
+    SimpleDdgiVolume volume;
+    SimpleDdgiVolumePaging paging;
+    bool pageTopologyValid = SimpleDdgiFindSparsePageVolume(
+        params,
+        virtualPage,
+        volumeIndex,
+        volume,
+        paging,
+        localPage);
+    if (!pageTopologyValid)
+    {
+        classFlags |= SIMPLE_DDGI_PAGE_CLASS_INVALID_MAPPING;
+        ResidencyAtomicAdd(
+            params,
+            ResidencyCounterWord(
+                params,
+                SIMPLE_DDGI_RESIDENCY_COUNTER_MAPPING_ERRORS),
+            1u);
+    }
+
+    if (resident && published && inFlightCount == 0u &&
+        pageTopologyValid)
+    {
+        bool allInactive = true;
+        uint validMask = SimpleDdgiValidPageProbeMask(
+            volume,
+            paging,
+            localPage);
+        for (uint slot = 0u; slot < SIMPLE_DDGI_PROBES_PER_PAGE; slot++)
+        {
+            if ((validMask & (1u << slot)) == 0u)
+                continue;
+            uint virtualProbe;
+            if (!SimpleDdgiVirtualProbeForPageSlot(
+                    volume,
+                    paging,
+                    localPage,
+                    slot,
+                    virtualProbe))
+            {
+                continue;
+            }
+            SimpleDdgiProbeState state = ReadSimpleDdgiProbeState(
+                pc.ProbeStateBufferIndex,
+                virtualProbe);
+            bool inactive =
+                state.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE ||
+                (state.flags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u ||
+                state.activeWeight <= 0.001;
+            allInactive = allInactive && inactive;
+        }
+        if (allInactive && validMask != 0u)
+            emptyConfirmations = min(emptyConfirmations + 1u, 255u);
+        else
+            emptyConfirmations = 0u;
+        if (emptyConfirmations >= 2u)
+            suppressed = true;
+    }
+
+    uint lastRelevant = history.z;
+    bool retryDue = suppressed && demandClass != 0u &&
+        pc.CurrentFrame >= lastRelevant &&
+        pc.CurrentFrame - lastRelevant >= ResidencyRead(params, 14u);
+    if (retryDue)
+    {
+        suppressed = false;
+        emptyConfirmations = 0u;
+        demandClass = SIMPLE_DDGI_PAGE_DEMAND_CLASS_SUPPRESSED_RETRY;
+        distanceBucket = 255u;
+        ResidencyAtomicAdd(
+            params,
+            ResidencyCounterWord(
+                params,
+                SIMPLE_DDGI_RESIDENCY_COUNTER_RETRY),
+            1u);
+    }
+
+    if (demandClass != 0u)
+    {
+        if (resident || lastRelevant == 0u)
+            lastRelevant = pc.CurrentFrame;
+    }
+    else if (!resident && !suppressed)
+    {
+        // A missing page's timestamp is its current outstanding-demand start,
+        // not a historical maximum. A gap in demand resets the latency tie
+        // breaker so a much later request cannot inherit stale priority.
+        lastRelevant = 0u;
+    }
+    bool retained = resident && lastRelevant != 0u &&
+        pc.CurrentFrame >= lastRelevant &&
+        pc.CurrentFrame - lastRelevant < ResidencyRead(params, 11u);
+    // Confirmed-empty suppression is authoritative even under persistent
+    // depth demand: the dense coarser ring owns those receivers until the
+    // bounded retry expires. Keeping demand protection here would strand a
+    // suppressed page in the physical pool indefinitely.
+    bool protectedPage = (demandClass != 0u && !suppressed) || pinned ||
+        inFlightCount != 0u ||
+        (table.z & SIMPLE_DDGI_PAGE_TABLE_INITIALIZING) != 0u ||
+        (!published && retained && pc.CameraCut == 0u);
+    bool retentionExpired = resident && lastRelevant != 0u &&
+        pc.CurrentFrame >= lastRelevant &&
+        pc.CurrentFrame - lastRelevant >= ResidencyRead(params, 11u);
+    bool pressureVictim = pc.CameraCut != 0u || retentionExpired;
+
+    if (resident)
+        classFlags |= SIMPLE_DDGI_PAGE_CLASS_RESIDENT;
+    if (retained)
+        classFlags |= SIMPLE_DDGI_PAGE_CLASS_RETAINED;
+    if (suppressed)
+        classFlags |= SIMPLE_DDGI_PAGE_CLASS_SUPPRESSED;
+    if (!resident && demandClass != 0u && !suppressed && pageTopologyValid)
+        classFlags |= SIMPLE_DDGI_PAGE_CLASS_MISSING;
+    if (resident && !protectedPage && (suppressed || pressureVictim))
+        classFlags |= SIMPLE_DDGI_PAGE_CLASS_VICTIM;
+    if (resident && !protectedPage && (suppressed || retentionExpired))
+        classFlags |= SIMPLE_DDGI_PAGE_CLASS_EVICT_WHEN_IDLE;
+
+    if (suppressed)
+        table.z |= SIMPLE_DDGI_PAGE_TABLE_SUPPRESSED_EMPTY;
+    else
+        table.z &= ~SIMPLE_DDGI_PAGE_TABLE_SUPPRESSED_EMPTY;
+    if (resident)
+        ResidencyWrite(params, tableBase + 2u, table.z);
+    historyFlags = (developmentPinned
+            ? SIMPLE_DDGI_PAGE_HISTORY_DEVELOPMENT_PIN
+            : 0u) |
+        (suppressed
+            ? SIMPLE_DDGI_PAGE_HISTORY_SUPPRESSED
+            : 0u) |
+        (emptyConfirmations <<
+            SIMPLE_DDGI_PAGE_HISTORY_EMPTY_CONFIRMATION_SHIFT);
+    ResidencyWrite(params, historyBase + 2u, lastRelevant);
+    ResidencyWrite(
+        params,
+        historyBase + 3u,
+        historyFlags | (currentGeometry << 16u));
+
+    uint classBase = ResidencyClassBase(params, virtualPage);
+    ResidencyWrite(params, classBase + 0u, classFlags);
+    ResidencyWrite(params, classBase + 1u, lastRelevant);
+    ResidencyWrite(params, classBase + 2u, physicalPage);
+    ResidencyWrite(
+        params,
+        classBase + 3u,
+        demandClass | (distanceBucket << 8u) |
+            (min(volumeIndex, 255u) << 16u));
+    if ((classFlags & SIMPLE_DDGI_PAGE_CLASS_MISSING) != 0u)
+        ResidencyAtomicAdd(
+            params,
+            ResidencyCounterWord(
+                params,
+                SIMPLE_DDGI_RESIDENCY_COUNTER_ADMISSION_CANDIDATES),
+            1u);
+    if ((classFlags & SIMPLE_DDGI_PAGE_CLASS_VICTIM) != 0u)
+        ResidencyAtomicAdd(
+            params,
+            ResidencyCounterWord(
+                params,
+                SIMPLE_DDGI_RESIDENCY_COUNTER_VICTIMS),
+            1u);
+    if (visible)
+        ResidencyAtomicAdd(
+            params,
+            ResidencyCounterWord(
+                params,
+                SIMPLE_DDGI_RESIDENCY_COUNTER_VISIBLE_DEMAND),
+            1u);
+    if (receiver)
+        ResidencyAtomicAdd(
+            params,
+            ResidencyCounterWord(
+                params,
+                SIMPLE_DDGI_RESIDENCY_COUNTER_RECEIVER_DEMAND),
+            1u);
+    if (retained)
+        ResidencyAtomicAdd(
+            params,
+            ResidencyCounterWord(
+                params,
+                SIMPLE_DDGI_RESIDENCY_COUNTER_RETAINED),
+            1u);
+}

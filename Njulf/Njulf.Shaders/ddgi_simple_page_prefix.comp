@@ -1,0 +1,117 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_page_residency_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    if (gl_GlobalInvocationID.x != 0u ||
+        !SimpleDdgiResidencyHeaderMatches(params))
+    {
+        return;
+    }
+
+    uint candidateCount = 0u;
+    uint victimCount = 0u;
+    uint residentCount = 0u;
+    uint publishedCount = 0u;
+    uint initializingCount = 0u;
+    uint suppressedCount = 0u;
+    uint candidateBase = SimpleDdgiCandidateScratchOffsetWords(params);
+    uint victimBase = SimpleDdgiVictimScratchOffsetWords(params);
+    uint prefixBase = SimpleDdgiPrefixScratchOffsetWords(params);
+
+    for (uint virtualPage = 0u;
+         virtualPage < params.virtualPageCount;
+         virtualPage++)
+    {
+        uint classBase = ResidencyClassBase(params, virtualPage);
+        uint classFlags = ResidencyRead(params, classBase + 0u);
+        ResidencyWrite(params, prefixBase + virtualPage, candidateCount);
+        if ((classFlags & SIMPLE_DDGI_PAGE_CLASS_MISSING) != 0u)
+        {
+            ResidencyWrite(
+                params,
+                candidateBase + candidateCount * 2u + 0u,
+                virtualPage);
+            ResidencyWrite(
+                params,
+                candidateBase + candidateCount * 2u + 1u,
+                ResidencyRead(params, classBase + 3u));
+            candidateCount++;
+        }
+        if ((classFlags & SIMPLE_DDGI_PAGE_CLASS_VICTIM) != 0u)
+        {
+            uint physicalPage = ResidencyRead(params, classBase + 2u);
+            if (physicalPage < params.sparsePhysicalPageCapacity)
+            {
+                ResidencyWrite(
+                    params,
+                    victimBase + victimCount * 2u + 0u,
+                    physicalPage);
+                ResidencyWrite(
+                    params,
+                    victimBase + victimCount * 2u + 1u,
+                    virtualPage);
+                victimCount++;
+            }
+        }
+        if ((classFlags & SIMPLE_DDGI_PAGE_CLASS_RESIDENT) != 0u)
+        {
+            residentCount++;
+            uint tableFlags = ResidencyRead(
+                params,
+                ResidencyTableBase(virtualPage) + 2u);
+            if ((tableFlags & SIMPLE_DDGI_PAGE_TABLE_PUBLISHED) != 0u &&
+                (tableFlags & SIMPLE_DDGI_PAGE_TABLE_INITIALIZING) == 0u)
+            {
+                publishedCount++;
+            }
+            if ((tableFlags & SIMPLE_DDGI_PAGE_TABLE_INITIALIZING) != 0u)
+                initializingCount++;
+        }
+        if ((classFlags & SIMPLE_DDGI_PAGE_CLASS_SUPPRESSED) != 0u)
+            suppressedCount++;
+    }
+
+    ResidencyWrite(
+        params,
+        ResidencyCounterWord(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_ADMISSION_CANDIDATES),
+        candidateCount);
+    ResidencyWrite(
+        params,
+        ResidencyCounterWord(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_VICTIMS),
+        victimCount);
+    ResidencyWrite(
+        params,
+        ResidencyCounterWord(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_RESIDENT),
+        residentCount);
+    ResidencyWrite(
+        params,
+        ResidencyCounterWord(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_PUBLISHED),
+        publishedCount);
+    ResidencyWrite(
+        params,
+        ResidencyCounterWord(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_INITIALIZING),
+        initializingCount);
+    ResidencyWrite(
+        params,
+        ResidencyCounterWord(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_SUPPRESSED),
+        suppressedCount);
+}

@@ -151,6 +151,19 @@ namespace Njulf.Rendering.Pipeline
             if (IsGpuResidentMode)
             {
                 base.Execute(cmd, frameIndex, sceneData);
+                // Source-repair blends are publication work, not cached solver
+                // iterations. Counting them hid the actual solve-epoch cost in
+                // qualification evidence. Preserve the legacy counter outside
+                // the certified V2 state machine.
+                bool certifiedV2 = VolumeManager.TransportV2Active &&
+                    VolumeManager.TailCertificationEnabled;
+                if (!certifiedV2 ||
+                    VolumeManager.TransportTailPhase ==
+                        SimpleDdgiTransportPhase.AcceleratedSolve)
+                {
+                    sceneData.SimpleDdgiTransportCachedSweepCount = checked(
+                        sceneData.SimpleDdgiTransportCachedSweepCount + 1);
+                }
                 return;
             }
 
@@ -275,6 +288,8 @@ namespace Njulf.Rendering.Pipeline
             }
 
             base.Execute(cmd, frameIndex, sceneData);
+            sceneData.SimpleDdgiTransportCachedSweepCount = checked(
+                sceneData.SimpleDdgiTransportCachedSweepCount + 1);
             VolumeManager.MarkTransportExecuted();
         }
     }
@@ -432,6 +447,8 @@ namespace Njulf.Rendering.Pipeline
                 &pushConstants);
             _context.Api.CmdDispatch(cmd, checked((uint)dispatch.ProbeCount), 1, 1);
             InsertStorageBarrier(cmd);
+            sceneData.SimpleDdgiTransportAuditChunkCount = checked(
+                sceneData.SimpleDdgiTransportAuditChunkCount + 1);
 
             if (!_volumeManager.MarkTransportTailAuditChunkSubmitted(dispatch))
             {
@@ -864,6 +881,7 @@ namespace Njulf.Rendering.Pipeline
             IrradianceAtlasBufferIndex = BindlessIndex.SimpleDdgiIrradianceAtlasBuffer,
             VisibilityAtlasBufferIndex = BindlessIndex.SimpleDdgiVisibilityAtlasBuffer,
             ProbeStateBufferIndex = BindlessIndex.SimpleDdgiProbeStateBuffer,
+            ReceiverProbeBufferIndex = BindlessIndex.SimpleDdgiReceiverProbeBuffer,
             ProbeUpdateQueueBufferIndex = BindlessIndex.SimpleDdgiProbeUpdateQueueBuffer,
             TransportIrradianceAtlasBufferIndex = BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer,
             PrivateVisibilityAtlasOffsetWords = _volumeManager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident

@@ -9,6 +9,28 @@ namespace Njulf.Tests;
 public sealed class SimpleDdgiGpuSchedulerValidationTests
 {
     [Test]
+    public void RuntimeDiagnostics_ExportExactCommitRejections()
+    {
+        string renderer = ReadRepoText(
+            "Njulf.Rendering",
+            "VulkanRenderer.cs");
+
+        Assert.That(
+            renderer,
+            Does.Contain(
+                "SimpleDdgiSchedulerFeedbackFailedCommitCount =\n" +
+                "                schedulerFeedback.FailedCommitCount;"));
+
+        string feedbackShader = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_feedback.comp");
+        Assert.That(
+            feedbackShader,
+            Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_COUNTER_COMMIT_REJECTED));"));
+    }
+
+    [Test]
     public void CpuOracleIsDeterministicAndHonorsRequestAndRayBudgets()
     {
         var candidates = new GPUSimpleDdgiSchedulerCandidate[4];
@@ -111,6 +133,125 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
             Assert.That(result.InvalidCandidateCount, Is.EqualTo(1));
             Assert.That(result.AcceptedRequestCount, Is.EqualTo(0));
             Assert.That(counts, Is.All.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public void CachedV2UpdateCarriesFullSourceSequenceWithoutChargingPrimaryRays()
+    {
+        var candidates = new[]
+        {
+            new GPUSimpleDdgiSchedulerCandidate
+            {
+                ProbeIndex = 100u,
+                VolumeIndex = 0u,
+                ExpectedPhysicalGeneration = 7u,
+                SequenceOrdinal = 0u,
+                WorkClassAndTransport = SimpleDdgiSchedulerAbi.PackCandidateWorkClassAndTransport(
+                    SimpleDdgiSchedulerWorkClass.NearMaintenance,
+                    SimpleDdgiSchedulerTransportCategory.CachedSolverPropagation),
+                RayTierAndReasonFlags = SimpleDdgiSchedulerAbi.PackCandidateRayTierAndReasons(
+                    SimpleDdgiSchedulerRayTier.Maintenance,
+                    SimpleDdgiSchedulerCandidateReason.ConvergencePending),
+                ActiveRayCount = 16u,
+                SourceRayCount = 128u
+            }
+        };
+        var queue = new GPUSimpleDdgiProbeUpdate[1];
+        var counts = new int[SimpleDdgiSchedulerAbi.MaxLaneCount];
+        var accepted = new int[SimpleDdgiSchedulerAbi.MaxLaneCount];
+        var cursors = new uint[SimpleDdgiSchedulerAbi.MaxLaneCount];
+
+        SimpleDdgiCpuScheduleResult result = SimpleDdgiCpuScheduleModel.Schedule(
+            candidates,
+            new[] { new SimpleDdgiCpuVolumePolicy(1, 0, 1, 1, true) },
+            new SimpleDdgiCpuSchedulePolicy(1, 0, 0, 11u, 1, true),
+            queue,
+            counts,
+            accepted,
+            cursors);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsValid, Is.True);
+            Assert.That(result.AcceptedRequestCount, Is.EqualTo(1));
+            Assert.That(result.AcceptedPrimaryRayCount, Is.Zero);
+            Assert.That(result.AcceptedSourceRayCount, Is.Zero);
+            Assert.That(queue[0].ProbeIndex, Is.EqualTo(100u));
+            Assert.That(queue[0].SourceRayCount, Is.EqualTo(128u));
+            Assert.That(
+                (queue[0].Flags & SimpleDdgiSchedulerAbi.UpdateRayCountMask) >>
+                    (int)SimpleDdgiSchedulerAbi.UpdateRayCountShift,
+                Is.EqualTo(128u));
+            Assert.That(
+                queue[0].Flags & SimpleDdgiSchedulerAbi.UpdateSourceRefreshFlag,
+                Is.Zero);
+        });
+    }
+
+    [Test]
+    public void CpuOracleCarriesPerProbeSourceIdentityAcrossRefreshAndCachedWork()
+    {
+        var candidates = new[]
+        {
+            new GPUSimpleDdgiSchedulerCandidate
+            {
+                ProbeIndex = 1u,
+                VolumeIndex = 0u,
+                ExpectedPhysicalGeneration = 3u,
+                SequenceOrdinal = 0u,
+                WorkClassAndTransport = SimpleDdgiSchedulerAbi.PackCandidateWorkClassAndTransport(
+                    SimpleDdgiSchedulerWorkClass.FreshExposedVisible,
+                    SimpleDdgiSchedulerTransportCategory.HardSourceRepair),
+                RayTierAndReasonFlags = SimpleDdgiSchedulerAbi.PackCandidateRayTierAndReasons(
+                    SimpleDdgiSchedulerRayTier.Full,
+                    SimpleDdgiSchedulerCandidateReason.Fresh),
+                ActiveRayCount = 8u,
+                SourceRayCount = 8u
+            },
+            new GPUSimpleDdgiSchedulerCandidate
+            {
+                ProbeIndex = 2u,
+                VolumeIndex = 0u,
+                ExpectedPhysicalGeneration = 5u,
+                SequenceOrdinal = 1u,
+                WorkClassAndTransport = SimpleDdgiSchedulerAbi.PackCandidateWorkClassAndTransport(
+                    SimpleDdgiSchedulerWorkClass.NearMaintenance,
+                    SimpleDdgiSchedulerTransportCategory.CachedSolverPropagation),
+                RayTierAndReasonFlags = SimpleDdgiSchedulerAbi.PackCandidateRayTierAndReasons(
+                    SimpleDdgiSchedulerRayTier.Maintenance,
+                    SimpleDdgiSchedulerCandidateReason.ConvergencePending),
+                ActiveRayCount = 2u,
+                SourceRayCount = 8u
+            }
+        };
+        var queue = new GPUSimpleDdgiProbeUpdate[2];
+        var counts = new int[SimpleDdgiSchedulerAbi.MaxLaneCount];
+        var accepted = new int[SimpleDdgiSchedulerAbi.MaxLaneCount];
+        var cursors = new uint[SimpleDdgiSchedulerAbi.MaxLaneCount];
+
+        SimpleDdgiCpuScheduleResult result = SimpleDdgiCpuScheduleModel.Schedule(
+            candidates,
+            new[] { new SimpleDdgiCpuVolumePolicy(2, 0, 2, 1, true) },
+            new SimpleDdgiCpuSchedulePolicy(2, 8, 8, 101u, 1, true),
+            new uint[] { 0u, 41u, 43u },
+            new uint[] { 0u, 9u, 17u },
+            queue,
+            counts,
+            accepted,
+            cursors);
+
+        GPUSimpleDdgiProbeUpdate refreshed = queue[0].ProbeIndex == 1u ? queue[0] : queue[1];
+        GPUSimpleDdgiProbeUpdate cached = queue[0].ProbeIndex == 2u ? queue[0] : queue[1];
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.AcceptedRequestCount, Is.EqualTo(2));
+            Assert.That(refreshed.ProbeIndex, Is.EqualTo(1u));
+            Assert.That(refreshed.SourceLightingGeneration, Is.EqualTo(101u));
+            Assert.That(refreshed.SourceEpoch, Is.EqualTo(10u));
+            Assert.That(cached.ProbeIndex, Is.EqualTo(2u));
+            Assert.That(cached.SourceLightingGeneration, Is.EqualTo(43u));
+            Assert.That(cached.SourceEpoch, Is.EqualTo(17u));
         });
     }
 
@@ -220,5 +361,91 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
             Assert.That(cursors[lane], Is.EqualTo(cursorBeforeRejection));
             Assert.That(accepted[lane], Is.Zero);
         });
+    }
+
+    [Test]
+    public void FallbackStateExportRejectsPartialOrGenerationlessProbeRecords()
+    {
+        var scheduler = new GPUSimpleDdgiSchedulerProbeState
+        {
+            CommittedSourceLightingGeneration = 7u,
+            SourceEpoch = 11u,
+            OwningVolumeTableGeneration = 13u,
+            PackedTransportAndLifecycle =
+                SimpleDdgiSchedulerAbi.PackSchedulerProbeLifecycle(
+                    64u,
+                    3u,
+                    2u,
+                    0u,
+                    0u)
+        };
+        var state = new GPUSimpleDdgiProbeState
+        {
+            RelocationAndActive = new Njulf.Core.Math.Vector4(
+                0.1f,
+                0.0f,
+                -0.1f,
+                1.0f),
+            Flags = 5u << 8,
+            Classification = 0u
+        };
+        GPUSimpleDdgiSchedulerProbeState zeroEpoch = scheduler;
+        zeroEpoch.SourceEpoch = 0u;
+        GPUSimpleDdgiSchedulerProbeState partialTransaction = scheduler;
+        partialTransaction.PackedTransportAndLifecycle =
+            SimpleDdgiSchedulerAbi.PackSchedulerProbeLifecycle(
+                64u,
+                3u,
+                2u,
+                0u,
+                1u);
+        GPUSimpleDdgiProbeState zeroGeneration = state;
+        zeroGeneration.Flags = 0u;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager.IsValidGpuSchedulerFallbackRecord(
+                    scheduler,
+                    state,
+                    13u),
+                Is.True);
+            Assert.That(
+                SimpleDdgiVolumeManager.IsValidGpuSchedulerFallbackRecord(
+                    zeroEpoch,
+                    state,
+                    13u),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager.IsValidGpuSchedulerFallbackRecord(
+                    partialTransaction,
+                    state,
+                    13u),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager.IsValidGpuSchedulerFallbackRecord(
+                    scheduler,
+                    zeroGeneration,
+                    13u),
+                Is.False);
+        });
+    }
+
+    private static string ReadRepoText(params string[] pathParts)
+    {
+        string? directory = TestContext.CurrentContext.TestDirectory;
+        while (!string.IsNullOrEmpty(directory))
+        {
+            string candidate = Path.Combine(
+                new[] { directory }.Concat(pathParts).ToArray());
+            if (File.Exists(candidate))
+                return File.ReadAllText(candidate);
+
+            directory = Directory.GetParent(directory)?.FullName;
+        }
+
+        throw new FileNotFoundException(
+            "Could not locate repository file.",
+            Path.Combine(pathParts));
     }
 }

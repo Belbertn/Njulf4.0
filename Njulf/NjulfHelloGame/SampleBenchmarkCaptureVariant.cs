@@ -16,7 +16,17 @@ public static class SampleBenchmarkCaptureVariant
     public const string DecalShadowsDisabled = "decal-shadows-disabled";
     public const string FarFieldGated = "far-field-gated";
     public const string FarFieldForcedOld = "far-field-forced-old";
+    public const string TailJacobi = "tail-jacobi";
+    public const string TailAccelerated = "tail-accelerated";
     public const string DecalMaterialPrefix = "decal-material:";
+
+    public static bool IsTailVariant(string? variant)
+    {
+        string normalized = string.IsNullOrWhiteSpace(variant)
+            ? Baseline
+            : variant.Trim().ToLowerInvariant();
+        return normalized is TailJacobi or TailAccelerated;
+    }
 
     public static string Apply(RenderSettings settings, string? variant)
     {
@@ -48,6 +58,15 @@ public static class SampleBenchmarkCaptureVariant
             case FarFieldForcedOld:
                 settings.GlobalIllumination.SimpleDdgiForceLegacyFarFieldFallbackEvaluation = true;
                 return normalized;
+            case TailJacobi:
+            case TailAccelerated:
+                settings.GlobalIllumination.SimpleDdgiSchedulerMode =
+                    SimpleDdgiSchedulerMode.GpuResident;
+                settings.GlobalIllumination.SimpleDdgiTransportV2Enabled = true;
+                settings.GlobalIllumination.SimpleDdgiTransportTailCertificationEnabled = true;
+                settings.GlobalIllumination.SimpleDdgiTransportAccelerationEnabled =
+                    normalized == TailAccelerated;
+                return normalized;
         }
 
         if (normalized.StartsWith(DecalMaterialPrefix, StringComparison.Ordinal))
@@ -72,6 +91,7 @@ public static class SampleBenchmarkCaptureVariant
             $"Unknown benchmark capture variant '{variant}'. Supported variants: " +
             $"{Baseline}, {DecalsDisabled}, {DecalDdgiDisabled}, " +
             $"{DecalShadowsDisabled}, {FarFieldGated}, {FarFieldForcedOld}, " +
+            $"{TailJacobi}, {TailAccelerated}, " +
             $"or {DecalMaterialPrefix}<index>.",
             nameof(variant));
     }

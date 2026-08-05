@@ -562,7 +562,7 @@ namespace Njulf.Rendering.Pipeline
             return hash;
         }
 
-        private static void GetTransitionMasks(
+        internal static void GetTransitionMasks(
             ImageLayout oldLayout,
             ImageLayout newLayout,
             out PipelineStageFlags2 srcStage,
@@ -573,8 +573,10 @@ namespace Njulf.Rendering.Pipeline
             switch (oldLayout)
             {
                 case ImageLayout.DepthStencilAttachmentOptimal:
-                    srcStage = PipelineStageFlags2.LateFragmentTestsBit;
-                    srcAccess = AccessFlags2.DepthStencilAttachmentWriteBit;
+                    srcStage = PipelineStageFlags2.EarlyFragmentTestsBit |
+                        PipelineStageFlags2.LateFragmentTestsBit;
+                    srcAccess = AccessFlags2.DepthStencilAttachmentReadBit |
+                        AccessFlags2.DepthStencilAttachmentWriteBit;
                     break;
                 case ImageLayout.DepthStencilReadOnlyOptimal:
                     srcStage = PipelineStageFlags2.FragmentShaderBit;
@@ -598,7 +600,10 @@ namespace Njulf.Rendering.Pipeline
             {
                 case ImageLayout.DepthStencilAttachmentOptimal:
                     dstStage = PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit;
-                    dstAccess = AccessFlags2.DepthStencilAttachmentWriteBit;
+                    // Every face composes the cleared/copied cache with loadOp=Load
+                    // before writing dynamic depth, so both accesses are required.
+                    dstAccess = AccessFlags2.DepthStencilAttachmentReadBit |
+                        AccessFlags2.DepthStencilAttachmentWriteBit;
                     break;
                 case ImageLayout.DepthStencilReadOnlyOptimal:
                     dstStage = PipelineStageFlags2.FragmentShaderBit;

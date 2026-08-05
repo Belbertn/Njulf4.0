@@ -3,7 +3,15 @@
 #extension GL_EXT_mesh_shader : require
 
 #include "common.glsl"
+#define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE (gl_LocalInvocationIndex == 0u)
+#define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 1
+#define SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 0u
+#define SIMPLE_DDGI_OPAQUE_GATHER_ORACLE 1
 #include "ddgi_simple_shared.glsl"
+#undef SIMPLE_DDGI_OPAQUE_GATHER_ORACLE
+#undef SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET
+#undef SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT
+#undef SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 126) out;

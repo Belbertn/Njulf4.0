@@ -80,7 +80,7 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
         GlobalIlluminationSettings gi = _settings.GlobalIllumination;
         if (_volumeManager.TransportTailAuditPending)
             return false;
-            return _volumeManager.SchedulerMode.IsGpuMode() &&
+        return _volumeManager.SchedulerMode.IsGpuMode() &&
             gi.EffectiveUseDdgi &&
             gi.SimpleDdgiStructuredGatherEnabled &&
             gi.EffectiveUseRayQueryBackend &&

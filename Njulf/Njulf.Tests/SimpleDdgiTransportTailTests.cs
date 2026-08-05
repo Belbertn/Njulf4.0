@@ -1,4 +1,5 @@
 using Njulf.Core.Math;
+using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
@@ -19,6 +20,291 @@ public sealed class SimpleDdgiTransportTailTests
         Audit: 8u,
         Queue: 9u,
         SchedulerResources: 10u);
+
+    [Test]
+    public void ParticipantCoverage_IncludesOffscreenActiveProbe()
+    {
+        (bool Visible, bool Inactive)[] probes =
+        [
+            (Visible: true, Inactive: false),
+            (Visible: false, Inactive: false),
+            (Visible: false, Inactive: true)
+        ];
+
+        uint expectedParticipants = 0u;
+        uint auditedParticipants = 0u;
+        uint excludedInactive = 0u;
+        uint excludedNotVisible = 0u;
+        foreach ((bool visible, bool inactive) in probes)
+        {
+            if (inactive)
+            {
+                excludedInactive++;
+                continue;
+            }
+
+            bool participating = SimpleDdgiSchedulerAbi.IsTailCertificationParticipant(
+                inactive,
+                sourceReady: true,
+                fresh: false,
+                scrollExposed: false,
+                relocationPending: false,
+                sourceCacheInvalid: false);
+            if (participating)
+            {
+                expectedParticipants++;
+                auditedParticipants++;
+            }
+            else if (!visible)
+            {
+                excludedNotVisible++;
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(expectedParticipants, Is.EqualTo(2u));
+            Assert.That(auditedParticipants, Is.EqualTo(2u));
+            Assert.That(excludedInactive, Is.EqualTo(1u));
+            Assert.That(excludedNotVisible, Is.Zero);
+        });
+    }
+
+    [TestCase(128u, true)]
+    [TestCase(127u, false)]
+    [TestCase(64u, false)]
+    [TestCase(0u, false)]
+    public void SourceCacheCardinality_RequiresCompleteCurrentSequence(
+        uint storedSourceRayCount,
+        bool expectedValid)
+    {
+        bool valid = SimpleDdgiTransportTailEstimator.IsCompleteCurrentSourceCacheEntry(
+            storedSourceRayCount,
+            requiredSourceRayCount: 128u,
+            physicalGeneration: 17u,
+            expectedPhysicalGeneration: 17u,
+            sourceLightingGeneration: 23u,
+            expectedSourceLightingGeneration: 23u,
+            sourceEpoch: 29u,
+            expectedSourceEpoch: 29u);
+
+        Assert.That(valid, Is.EqualTo(expectedValid));
+    }
+
+    [Test]
+    public void ResidentFrameWork_UsesGenerationValidatedGpuFeedback()
+    {
+        var feedback = new GPUSimpleDdgiSchedulerFeedback
+        {
+            AcceptedCount = 17u,
+            SourceProbeUsed = 5u,
+            PrimaryRayUsed = 640u,
+            SourceAchievedRays = 640u,
+            TransportRayUsed = 1_408u,
+            PublishedCount = 16u
+        };
+
+        VulkanRenderer.SimpleDdgiFrameWork work =
+            VulkanRenderer.ResolveSimpleDdgiFrameWork(
+                rayUpdateActive: true,
+                SimpleDdgiSchedulerMode.GpuResident,
+                gpuFeedbackValid: true,
+                feedback,
+                cpuScheduledProbeCount: 0,
+                cpuSourceRefreshProbeCount: 0,
+                cpuPrimaryRayCount: 0UL,
+                cpuSourceRayCount: 0UL,
+                cpuTransportRayCount: 0UL,
+                cpuPublishedProbeCount: 0);
+
+        Assert.That(work, Is.EqualTo(new VulkanRenderer.SimpleDdgiFrameWork(
+            ScheduledProbeCount: 17,
+            SourceRefreshProbeCount: 5,
+            PrimaryRayCount: 640UL,
+            SourceRayCount: 640UL,
+            TransportRayCount: 1_408UL,
+            PublishedProbeCount: 16)));
+    }
+
+    [TestCase(SimpleDdgiSchedulerMode.CpuReference, false)]
+    [TestCase(SimpleDdgiSchedulerMode.GpuMirror, true)]
+    [TestCase(SimpleDdgiSchedulerMode.GpuResident, false)]
+    public void NonAuthoritativeResidentFeedback_DoesNotReplaceCpuWork(
+        SimpleDdgiSchedulerMode schedulerMode,
+        bool gpuFeedbackValid)
+    {
+        var feedback = new GPUSimpleDdgiSchedulerFeedback
+        {
+            AcceptedCount = 99u,
+            SourceProbeUsed = 99u,
+            PrimaryRayUsed = 99u,
+            SourceAchievedRays = 99u,
+            TransportRayUsed = 99u,
+            PublishedCount = 99u
+        };
+
+        VulkanRenderer.SimpleDdgiFrameWork work =
+            VulkanRenderer.ResolveSimpleDdgiFrameWork(
+                rayUpdateActive: true,
+                schedulerMode,
+                gpuFeedbackValid,
+                feedback,
+                cpuScheduledProbeCount: 7,
+                cpuSourceRefreshProbeCount: 3,
+                cpuPrimaryRayCount: 384UL,
+                cpuSourceRayCount: 384UL,
+                cpuTransportRayCount: 896UL,
+                cpuPublishedProbeCount: 6);
+
+        Assert.That(work, Is.EqualTo(new VulkanRenderer.SimpleDdgiFrameWork(
+            ScheduledProbeCount: 7,
+            SourceRefreshProbeCount: 3,
+            PrimaryRayCount: 384UL,
+            SourceRayCount: 384UL,
+            TransportRayCount: 896UL,
+            PublishedProbeCount: 6)));
+    }
+
+    [Test]
+    public void InactiveRayProducer_ReportsNoFrameWork()
+    {
+        VulkanRenderer.SimpleDdgiFrameWork work =
+            VulkanRenderer.ResolveSimpleDdgiFrameWork(
+                rayUpdateActive: false,
+                SimpleDdgiSchedulerMode.GpuResident,
+                gpuFeedbackValid: true,
+                new GPUSimpleDdgiSchedulerFeedback
+                {
+                    AcceptedCount = 1u,
+                    SourceProbeUsed = 1u,
+                    PrimaryRayUsed = 128u,
+                    SourceAchievedRays = 128u,
+                    TransportRayUsed = 128u,
+                    PublishedCount = 1u
+                },
+                cpuScheduledProbeCount: 1,
+                cpuSourceRefreshProbeCount: 1,
+                cpuPrimaryRayCount: 128UL,
+                cpuSourceRayCount: 128UL,
+                cpuTransportRayCount: 128UL,
+                cpuPublishedProbeCount: 1);
+
+        Assert.That(work, Is.EqualTo(default(VulkanRenderer.SimpleDdgiFrameWork)));
+    }
+
+    [Test]
+    public void SourceCacheIdentity_RequiresEveryGenerationToMatch()
+    {
+        static bool Validate(uint physical, uint source, uint epoch) =>
+            SimpleDdgiTransportTailEstimator.IsCompleteCurrentSourceCacheEntry(
+                storedSourceRayCount: 128u,
+                requiredSourceRayCount: 128u,
+                physicalGeneration: physical,
+                expectedPhysicalGeneration: 17u,
+                sourceLightingGeneration: source,
+                expectedSourceLightingGeneration: 23u,
+                sourceEpoch: epoch,
+                expectedSourceEpoch: 29u);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Validate(17u, 23u, 29u), Is.True);
+            Assert.That(Validate(16u, 23u, 29u), Is.False);
+            Assert.That(Validate(17u, 22u, 29u), Is.False);
+            Assert.That(Validate(17u, 23u, 28u), Is.False);
+        });
+    }
+
+    [Test]
+    public void BlendSweepPolicy_SourceRefreshWritesVisibilityAndLifecycleOnlyInSweepZero()
+    {
+        int visibilityWrites = 0;
+        int lifecycleCompletions = 0;
+        int irradianceWrites = 0;
+        for (int sweep = 0; sweep < 3; sweep++)
+        {
+            SimpleDdgiBlendSweepWork work =
+                SimpleDdgiTransportSolveController.ResolveBlendSweepWork(
+                    sweep,
+                    isFirstColor: true,
+                    transportV2Active: true,
+                    requiresSourceRefresh: true,
+                    freshUpdate: sweep == 0);
+            visibilityWrites += work.WritesVisibility ? 1 : 0;
+            lifecycleCompletions += work.AdvancesOneUpdateLifecycle ? 1 : 0;
+            irradianceWrites += work.WritesIrradiance ? 1 : 0;
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(visibilityWrites, Is.EqualTo(1));
+            Assert.That(lifecycleCompletions, Is.EqualTo(1));
+            Assert.That(irradianceWrites, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void Controller_GlobalProbeVisitIndicesUseTotalProbeCapacity()
+    {
+        var controller = new SimpleDdgiTransportSolveController();
+        controller.EnsureParticipantCapacity(101);
+        Assert.That(controller.BeginSolveEpoch(Generations, expectedParticipantCount: 2), Is.True);
+        SimpleDdgiTransportGenerations frozen = controller.FrozenGenerations;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(controller.ParticipantVisitCapacity, Is.EqualTo(101));
+            Assert.That(controller.ExpectedParticipantCount, Is.EqualTo(2));
+            Assert.That(controller.MarkParticipantVisited(0, frozen), Is.True);
+            Assert.That(controller.MarkParticipantVisited(100, frozen), Is.True);
+            Assert.That(controller.VisitedParticipantCount, Is.EqualTo(2));
+            Assert.That(controller.IsSolveEpochComplete, Is.True);
+        });
+    }
+
+    [TestCase(SimpleDdgiSchedulerMode.GpuResident, false, false)]
+    [TestCase(SimpleDdgiSchedulerMode.GpuResident, true, true)]
+    [TestCase(SimpleDdgiSchedulerMode.GpuMirror, false, true)]
+    [TestCase(SimpleDdgiSchedulerMode.CpuReference, false, true)]
+    public void ResidentTailCounts_RequireGenerationMatchedFeedback(
+        SimpleDdgiSchedulerMode schedulerMode,
+        bool feedbackValid,
+        bool expectedAuthority)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.CanPrepareTailSolveParticipantCounts(
+                schedulerMode,
+                feedbackValid),
+            Is.EqualTo(expectedAuthority));
+    }
+
+    [TestCase(SimpleDdgiSchedulerMode.CpuReference, false,
+        SimpleDdgiTailCertificationFallbackReason.RequiresGpuResidentScheduler)]
+    [TestCase(SimpleDdgiSchedulerMode.GpuMirror, false,
+        SimpleDdgiTailCertificationFallbackReason.RequiresGpuResidentScheduler)]
+    [TestCase(SimpleDdgiSchedulerMode.GpuResident, true,
+        SimpleDdgiTailCertificationFallbackReason.None)]
+    public void TailCertificationPolicy_RequiresGpuResident(
+        SimpleDdgiSchedulerMode schedulerMode,
+        bool expectedEnabled,
+        SimpleDdgiTailCertificationFallbackReason expectedReason)
+    {
+        SimpleDdgiTailCertificationAvailability availability =
+            SimpleDdgiTransportSolveController.ResolveTailCertificationAvailability(
+                requested: true,
+                schedulerMode,
+                gpuSchedulerReady: true,
+                gpuSchedulerFrameExecutionAvailable: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(availability.Enabled, Is.EqualTo(expectedEnabled));
+            Assert.That(availability.Reason, Is.EqualTo(expectedReason));
+            Assert.That(
+                availability.Enabled || availability.Message.Length > 0,
+                Is.True);
+        });
+    }
 
     [Test]
     public void EvaluateTail_UsesInfinityNormAndAbsoluteFloor()
@@ -252,6 +538,59 @@ public sealed class SimpleDdgiTransportTailTests
             changed), Is.False);
         Assert.That(controller.IsCertified, Is.False);
         Assert.That(controller.LastReason, Is.EqualTo(SimpleDdgiTransportCertificationReason.GenerationsChanged));
+    }
+
+    [Test]
+    public void Controller_TailAboveToleranceStartsANewFullyVisitedSolveEpoch()
+    {
+        var controller = new SimpleDdgiTransportSolveController();
+        Assert.That(controller.BeginSolveEpoch(Generations, 2), Is.True);
+        SimpleDdgiTransportGenerations firstSolve = controller.FrozenGenerations;
+        Assert.That(controller.MarkParticipantVisited(0, firstSolve), Is.True);
+        Assert.That(controller.MarkParticipantVisited(1, firstSolve), Is.True);
+        Assert.That(controller.TryBeginAudit(firstSolve), Is.True);
+        uint rejectedSolveEpoch = controller.SolveEpoch;
+        SimpleDdgiTransportGenerations audited = controller.FrozenGenerations;
+
+        SimpleDdgiTransportTailSummary rejected = new()
+        {
+            AuditEpoch = controller.AuditEpoch,
+            Generations = audited,
+            ExpectedParticipantCount = 2u,
+            AuditedParticipantCount = 2u,
+            ExpectedTexelCount = 128u,
+            AuditedTexelCount = 128u,
+            FixedPointDefect = 0.1f,
+            FieldMagnitude = 1.0f,
+            ConfiguredContractionBound = 0.9f,
+            ObservedContractionBound = 0.5f,
+            CertifiedContractionBound = 0.5f,
+            AbsoluteTailBound = 0.2f,
+            RelativeTailBound = 0.2f,
+            Tolerance = 0.025f,
+            CanonicalQuantizationFloor = 0.001f,
+            IsComplete = true,
+            Reason = SimpleDdgiTransportCertificationReason.TailAboveTolerance
+        };
+
+        Assert.That(controller.TryAcceptAudit(rejected, audited), Is.False);
+        SimpleDdgiTransportGenerations secondSolve = controller.FrozenGenerations;
+        Assert.Multiple(() =>
+        {
+            Assert.That(controller.Phase,
+                Is.EqualTo(SimpleDdgiTransportPhase.AcceleratedSolve));
+            Assert.That(controller.LastReason,
+                Is.EqualTo(SimpleDdgiTransportCertificationReason.TailAboveTolerance));
+            Assert.That(controller.LastSummary, Is.EqualTo(rejected));
+            Assert.That(controller.SolveEpoch, Is.Not.EqualTo(rejectedSolveEpoch));
+            Assert.That(controller.ExpectedParticipantCount, Is.EqualTo(2));
+            Assert.That(controller.VisitedParticipantCount, Is.Zero);
+            Assert.That(controller.IsSolveEpochComplete, Is.False);
+        });
+
+        Assert.That(controller.MarkParticipantVisited(0, secondSolve), Is.True);
+        Assert.That(controller.MarkParticipantVisited(1, secondSolve), Is.True);
+        Assert.That(controller.IsSolveEpochComplete, Is.True);
     }
 
     [Test]

@@ -423,7 +423,7 @@ internal sealed class SampleDiagnosticsReporter
         }
 
         Console.WriteLine(
-            $"Frame diagnostics GI: enabled={diagnostics.GlobalIlluminationEnabled}, mode={diagnostics.GlobalIlluminationMode}, debug={diagnostics.GlobalIlluminationDebugView}, " +
+            $"Frame diagnostics GI: enabled={diagnostics.GlobalIlluminationEnabled}, mode={diagnostics.GlobalIlluminationMode}, requestedDebug={diagnostics.GlobalIlluminationRequestedDebugView}, debug={diagnostics.GlobalIlluminationDebugView}, debugAvailable={diagnostics.GlobalIlluminationRequestedDebugViewAvailable}, debugAvailability='{diagnostics.GlobalIlluminationDebugViewAvailabilityReason}', " +
             $"rayQuerySupported={diagnostics.GlobalIlluminationRayQuerySupported}, rayQueryActive={diagnostics.GlobalIlluminationRayQueryActive}, " +
             $"ddgiVolumes={diagnostics.DdgiProbeVolumeCount}, ddgiProbes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount}, " +
             $"ddgiUpdated={diagnostics.DdgiProbesUpdated}, ddgiRays={diagnostics.DdgiRaysPerProbe}, relocation={diagnostics.DdgiProbeRelocationCount}, " +
@@ -487,7 +487,12 @@ internal sealed class SampleDiagnosticsReporter
             $"readbackProbes={upload.ReadbackProbeCount}, schedulerEntries={upload.SchedulerEntryRefreshCount}, " +
             $"schedulerWake={upload.SchedulerWakeEntryRefreshCount}/{upload.SchedulerWakeRefreshBudget}:saturated={upload.SchedulerWakeBudgetSaturated}, " +
             $"schedulerFullRebuilds={upload.SchedulerFullRebuildCount}, visibilityEntries={upload.VisibilityEntryRefreshCount}, " +
-            $"stateDirtySlots/runs={upload.StateDirtySlotCount}/{upload.StateUploadRunCount}.");
+            $"stateDirtySlots/runs={upload.StateDirtySlotCount}/{upload.StateUploadRunCount}, " +
+            $"receiver capacity/bytes/generation/published/invalidationBytes/ranges/fullClear=" +
+            $"{diagnostics.SimpleDdgiReceiverProbeCapacity}/{diagnostics.SimpleDdgiReceiverProbeBytes}/" +
+            $"{diagnostics.SimpleDdgiReceiverResourceGeneration}/{diagnostics.SimpleDdgiReceiverRecordsPublished}/" +
+            $"{diagnostics.SimpleDdgiReceiverInvalidationBytes}/{diagnostics.SimpleDdgiReceiverInvalidationRangeCount}/" +
+            $"{diagnostics.SimpleDdgiReceiverFullClear}.");
     }
 
 

@@ -46,6 +46,59 @@ DDGI diagnostics distinguish geometric coverage from usable lighting support.
 
 `traceDispatchGroups`, `traceProbeCount`, `traceRayCount`, `blendProbeCount`, `relocateClassifyProbeCount`, and `publishProbeCount` report the actual DDGI update workload. In GPU scheduler mode these values come from completed scheduler readback and are reported as pending until readback is valid. For the trace shader, one dispatch group maps to one updated probe.
 
+## Sparse Probe Residency
+
+`SimpleDdgiProbeResidency.Mode` distinguishes three contracts:
+
+- `Dense` uses identity physical addressing and does not run a page transaction.
+- `Shadow` keeps dense payload addressing while the depth predictor and representative receiver gathers stamp virtual near-ring pages for qualification.
+- `SparseNearRing` makes the bounded near-ring page table authoritative. Authored, mid, and far volumes remain dense, and a containing dense coarser ring supplies missing fine ownership.
+
+Shipping residency feedback is a generation-stamped 1 KiB summary copied only after scheduler commit. It never contains a page list. `FeedbackValid=false` means the first fence-complete summary is pending or a stale resource generation was rejected; it does not mean a zero-valued page population.
+
+The key capacity fields are:
+
+- `VirtualProbeCount` and `VirtualPageCount`: unchanged topology and the near-ring 2×2×2 page grid.
+- `DensePhysicalProbeCount`: payload reserved for dense authored/mid/far volumes.
+- `SparsePhysicalPageCapacity` and `PhysicalProbeCapacity`: immutable allocation capacity, independent of current occupancy.
+- `ResidentPageCount`, `FreePageCount`, `InitializingPageCount`, and `PublishedPageCount`: current mapping lifecycle.
+- `OrdinaryAllocationToPublication*Frames` and `CutAllocationToPublication*Frames`: independent P50/P95/maximum first-publication latency distributions; the aggregate fields remain available for continuity.
+- `GpuSimpleDdgiPageDemandMicroseconds`, `GpuSimpleDdgiPageResidencyMicroseconds`, and `GpuSimpleDdgiPageFeedbackMicroseconds`: independently timestamped page stages.
+- `NonResidentVirtualProbeCount`, `ActiveResidentProbeCount`, `InactiveResidentProbeCount`, and `ConvergedResidentProbeCount`: distinct residency, geometry-classification, and solver populations.
+
+Memory evidence reports `PhysicalPayloadBytes`, `PageArenaBytes`, `FeedbackReadbackBytes`, `DenseEquivalentBytes`, `AllocatedCapacityBytes`, and `AvoidedBytes`. Layout telemetry additionally reports edge-page padding and sampled-atlas 256-layer rounding. Savings always compare concrete capacity allocations; a low resident count is never reported as released memory.
+
+Demand and churn evidence includes visible/receiver page counts, request overflow, retained age buckets, admissions, evictions, failed admissions, pressure streaks, suppression/retry counts, and allocation-to-schedule/publication P50/P95/max. Ring records keep virtual, resident, active, inactive, demanded, and converged populations separate.
+
+Correctness counters must remain zero in a qualified capture:
+
+- page-table/reverse-map disagreement;
+- duplicate virtual or physical owners;
+- stale virtual, mapping, or resource requests that reach mutation;
+- out-of-range requests and bounded-request overflow;
+- nonresident payload-read validation failures.
+
+`NonResidentGatherRejectionCount` is expected during warmup or pressure and proves the fine payload was rejected before access. `CoarserFallbackCount` should rise with it when a dense containing ring supplies the missing ownership. A rejection without usable coarser fallback is a correctness failure, not a normal sparse miss.
+
+### Shadow predictor evidence
+
+In `Shadow`, the depth pass stamps predicted opaque pages and rate-limited receiver gathers stamp instrumented actual pages while all rendering remains dense. `PredictorComparisonValid` gates `PredictorFalseNegativePageCount`, `PredictorFalsePositivePageCount`, `PredictorFalseNegativeRate`, and `PredictorInflationRatio`. The initial trajectory gates are false-negative P95 ≤ 0.5%, inflation P95 ≤ 1.5×, and no page missed for more than two consecutive rendered frames.
+
+`SimpleDdgiResidencyWorkingSetAnalyzer` consumes validation page sets and exports an atomic JSON report containing per-frame unique demand, candidate retention working sets, 2×2×2 versus offline 4×2×4 geometry, coverage errors, P50/P95/P99/max pool requirements, deterministic capacity/churn simulations, and exact memory projections. This is offline qualification tooling; it is not used by the shipping scheduler.
+
+### Runtime failure state
+
+`MutationFrozen=true` means page eviction/reassignment has stopped. If `ResidencyStateValid=true`, the last validated complete map remains readable while a controlled retry is prepared. If false, the sparse fine volume fails closed and receivers use dense coarser lighting. `SparseAuthoritative`, `FallbackReason`, and the `simple-ddgi-probe-residency` feature-state row reflect this distinction. Re-entry always creates a new residency resource generation at a frame boundary.
+
+## Residency Debug Views
+
+- `DdgiProbeResidency`: virtual probe markers for published, fresh, demanded-missing, retained, suppressed, and nonresident states. Nonresident probes remain visible as neutral/hollow markers.
+- `DdgiResidencyFallback`: missing fine ownership and the coarser ring that supplied it.
+- `DdgiPageAge`: retention age and pressure visualization.
+- `DdgiPhysicalPage`: physical page identity and mapping generation for validation.
+
+The views are observational. They do not pin or request pages. Development tools must explicitly call `TrySetSimpleDdgiProbeResidencyDevelopmentPin` or `SetSimpleDdgiProbeResidencyDevelopmentFreeze`; these APIs require debug tooling to be enabled. Pin state, command count, last command, and development freeze state are exported in residency telemetry. Runtime-failure freeze is a separate latch and cannot be cleared through the development API.
+
 ## Troubleshooting
 
 | Symptom | Likely area |
@@ -57,6 +110,12 @@ DDGI diagnostics distinguish geometric coverage from usable lighting support.
 | `bucketCapDrop` high | Priority bucket top-k cap or source quota distribution |
 | `requestBudgetRejected` high | Request budget too small for current warmup/dirty workload |
 | `primaryRayBudgetRejected` high | Primary ray budget too small for selected probes |
+| `PredictorFalseNegativeRate` high in Shadow | Depth sampling, discontinuity coverage, or sample-bias mismatch |
+| `PredictorInflationRatio` high in Shadow | Predictor is over-conservative and may erase the sparse working-set benefit |
+| `FailedAdmissionCount` or pressure streak growing | Page capacity/retention mismatch or cut/teleport stress; inspect page age and fallback |
+| duplicate owner or reverse disagreement nonzero | Invalid residency transaction; mutation should freeze and the capture fails |
+| `MutationFrozen=true`, `ResidencyStateValid=false` | Sparse fine addressing was disabled; inspect `FallbackReason` and confirm dense coarser output |
+| nonresident rejections without coarser fallback | Dense containing-ring invariant or gather ownership composition failure |
 | `rawLum` high, `finalLum` low | Final composition or suppression mask |
 | `finalLum` visible, `rawLum` weak, `fallbackWeight` high | Environment fallback is masking weak DDGI bounce |
 | `ddgiActualRequests=pending` | First readback frames have not completed yet |

@@ -36,8 +36,12 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.SimpleDdgiRayQueryInstanceBuffer, Is.EqualTo(BindlessIndex.SimpleDdgiTransportSourceCacheBuffer + 1));
             Assert.That(BindlessIndex.SimpleDdgiEmissiveSourceBuffer, Is.EqualTo(BindlessIndex.SimpleDdgiRayQueryInstanceBuffer + 1));
             Assert.That(BindlessIndex.FarFieldClipmapParamsBuffer, Is.EqualTo(BindlessIndex.SimpleDdgiEmissiveSourceBuffer + 1));
+            Assert.That(BindlessIndex.SimpleDdgiReceiverProbeBuffer, Is.EqualTo(BindlessIndex.SimpleDdgiSchedulerArenaBuffer + 1));
+            Assert.That(BindlessIndex.SimpleDdgiResidencyArenaBuffer, Is.EqualTo(BindlessIndex.SimpleDdgiReceiverProbeBuffer + 1));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiRayQueryInstanceBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiRayQueryInstanceBuffer)));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiEmissiveSourceBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiEmissiveSourceBuffer)));
+            Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiReceiverProbeBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiReceiverProbeBuffer)));
+            Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiResidencyArenaBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiResidencyArenaBuffer)));
         });
     }
 
@@ -57,6 +61,8 @@ public sealed class BindlessIndexTests
             ["SIMPLE_DDGI_TRANSPORT_SOURCE_CACHE_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiTransportSourceCacheBuffer,
             ["SIMPLE_DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiRayQueryInstanceBuffer,
             ["SIMPLE_DDGI_EMISSIVE_SOURCE_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiEmissiveSourceBuffer,
+            ["SIMPLE_DDGI_RECEIVER_PROBE_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiReceiverProbeBuffer,
+            ["SIMPLE_DDGI_RESIDENCY_ARENA_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiResidencyArenaBuffer,
             ["FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapParamsBuffer,
             ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount
         };

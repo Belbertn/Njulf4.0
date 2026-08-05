@@ -1233,7 +1233,7 @@ namespace Njulf.Rendering.Data
         public Vector4 RadianceSelectionProbability;
     }
 
-    // 208 bytes. Fixed-grid DDGI params, mirrored by ddgi_simple_shared.glsl.
+    // 240 bytes. Fixed-grid DDGI params, mirrored by ddgi_simple_shared.glsl.
     // The final two vectors are the V2 transport contract.  They deliberately
     // live in the params header instead of pass-local state so every shader that
     // samples DDGI can identify the published (receiver-visible) atlas.
@@ -1262,6 +1262,13 @@ namespace Njulf.Rendering.Data
         // X = solver relaxation, Y = diffuse-albedo clamp, Z = tail-relative
         // tolerance, W = bounded cached accelerated sweep count.
         public Vector4 TransportControls;
+        // X = residency arena bindless index, Y = virtual page count,
+        // Z = physical payload probe capacity, W = residency resource
+        // generation. Integer values use PackHeaderWord.
+        public Vector4 ResidencyAndCounts;
+        // X = SimpleDdgiProbeResidencyMode, Y = dense physical probe count,
+        // Z = sparse physical page capacity, W = residency feature flags.
+        public Vector4 ResidencyControls;
     }
 
     // 96 bytes. Appended after GPUSimpleDdgiParams in the simple DDGI params buffer.
@@ -1272,8 +1279,256 @@ namespace Njulf.Rendering.Data
         public Vector4 GridCountsAndFirstProbe;
         public Vector4 WorldMinAndEdgeFade;
         public Vector4 WorldMaxAndKind;
+        // X/Y = queue start/count, Z = required complete source-ray
+        // cardinality, W reserved.
         public Vector4 UpdateStartAndCount;
         public Vector4 RaysAndReserved;
+    }
+
+    // 32 bytes. Parallel to GPUSimpleDdgiVolume and mirrored by
+    // ddgi_simple_page_shared.glsl. All values are integer identities; keeping
+    // them out of float-packed volume metadata avoids precision loss at the
+    // hard virtual-probe limit.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiVolumePaging
+    {
+        public uint VirtualFirstProbe;
+        public uint PageTableFirst;
+        public uint DensePhysicalFirstProbe;
+        public uint ResidencyMode;
+        public uint PageGridX;
+        public uint PageGridY;
+        public uint PageGridZ;
+        public uint SparsePoolFirstProbe;
+    }
+
+    // 64-byte fixed residency transaction header. Frame serial and resource
+    // generation stamp every delayed feedback record; MappingGenerationCounter
+    // is the one monotonic, non-zero allocator for page owner tokens.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiResidencyHeader
+    {
+        public uint FrameSerialLow;
+        public uint FrameSerialHigh;
+        public uint ResidencyResourceGeneration;
+        public uint MappingGenerationCounter;
+        public uint ResidencyMode;
+        public uint VirtualProbeCount;
+        public uint VirtualPageCount;
+        public uint DensePhysicalProbeCount;
+        public uint SparsePhysicalPageCapacity;
+        public uint PhysicalProbeCapacity;
+        public uint VolumeCount;
+        public uint RetentionFrames;
+        public uint MaximumAdmissionsPerFrame;
+        public uint MaximumReceiverFeedbackRequests;
+        public uint InactiveRetryFrames;
+        public uint Flags;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiPageTableEntry
+    {
+        public uint PhysicalPagePlusOne;
+        public uint MappingGeneration;
+        public uint Flags;
+        // Shadow-only packed opaque gather-oracle epoch. It is not mapping
+        // identity and remains zero/ignored in authoritative sparse mode.
+        public uint OpaqueGatherOracleStamp;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiPageHistory
+    {
+        public uint VisibleDemandEpoch;
+        public uint ReceiverDemandEpoch;
+        public uint LastRelevantFrame;
+        public uint FlagsAndGeometryRevision;
+    }
+
+    // Explicit development-only command embedded in the fixed demand-counter
+    // region. Shipping demand producers never write this record.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiPageDevelopmentControl
+    {
+        public uint CommandSerial;
+        public uint VirtualPagePlusOne;
+        public uint Flags;
+        public uint Reserved0;
+    }
+
+    // 48 bytes. Full reverse identity is checked before any sparse payload
+    // access. Frame values are diagnostic/retention metadata and never serve as
+    // completion tokens for resource destruction.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiPhysicalPageMetadata
+    {
+        public uint OwnerVirtualPagePlusOne;
+        public uint MappingGeneration;
+        public uint ResidencyResourceGeneration;
+        public uint FlagsAndDemandClass;
+        public uint LastRelevantFrame;
+        public uint LastPublishedFrame;
+        public uint SourceGeneration;
+        public uint CohortGeneration;
+        // Encoded as frame + 1 so frame zero remains distinguishable from an
+        // event that has not happened. These stamps are diagnostic witnesses;
+        // resource retirement continues to use completion tokens exclusively.
+        public uint AllocationFramePlusOne;
+        public uint FirstScheduleFramePlusOne;
+        public uint FirstPublicationFramePlusOne;
+        // SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_* flags. These classify
+        // diagnostic latency samples without using frame age as authority.
+        public uint AllocationFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiPageInitWork
+    {
+        public uint VirtualPageIndex;
+        public uint PhysicalPageIndex;
+        public uint MappingGeneration;
+        public uint Flags;
+    }
+
+    // The shipping copy is the layout's fixed 1 KiB feedback region. The
+    // stable scalar prefix occupies 256 bytes and future fields can be appended
+    // without changing copy size or permitting a page-table readback.
+    [StructLayout(LayoutKind.Sequential, Pack = 4, Size = 1024)]
+    public struct GPUSimpleDdgiResidencyFeedback
+    {
+        public uint FrameSerialLow;
+        public uint FrameSerialHigh;
+        public uint ResidencyResourceGeneration;
+        public uint MappingGenerationCounter;
+        public uint VirtualProbeCount;
+        public uint VirtualPageCount;
+        public uint DensePhysicalProbeCount;
+        public uint SparsePhysicalPageCapacity;
+        public uint PhysicalProbeCapacity;
+        public uint ResidentPageCount;
+        public uint FreePageCount;
+        public uint InitializingPageCount;
+        public uint PublishedPageCount;
+        public uint SuppressedPageCount;
+        public uint VisibleDemandPageCount;
+        public uint ReceiverDemandPageCount;
+        public uint RetainedPageCount;
+        public uint AdmissionCount;
+        public uint EvictionCount;
+        public uint FailedAdmissionCount;
+        public uint PoolPressureFrameCount;
+        public uint ConsecutivePressureFrames;
+        public uint MaximumConsecutivePressureFrames;
+        public uint PageTableReverseDisagreementCount;
+        public uint DuplicateVirtualOwnerCount;
+        public uint DuplicatePhysicalOwnerCount;
+        public uint StaleVirtualRequestCount;
+        public uint StaleMappingRequestCount;
+        public uint StaleResourceRequestCount;
+        public uint OutOfRangeRequestCount;
+        public uint NonResidentGatherRejectionCount;
+        public uint CoarserFallbackCount;
+        public uint SuppressionCount;
+        public uint RetryCount;
+        public uint AllocationToScheduleP50;
+        public uint AllocationToScheduleP95;
+        public uint AllocationToScheduleMax;
+        public uint AllocationToPublicationP50;
+        public uint AllocationToPublicationP95;
+        public uint AllocationToPublicationMax;
+        public uint Flags;
+        public uint EventSourceGeneration;
+        public uint EventCohortGeneration;
+        public uint AdmissionProbeCount;
+        public uint EvictionProbeCount;
+        public uint OtherGenerationEvictionProbeCount;
+        public uint ReceiverRequestOverflowCount;
+        public uint NonResidentVirtualProbeCount;
+        public uint InactiveResidentProbeCount;
+        public uint ActiveResidentProbeCount;
+        public uint ResidentProbeCount;
+        public uint ConvergedResidentProbeCount;
+        public uint VisibleDemandResidentHitPageCount;
+        public uint VisibleDemandMissingPageCount;
+        public uint RetainedAge0To15PageCount;
+        public uint RetainedAge16To63PageCount;
+        public uint RetainedAge64To255PageCount;
+        public uint RetainedAge256PlusPageCount;
+        public uint DemandEpoch;
+        public uint ReceiverRequestCount;
+        public uint PredictorFalseNegativePageCount;
+        public uint PredictorFalsePositivePageCount;
+        public uint OpaqueGatherDemandPageCount;
+        public uint PredictorTruePositivePageCount;
+        public uint NearVirtualProbeCount;
+        public uint NearResidentProbeCount;
+        public uint NearActiveResidentProbeCount;
+        public uint NearInactiveResidentProbeCount;
+        public uint NearDemandedPageCount;
+        public uint NearConvergedResidentProbeCount;
+        public uint MidVirtualProbeCount;
+        public uint MidResidentProbeCount;
+        public uint MidActiveResidentProbeCount;
+        public uint MidInactiveResidentProbeCount;
+        public uint MidDemandedPageCount;
+        public uint MidConvergedResidentProbeCount;
+        public uint FarVirtualProbeCount;
+        public uint FarResidentProbeCount;
+        public uint FarActiveResidentProbeCount;
+        public uint FarInactiveResidentProbeCount;
+        public uint FarDemandedPageCount;
+        public uint FarConvergedResidentProbeCount;
+        public uint OrdinaryAllocationToPublicationP50;
+        public uint OrdinaryAllocationToPublicationP95;
+        public uint OrdinaryAllocationToPublicationMax;
+        public uint CutAllocationToPublicationP50;
+        public uint CutAllocationToPublicationP95;
+        public uint CutAllocationToPublicationMax;
+        public uint DevelopmentPinnedPageCount;
+    }
+
+    // 112-byte depth-demand ABI. One shader invocation predicts one 8x8
+    // receiver tile and stamps a packed epoch/distance demand record.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiPageDemandPushConstants
+    {
+        public Matrix4x4 InverseViewProjectionMatrix;
+        public Vector4 CameraPositionAndPadding;
+        public uint ScreenWidth;
+        public uint ScreenHeight;
+        public uint ParamsBufferIndex;
+        public uint DepthTextureIndex;
+        public uint DemandEpoch;
+        public uint SampleCount;
+        public uint Flags;
+        public uint Reserved0;
+    }
+
+    // 72-byte common ABI for reset/classify/prefix/reconcile/initialize/
+    // feedback. FrameSerialLow/High occupy Reserved0/1 for the fixed delayed
+    // summary; CurrentFrame remains the virtual-state age clock.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiPageResidencyPushConstants
+    {
+        public uint ParamsBufferIndex;
+        public uint ProbeStateBufferIndex;
+        public uint RelocationClassificationBufferIndex;
+        public uint ReceiverProbeBufferIndex;
+        public uint TransportSourceCacheBufferIndex;
+        public uint SchedulerArenaBufferIndex;
+        public uint SchedulerProbeStateOffsetWords;
+        public uint SchedulerActiveProbeCount;
+        public uint CurrentFrame;
+        public uint DemandEpoch;
+        public uint ResourceGeneration;
+        public uint GeometryGeneration;
+        public uint SourceGeneration;
+        public uint CohortGeneration;
+        public uint CameraCut;
+        public uint Stage;
+        public uint Reserved0;
+        public uint Reserved1;
     }
 
     // 32 bytes. RadianceDistance.w retains full-precision surface distance.
@@ -1289,18 +1544,26 @@ namespace Njulf.Rendering.Data
     // 36 bytes. Persistent source transport cache. A cache entry represents one
     // physical probe slot and one deterministic ray direction, so direct/sky/
     // emissive source tracing can be reused across multiple bounce iterations.
+    // Source radiance and distance use four IEEE binary16 lanes. Radiance is
+    // already bounded to the finite binary16 range by the transport contract;
+    // retaining the original 36-byte footprint leaves room for exact, full-width
+    // source-generation and source-epoch identity without reducing probe/ray
+    // capacity at the existing production memory tiers.
     // The high byte of PackedTransmission stores the complete source sequence
     // cardinality; zero encodes the supported maximum of 256 and its RGB bytes
     // remain the packed transmission lobe.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiTransportRayCache
     {
-        public Vector4 SourceRadianceDistance;
+        public uint PackedSourceRadianceXY;
+        public uint PackedSourceRadianceZDistance;
         public uint PackedDirection;
         public uint PackedNormal;
         public uint PackedAlbedo;
         public uint PackedTransmission;
         public uint GenerationAndFlags;
+        public uint SourceLightingGeneration;
+        public uint SourceEpoch;
     }
 
     // 32 bytes. Simple DDGI per-probe state: relocation.xyz/active, then flags/age/classification/debug.
@@ -1314,7 +1577,24 @@ namespace Njulf.Rendering.Data
         public uint Reserved0;
     }
 
-    // 32 bytes. Simple DDGI update queue entry.
+    // 16 bytes. Receiver-only projection of the authoritative 32-byte probe
+    // state. The first two words pack spacing-relative relocation and active
+    // weight, the third word contains receiver rejection/publication flags,
+    // and the final word is the canonical atlas probe address. Compute and
+    // scheduler shaders must continue to use GPUSimpleDdgiProbeState.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiReceiverProbe
+    {
+        public uint PackedRelocationXY;
+        public uint PackedRelocationZWeight;
+        public uint Flags;
+        public uint AtlasProbeAddress;
+    }
+
+    // 48 bytes. Simple DDGI update queue entry. The predecessor scheduler
+    // consumes the original words 6/7 for outcome identity and exact source
+    // epoch, so sparse physical identity is appended instead of aliasing either
+    // correctness field. Twelve words retain 16-byte record alignment.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiProbeUpdate
     {
@@ -1325,11 +1605,19 @@ namespace Njulf.Rendering.Data
         // Full source sequence cardinality used by V2 cache lookup. It remains
         // valid when Flags carries a smaller maintenance-ray count.
         public uint SourceRayCount;
-        // CPU completion metadata for the lighting generation that produced the
-        // source cache. Shaders intentionally do not depend on this value.
+        // Metadata for the lighting generation that produced the source cache.
         public uint SourceLightingGeneration;
         public uint OutcomeIndex;
-        public uint Reserved4;
+        // Exact source epoch expected after this transaction. Cached-only work
+        // carries the already committed epoch; a source refresh carries the
+        // next epoch that will become visible at commit.
+        public uint SourceEpoch;
+        public uint PhysicalProbeIndex;
+        public uint PageMappingGeneration;
+        // Full residency-arena transaction identity. This complements the
+        // per-page mapping generation and closes ABA across arena replacement.
+        public uint ResidencyResourceGeneration;
+        public uint Reserved2;
     }
 
     // 48 bytes. Mirrors SIMPLE_DDGI_RELOCATION_CLASSIFICATION_STRIDE_WORDS.
@@ -1547,6 +1835,13 @@ namespace Njulf.Rendering.Data
         // rejects the summary even if the wrapped value happens to match the
         // expected population.
         public uint CounterOverflow;
+        // Fail-closed cache rejection attribution. These counts are per probe,
+        // not per ray, and may overlap when one probe violates multiple fields.
+        public uint CacheIdentityFailureCount;
+        public uint CacheCardinalityFailureCount;
+        public uint CacheSourceGenerationFailureCount;
+        public uint CacheSourceEpochFailureCount;
+        public uint CachePhysicalGenerationFailureCount;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1556,6 +1851,7 @@ namespace Njulf.Rendering.Data
         public uint IrradianceAtlasBufferIndex;
         public uint VisibilityAtlasBufferIndex;
         public uint ProbeStateBufferIndex;
+        public uint ReceiverProbeBufferIndex;
         public uint ProbeUpdateQueueBufferIndex;
         public uint TransportIrradianceAtlasBufferIndex;
         public uint PrivateVisibilityAtlasOffsetWords;
@@ -1772,7 +2068,9 @@ namespace Njulf.Rendering.Data
         public uint SourceAchievedRays;
         public uint SourceCapacityShortfall;
         public uint InvalidGenerationCount;
-        public uint DuplicateCount;
+        // Total admitted ray evaluations, including complete source sequences
+        // and cached transport-solver evaluations.
+        public uint TransportRayUsed;
         public uint OverflowCount;
         public uint FailedCommitCount;
         public uint PendingFreshCount;
@@ -1794,11 +2092,14 @@ namespace Njulf.Rendering.Data
         public uint PublishedPropagationGeneration;
         public uint StaticConvergedGeneration;
         public uint StaticConvergencePending;
-        public uint StaleReadbackRejectionCount;
-        public uint ResourceGenerationRejectionCount;
-        public uint DirtyFirstScheduledP95;
-        public uint DirtyFirstCommittedP95;
-        public uint DirtyConvergenceP95;
+        public uint HardSourceProbeUsed;
+        public uint RoutineSourceProbeUsed;
+        public uint CachedSolverProbeUsed;
+        // Low/high 16-bit source-repair attribution pairs. The resident field
+        // is capped at 32,768 probes, so every exact cause count fits without
+        // expanding the fixed 256-byte feedback/readback ABI.
+        public uint PackedPendingSourceInvalidAndCardinalityCounts;
+        public uint PackedPendingSourceRepairAndGenerationCounts;
         public uint RayBucket0Count;
         public uint RayBucket1Count;
         public uint RayBucket2Count;
@@ -1816,10 +2117,10 @@ namespace Njulf.Rendering.Data
         public uint SolveEpochParticipantCount;
         public uint SolveEpochVisitedCount;
         public uint SolveEpoch;
-        // Accepted-order index into the scheduler outcome array. The public
-        // queue ABI keeps this word even in CPU/V1 mode so all consumers share
-        // one 32-byte record layout.
-        public uint OutcomeIndex;
+        // Number of admitted transactions which execute a complete source-ray
+        // sequence. This is distinct from AcceptedCount, which also includes
+        // cached solver-only work.
+        public uint SourceProbeUsed;
         // Number of resident transactions that copied the private transport
         // atlas to the receiver-visible canonical atlas this frame.
         public uint PublishedCount;
@@ -1863,7 +2164,9 @@ namespace Njulf.Rendering.Data
         public uint TransportIrradianceAtlasBufferIndex;
         public uint PrivateVisibilityAtlasOffsetWords;
         public uint Stage;
-        public uint Reserved0;
+        // Reuses the final reserved word so this ABI remains within Vulkan's
+        // guaranteed 128-byte push-constant range.
+        public uint ReceiverProbeBufferIndex;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

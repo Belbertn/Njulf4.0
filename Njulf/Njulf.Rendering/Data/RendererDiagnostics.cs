@@ -20,7 +20,12 @@ namespace Njulf.Rendering.Data
         SampledAtlasBudget = 1u << 8,
         TransportMode = 1u << 9,
         LiveResourceMismatch = 1u << 10,
-        FeatureDisabled = 1u << 11
+        FeatureDisabled = 1u << 11,
+        SchedulerMode = 1u << 12,
+        SchedulerCapacity = 1u << 13,
+        SchedulerValidation = 1u << 14,
+        ResidencyMode = 1u << 15,
+        ResidencyCapacity = 1u << 16
     }
 
     /// <summary>
@@ -117,6 +122,11 @@ namespace Njulf.Rendering.Data
         public uint TailExcludedNotVisibleCount { get; init; }
         public uint TailExcludedStaleSourceCount { get; init; }
         public uint TailExcludedInvalidCacheCount { get; init; }
+        public uint TailCacheIdentityFailureCount { get; init; }
+        public uint TailCacheCardinalityFailureCount { get; init; }
+        public uint TailCacheSourceGenerationFailureCount { get; init; }
+        public uint TailCacheSourceEpochFailureCount { get; init; }
+        public uint TailCachePhysicalGenerationFailureCount { get; init; }
         public uint TailNonFiniteCount { get; init; }
         public uint TailCounterOverflowCount { get; init; }
         public uint TailExpectedTexelCount { get; init; }
@@ -173,6 +183,7 @@ namespace Njulf.Rendering.Data
         public SimpleDdgiCapacityResourceTelemetry TransportSourceCache { get; init; }
         public SimpleDdgiCapacityResourceTelemetry RayScratch { get; init; }
         public SimpleDdgiCapacityResourceTelemetry ProbeState { get; init; }
+        public SimpleDdgiCapacityResourceTelemetry ReceiverProbes { get; init; }
         public SimpleDdgiCapacityResourceTelemetry UpdateQueue { get; init; }
         public SimpleDdgiCapacityResourceTelemetry RelocationClassification { get; init; }
         public SimpleDdgiCapacityResourceTelemetry ReadbackBuffers { get; init; }
@@ -243,6 +254,14 @@ namespace Njulf.Rendering.Data
         public int StreamingCellId { get; init; }
         public int QualityClass { get; init; }
         public int PhysicalProbeCapacity { get; init; }
+        public SimpleDdgiProbeResidencyMode ProbeResidencyMode { get; init; } =
+            SimpleDdgiProbeResidencyMode.Dense;
+        public int VirtualPageCount { get; init; }
+        public int ResidentProbeCount { get; init; }
+        public int ActiveResidentProbeCount { get; init; }
+        public int InactiveResidentProbeCount { get; init; }
+        public int DemandedPageCount { get; init; }
+        public int ConvergedResidentProbeCount { get; init; }
         public float OriginX { get; init; }
         public float OriginY { get; init; }
         public float OriginZ { get; init; }
@@ -1060,6 +1079,9 @@ namespace Njulf.Rendering.Data
         public int GlobalIlluminationRequested { get; init; }
         public GlobalIlluminationMode GlobalIlluminationRequestedMode { get; init; } = GlobalIlluminationMode.Disabled;
         public GlobalIlluminationDebugView GlobalIlluminationRequestedDebugView { get; init; } = GlobalIlluminationDebugView.None;
+        /// <summary>1 when the running shader bundle contains the requested GI debug branch.</summary>
+        public int GlobalIlluminationRequestedDebugViewAvailable { get; init; } = 1;
+        public string GlobalIlluminationDebugViewAvailabilityReason { get; init; } = string.Empty;
         /// <summary>1 when the live rollback switch deliberately suppresses dynamic GI.</summary>
         public int GlobalIlluminationEmergencyFallbackEnabled { get; init; }
         public string GlobalIlluminationFallbackReason { get; init; } = string.Empty;
@@ -1152,6 +1174,10 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiTransportGlobalConvergenceElapsedFrames { get; init; }
         public SimpleDdgiTransportConvergenceTelemetry SimpleDdgiTransportConvergence { get; init; } =
             SimpleDdgiTransportConvergenceTelemetry.Empty;
+        public SimpleDdgiTrackingState SimpleDdgiTrackingState { get; init; } =
+            global::Njulf.Rendering.Resources.SimpleDdgiTrackingState.Bootstrapping;
+        public int SimpleDdgiTransportCachedSweepCount { get; init; }
+        public int SimpleDdgiTransportAuditChunkCount { get; init; }
         public ulong SimpleDdgiTransportCalibrationChangeCount { get; init; }
         public ulong SimpleDdgiTransportIrradianceAtlasBytes { get; init; }
         public ulong SimpleDdgiTransportSourceCacheBytes { get; init; }
@@ -1161,6 +1187,8 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiTransportAcceleratedSweepCount { get; init; }
         public bool SimpleDdgiTransportAccelerationEnabled { get; init; }
         public bool SimpleDdgiTransportTailCertificationEnabled { get; init; }
+        public string SimpleDdgiTransportTailCertificationFallbackReason { get; init; } =
+            string.Empty;
         /// <summary>Legacy alias retained for capture-schema compatibility only.</summary>
         public float SimpleDdgiTransportResidualThreshold { get; init; }
         /// <summary>Legacy deserialization value; never a V2 convergence gate.</summary>
@@ -1211,6 +1239,21 @@ namespace Njulf.Rendering.Data
         public ulong SimpleDdgiSampledAtlasImageBytes { get; init; }
         public ulong SimpleDdgiRayScratchBytes { get; init; }
         public ulong SimpleDdgiProbeStateBytes { get; init; }
+        public ulong SimpleDdgiReceiverProbeBytes { get; init; }
+        public int SimpleDdgiReceiverProbeCapacity { get; init; }
+        /// <summary>Fail-closed compact receiver bytes written by the CPU this frame.</summary>
+        public ulong SimpleDdgiReceiverInvalidationBytes { get; init; }
+        /// <summary>Contiguous transfer ranges used for compact receiver invalidation this frame.</summary>
+        public int SimpleDdgiReceiverInvalidationRangeCount { get; init; }
+        /// <summary>1 when invalidation used a whole-buffer transfer fill this frame.</summary>
+        public int SimpleDdgiReceiverFullClear { get; init; }
+        /// <summary>
+        /// Generation of the ownership/resource contract that gives compact
+        /// receiver atlas addresses their meaning.
+        /// </summary>
+        public uint SimpleDdgiReceiverResourceGeneration { get; init; }
+        /// <summary>Completed GPU publications projected into compact receiver records.</summary>
+        public int SimpleDdgiReceiverRecordsPublished { get; init; }
         public ulong SimpleDdgiProbeUpdateQueueBytes { get; init; }
         public ulong SimpleDdgiRelocationClassificationBytes { get; init; }
         public ulong SimpleDdgiProbeStateReadbackBytes { get; init; }
@@ -1541,15 +1584,47 @@ namespace Njulf.Rendering.Data
         public long GpuDdgiPublishMicroseconds { get; init; }
         public long GpuDdgiUpdateMicroseconds { get; init; }
         public long GpuSimpleDdgiTraceMicroseconds { get; init; }
+        public long GpuSimpleDdgiPageDemandMicroseconds { get; init; }
+        public long GpuSimpleDdgiPageResidencyMicroseconds { get; init; }
+        public long GpuSimpleDdgiPageFeedbackMicroseconds { get; init; }
         public long GpuSimpleDdgiScheduleMicroseconds { get; init; }
         public long GpuSimpleDdgiTransportMicroseconds { get; init; }
+        public long GpuSimpleDdgiAcceleratedSolveMicroseconds { get; init; }
         public long GpuSimpleDdgiBlendMicroseconds { get; init; }
+        public long GpuSimpleDdgiRelocateClassifyMicroseconds { get; init; }
+        public long GpuSimpleDdgiPublishMicroseconds { get; init; }
+        public long GpuSimpleDdgiTransportAuditMicroseconds { get; init; }
         public long GpuSimpleDdgiCommitMicroseconds { get; init; }
         public SimpleDdgiSchedulerMode SimpleDdgiSchedulerMode { get; init; } = SimpleDdgiSchedulerMode.CpuReference;
         public int SimpleDdgiSchedulerReady { get; init; }
+        public int SimpleDdgiSchedulerFeedbackValid { get; init; }
+        public ulong SimpleDdgiSchedulerFeedbackFrameSerial { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackConsideredCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackEligibleCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackAcceptedCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackCommittedCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackFailedCommitCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackPendingFreshCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackPendingSourceCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackPendingSourceInvalidFlagCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackPendingSourcePrivateRepairCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackPendingSourceCardinalityCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackPendingSourceGenerationCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackSolveParticipantCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackSolveVisitedCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackSolveEpoch { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackPrimaryRayCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackSourceRayCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackTransportRayCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackSourceProbeCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackHardSourceProbeCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackRoutineSourceProbeCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackCachedSolverProbeCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackPublishedCount { get; init; }
         public uint SimpleDdgiSchedulerResourceGeneration { get; init; }
         public ulong SimpleDdgiSchedulerArenaBytes { get; init; }
         public ulong SimpleDdgiSchedulerFeedbackReadbackBytes { get; init; }
+        public ulong SimpleDdgiSchedulerAuditReadbackBytes { get; init; }
         public ulong SimpleDdgiSchedulerRetiredBytes { get; init; }
         public ulong SimpleDdgiSchedulerStaleFeedbackCount { get; init; }
         public ulong SimpleDdgiSchedulerFeedbackGenerationRejectionCount { get; init; }
@@ -1557,6 +1632,12 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiSchedulerFallbackFreshResetPending { get; init; }
         public ulong SimpleDdgiSchedulerFallbackCount { get; init; }
         public string SimpleDdgiSchedulerFallbackReason { get; init; } = string.Empty;
+        public int SimpleDdgiSchedulerFallbackExportPending { get; init; }
+        public ulong SimpleDdgiSchedulerFallbackExportBytes { get; init; }
+        public ulong SimpleDdgiSchedulerStateExportSuccessCount { get; init; }
+        public ulong SimpleDdgiSchedulerStateExportFailureCount { get; init; }
+        public int SimpleDdgiSchedulerReentryStableFrameCount { get; init; }
+        public ulong SimpleDdgiSchedulerReentryCount { get; init; }
         public long GpuGiCompositeMicroseconds { get; init; }
         public ulong DdgiTextureBytes { get; init; }
         public ulong DdgiBufferBytes { get; init; }
@@ -1679,6 +1760,9 @@ namespace Njulf.Rendering.Data
         /// <summary>Requested/accepted Simple-DDGI layout, including rejected source volumes.</summary>
         public SimpleDdgiLayoutTelemetry SimpleDdgiLayout { get; init; } =
             SimpleDdgiLayoutTelemetry.Unavailable("Simple DDGI layout was not captured.");
+        public SimpleDdgiProbeResidencyTelemetry SimpleDdgiProbeResidency { get; init; } =
+            SimpleDdgiProbeResidencyTelemetry.Unavailable(
+                "Simple DDGI probe residency was not captured.");
         /// <summary>Resolved Simple-DDGI scheduling/cap evidence for this frame.</summary>
         public SimpleDdgiSchedulingTelemetry SimpleDdgiScheduling { get; init; } =
             SimpleDdgiSchedulingTelemetry.Unavailable("Simple DDGI scheduling was not captured.");

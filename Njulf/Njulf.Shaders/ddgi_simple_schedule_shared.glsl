@@ -2,6 +2,8 @@
 #define NJULF_DDGI_SIMPLE_SCHEDULE_SHARED_GLSL
 
 #include "common.glsl"
+#include "ddgi_simple_receiver_abi.glsl"
+#include "ddgi_simple_scheduler_metadata_abi.glsl"
 
 // This file is the shader-side mirror of SimpleDdgiGpuSchedulerLayout and
 // GPUSimpleDdgiSchedulePushConstants. Keep all offsets in words and derive
@@ -27,11 +29,12 @@ const uint SIMPLE_DDGI_SCHEDULER_GROUP_LANE_VALUES_PER_WORD = 2u;
 // and use the ten-word private stride for the resident arena mirror.
 const uint SIMPLE_DDGI_PROBE_STATE_WORDS = 8u;
 const uint SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS = 10u;
-// The public queue remains an eight-word ABI; the internal scheduler record
-// is seven words and is expanded by SchedulerCopyUpdateToQueue. Classification
-// proposal bits use scheduler-private high flag bits until emit strips them.
-const uint SIMPLE_DDGI_PROBE_UPDATE_STRIDE_WORDS = 8u;
-const uint SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS = 7u;
+// The public queue is twelve words so the predecessor's exact outcome/source
+// epoch fields and sparse physical identity coexist while every record remains
+// 16-byte aligned. The internal proposal appends physical index and mapping
+// generation to its original seven words.
+const uint SIMPLE_DDGI_PROBE_UPDATE_STRIDE_WORDS = 12u;
+const uint SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS = 9u;
 const uint SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS = 15u;
 // The transaction-private relocation proposal reuses the existing 48-byte
 // relocation/classification storage ABI. Commit is a scheduler-only shader,
@@ -98,13 +101,6 @@ const uint SIMPLE_DDGI_SCHEDULER_REASON_TOPOLOGY = 1u << 11u;
 // dirty-reason word. The low reason bits are transient; these two bits survive
 // commit so the delayed atmosphere summary can identify the visible cohort
 // without a CPU probe scan.
-const uint SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBLE = 1u << 16u;
-const uint SIMPLE_DDGI_SCHEDULER_PROBE_META_PUBLISHED = 1u << 17u;
-const uint SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR = 1u << 30u;
-const uint SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBILITY_MASK =
-    SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBLE |
-    SIMPLE_DDGI_SCHEDULER_PROBE_META_PUBLISHED;
-
 const uint SIMPLE_DDGI_SCHEDULER_PROBE_FRESH = 1u << 0u;
 const uint SIMPLE_DDGI_SCHEDULER_PROBE_SCROLL = 1u << 1u;
 const uint SIMPLE_DDGI_SCHEDULER_PROBE_INACTIVE = 1u << 2u;
@@ -113,6 +109,7 @@ const uint SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED = 1u << 1u;
 const uint SIMPLE_DDGI_PROBE_FLAG_INACTIVE = 1u << 2u;
 const uint SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING = 1u << 3u;
 const uint SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID = 1u << 4u;
+const uint SIMPLE_DDGI_PROBE_FLAG_NON_RESIDENT = 1u << 5u;
 const uint SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT = 8u;
 const uint SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK = 0xffffff00u;
 const uint SIMPLE_DDGI_SCHEDULER_PROBE_RELOCATION = 1u << 3u;
@@ -160,9 +157,22 @@ const uint SIMPLE_DDGI_SCHEDULER_COUNTER_COMPACTED = 8u;
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_PUBLISHED = 7u;
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_PRIMARY_USED = 9u;
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_SOURCE_USED = 10u;
+// Exact admitted work witnesses. SOURCE_PROBE_USED counts transactions that
+// execute a complete source-ray sequence; TRANSPORT_USED includes both those
+// source transactions and cached solver evaluations.
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_TRANSPORT_USED = 11u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_SOURCE_PROBE_USED = 12u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_HARD_SOURCE_PROBE_USED = 13u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_ROUTINE_SOURCE_PROBE_USED = 14u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_CACHED_SOLVER_PROBE_USED = 15u;
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_BUCKET_BASE = 20u;
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_VOLUME_USAGE_BASE = 32u;
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_CLASS_USAGE_BASE = 16u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_PENDING_TAIL_SOURCE = 48u;
+// Admission rejection is a scheduling-pressure metric. Keep publication
+// failures separate so a failed resident transaction cannot be hidden by the
+// much larger population that was legitimately deferred by the frame budget.
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_COMMIT_REJECTED = 49u;
 
 const uint SIMPLE_DDGI_SCHEDULER_DISPATCH_RESET = 0u;
 const uint SIMPLE_DDGI_SCHEDULER_DISPATCH_CLASSIFY = 1u;
@@ -212,7 +222,7 @@ layout(push_constant) uniform SimpleDdgiScheduleBlock
     uint TransportIrradianceAtlasBufferIndex;
     uint PrivateVisibilityAtlasOffsetWords;
     uint Stage;
-    uint Reserved0;
+    uint ReceiverProbeBufferIndex;
 } pc;
 
 uint SchedulerArenaRead(uint wordOffset)
@@ -257,12 +267,19 @@ uint SchedulerDirtyRegionCount() { return SchedulerFrame(24u); }
 uint SchedulerDirtyReasonFlags() { return SchedulerFrame(26u); }
 uint SchedulerSourceTargetRays() { return SchedulerFrame(8u); }
 uint SchedulerFeatureFlags() { return SchedulerFrame(27u); }
+
+uint SchedulerAdvanceSourceEpoch(uint epoch)
+{
+    uint next = epoch + 1u;
+    return next == 0u ? 1u : next;
+}
 uint SchedulerInvalidationMarker() { return SchedulerFrame(38u); }
 bool SchedulerGpuResident() { return (SchedulerFeatureFlags() & 1u) != 0u; }
 bool SchedulerGpuMirror() { return (SchedulerFeatureFlags() & 2u) != 0u; }
 bool SchedulerTransportV2() { return (SchedulerFeatureFlags() & 4u) != 0u; }
 bool SchedulerToroidal() { return (SchedulerFeatureFlags() & 8u) != 0u; }
 bool SchedulerAtlasFresh() { return (SchedulerFeatureFlags() & 16u) != 0u; }
+bool SchedulerGlobalConvergence() { return (SchedulerFeatureFlags() & 32u) != 0u; }
 bool SchedulerDirtyOverflow() { return (SchedulerFeatureFlags() & 64u) != 0u; }
 bool SchedulerClassificationEnabled() { return (SchedulerFeatureFlags() & 128u) != 0u; }
 bool SchedulerSampledPublicationRequired() {
@@ -572,6 +589,446 @@ bool SchedulerTryReserve(uint counterWord, uint amount, uint limit)
     return false;
 }
 
+// Minimal sparse-address resolver for the scheduler ABI. Probe indices in the
+// resident scheduler already identify toroidal physical slots, which are also
+// the sparse page-table coordinate space. The complete receiver/update helper
+// lives in ddgi_simple_page_shared.glsl.
+bool SchedulerResolvePayloadAddress(
+    uint probeIndex,
+    uint volumeIndex,
+    out uint physicalProbeIndex,
+    out uint pageMappingGeneration)
+{
+    const uint paramsHeaderWords = 60u;
+    const uint volumeStrideWords = 24u;
+    const uint maxVolumes = 16u;
+    const uint pagingStrideWords = 8u;
+    const uint pagingBaseWords =
+        paramsHeaderWords + maxVolumes * volumeStrideWords;
+    const uint pageTableOffsetWords = 144u;
+    const uint pageTableEntryWords = 4u;
+    const uint pageHistoryWords = 4u;
+    const uint physicalMetadataWords = 12u;
+    const uint sparseMode = 2u;
+    const uint tableValid = 1u << 0u;
+    const uint tableSuppressed = 1u << 3u;
+    const uint invalidIndex = 0xffffffffu;
+
+    physicalProbeIndex = invalidIndex;
+    pageMappingGeneration = 0u;
+    if (volumeIndex >= SchedulerActiveVolumeCount())
+        return false;
+
+    uint pagingBase = pagingBaseWords +
+        volumeIndex * pagingStrideWords;
+    uint virtualFirst = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        pagingBase + 0u);
+    uint pageTableFirst = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        pagingBase + 1u);
+    uint densePhysicalFirst = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        pagingBase + 2u);
+    uint mode = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        pagingBase + 3u);
+    uint pageGridX = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        pagingBase + 4u);
+    uint pageGridY = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        pagingBase + 5u);
+    uint pageGridZ = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        pagingBase + 6u);
+    uint sparsePoolFirst = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        pagingBase + 7u);
+    uint physicalCapacity = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        54u);
+    if (probeIndex < virtualFirst)
+        return false;
+    uint localProbe = probeIndex - virtualFirst;
+    if (localProbe >= SchedulerVolumeProbeCount(volumeIndex))
+        return false;
+
+    if (mode != sparseMode)
+    {
+        physicalProbeIndex = densePhysicalFirst + localProbe;
+        pageMappingGeneration = 0xffffffffu;
+        return physicalProbeIndex < physicalCapacity;
+    }
+
+    uint residencyArena = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        52u);
+    uint virtualPageCount = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        53u);
+    uint resourceGeneration = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        55u);
+    uint sparsePageCapacity = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        58u);
+    uint residencyFlags = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        59u);
+    if (residencyArena !=
+            uint(SIMPLE_DDGI_RESIDENCY_ARENA_BUFFER_INDEX) ||
+        resourceGeneration == 0u ||
+        (residencyFlags & (1u << 0u)) == 0u ||
+        (residencyFlags & (1u << 1u)) != 0u ||
+        (residencyFlags & (1u << 2u)) == 0u ||
+        ReadStorageWordUniform(residencyArena, 2u) !=
+            resourceGeneration ||
+        pageGridX == 0u || pageGridY == 0u || pageGridZ == 0u)
+    {
+        return false;
+    }
+
+    uint countX = max(SchedulerVolumeCurrentCountX(volumeIndex), 1u);
+    uint countY = max(SchedulerVolumeCurrentCountY(volumeIndex), 1u);
+    uint xy = countX * countY;
+    uint physicalZ = localProbe / xy;
+    uint remainder = localProbe - physicalZ * xy;
+    uint physicalY = remainder / countX;
+    uint physicalX = remainder - physicalY * countX;
+    uint pageX = physicalX >> 1u;
+    uint pageY = physicalY >> 1u;
+    uint pageZ = physicalZ >> 1u;
+    if (pageX >= pageGridX || pageY >= pageGridY ||
+        pageZ >= pageGridZ)
+    {
+        return false;
+    }
+    uint virtualPage = pageTableFirst + pageX +
+        pageY * pageGridX + pageZ * pageGridX * pageGridY;
+    if (virtualPage >= virtualPageCount)
+        return false;
+    uint tableBase = pageTableOffsetWords +
+        virtualPage * pageTableEntryWords;
+    uint physicalPlusOne = ReadStorageWordUniform(
+        residencyArena,
+        tableBase + 0u);
+    uint mappingGeneration = ReadStorageWordUniform(
+        residencyArena,
+        tableBase + 1u);
+    uint tableFlags = ReadStorageWordUniform(
+        residencyArena,
+        tableBase + 2u);
+    if (physicalPlusOne == 0u || mappingGeneration == 0u ||
+        (tableFlags & tableValid) == 0u ||
+        (tableFlags & tableSuppressed) != 0u)
+    {
+        return false;
+    }
+    uint physicalPage = physicalPlusOne - 1u;
+    if (physicalPage >= sparsePageCapacity)
+        return false;
+    uint physicalMetadataOffset = pageTableOffsetWords +
+        virtualPageCount *
+            (pageTableEntryWords + pageHistoryWords);
+    uint reverseBase = physicalMetadataOffset +
+        physicalPage * physicalMetadataWords;
+    if (ReadStorageWordUniform(residencyArena, reverseBase + 0u) !=
+            virtualPage + 1u ||
+        ReadStorageWordUniform(residencyArena, reverseBase + 1u) !=
+            mappingGeneration ||
+        ReadStorageWordUniform(residencyArena, reverseBase + 2u) !=
+            resourceGeneration)
+    {
+        return false;
+    }
+
+    uint pageLocal = (physicalX & 1u) |
+        ((physicalY & 1u) << 1u) |
+        ((physicalZ & 1u) << 2u);
+    physicalProbeIndex = sparsePoolFirst +
+        physicalPage * 8u + pageLocal;
+    pageMappingGeneration = mappingGeneration;
+    return physicalProbeIndex < physicalCapacity;
+}
+
+bool SchedulerResolveSparsePageMetadata(
+    uint probeIndex,
+    uint volumeIndex,
+    uint physicalProbeIndex,
+    uint pageMappingGeneration,
+    out uint residencyArena,
+    out uint tableBase,
+    out uint metadataBase,
+    out uint pageLocalBit,
+    out uint validProbeMask)
+{
+    const uint paramsHeaderWords = 60u;
+    const uint volumeStrideWords = 24u;
+    const uint maxVolumes = 16u;
+    const uint pagingStrideWords = 8u;
+    const uint pagingBaseWords = paramsHeaderWords +
+        maxVolumes * volumeStrideWords;
+    const uint pageTableOffsetWords = 144u;
+    const uint pageTableEntryWords = 4u;
+    const uint pageHistoryWords = 4u;
+    const uint physicalMetadataWords = 12u;
+    const uint sparseMode = 2u;
+
+    residencyArena = 0u;
+    tableBase = 0u;
+    metadataBase = 0u;
+    pageLocalBit = 0u;
+    validProbeMask = 0u;
+    if (volumeIndex >= SchedulerActiveVolumeCount())
+        return false;
+    uint pagingBase = pagingBaseWords + volumeIndex * pagingStrideWords;
+    uint mode = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        pagingBase + 3u);
+    if (mode != sparseMode)
+        return false;
+    uint virtualFirst = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        pagingBase + 0u);
+    uint pageTableFirst = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        pagingBase + 1u);
+    uint pageGridX = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        pagingBase + 4u);
+    uint pageGridY = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        pagingBase + 5u);
+    uint sparsePoolFirst = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        pagingBase + 7u);
+    uint virtualPageCount = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        53u);
+    uint sparsePageCapacity = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        58u);
+    residencyArena = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        52u);
+    if (residencyArena != uint(SIMPLE_DDGI_RESIDENCY_ARENA_BUFFER_INDEX) ||
+        probeIndex < virtualFirst ||
+        physicalProbeIndex < sparsePoolFirst ||
+        pageMappingGeneration == 0u)
+    {
+        return false;
+    }
+    uint localProbe = probeIndex - virtualFirst;
+    uint countX = max(SchedulerVolumeCurrentCountX(volumeIndex), 1u);
+    uint countY = max(SchedulerVolumeCurrentCountY(volumeIndex), 1u);
+    uint countZ = max(SchedulerVolumeCurrentCountZ(volumeIndex), 1u);
+    uint xy = countX * countY;
+    uint physicalZ = localProbe / xy;
+    uint remainder = localProbe - physicalZ * xy;
+    uint physicalY = remainder / countX;
+    uint physicalX = remainder - physicalY * countX;
+    uint pageX = physicalX >> 1u;
+    uint pageY = physicalY >> 1u;
+    uint pageZ = physicalZ >> 1u;
+    uint virtualPage = pageTableFirst + pageX +
+        pageY * pageGridX + pageZ * pageGridX * pageGridY;
+    uint physicalPage = (physicalProbeIndex - sparsePoolFirst) / 8u;
+    uint pageLocal = (physicalProbeIndex - sparsePoolFirst) & 7u;
+    if (virtualPage >= virtualPageCount ||
+        physicalPage >= sparsePageCapacity)
+    {
+        return false;
+    }
+    tableBase = pageTableOffsetWords + virtualPage * pageTableEntryWords;
+    uint physicalMetadataOffset = pageTableOffsetWords +
+        virtualPageCount * (pageTableEntryWords + pageHistoryWords);
+    metadataBase = physicalMetadataOffset +
+        physicalPage * physicalMetadataWords;
+    uint resourceGeneration = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        55u);
+    if (ReadStorageWordUniform(residencyArena, tableBase + 0u) !=
+            physicalPage + 1u ||
+        ReadStorageWordUniform(residencyArena, tableBase + 1u) !=
+            pageMappingGeneration ||
+        ReadStorageWordUniform(residencyArena, metadataBase + 0u) !=
+            virtualPage + 1u ||
+        ReadStorageWordUniform(residencyArena, metadataBase + 1u) !=
+            pageMappingGeneration ||
+        ReadStorageWordUniform(residencyArena, metadataBase + 2u) !=
+            resourceGeneration)
+    {
+        return false;
+    }
+
+    pageLocalBit = 1u << pageLocal;
+    uvec3 pageOrigin = uvec3(pageX, pageY, pageZ) * 2u;
+    for (uint slot = 0u; slot < 8u; slot++)
+    {
+        uvec3 localCoord = uvec3(
+            slot & 1u,
+            (slot >> 1u) & 1u,
+            (slot >> 2u) & 1u);
+        uvec3 coord = pageOrigin + localCoord;
+        if (coord.x < countX && coord.y < countY && coord.z < countZ)
+            validProbeMask |= 1u << slot;
+    }
+    return validProbeMask != 0u;
+}
+
+bool SchedulerRetainSparsePage(
+    uint probeIndex,
+    uint volumeIndex,
+    uint physicalProbeIndex,
+    uint pageMappingGeneration)
+{
+    const uint sparseMode = 2u;
+    const uint pagingBaseWords = 60u + 16u * 24u;
+    uint mode = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        pagingBaseWords + volumeIndex * 8u + 3u);
+    if (mode != sparseMode)
+        return true;
+    uint arena;
+    uint tableBase;
+    uint metadataBase;
+    uint pageLocalBit;
+    uint validMask;
+    if (!SchedulerResolveSparsePageMetadata(
+            probeIndex,
+            volumeIndex,
+            physicalProbeIndex,
+            pageMappingGeneration,
+            arena,
+            tableBase,
+            metadataBase,
+            pageLocalBit,
+            validMask))
+    {
+        return false;
+    }
+    uint observed = atomicAdd(
+        BindlessStorageBuffers[nonuniformEXT(arena)].Words[
+            metadataBase + 3u],
+        0u);
+    for (;;)
+    {
+        uint count = (observed >> 16u) & 0xffu;
+        if (count == 0xffu)
+            return false;
+        uint replacement = observed + (1u << 16u);
+        uint previous = atomicCompSwap(
+            BindlessStorageBuffers[nonuniformEXT(arena)].Words[
+                metadataBase + 3u],
+            observed,
+            replacement);
+        if (previous == observed)
+        {
+            atomicCompSwap(
+                BindlessStorageBuffers[nonuniformEXT(arena)].Words[
+                    metadataBase + 9u],
+                0u,
+                SchedulerFrameIndex() + 1u);
+            return true;
+        }
+        observed = previous;
+    }
+}
+
+void SchedulerReleaseSparsePage(
+    uint probeIndex,
+    uint volumeIndex,
+    uint physicalProbeIndex,
+    uint pageMappingGeneration)
+{
+    uint arena;
+    uint tableBase;
+    uint metadataBase;
+    uint pageLocalBit;
+    uint validMask;
+    if (!SchedulerResolveSparsePageMetadata(
+            probeIndex,
+            volumeIndex,
+            physicalProbeIndex,
+            pageMappingGeneration,
+            arena,
+            tableBase,
+            metadataBase,
+            pageLocalBit,
+            validMask))
+    {
+        return;
+    }
+    uint observed = atomicAdd(
+        BindlessStorageBuffers[nonuniformEXT(arena)].Words[
+            metadataBase + 3u],
+        0u);
+    for (;;)
+    {
+        uint count = (observed >> 16u) & 0xffu;
+        if (count == 0u)
+            return;
+        uint replacement = observed - (1u << 16u);
+        uint previous = atomicCompSwap(
+            BindlessStorageBuffers[nonuniformEXT(arena)].Words[
+                metadataBase + 3u],
+            observed,
+            replacement);
+        if (previous == observed)
+            return;
+        observed = previous;
+    }
+}
+
+void SchedulerPublishSparsePageProbe(
+    uint probeIndex,
+    uint volumeIndex,
+    uint physicalProbeIndex,
+    uint pageMappingGeneration)
+{
+    uint arena;
+    uint tableBase;
+    uint metadataBase;
+    uint pageLocalBit;
+    uint validMask;
+    if (!SchedulerResolveSparsePageMetadata(
+            probeIndex,
+            volumeIndex,
+            physicalProbeIndex,
+            pageMappingGeneration,
+            arena,
+            tableBase,
+            metadataBase,
+            pageLocalBit,
+            validMask))
+    {
+        return;
+    }
+    uint publishedBit = pageLocalBit << 8u;
+    uint previous = atomicOr(
+        BindlessStorageBuffers[nonuniformEXT(arena)].Words[
+            metadataBase + 3u],
+        publishedBit);
+    uint publishedMask = ((previous | publishedBit) >> 8u) & 0xffu;
+    atomicMax(
+        BindlessStorageBuffers[nonuniformEXT(arena)].Words[
+            metadataBase + 5u],
+        SchedulerFrameIndex());
+    if ((publishedMask & validMask) == validMask)
+    {
+        atomicCompSwap(
+            BindlessStorageBuffers[nonuniformEXT(arena)].Words[
+                metadataBase + 10u],
+            0u,
+            SchedulerFrameIndex() + 1u);
+        atomicOr(
+            BindlessStorageBuffers[nonuniformEXT(arena)].Words[
+                tableBase + 2u],
+            1u << 2u);
+    }
+}
+
 void SchedulerWriteUpdate(
     uint updateIndex,
     uint probeIndex,
@@ -595,6 +1052,27 @@ void SchedulerWriteUpdate(
     // The queue is compacted by ray bucket, so consumers use this stable
     // accepted-order index to address the corresponding outcome record.
     SchedulerArenaWrite(base + 6u, updateIndex);
+    uint physicalProbeIndex;
+    uint pageMappingGeneration;
+    bool addressValid = SchedulerResolvePayloadAddress(
+        probeIndex,
+        volumeIndex,
+        physicalProbeIndex,
+        pageMappingGeneration);
+    if (addressValid)
+    {
+        addressValid = SchedulerRetainSparsePage(
+            probeIndex,
+            volumeIndex,
+            physicalProbeIndex,
+            pageMappingGeneration);
+    }
+    SchedulerArenaWrite(
+        base + 7u,
+        addressValid ? physicalProbeIndex : 0xffffffffu);
+    SchedulerArenaWrite(
+        base + 8u,
+        addressValid ? pageMappingGeneration : 0u);
     // Candidate reasons are a transaction-private proposal. CommitLocal uses
     // these high bits to apply visibility and invalidation metadata only after
     // every producer has completed successfully. Emit strips them before the
@@ -618,7 +1096,7 @@ void SchedulerCopyUpdateToQueue(uint updateIndex, uint queueIndex)
     uint sourceBase = pc.UpdateRecordsOffsetWords +
         updateIndex * SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS;
     uint destinationBase = queueIndex * SIMPLE_DDGI_PROBE_UPDATE_STRIDE_WORDS;
-    for (uint word = 0u; word < SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS; word++)
+    for (uint word = 0u; word < 7u; word++)
     {
         uint value = SchedulerArenaRead(sourceBase + word);
         if (word == 2u)
@@ -628,9 +1106,39 @@ void SchedulerCopyUpdateToQueue(uint updateIndex, uint queueIndex)
             destinationBase + word,
             value);
     }
-    // The public queue has one padding word beyond the seven-word internal
-    // record. Keep that queue ABI fixed and explicit.
-    WriteStorageWordUniform(pc.UpdateQueueBufferIndex, destinationBase + 7u, 0u);
+    uint probeIndex = SchedulerArenaRead(sourceBase + 0u);
+    uint updateFlags = SchedulerArenaRead(sourceBase + 2u);
+    uint stateBase = pc.SchedulerProbeStateOffsetWords +
+        probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+    uint committedSourceEpoch = SchedulerArenaRead(stateBase + 3u);
+    uint transactionSourceEpoch =
+        (updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) != 0u
+            ? SchedulerAdvanceSourceEpoch(committedSourceEpoch)
+            : committedSourceEpoch;
+    // The public queue's final word carries the exact per-probe source epoch
+    // reserved by the accepted transaction. Derive it from immutable admitted
+    // state here: outcome words 12 and 13 are producer completion counters and
+    // must start at zero before trace/transport execute.
+    WriteStorageWordUniform(
+        pc.UpdateQueueBufferIndex,
+        destinationBase + 7u,
+        transactionSourceEpoch);
+    WriteStorageWordUniform(
+        pc.UpdateQueueBufferIndex,
+        destinationBase + 8u,
+        SchedulerArenaRead(sourceBase + 7u));
+    WriteStorageWordUniform(
+        pc.UpdateQueueBufferIndex,
+        destinationBase + 9u,
+        SchedulerArenaRead(sourceBase + 8u));
+    WriteStorageWordUniform(
+        pc.UpdateQueueBufferIndex,
+        destinationBase + 10u,
+        ReadStorageWordUniform(pc.ParamsBufferIndex, 55u));
+    WriteStorageWordUniform(
+        pc.UpdateQueueBufferIndex,
+        destinationBase + 11u,
+        0u);
 }
 
 void SchedulerReadUpdate(
@@ -679,6 +1187,9 @@ void SchedulerWriteOutcome(
     // source cache or advance its routine-source timestamp.
     SchedulerArenaWrite(base + 10u, updateFlags);
     SchedulerArenaWrite(base + 11u, max(rayInvocationCount, 1u));
+    // Producer completion counters. Trace uses word 12; transport uses word 13.
+    // These cannot carry transaction metadata because every ray atomically
+    // increments them before CommitLocal validates the outcome.
     SchedulerArenaWrite(base + 12u, 0u);
     SchedulerArenaWrite(base + 13u, 0u);
     SchedulerArenaWrite(base + 14u, 0u);

@@ -187,4 +187,43 @@ public sealed class SimpleDdgiGpuSchedulerPolicyTests
                 physicalGeneration),
             Is.False);
     }
+
+    [Test]
+    public void PersistentGpuDirtyRegionKeepsOneEventGeneration()
+    {
+        const ulong signature = 0x1020304050607080UL;
+        uint firstEvent = SimpleDdgiVolumeManager.ResolveGpuDirtyRegionGeneration(
+            currentGeneration: 1u,
+            previousRegionsPresent: false,
+            previousSignature: 0u,
+            currentSignature: signature);
+        uint persistentEvent = SimpleDdgiVolumeManager.ResolveGpuDirtyRegionGeneration(
+            currentGeneration: firstEvent,
+            previousRegionsPresent: true,
+            previousSignature: signature,
+            currentSignature: signature);
+
+        Assert.That(firstEvent, Is.EqualTo(2u));
+        Assert.That(persistentEvent, Is.EqualTo(firstEvent));
+    }
+
+    [Test]
+    public void ChangedOrRepublishedGpuDirtyRegionStartsANewEventGeneration()
+    {
+        const ulong firstSignature = 0x1020304050607080UL;
+        const ulong changedSignature = 0x1020304050607081UL;
+        uint changedEvent = SimpleDdgiVolumeManager.ResolveGpuDirtyRegionGeneration(
+            currentGeneration: 41u,
+            previousRegionsPresent: true,
+            previousSignature: firstSignature,
+            currentSignature: changedSignature);
+        uint republishedAfterGap = SimpleDdgiVolumeManager.ResolveGpuDirtyRegionGeneration(
+            currentGeneration: changedEvent,
+            previousRegionsPresent: false,
+            previousSignature: changedSignature,
+            currentSignature: changedSignature);
+
+        Assert.That(changedEvent, Is.EqualTo(42u));
+        Assert.That(republishedAfterGap, Is.EqualTo(43u));
+    }
 }

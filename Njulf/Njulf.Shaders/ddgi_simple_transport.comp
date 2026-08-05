@@ -4,6 +4,7 @@
 
 #include "common.glsl"
 #include "gi_material_transport.glsl"
+#define SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE 1
 // Transport reads the canonical field published by the preceding completed
 // update. The sampled atlas is an incrementally synchronized mirror of that
 // exact field and remains in shader-read layout between publications, including
@@ -133,6 +134,15 @@ void main()
             1u << 2u);
         return;
     }
+    if (!SimpleDdgiUpdateMatchesLiveAddress(params, update))
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 0u);
+        return;
+    }
 
     SimpleDdgiVolume volume;
     uint localProbeIndex;
@@ -151,7 +161,10 @@ void main()
             pc.PrimaryDirectionalLightIndex))
         return;
     SimpleDdgiProbeState probeState = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, update.probeIndex);
-    if (!SimpleDdgiUpdateMatchesProbeGeneration(update, probeState))
+    if (!SimpleDdgiUpdateMatchesProbeGenerationAndRecord(
+            params,
+            update,
+            probeState))
     {
         SimpleDdgiSchedulerFailOutcome(
             pc.SchedulerArenaBufferIndex,
@@ -168,14 +181,29 @@ void main()
         rayIndex * sourceRayCount / max(activeRayCount, 1u),
         sourceRayCount - 1u);
     uint directionRayIndex = sourceRayOrdinal * params.raysPerProbe / sourceRayCount;
+    uint sourceCacheProbeGeneration = SimpleDdgiProbeGeneration(probeState);
+    if (SimpleDdgiUpdateRequiresSourceRefresh(update) &&
+        (update.flags & SIMPLE_DDGI_UPDATE_INVALIDATE) != 0u)
+    {
+        // Trace has populated the cache for the generation this transaction
+        // will publish. Consume that transaction-local generation here; later
+        // cached sweeps and the audit use the now-published probe generation.
+        sourceCacheProbeGeneration =
+            NextSimpleDdgiPhysicalGeneration(sourceCacheProbeGeneration);
+    }
     SimpleDdgiTransportRayCache source;
-    if (!ReadSimpleDdgiTransportRayCache(
+    bool sourceCacheValid = ReadSimpleDdgiTransportRayCache(
             pc.TransportSourceCacheBufferIndex,
-            update.probeIndex,
+            update.physicalProbeIndex,
             directionRayIndex,
             params,
-            SimpleDdgiProbeGeneration(probeState),
-            source))
+            sourceCacheProbeGeneration,
+            source);
+    sourceCacheValid = sourceCacheValid &&
+        source.sourceRayCount == sourceRayCount &&
+        source.sourceLightingGeneration == update.sourceLightingGeneration &&
+        source.sourceEpoch == update.sourceEpoch;
+    if (!sourceCacheValid)
     {
         // A stale/corrupt cache cannot inject old energy. Preserve the source
         // scratch result (or zero if trace was skipped), then atomically request
@@ -218,7 +246,9 @@ void main()
             sourceVisibilityHit.x,
             sourceDirectionHit.xyz,
             sourceVisibilityHit.y);
-        if (SimpleDdgiSolveIsFinalColor(pc.Flags))
+        if (SimpleDdgiSolveIsFinalSweep(
+                pc.Flags,
+                params.transportAcceleratedSweepCount))
             SimpleDdgiSchedulerRayComplete(
                 pc.SchedulerArenaBufferIndex,
                 pc.SchedulerOutcomesOffsetWords,
@@ -252,10 +282,23 @@ void main()
     totalRadiance += bounceRadiance;
     if (malformedOperatorInput)
     {
-        // A malformed operator input is a source-cache repair condition.  Do
-        // not let a zeroed recursive term become a seemingly valid certificate
-        // while the cache metadata still claims that this probe is current.
-        MarkSimpleDdgiProbeSourceCacheInvalid(pc.ProbeStateBufferIndex, update.probeIndex);
+        // A malformed operator input is a source-cache repair condition. In
+        // resident mode it is transaction-private until CommitLocal rejects
+        // the outcome and publishes the scheduler repair marker; mutating the
+        // public cache-invalid bit here would let one ray tear the frozen
+        // participant field underneath the rest of the solve epoch.
+        if (gpuScheduler)
+        {
+            SimpleDdgiSchedulerFailOutcome(
+                pc.SchedulerArenaBufferIndex,
+                pc.SchedulerOutcomesOffsetWords,
+                update.outcomeIndex,
+                1u << 3u);
+        }
+        else
+            MarkSimpleDdgiProbeSourceCacheInvalid(
+                pc.ProbeStateBufferIndex,
+                update.probeIndex);
         bounceRadiance = vec3(0.0);
         totalRadiance = source.sourceRadiance;
     }
@@ -305,7 +348,9 @@ void main()
         visibilityHit.x,
         source.direction,
         visibilityHit.y);
-    if (SimpleDdgiSolveIsFinalColor(pc.Flags))
+    if (SimpleDdgiSolveIsFinalSweep(
+            pc.Flags,
+            params.transportAcceleratedSweepCount))
         SimpleDdgiSchedulerRayComplete(
             pc.SchedulerArenaBufferIndex,
             pc.SchedulerOutcomesOffsetWords,

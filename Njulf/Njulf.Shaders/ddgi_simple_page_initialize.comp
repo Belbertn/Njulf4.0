@@ -1,0 +1,139 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_page_residency_shared.glsl"
+
+// One workgroup owns one admission. Source validity clear, virtual-state
+// initialization, reverse identity, and final table publication are therefore
+// ordered by a real workgroup barrier rather than by cross-workgroup timing.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    uint workIndex = gl_WorkGroupID.x;
+    uint admissionCount = ResidencyRead(
+        params,
+        ResidencyCounterWord(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_ADMISSIONS));
+    if (workIndex >= admissionCount ||
+        !SimpleDdgiResidencyHeaderMatches(params) ||
+        (params.residencyFlags & SIMPLE_DDGI_RESIDENCY_FLAG_FROZEN) != 0u)
+    {
+        return;
+    }
+
+    uint workBase = SimpleDdgiInitWorkOffsetWords(params) +
+        workIndex * 4u;
+    uint virtualPage = ResidencyRead(params, workBase + 0u);
+    uint physicalPage = ResidencyRead(params, workBase + 1u);
+    uint mappingGeneration = ResidencyRead(params, workBase + 2u);
+    if (virtualPage >= params.virtualPageCount ||
+        physicalPage >= params.sparsePhysicalPageCapacity ||
+        mappingGeneration == 0u)
+    {
+        return;
+    }
+    uint reverseBase = ResidencyPhysicalBase(params, physicalPage);
+    if (ResidencyRead(params, reverseBase + 0u) != virtualPage + 1u ||
+        ResidencyRead(params, reverseBase + 1u) != mappingGeneration ||
+        ResidencyRead(params, reverseBase + 2u) !=
+            params.residencyResourceGeneration)
+    {
+        return;
+    }
+
+    uint volumeIndex;
+    uint localPage;
+    SimpleDdgiVolume volume;
+    SimpleDdgiVolumePaging paging;
+    if (!SimpleDdgiFindSparsePageVolume(
+            params,
+            virtualPage,
+            volumeIndex,
+            volume,
+            paging,
+            localPage))
+    {
+        return;
+    }
+
+    uint localInvocation = gl_LocalInvocationID.x;
+    if (params.residencyMode ==
+        SIMPLE_DDGI_RESIDENCY_MODE_SPARSE_NEAR_RING)
+    {
+        uint raysPerProbe = max(params.raysPerProbe, 1u);
+        uint cacheEntryCount = SIMPLE_DDGI_PROBES_PER_PAGE * raysPerProbe;
+        uint firstPhysicalProbe = paging.sparsePoolFirstProbe +
+            physicalPage * SIMPLE_DDGI_PROBES_PER_PAGE;
+        for (uint cacheEntry = localInvocation;
+             cacheEntry < cacheEntryCount;
+             cacheEntry += gl_WorkGroupSize.x)
+        {
+            uint pageProbe = cacheEntry / raysPerProbe;
+            uint ray = cacheEntry - pageProbe * raysPerProbe;
+            uint cacheBase = ((firstPhysicalProbe + pageProbe) *
+                raysPerProbe + ray) *
+                SIMPLE_DDGI_TRANSPORT_RAY_CACHE_STRIDE_WORDS;
+            // The validity/generation word is the sole publication gate for a
+            // cache entry. Remaining payload may retain undefined old bits.
+            WriteStorageWordUniform(
+                pc.TransportSourceCacheBufferIndex,
+                cacheBase + 6u,
+                0u);
+        }
+
+        if (localInvocation < SIMPLE_DDGI_PROBES_PER_PAGE)
+        {
+            uint virtualProbe;
+            if (SimpleDdgiVirtualProbeForPageSlot(
+                    volume,
+                    paging,
+                    localPage,
+                    localInvocation,
+                    virtualProbe))
+            {
+                ResidencyInvalidateVirtualProbe(
+                    params,
+                    virtualProbe,
+                    false);
+            }
+        }
+    }
+
+    memoryBarrierBuffer();
+    barrier();
+    if (localInvocation == 0u)
+    {
+        uint validMask = SimpleDdgiValidPageProbeMask(
+            volume,
+            paging,
+            localPage);
+        uint metadataFlags = ResidencyRead(params, reverseBase + 3u) &
+            SIMPLE_DDGI_PHYSICAL_PAGE_PINNED;
+        metadataFlags |= params.residencyMode ==
+                SIMPLE_DDGI_RESIDENCY_MODE_SHADOW
+            ? validMask <<
+                SIMPLE_DDGI_PHYSICAL_PAGE_PUBLISHED_MASK_SHIFT
+            : 0u;
+        ResidencyWrite(params, reverseBase + 3u, metadataFlags);
+        ResidencyWrite(params, reverseBase + 4u, pc.CurrentFrame);
+        if (params.residencyMode == SIMPLE_DDGI_RESIDENCY_MODE_SHADOW)
+            ResidencyWrite(params, reverseBase + 5u, pc.CurrentFrame);
+
+        uint tableBase = ResidencyTableBase(virtualPage);
+        ResidencyWrite(params, tableBase + 0u, physicalPage + 1u);
+        ResidencyWrite(params, tableBase + 1u, mappingGeneration);
+        if (params.residencyMode != SIMPLE_DDGI_RESIDENCY_MODE_SHADOW)
+            ResidencyWrite(params, tableBase + 3u, 0u);
+        memoryBarrierBuffer();
+        uint tableFlags = SIMPLE_DDGI_PAGE_TABLE_VALID;
+        if (params.residencyMode == SIMPLE_DDGI_RESIDENCY_MODE_SHADOW)
+            tableFlags |= SIMPLE_DDGI_PAGE_TABLE_PUBLISHED;
+        // VALID is the final store. No receiver/update can resolve this owner
+        // before every cache/state initialization write above is visible.
+        ResidencyWrite(params, tableBase + 2u, tableFlags);
+    }
+}

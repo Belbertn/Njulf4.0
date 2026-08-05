@@ -107,6 +107,39 @@ public sealed class DirectionalShadowDataBuilderTests
     }
 
     [Test]
+    public void PointShadowDepthTransitions_SynchronizeLoadedAttachmentReadsAndWrites()
+    {
+        PointShadowPass.GetTransitionMasks(
+            ImageLayout.DepthStencilAttachmentOptimal,
+            ImageLayout.TransferSrcOptimal,
+            out PipelineStageFlags2 sourceStage,
+            out AccessFlags2 sourceAccess,
+            out _,
+            out _);
+        PointShadowPass.GetTransitionMasks(
+            ImageLayout.TransferDstOptimal,
+            ImageLayout.DepthStencilAttachmentOptimal,
+            out _,
+            out _,
+            out PipelineStageFlags2 destinationStage,
+            out AccessFlags2 destinationAccess);
+
+        const PipelineStageFlags2 expectedStages =
+            PipelineStageFlags2.EarlyFragmentTestsBit |
+            PipelineStageFlags2.LateFragmentTestsBit;
+        const AccessFlags2 expectedAccess =
+            AccessFlags2.DepthStencilAttachmentReadBit |
+            AccessFlags2.DepthStencilAttachmentWriteBit;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sourceStage, Is.EqualTo(expectedStages));
+            Assert.That(sourceAccess, Is.EqualTo(expectedAccess));
+            Assert.That(destinationStage, Is.EqualTo(expectedStages));
+            Assert.That(destinationAccess, Is.EqualTo(expectedAccess));
+        });
+    }
+
+    [Test]
     public void StaticShadowCacheSignature_TracksSceneContentAndRasterBias()
     {
         var sceneData = new SceneRenderingData

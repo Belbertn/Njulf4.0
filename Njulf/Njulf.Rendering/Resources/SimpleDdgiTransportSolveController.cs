@@ -4,6 +4,39 @@ using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Resources;
 
+public readonly record struct SimpleDdgiBlendSweepWork(
+    bool WritesIrradiance,
+    bool WritesVisibility,
+    bool AdvancesOneUpdateLifecycle);
+
+public enum SimpleDdgiTailCertificationFallbackReason : byte
+{
+    None = 0,
+    DisabledByConfiguration = 1,
+    RequiresGpuResidentScheduler = 2,
+    GpuSchedulerNotReady = 3,
+    GpuSchedulerFrameExecutionUnavailable = 4
+}
+
+public readonly record struct SimpleDdgiTailCertificationAvailability(
+    bool Enabled,
+    SimpleDdgiTailCertificationFallbackReason Reason)
+{
+    public string Message => Reason switch
+    {
+        SimpleDdgiTailCertificationFallbackReason.None => string.Empty,
+        SimpleDdgiTailCertificationFallbackReason.DisabledByConfiguration =>
+            "Tail certification is disabled by configuration.",
+        SimpleDdgiTailCertificationFallbackReason.RequiresGpuResidentScheduler =>
+            "Tail certification requires the GpuResident Simple-DDGI scheduler; CPU reference and GPU mirror modes use uncertified fallback convergence.",
+        SimpleDdgiTailCertificationFallbackReason.GpuSchedulerNotReady =>
+            "Tail certification is pending because the GpuResident scheduler resources are not ready.",
+        SimpleDdgiTailCertificationFallbackReason.GpuSchedulerFrameExecutionUnavailable =>
+            "Tail certification is disabled because GpuResident scheduler frame execution is unavailable.",
+        _ => "Tail certification is unavailable for an unknown reason."
+    };
+}
+
 /// <summary>
 /// The scheduler-facing state machine for error-bounded V2 transport.  It is
 /// intentionally independent of Vulkan objects so generation invalidation and
@@ -36,10 +69,74 @@ public sealed class SimpleDdgiTransportSolveController
     public uint AuditEpoch => _auditEpoch;
     public int ExpectedParticipantCount => _expectedParticipantCount;
     public int VisitedParticipantCount => _visitedParticipantCount;
+    public int ParticipantVisitCapacity => _participantVisitEpoch.Length;
     public bool IsSolveEpochComplete =>
         Phase == SimpleDdgiTransportPhase.AcceleratedSolve &&
         _visitedParticipantCount == _expectedParticipantCount;
     public bool IsCertified => Phase == SimpleDdgiTransportPhase.Certified && LastSummary.IsCertified;
+
+    /// <summary>
+    /// CPU mirror of the blend shader's per-sweep side-effect policy. Cached
+    /// sweeps always advance irradiance, while visibility and transaction
+    /// lifecycle work are restricted to sweep zero's first color.
+    /// </summary>
+    public static SimpleDdgiBlendSweepWork ResolveBlendSweepWork(
+        int sweepIndex,
+        bool isFirstColor,
+        bool transportV2Active,
+        bool requiresSourceRefresh,
+        bool freshUpdate)
+    {
+        if (sweepIndex < 0)
+            throw new ArgumentOutOfRangeException(nameof(sweepIndex));
+
+        bool firstSweepFirstColor = sweepIndex == 0 && isFirstColor;
+        bool visibility = !transportV2Active ||
+            (firstSweepFirstColor && (requiresSourceRefresh || freshUpdate));
+        return new SimpleDdgiBlendSweepWork(
+            WritesIrradiance: true,
+            WritesVisibility: visibility,
+            AdvancesOneUpdateLifecycle: !transportV2Active || firstSweepFirstColor);
+    }
+
+    public static SimpleDdgiTailCertificationAvailability ResolveTailCertificationAvailability(
+        bool requested,
+        SimpleDdgiSchedulerMode schedulerMode,
+        bool gpuSchedulerReady,
+        bool gpuSchedulerFrameExecutionAvailable)
+    {
+        if (!requested)
+        {
+            return new SimpleDdgiTailCertificationAvailability(
+                false,
+                SimpleDdgiTailCertificationFallbackReason.DisabledByConfiguration);
+        }
+
+        if (schedulerMode != SimpleDdgiSchedulerMode.GpuResident)
+        {
+            return new SimpleDdgiTailCertificationAvailability(
+                false,
+                SimpleDdgiTailCertificationFallbackReason.RequiresGpuResidentScheduler);
+        }
+
+        if (!gpuSchedulerReady)
+        {
+            return new SimpleDdgiTailCertificationAvailability(
+                false,
+                SimpleDdgiTailCertificationFallbackReason.GpuSchedulerNotReady);
+        }
+
+        if (!gpuSchedulerFrameExecutionAvailable)
+        {
+            return new SimpleDdgiTailCertificationAvailability(
+                false,
+                SimpleDdgiTailCertificationFallbackReason.GpuSchedulerFrameExecutionUnavailable);
+        }
+
+        return new SimpleDdgiTailCertificationAvailability(
+            true,
+            SimpleDdgiTailCertificationFallbackReason.None);
+    }
 
     /// <summary>
     /// Starts a source-repair transaction and invalidates any certificate that
@@ -76,24 +173,8 @@ public sealed class SimpleDdgiTransportSolveController
         }
 
         EnsureParticipantCapacity(expectedParticipantCount);
-        uint previousSolveEpoch = _solveEpoch;
-        _solveEpoch = NextNonZero(_solveEpoch);
-        if (_solveEpoch <= previousSolveEpoch)
-        {
-            // Visit stamps are meaningful only within the current 32-bit
-            // epoch namespace. Clear the bounded table on wrap so a visit
-            // from an old epoch 1 cannot authorize the new epoch 1.
-            Array.Clear(_participantVisitEpoch);
-        }
         _expectedParticipantCount = expectedParticipantCount;
-        _visitedParticipantCount = 0;
-        _auditCancelled = false;
-        FrozenGenerations = generations with
-        {
-            Solve = _solveEpoch,
-            Audit = NonZeroGeneration(_auditEpoch)
-        };
-        Phase = SimpleDdgiTransportPhase.AcceleratedSolve;
+        AdvanceSolveEpoch(generations);
         LastReason = expectedParticipantCount == 0
             ? SimpleDdgiTransportCertificationReason.SolveEpochIncomplete
             : SimpleDdgiTransportCertificationReason.None;
@@ -261,7 +342,14 @@ public sealed class SimpleDdgiTransportSolveController
             LastReason = summary.CanonicalQuantizationFloor > summary.Tolerance
                 ? SimpleDdgiTransportCertificationReason.QuantizationLimited
                 : SimpleDdgiTransportCertificationReason.TailAboveTolerance;
-            Phase = SimpleDdgiTransportPhase.AcceleratedSolve;
+            // A finite, complete audit above tolerance is useful evidence, but
+            // it does not authorize another audit of the byte-identical field.
+            // Start a distinct epoch and clear its visit witness so every probe
+            // receives another cached solve before certification is attempted.
+            if (LastReason == SimpleDdgiTransportCertificationReason.TailAboveTolerance)
+                AdvanceSolveEpoch(currentGenerations);
+            else
+                Phase = SimpleDdgiTransportPhase.AcceleratedSolve;
             return false;
         }
 
@@ -414,11 +502,35 @@ public sealed class SimpleDdgiTransportSolveController
         return result < 0 ? result + modulus : result;
     }
 
-    private void EnsureParticipantCapacity(int required)
+    public void EnsureParticipantCapacity(int required)
     {
+        if (required < 0)
+            throw new ArgumentOutOfRangeException(nameof(required));
         if (required <= _participantVisitEpoch.Length)
             return;
         Array.Resize(ref _participantVisitEpoch, required);
+    }
+
+    private void AdvanceSolveEpoch(SimpleDdgiTransportGenerations generations)
+    {
+        uint previousSolveEpoch = _solveEpoch;
+        _solveEpoch = NextNonZero(_solveEpoch);
+        if (_solveEpoch <= previousSolveEpoch)
+        {
+            // Visit stamps are meaningful only within the current 32-bit
+            // epoch namespace. Clear the bounded table on wrap so a visit
+            // from an old epoch 1 cannot authorize the new epoch 1.
+            Array.Clear(_participantVisitEpoch);
+        }
+
+        _visitedParticipantCount = 0;
+        _auditCancelled = false;
+        FrozenGenerations = generations with
+        {
+            Solve = _solveEpoch,
+            Audit = NonZeroGeneration(_auditEpoch)
+        };
+        Phase = SimpleDdgiTransportPhase.AcceleratedSolve;
     }
 
     private static uint NextNonZero(uint value)

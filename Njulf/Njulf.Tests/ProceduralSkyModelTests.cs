@@ -363,8 +363,14 @@ public sealed class ProceduralSkyModelTests
                 BindlessIndex.SimpleDdgiSchedulerArenaBuffer,
                 Is.EqualTo(BindlessIndex.EnvironmentGiDataBuffer + 1));
             Assert.That(
-                BindlessIndex.StaticBufferCount,
+                BindlessIndex.SimpleDdgiReceiverProbeBuffer,
                 Is.EqualTo(BindlessIndex.SimpleDdgiSchedulerArenaBuffer + 1));
+            Assert.That(
+                BindlessIndex.SimpleDdgiResidencyArenaBuffer,
+                Is.EqualTo(BindlessIndex.SimpleDdgiReceiverProbeBuffer + 1));
+            Assert.That(
+                BindlessIndex.StaticBufferCount,
+                Is.EqualTo(BindlessIndex.SimpleDdgiResidencyArenaBuffer + 1));
         });
     }
 

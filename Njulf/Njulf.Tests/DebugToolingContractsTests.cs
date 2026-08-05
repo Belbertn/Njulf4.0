@@ -3,6 +3,7 @@ using Njulf.Core.Math;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
 using NjulfHelloGame;
 using NUnit.Framework;
@@ -87,7 +88,7 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.DirectionalShadowReceiverDepthQuantizationScale, Is.EqualTo(65535.0f));
                 Assert.That(RendererDiagnosticsBuffer.FarFieldMaterialV2CounterCount, Is.EqualTo(2));
                 Assert.That(RendererDiagnosticsBuffer.MaterialGiCounterCount, Is.EqualTo(10));
-                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiGatherRejectionReasonCount, Is.EqualTo(9));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiGatherRejectionReasonCount, Is.EqualTo(10));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiGatherRoleCount, Is.EqualTo(3));
                 Assert.That(RendererDiagnosticsBuffer.DdgiDeliveryFailureCounterCount, Is.EqualTo(1));
                 Assert.That(RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterCount, Is.EqualTo(4));
@@ -389,6 +390,51 @@ namespace Njulf.Tests
                     program,
                     Does.Contain(
                         "_smokeOptions.Mode is SampleSmokeMode.QualitySwitch or SampleSmokeMode.LongRun"));
+            });
+        }
+
+        [Test]
+        public void SimpleDdgiReceiverDebugViews_RespectCompiledArtifactCapability()
+        {
+            bool detailedCompiled =
+                RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    RendererBuildFeatures.RequiresDetailedDdgiReceiverDiagnostics(
+                        GlobalIlluminationDebugView.DdgiIrradiance),
+                    Is.True);
+                Assert.That(
+                    RendererBuildFeatures.RequiresDetailedDdgiReceiverDiagnostics(
+                        GlobalIlluminationDebugView.DdgiSourceCacheRadiance),
+                    Is.True);
+                Assert.That(
+                    RendererBuildFeatures.RequiresDetailedDdgiReceiverDiagnostics(
+                        GlobalIlluminationDebugView.FinalIndirect),
+                    Is.False);
+                Assert.That(
+                    RendererBuildFeatures.RequiresDetailedDdgiReceiverDiagnostics(
+                        GlobalIlluminationDebugView.FarFieldTraceResult),
+                    Is.False);
+                Assert.That(
+                    RendererBuildFeatures.RequiresDetailedDdgiReceiverDiagnostics(
+                        GlobalIlluminationDebugView.MaterialTransportHitProvenance),
+                    Is.False);
+                Assert.That(
+                    RendererBuildFeatures.IsGlobalIlluminationDebugViewAvailable(
+                        GlobalIlluminationDebugView.DdgiProbeState),
+                    Is.EqualTo(detailedCompiled));
+                Assert.That(
+                    RendererBuildFeatures.ResolveGlobalIlluminationDebugView(
+                        GlobalIlluminationDebugView.DdgiProbeState),
+                    Is.EqualTo(detailedCompiled
+                        ? GlobalIlluminationDebugView.DdgiProbeState
+                        : GlobalIlluminationDebugView.None));
+                Assert.That(
+                    RendererBuildFeatures.IsGlobalIlluminationDebugViewAvailable(
+                        GlobalIlluminationDebugView.FarFieldSunShadow),
+                    Is.True);
             });
         }
 

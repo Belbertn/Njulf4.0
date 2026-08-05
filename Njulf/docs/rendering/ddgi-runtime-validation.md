@@ -5,21 +5,58 @@ This checklist validates the active Simple DDGI implementation in runtime scenes
 ## Required Scenes
 
 - `GiSponzaRightWallStationary`: shadowed arcade/alley support, raw diffuse, and fallback behavior.
+- Sponza slow horizontal and vertical travel, including near/mid ring-boundary sweeps.
+- Sponza cuts between plaza, upper facade, and alley/interior views.
 - `GiCornellRoom`: colored bounce and receiver coverage.
 - `GiLongCorridorOcclusion`: thin-wall visibility and leakage behavior.
 - `GiFastTraversalTeleport`: camera-cut recovery and Simple DDGI warmup.
+- A broad outdoor scene with a large empty-air near volume.
+- Tall multi-floor architecture under every vertical-ring policy.
+- Transparent cloth/glass, foliage, particles, and fog receivers.
+- Dynamic geometry entering/leaving an unallocated or suppressed page.
+- A deliberate page-capacity stress scene with deterministic coarse fallback.
+
+## Locked Residency Matrix
+
+Run at least three identity-locked Release repetitions for each applicable scene:
+
+1. `Dense`: authoritative same-binary rollback and image/memory baseline.
+2. `Shadow`: dense output plus predictor and exact representative gather-touch evidence.
+3. `SparseNearRing`: authoritative bounded near payload with dense mid/far fallback.
+
+Record executable identity, shader hashes, settings/capture identity, GPU/driver, scene revision, resolution, warmup/measurement windows, and whether async compute was forced. Do not compare captures with different identities or silently reduced page budgets.
+
+Useful command-line overrides are:
+
+```text
+--simple-ddgi-residency-mode=dense|shadow|sparse-near-ring
+--simple-ddgi-sparse-page-budget=<pages>
+--simple-ddgi-sparse-min-page-budget=<pages>
+--simple-ddgi-sparse-retention-frames=<frames>
+--simple-ddgi-sparse-max-admissions=<pages>
+--simple-ddgi-sparse-max-feedback=<requests>
+--simple-ddgi-sparse-inactive-retry-frames=<frames>
+```
 
 ## Debug Buffers
 
-Capture `FinalIndirect`, `DdgiIrradiance`, `DdgiSampledIrradiance`, `DdgiFinalDiffuse`, `DdgiRawDiffuse`, `DdgiCoverage`, `DdgiSupportCoverage`, `DdgiDataConfidence`, `DdgiVisibilityMoments`, and `DdgiUpdateReasons` after cold start and after at least 120 steady frames.
+Capture `FinalIndirect`, `DdgiIrradiance`, `DdgiSampledIrradiance`, `DdgiFinalDiffuse`, `DdgiRawDiffuse`, `DdgiCoverage`, `DdgiSupportCoverage`, `DdgiDataConfidence`, `DdgiVisibilityMoments`, and `DdgiUpdateReasons` after cold start and after at least 120 steady frames. For paging runs also capture `DdgiProbeResidency`, `DdgiResidencyFallback`, `DdgiPageAge`, and `DdgiPhysicalPage`.
+
+Probe overlays must retain the regular virtual lattice. Confirm that nonresident probes are neutral/hollow rather than omitted, newly mapped pages remain fresh until complete publication, and missing fine ownership visibly resolves through the expected coarser ring.
 
 ## Metrics To Record
 
 - Simple DDGI active probe count, updated probe count, and primary ray count.
 - Scheduler request and primary-ray budgets, plus any rejected work.
 - Recenter, atlas-clear, atlas-fresh, and warmup state.
-- Trace, transport, blend, relocation, and publish timings.
+- Page demand, page residency, page feedback, scheduler, trace, transport, blend, relocation, and publish timings.
 - DDGI atlas/buffer memory and the configured tier budget.
+- Virtual/dense/sparse physical capacities, sampled-atlas rounded capacity, page padding, arena bytes, dense-equivalent bytes, allocated bytes, and avoided bytes.
+- Resident/free/initializing/published/suppressed pages and per-ring virtual/resident/active/inactive/demanded/converged populations.
+- Visible and receiver demand, retained age buckets, admission/eviction/failed-admission counts, pressure streaks, suppression/retry, and request overflow.
+- Allocation-to-first-schedule and allocation-to-first-publication P50/P95/max.
+- Page/reverse disagreement, duplicate owners, stale virtual/mapping/resource requests, out-of-range requests, nonresident rejections, and coarser fallbacks.
+- In Shadow, predictor false negatives/positives, false-negative rate, inflation ratio, and the exported working-set/capacity simulation report.
 
 ## Acceptance Checks
 
@@ -29,7 +66,51 @@ Capture `FinalIndirect`, `DdgiIrradiance`, `DdgiSampledIrradiance`, `DdgiFinalDi
 - Recenter, atlas clear, and camera-cut frames are treated as transient evidence rather than steady-state regressions.
 - Simple DDGI timing and storage remain within the selected quality tier budget.
 - Emergency degradation preserves visible, dirty, and newly exposed near-field updates before background refresh work.
+- Invalid indices, duplicate owners, stale mutations, bounded-buffer overflow, stale publication, and feature-attributable Vulkan validation messages are zero.
+- A full pool never reallocates, overruns, or evicts a currently demanded, pinned, or in-flight page; excess demand receives deterministic dense coarser lighting.
+- Ordinary-motion first-publication P95 is evaluated independently from cut/teleport P95; aggregate latency must not hide a failing cohort.
+- Stationary settled admission and eviction counts are zero. Ordinary motion has no sustained pressure.
+- First coherent fine publication P95 is at most two rendered frames for ordinary motion and at most eight for the declared cut/teleport stress path.
+- Shadow false-negative P95 is at most 0.5%, demand inflation P95 is at most 1.5×, and no actual demanded page is missed for more than two consecutive rendered frames.
+- The current-profile residency arena is at most 512 KiB and the hard virtual-limit fixture is at most 1 MiB.
+- Topology-identical sparse saves at least the greater of 16 MiB or 10% of same-binary Dense live bytes. The current High fixture saves 40,442,096 bytes (209,946,912 Dense versus 169,504,816 Sparse) with a 139,024-byte arena.
+- Total tracked GPU memory is at most 80% of the target 2 GiB profile, and stable frames create/destroy/rebind no residency or payload resources.
+- Added sparse forward-gather P95 is at most 0.15 ms and 5%; page-management GPU P95 is at most 0.25 ms; added CPU P95 is at most 0.10 ms with no stable-frame per-page enumeration.
+- Dense/Sparse HDR comparisons meet the frozen error gates and human review finds no black flash, stale-cell flash, page seam, ring seam, new leak, or transparent/fog/foliage pumping.
+
+## Transition and Failure Exercises
+
+Exercise Dense → Shadow → Sparse and back at frame boundaries; enable/disable; unsupported prerequisites; sampled atlas supported/disabled/budget-rejected; V2 ray-capacity changes; resize/resolution changes; scene reload/topology changes; one-cell scrolling on every axis; large scroll/cut/teleport; pool-full pressure; dynamic geometry invalidation; light/material/atmosphere changes; frames-in-flight retirement; graphics queue; forced async validation and rejected async fallback; and shutdown.
+
+The bounded automated mode exercises the live residency transition without
+restarting the renderer and verifies mode telemetry, exact settings rollback,
+resource-generation changes, feedback readiness, mapping invariants, and stable
+device identity:
+
+```text
+--smoke-mode=ddgi-residency-switch
+--smoke-frames=12
+--quality-preset=ddgi-high
+--simple-ddgi-scheduler-mode=gpu-resident
+--simple-ddgi-residency-mode=sparse-near-ring
+```
+
+The bindless storage heap is shared by all frames in flight. A capacity or
+residency-arena transition therefore completes the renderer's submitted frame
+fences before rewriting a live update-after-bind descriptor. This is a targeted
+resource-generation transaction, not `vkDeviceWaitIdle`; the transition smoke
+must report zero device-idle calls. Old resources remain completion-token owned
+until the descriptor readers have finished, and a transition fails closed if
+the returned fence progress cannot certify the old generation.
+
+On a runtime scheduler/residency failure, verify that mutation freezes without a device wait. A valid last map may remain readable; an invalid map disables the sparse fine volume and uses the dense coarser field. Controlled re-entry must install a fresh residency-resource generation before mutation resumes. No hidden full-density near payload may exist beside sparse mode.
+
+For development pin/freeze testing, enable debug tooling and use the explicit renderer APIs. Verify a pinned missing page is admitted at the highest class, a pinned resident page is never a victim, unpin restores ordinary retention/eviction, and development freeze stops mutation without clearing a valid map. Merely selecting any debug view must leave residency unchanged.
+
+## Shadow Working-Set Export
+
+Validation capture code supplies predictor and instrumented page sets to `SimpleDdgiResidencyWorkingSetAnalyzer`. Export the resulting `SimpleDdgiResidencyWorkingSetReport` with `WriteJson`. The report includes per-frame unique demand, candidate retention populations, 2×2×2 and offline 4×2×4 demand geometry, coverage errors, required pool P50/P95/P99/max, deterministic admission/eviction/pressure simulations, and exact memory projections. Freeze this evidence before changing shipping page capacity or retention.
 
 ## Automation Hooks
 
-The runtime scenario, metric, debug-buffer, and gate definitions live in `NjulfHelloGame/SampleGlobalIlluminationValidation.cs`. The console diagnostics are aligned with `docs/rendering/ddgi-diagnostics.md`.
+The console and performance JSON diagnostics are aligned with `docs/rendering/ddgi-diagnostics.md`. Pure address, allocator, memory, ABI, shader-contract, graph-order, and working-set tests live in `Njulf.Tests`. Runtime/HDR thresholds still require a Vulkan-capable machine and captured scene evidence; a green unit suite does not substitute for the locked repetitions and human review above.

@@ -55,4 +55,45 @@ public sealed class SimpleDdgiRayCapacityPlannerTests
             Assert.That(float.IsPositiveInfinity(blocked.MinimumAchievableSweepSeconds), Is.True);
         });
     }
+
+    [Test]
+    public void TierCadence_MixedRingsReceiveExactNonStarvingSweepAllotments()
+    {
+        const int frames = 600;
+        int nearTotal = 0;
+        int midTotal = 0;
+        int farTotal = 0;
+        for (uint frame = 0u; frame < frames; frame++)
+        {
+            int near = SimpleDdgiRayCapacityPlanner.ResolveTierProbeTarget(
+                10_976,
+                frames,
+                frame);
+            int mid = SimpleDdgiRayCapacityPlanner.ResolveTierProbeTarget(
+                3_240,
+                frames,
+                frame);
+            int far = SimpleDdgiRayCapacityPlanner.ResolveTierProbeTarget(
+                1_152,
+                frames,
+                frame);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(near, Is.InRange(18, 19));
+                Assert.That(mid, Is.InRange(5, 6));
+                Assert.That(far, Is.InRange(1, 2));
+            });
+            nearTotal += near;
+            midTotal += mid;
+            farTotal += far;
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(nearTotal, Is.EqualTo(10_976));
+            Assert.That(midTotal, Is.EqualTo(3_240));
+            Assert.That(farTotal, Is.EqualTo(1_152));
+        });
+    }
 }

@@ -77,6 +77,78 @@ namespace Njulf.Rendering.Diagnostics
 #else
         public const bool DetailedDdgiDiagnosticsCompiled = false;
 #endif
+
+        /// <summary>
+        /// Returns true for receiver views whose inputs and branch fan-out are
+        /// deliberately absent from production Simple-DDGI shaders.  General GI
+        /// views (final indirect, far-field inspection, and material provenance)
+        /// remain usable in production artifacts.
+        /// </summary>
+        public static bool RequiresDetailedDdgiReceiverDiagnostics(
+            GlobalIlluminationDebugView view)
+        {
+            return view is GlobalIlluminationDebugView.DdgiIrradiance
+                or GlobalIlluminationDebugView.DdgiVisibility
+                or GlobalIlluminationDebugView.DdgiProbeIndex
+                or GlobalIlluminationDebugView.DdgiProbeState
+                or GlobalIlluminationDebugView.DdgiProbeRelocation
+                or GlobalIlluminationDebugView.DdgiLeakClamp
+                or GlobalIlluminationDebugView.DdgiCoverage
+                or GlobalIlluminationDebugView.DdgiCascadeSelection
+                or GlobalIlluminationDebugView.DdgiCascadeBlendWeight
+                or GlobalIlluminationDebugView.DdgiUpdateReasons
+                or GlobalIlluminationDebugView.DdgiRayBudget
+                or GlobalIlluminationDebugView.DdgiGatherLocalVolume
+                or GlobalIlluminationDebugView.DdgiGatherClipmap
+                or GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight
+                or GlobalIlluminationDebugView.DdgiGatherFallback
+                or GlobalIlluminationDebugView.DdgiRawDiffuse
+                or GlobalIlluminationDebugView.DdgiSuppressionMask
+                or GlobalIlluminationDebugView.DdgiEffectiveWeight
+                or GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight
+                or GlobalIlluminationDebugView.DdgiClassificationInvalidScore
+                or GlobalIlluminationDebugView.DdgiVisibilityMoments
+                or GlobalIlluminationDebugView.DdgiSpatialCoverage
+                or GlobalIlluminationDebugView.DdgiSupportCoverage
+                or GlobalIlluminationDebugView.DdgiDataConfidence
+                or GlobalIlluminationDebugView.DdgiVisibilityConfidence
+                or GlobalIlluminationDebugView.DdgiConfidenceChain
+                or GlobalIlluminationDebugView.DdgiProbeLogicalPosition
+                or GlobalIlluminationDebugView.DdgiProbeRelocatedPosition
+                or GlobalIlluminationDebugView.DdgiProbeRelocationDirection
+                or GlobalIlluminationDebugView.DdgiGatherBlendWeight
+                or GlobalIlluminationDebugView.DdgiSampledIrradiance
+                or GlobalIlluminationDebugView.DdgiFinalDiffuse
+                or GlobalIlluminationDebugView.DdgiConfidenceBypass
+                or GlobalIlluminationDebugView.DdgiDirectionalSupport
+                or GlobalIlluminationDebugView.DdgiSourceCacheRadiance
+                or GlobalIlluminationDebugView.DdgiProbeResidency
+                or GlobalIlluminationDebugView.DdgiResidencyFallback
+                or GlobalIlluminationDebugView.DdgiPageAge
+                or GlobalIlluminationDebugView.DdgiPhysicalPage;
+        }
+
+        public static bool IsGlobalIlluminationDebugViewAvailable(
+            GlobalIlluminationDebugView view) =>
+            DetailedDdgiDiagnosticsCompiled ||
+            !RequiresDetailedDdgiReceiverDiagnostics(view);
+
+        /// <summary>
+        /// Resolves an authored request to a branch that exists in the running
+        /// shader bundle.  The authored setting is retained separately in
+        /// diagnostics, so an unavailable request is never reported as accepted.
+        /// </summary>
+        public static GlobalIlluminationDebugView ResolveGlobalIlluminationDebugView(
+            GlobalIlluminationDebugView view) =>
+            IsGlobalIlluminationDebugViewAvailable(view)
+                ? view
+                : GlobalIlluminationDebugView.None;
+
+        public static string GetGlobalIlluminationDebugViewAvailabilityReason(
+            GlobalIlluminationDebugView view) =>
+            IsGlobalIlluminationDebugViewAvailable(view)
+                ? string.Empty
+                : "The requested DDGI receiver view requires a Debug or DetailedInvestigation shader artifact.";
     }
 
     public enum GiMetricFreshness
@@ -287,6 +359,25 @@ namespace Njulf.Rendering.Diagnostics
         string Summary,
         IReadOnlyList<SimpleDdgiLayoutVolumeTelemetry> Volumes)
     {
+        public SimpleDdgiProbeResidencyMode ResidencyMode { get; init; } =
+            SimpleDdgiProbeResidencyMode.Dense;
+        public int DensePayloadProbeCount { get; init; }
+        public int SparseVirtualProbeCount { get; init; }
+        public int SparseVirtualPageCount { get; init; }
+        public int SparsePhysicalPageCapacity { get; init; }
+        public int PhysicalProbeCapacity { get; init; }
+        public int SampledAtlasPhysicalProbeCapacity { get; init; }
+        public int SparsePagePaddingProbeCount { get; init; }
+        public int SampledAtlasPaddingProbeCount { get; init; }
+        public ulong SampledAtlasPaddingBytes { get; init; }
+        public ulong DenseEquivalentBytes { get; init; }
+        public ulong AllocatedSparseBytes { get; init; }
+        public ulong AvoidedBytes { get; init; }
+        public ulong ResidencyArenaBytes { get; init; }
+        public bool PhysicalPageBudgetWasReduced { get; init; }
+        public string PhysicalPageBudgetDecision { get; init; } = string.Empty;
+        public string ResidencyFallbackReason { get; init; } = string.Empty;
+
         public static SimpleDdgiLayoutTelemetry Unavailable(string reason) => new(
             false,
             DdgiQualityTier.DdgiHigh,
@@ -363,8 +454,431 @@ namespace Njulf.Rendering.Diagnostics
                 rejectedVolumeCount,
                 report.WasDegraded,
                 report.Summary,
-                volumes);
+                volumes)
+            {
+                ResidencyMode = report.AcceptedMemoryPlan.ResidencyMode,
+                DensePayloadProbeCount = report.DensePayloadProbeCount,
+                SparseVirtualProbeCount = report.SparseVirtualProbeCount,
+                SparseVirtualPageCount = report.SparseVirtualPageCount,
+                SparsePhysicalPageCapacity = report.SparsePhysicalPageCapacity,
+                PhysicalProbeCapacity = report.PhysicalProbeCapacity,
+                SampledAtlasPhysicalProbeCapacity =
+                    report.SampledAtlasPhysicalProbeCapacity,
+                SparsePagePaddingProbeCount =
+                    report.SparsePagePaddingProbeCount,
+                SampledAtlasPaddingProbeCount =
+                    report.SampledAtlasPaddingProbeCount,
+                SampledAtlasPaddingBytes = report.SampledAtlasPaddingBytes,
+                DenseEquivalentBytes = report.DenseEquivalentBytes,
+                AllocatedSparseBytes = report.AllocatedSparseBytes,
+                AvoidedBytes = report.AvoidedBytes,
+                ResidencyArenaBytes = report.AcceptedMemoryPlan.ResidencyArenaBytes,
+                PhysicalPageBudgetWasReduced = report.PhysicalPageBudgetWasReduced,
+                PhysicalPageBudgetDecision = report.PhysicalPageBudgetDecision,
+                ResidencyFallbackReason = report.ResidencyFallbackReason
+            };
         }
+    }
+
+    public sealed record SimpleDdgiResidencyRingTelemetry(
+        int RingIndex,
+        int VirtualProbeCount,
+        int ResidentProbeCount,
+        int ActiveResidentProbeCount,
+        int InactiveResidentProbeCount,
+        int DemandedPageCount,
+        int ConvergedResidentProbeCount);
+
+    /// <summary>
+    /// Fixed-size, fence-complete sparse-page summary plus exact allocation-plan
+    /// bytes. It never contains a page list and therefore remains O(1) to export.
+    /// </summary>
+    public sealed record SimpleDdgiProbeResidencyTelemetry(
+        bool IsAvailable,
+        SimpleDdgiProbeResidencyMode Mode,
+        bool SparseAuthoritative,
+        string FallbackReason)
+    {
+        public uint CurrentResourceGeneration { get; init; }
+        /// <summary>
+        /// True when runtime validation stopped all page-table mutation. A
+        /// valid frozen map may remain readable, but the feature is degraded
+        /// until a fresh resource generation is bootstrapped.
+        /// </summary>
+        public bool MutationFrozen { get; init; }
+        public bool DevelopmentMutationFrozen { get; init; }
+        public bool ResidencyStateValid { get; init; }
+        public bool FeedbackValid { get; init; }
+        public ulong FeedbackFrameSerial { get; init; }
+        public uint FeedbackResourceGeneration { get; init; }
+        public uint MappingGeneration { get; init; }
+        public uint DemandEpoch { get; init; }
+        public int VirtualProbeCount { get; init; }
+        public int VirtualPageCount { get; init; }
+        public int DensePhysicalProbeCount { get; init; }
+        public int SparsePhysicalPageCapacity { get; init; }
+        public int PhysicalProbeCapacity { get; init; }
+        public int ResidentPageCount { get; init; }
+        public int FreePageCount { get; init; }
+        public int InitializingPageCount { get; init; }
+        public int PublishedPageCount { get; init; }
+        public int SuppressedPageCount { get; init; }
+        public int ResidentProbeCount { get; init; }
+        public int NonResidentVirtualProbeCount { get; init; }
+        public int ActiveResidentProbeCount { get; init; }
+        public int InactiveResidentProbeCount { get; init; }
+        public int ConvergedResidentProbeCount { get; init; }
+        public int VisibleDemandPageCount { get; init; }
+        public int ReceiverDemandPageCount { get; init; }
+        public int ReceiverRequestCount { get; init; }
+        public int ReceiverRequestOverflowCount { get; init; }
+        public bool PredictorComparisonValid { get; init; }
+        public int PredictorActualPageCount { get; init; }
+        public int PredictorTruePositivePageCount { get; init; }
+        public int PredictorFalseNegativePageCount { get; init; }
+        public int PredictorFalsePositivePageCount { get; init; }
+        public double PredictorFalseNegativeRate { get; init; }
+        public double PredictorInflationRatio { get; init; }
+        public int RetainedPageCount { get; init; }
+        public int RetainedAge0To15PageCount { get; init; }
+        public int RetainedAge16To63PageCount { get; init; }
+        public int RetainedAge64To255PageCount { get; init; }
+        public int RetainedAge256PlusPageCount { get; init; }
+        public int VisibleDemandResidentHitPageCount { get; init; }
+        public int VisibleDemandMissingPageCount { get; init; }
+        public int AdmissionCount { get; init; }
+        public int EvictionCount { get; init; }
+        public int FailedAdmissionCount { get; init; }
+        public int PoolPressureFrameCount { get; init; }
+        public int ConsecutivePressureFrames { get; init; }
+        public int MaximumConsecutivePressureFrames { get; init; }
+        public int PageTableReverseDisagreementCount { get; init; }
+        public int DuplicateVirtualOwnerCount { get; init; }
+        public int DuplicatePhysicalOwnerCount { get; init; }
+        public int StaleVirtualRequestCount { get; init; }
+        public int StaleMappingRequestCount { get; init; }
+        public int StaleResourceRequestCount { get; init; }
+        public int OutOfRangeRequestCount { get; init; }
+        public int NonResidentGatherRejectionCount { get; init; }
+        public int CoarserFallbackCount { get; init; }
+        public int SuppressionCount { get; init; }
+        public int RetryCount { get; init; }
+        public int DevelopmentPinnedPageCount { get; init; }
+        public ulong DevelopmentControlCommandCount { get; init; }
+        public int LastDevelopmentControlledVirtualPage { get; init; } = -1;
+        public bool LastDevelopmentPinState { get; init; }
+        public int AllocationToScheduleP50Frames { get; init; }
+        public int AllocationToScheduleP95Frames { get; init; }
+        public int AllocationToScheduleMaximumFrames { get; init; }
+        public int AllocationToPublicationP50Frames { get; init; }
+        public int AllocationToPublicationP95Frames { get; init; }
+        public int AllocationToPublicationMaximumFrames { get; init; }
+        public int OrdinaryAllocationToPublicationP50Frames { get; init; }
+        public int OrdinaryAllocationToPublicationP95Frames { get; init; }
+        public int OrdinaryAllocationToPublicationMaximumFrames { get; init; }
+        public int CutAllocationToPublicationP50Frames { get; init; }
+        public int CutAllocationToPublicationP95Frames { get; init; }
+        public int CutAllocationToPublicationMaximumFrames { get; init; }
+        public uint EventSourceGeneration { get; init; }
+        public uint EventCohortGeneration { get; init; }
+        public int AdmissionProbeCount { get; init; }
+        public int EvictionProbeCount { get; init; }
+        public int OtherGenerationEvictionProbeCount { get; init; }
+        public ulong PhysicalPayloadBytes { get; init; }
+        public ulong PageArenaBytes { get; init; }
+        public ulong FeedbackReadbackBytes { get; init; }
+        public ulong RetiredBytes { get; init; }
+        public ulong DenseEquivalentBytes { get; init; }
+        public ulong AllocatedCapacityBytes { get; init; }
+        public ulong AvoidedBytes { get; init; }
+        public ulong PayloadBytesAvoidedThisFrame { get; init; }
+        public ulong PrimaryRaysAvoidedThisFrame { get; init; }
+        public IReadOnlyList<SimpleDdgiResidencyRingTelemetry> Rings { get; init; } =
+            Array.Empty<SimpleDdgiResidencyRingTelemetry>();
+        public int ConfiguredPhysicalPageBudget { get; init; }
+        public int ConfiguredMinimumPhysicalPageBudget { get; init; }
+        public int RetentionFrames { get; init; }
+        public int MaximumAdmissionsPerFrame { get; init; }
+        public int MaximumReceiverFeedbackRequests { get; init; }
+        public int InactiveRetryFrames { get; init; }
+
+        public static SimpleDdgiProbeResidencyTelemetry Unavailable(
+            string reason) => new(
+                false,
+                SimpleDdgiProbeResidencyMode.Dense,
+                false,
+                reason);
+    }
+
+    public static class SimpleDdgiProbeResidencyTelemetryFactory
+    {
+        public static SimpleDdgiProbeResidencyTelemetry Create(
+            SimpleDdgiVolumeManager? manager)
+        {
+            if (manager?.LastLayoutReport is not { } report)
+            {
+                return SimpleDdgiProbeResidencyTelemetry.Unavailable(
+                    "Simple DDGI did not produce a resolved residency layout.");
+            }
+
+            GPUSimpleDdgiResidencyFeedback feedback =
+                manager.LastProbeResidencyFeedback;
+            SimpleDdgiProbeResidencyMode mode =
+                manager.ProbeResidencyMode;
+            bool valid = IsFeedbackValidForMode(
+                mode,
+                manager.ProbeResidencyFeedbackValid);
+            SimpleDdgiMemoryPlan plan = report.AcceptedMemoryPlan;
+            ulong sampledBytesPerProbe =
+                plan.SampledAtlasPhysicalProbeCapacity > 0
+                    ? plan.SampledAtlasImageBytes /
+                        (ulong)plan.SampledAtlasPhysicalProbeCapacity
+                    : 0UL;
+            ulong payloadBytesPerProbe = checked(
+                SimpleDdgiMemoryPlan.IrradianceBytesPerProbe +
+                SimpleDdgiMemoryPlan.VisibilityBytesPerProbe +
+                SimpleDdgiMemoryPlan.IrradianceBytesPerProbe +
+                (ulong)Math.Max(0, plan.RayCapacity) *
+                    SimpleDdgiMemoryPlan.TransportRayCacheBytes +
+                sampledBytesPerProbe);
+            ulong nonResident = valid
+                ? feedback.NonResidentVirtualProbeCount
+                : (ulong)Math.Max(0, plan.NonResidentVirtualProbeCapacity);
+            var rings = new[]
+            {
+                Ring(0, feedback.NearVirtualProbeCount,
+                    feedback.NearResidentProbeCount,
+                    feedback.NearActiveResidentProbeCount,
+                    feedback.NearInactiveResidentProbeCount,
+                    feedback.NearDemandedPageCount,
+                    feedback.NearConvergedResidentProbeCount),
+                Ring(1, feedback.MidVirtualProbeCount,
+                    feedback.MidResidentProbeCount,
+                    feedback.MidActiveResidentProbeCount,
+                    feedback.MidInactiveResidentProbeCount,
+                    feedback.MidDemandedPageCount,
+                    feedback.MidConvergedResidentProbeCount),
+                Ring(2, feedback.FarVirtualProbeCount,
+                    feedback.FarResidentProbeCount,
+                    feedback.FarActiveResidentProbeCount,
+                    feedback.FarInactiveResidentProbeCount,
+                    feedback.FarDemandedPageCount,
+                    feedback.FarConvergedResidentProbeCount)
+            };
+            bool mutationFrozen = manager.ProbeResidencyMutationFrozen;
+            bool residencyStateValid = manager.ProbeResidencyStateValid;
+            string fallbackReason = !string.IsNullOrWhiteSpace(
+                    report.ResidencyFallbackReason)
+                ? report.ResidencyFallbackReason
+                : manager.ProbeResidencyFailureReason;
+            if (mutationFrozen && string.IsNullOrWhiteSpace(fallbackReason))
+                fallbackReason = "Sparse residency mutation is frozen.";
+            bool sparseAuthoritative =
+                mode.UsesSparsePayloads() &&
+                (!mutationFrozen || residencyStateValid);
+            bool predictorComparisonValid = valid &&
+                mode ==
+                    SimpleDdgiProbeResidencyMode.Shadow;
+            uint predictorActualPages = predictorComparisonValid
+                ? feedback.OpaqueGatherDemandPageCount
+                : 0u;
+            uint predictorPages = predictorComparisonValid
+                ? feedback.VisibleDemandPageCount
+                : 0u;
+
+            return new SimpleDdgiProbeResidencyTelemetry(
+                true,
+                mode,
+                sparseAuthoritative,
+                fallbackReason)
+            {
+                CurrentResourceGeneration = manager.ProbeResidencyResourceGeneration,
+                MutationFrozen = mutationFrozen,
+                DevelopmentMutationFrozen =
+                    manager.ProbeResidencyDevelopmentMutationFrozen,
+                ResidencyStateValid = residencyStateValid,
+                FeedbackValid = valid,
+                FeedbackFrameSerial = manager.ProbeResidencyFeedbackFrameSerial,
+                FeedbackResourceGeneration = valid
+                    ? feedback.ResidencyResourceGeneration
+                    : 0u,
+                MappingGeneration = valid ? feedback.MappingGenerationCounter : 0u,
+                DemandEpoch = valid ? feedback.DemandEpoch : 0u,
+                VirtualProbeCount = valid
+                    ? ToInt(feedback.VirtualProbeCount)
+                    : plan.VirtualProbeCount,
+                VirtualPageCount = valid
+                    ? ToInt(feedback.VirtualPageCount)
+                    : plan.SparseVirtualPageCount,
+                DensePhysicalProbeCount = valid
+                    ? ToInt(feedback.DensePhysicalProbeCount)
+                    : plan.DensePayloadProbeCount,
+                SparsePhysicalPageCapacity = valid
+                    ? ToInt(feedback.SparsePhysicalPageCapacity)
+                    : plan.SparsePhysicalPageCapacity,
+                PhysicalProbeCapacity = valid
+                    ? ToInt(feedback.PhysicalProbeCapacity)
+                    : plan.PhysicalProbeCapacity,
+                ResidentPageCount = valid ? ToInt(feedback.ResidentPageCount) : 0,
+                FreePageCount = valid
+                    ? ToInt(feedback.FreePageCount)
+                    : plan.SparsePhysicalPageCapacity,
+                InitializingPageCount = valid ? ToInt(feedback.InitializingPageCount) : 0,
+                PublishedPageCount = valid ? ToInt(feedback.PublishedPageCount) : 0,
+                SuppressedPageCount = valid ? ToInt(feedback.SuppressedPageCount) : 0,
+                ResidentProbeCount = valid ? ToInt(feedback.ResidentProbeCount) : 0,
+                NonResidentVirtualProbeCount = ToInt(nonResident),
+                ActiveResidentProbeCount = valid ? ToInt(feedback.ActiveResidentProbeCount) : 0,
+                InactiveResidentProbeCount = valid ? ToInt(feedback.InactiveResidentProbeCount) : 0,
+                ConvergedResidentProbeCount = valid ? ToInt(feedback.ConvergedResidentProbeCount) : 0,
+                VisibleDemandPageCount = valid ? ToInt(feedback.VisibleDemandPageCount) : 0,
+                ReceiverDemandPageCount = valid ? ToInt(feedback.ReceiverDemandPageCount) : 0,
+                ReceiverRequestCount = valid ? ToInt(feedback.ReceiverRequestCount) : 0,
+                ReceiverRequestOverflowCount = valid ? ToInt(feedback.ReceiverRequestOverflowCount) : 0,
+                PredictorComparisonValid = predictorComparisonValid,
+                PredictorActualPageCount = predictorComparisonValid
+                    ? ToInt(feedback.OpaqueGatherDemandPageCount)
+                    : 0,
+                PredictorTruePositivePageCount = predictorComparisonValid
+                    ? ToInt(feedback.PredictorTruePositivePageCount)
+                    : 0,
+                PredictorFalseNegativePageCount = predictorComparisonValid
+                    ? ToInt(feedback.PredictorFalseNegativePageCount)
+                    : 0,
+                PredictorFalsePositivePageCount = predictorComparisonValid
+                    ? ToInt(feedback.PredictorFalsePositivePageCount)
+                    : 0,
+                PredictorFalseNegativeRate = predictorComparisonValid
+                    ? (double)feedback.PredictorFalseNegativePageCount /
+                        Math.Max(1u, predictorActualPages)
+                    : 0.0,
+                PredictorInflationRatio = predictorComparisonValid
+                    ? (double)predictorPages / Math.Max(1u, predictorActualPages)
+                    : 0.0,
+                RetainedPageCount = valid ? ToInt(feedback.RetainedPageCount) : 0,
+                RetainedAge0To15PageCount = valid ? ToInt(feedback.RetainedAge0To15PageCount) : 0,
+                RetainedAge16To63PageCount = valid ? ToInt(feedback.RetainedAge16To63PageCount) : 0,
+                RetainedAge64To255PageCount = valid ? ToInt(feedback.RetainedAge64To255PageCount) : 0,
+                RetainedAge256PlusPageCount = valid ? ToInt(feedback.RetainedAge256PlusPageCount) : 0,
+                VisibleDemandResidentHitPageCount = valid ? ToInt(feedback.VisibleDemandResidentHitPageCount) : 0,
+                VisibleDemandMissingPageCount = valid ? ToInt(feedback.VisibleDemandMissingPageCount) : 0,
+                AdmissionCount = valid ? ToInt(feedback.AdmissionCount) : 0,
+                EvictionCount = valid ? ToInt(feedback.EvictionCount) : 0,
+                FailedAdmissionCount = valid ? ToInt(feedback.FailedAdmissionCount) : 0,
+                PoolPressureFrameCount = valid ? ToInt(feedback.PoolPressureFrameCount) : 0,
+                ConsecutivePressureFrames = valid ? ToInt(feedback.ConsecutivePressureFrames) : 0,
+                MaximumConsecutivePressureFrames = valid ? ToInt(feedback.MaximumConsecutivePressureFrames) : 0,
+                PageTableReverseDisagreementCount = valid ? ToInt(feedback.PageTableReverseDisagreementCount) : 0,
+                DuplicateVirtualOwnerCount = valid ? ToInt(feedback.DuplicateVirtualOwnerCount) : 0,
+                DuplicatePhysicalOwnerCount = valid ? ToInt(feedback.DuplicatePhysicalOwnerCount) : 0,
+                StaleVirtualRequestCount = valid ? ToInt(feedback.StaleVirtualRequestCount) : 0,
+                StaleMappingRequestCount = valid ? ToInt(feedback.StaleMappingRequestCount) : 0,
+                StaleResourceRequestCount = valid ? ToInt(feedback.StaleResourceRequestCount) : 0,
+                OutOfRangeRequestCount = valid ? ToInt(feedback.OutOfRangeRequestCount) : 0,
+                NonResidentGatherRejectionCount = valid ? ToInt(feedback.NonResidentGatherRejectionCount) : 0,
+                CoarserFallbackCount = valid ? ToInt(feedback.CoarserFallbackCount) : 0,
+                SuppressionCount = valid ? ToInt(feedback.SuppressionCount) : 0,
+                RetryCount = valid ? ToInt(feedback.RetryCount) : 0,
+                DevelopmentPinnedPageCount = valid
+                    ? ToInt(feedback.DevelopmentPinnedPageCount)
+                    : 0,
+                DevelopmentControlCommandCount =
+                    manager.ProbeResidencyDevelopmentControlCommandCount,
+                LastDevelopmentControlledVirtualPage =
+                    manager.ProbeResidencyLastDevelopmentControlledVirtualPage,
+                LastDevelopmentPinState =
+                    manager.ProbeResidencyLastDevelopmentPinState,
+                AllocationToScheduleP50Frames = valid ? ToInt(feedback.AllocationToScheduleP50) : 0,
+                AllocationToScheduleP95Frames = valid ? ToInt(feedback.AllocationToScheduleP95) : 0,
+                AllocationToScheduleMaximumFrames = valid ? ToInt(feedback.AllocationToScheduleMax) : 0,
+                AllocationToPublicationP50Frames = valid ? ToInt(feedback.AllocationToPublicationP50) : 0,
+                AllocationToPublicationP95Frames = valid ? ToInt(feedback.AllocationToPublicationP95) : 0,
+                AllocationToPublicationMaximumFrames = valid ? ToInt(feedback.AllocationToPublicationMax) : 0,
+                OrdinaryAllocationToPublicationP50Frames = valid
+                    ? ToInt(feedback.OrdinaryAllocationToPublicationP50)
+                    : 0,
+                OrdinaryAllocationToPublicationP95Frames = valid
+                    ? ToInt(feedback.OrdinaryAllocationToPublicationP95)
+                    : 0,
+                OrdinaryAllocationToPublicationMaximumFrames = valid
+                    ? ToInt(feedback.OrdinaryAllocationToPublicationMax)
+                    : 0,
+                CutAllocationToPublicationP50Frames = valid
+                    ? ToInt(feedback.CutAllocationToPublicationP50)
+                    : 0,
+                CutAllocationToPublicationP95Frames = valid
+                    ? ToInt(feedback.CutAllocationToPublicationP95)
+                    : 0,
+                CutAllocationToPublicationMaximumFrames = valid
+                    ? ToInt(feedback.CutAllocationToPublicationMax)
+                    : 0,
+                EventSourceGeneration = valid ? feedback.EventSourceGeneration : 0u,
+                EventCohortGeneration = valid ? feedback.EventCohortGeneration : 0u,
+                AdmissionProbeCount = valid ? ToInt(feedback.AdmissionProbeCount) : 0,
+                EvictionProbeCount = valid ? ToInt(feedback.EvictionProbeCount) : 0,
+                OtherGenerationEvictionProbeCount = valid
+                    ? ToInt(feedback.OtherGenerationEvictionProbeCount)
+                    : 0,
+                PhysicalPayloadBytes = plan.PhysicalPayloadBytes,
+                PageArenaBytes = manager.ProbeResidencyArenaBytes,
+                FeedbackReadbackBytes = manager.ProbeResidencyFeedbackReadbackBytes,
+                RetiredBytes = manager.ProbeResidencyRetiredBytes,
+                DenseEquivalentBytes = report.DenseEquivalentBytes,
+                AllocatedCapacityBytes = report.AllocatedSparseBytes,
+                AvoidedBytes = report.AvoidedBytes,
+                PayloadBytesAvoidedThisFrame = SaturatingMultiply(
+                    nonResident,
+                    payloadBytesPerProbe),
+                PrimaryRaysAvoidedThisFrame = SaturatingMultiply(
+                    nonResident,
+                    (ulong)Math.Max(0, plan.RayCapacity)),
+                Rings = rings,
+                ConfiguredPhysicalPageBudget =
+                    manager.ProbeResidencyConfiguredPhysicalPageBudget,
+                ConfiguredMinimumPhysicalPageBudget =
+                    manager.ProbeResidencyConfiguredMinimumPhysicalPageBudget,
+                RetentionFrames = manager.ProbeResidencyRetentionFrames,
+                MaximumAdmissionsPerFrame =
+                    manager.ProbeResidencyMaximumAdmissionsPerFrame,
+                MaximumReceiverFeedbackRequests =
+                    manager.ProbeResidencyMaximumReceiverFeedbackRequests,
+                InactiveRetryFrames = manager.ProbeResidencyInactiveRetryFrames
+            };
+        }
+
+        internal static bool IsFeedbackValidForMode(
+            SimpleDdgiProbeResidencyMode mode,
+            bool feedbackValid) =>
+            mode.CollectsDemand() && feedbackValid;
+
+        private static SimpleDdgiResidencyRingTelemetry Ring(
+            int index,
+            uint virtualCount,
+            uint residentCount,
+            uint activeCount,
+            uint inactiveCount,
+            uint demandedCount,
+            uint convergedCount) => new(
+                index,
+                ToInt(virtualCount),
+                ToInt(residentCount),
+                ToInt(activeCount),
+                ToInt(inactiveCount),
+                ToInt(demandedCount),
+                ToInt(convergedCount));
+
+        private static int ToInt(uint value) =>
+            value > int.MaxValue ? int.MaxValue : (int)value;
+
+        private static int ToInt(ulong value) =>
+            value > int.MaxValue ? int.MaxValue : (int)value;
+
+        private static ulong SaturatingMultiply(ulong left, ulong right) =>
+            left == 0UL || right == 0UL
+                ? 0UL
+                : left > ulong.MaxValue / right
+                    ? ulong.MaxValue
+                    : left * right;
     }
 
     /// <summary>
@@ -624,12 +1138,13 @@ namespace Njulf.Rendering.Diagnostics
             if (diagnostics == null)
                 throw new ArgumentNullException(nameof(diagnostics));
 
-            var states = new List<GiFeatureState>(11)
+            var states = new List<GiFeatureState>(12)
             {
                 CreateGlobalIlluminationState(diagnostics),
                 CreateEmergencyGiFallbackState(diagnostics),
                 CreateDdgiState(diagnostics),
                 CreateSimpleDdgiState(diagnostics),
+                CreateSimpleDdgiProbeResidencyState(diagnostics),
                 CreateSimpleDdgiTransportState(diagnostics),
                 CreateRayQueryGiState(diagnostics),
                 CreatePagedFarFieldState(diagnostics),
@@ -933,6 +1448,69 @@ namespace Njulf.Rendering.Diagnostics
             if (active)
                 return new GiFeatureState("detailed-gi-counters", true, true, true, true, GiFeatureStateStatus.Active, "Completed GPU counter readback is available.");
             return new GiFeatureState("detailed-gi-counters", true, true, true, false, GiFeatureStateStatus.Fallback, "Counter readback is unavailable for the completed frame.");
+        }
+
+        private static GiFeatureState CreateSimpleDdgiProbeResidencyState(
+            RendererDiagnostics diagnostics)
+        {
+            SimpleDdgiProbeResidencyTelemetry residency =
+                diagnostics.SimpleDdgiProbeResidency;
+            bool requested = residency.Mode != SimpleDdgiProbeResidencyMode.Dense ||
+                !string.IsNullOrWhiteSpace(residency.FallbackReason);
+            if (!requested)
+            {
+                return new GiFeatureState(
+                    "simple-ddgi-probe-residency",
+                    true,
+                    true,
+                    false,
+                    false,
+                    GiFeatureStateStatus.Disabled,
+                    "Dense Simple-DDGI payload addressing is selected.");
+            }
+            if (!residency.IsAvailable ||
+                (residency.Mode == SimpleDdgiProbeResidencyMode.Dense &&
+                 !string.IsNullOrWhiteSpace(residency.FallbackReason)))
+            {
+                return new GiFeatureState(
+                    "simple-ddgi-probe-residency",
+                    true,
+                    true,
+                    true,
+                    false,
+                    GiFeatureStateStatus.Fallback,
+                    NonEmptyOr(
+                        residency.FallbackReason,
+                        "Sparse probe residency was requested but its layout is unavailable."));
+            }
+            if (residency.MutationFrozen)
+            {
+                string defaultReason = residency.ResidencyStateValid
+                    ? "Sparse residency mutation is frozen; the last validated mapping remains readable until a fresh transaction is bootstrapped."
+                    : "Sparse residency mutation is frozen and the mapping is invalid; gathers fail closed to the dense coarser ring.";
+                return new GiFeatureState(
+                    "simple-ddgi-probe-residency",
+                    true,
+                    true,
+                    true,
+                    false,
+                    GiFeatureStateStatus.Fallback,
+                    NonEmptyOr(residency.FallbackReason, defaultReason));
+            }
+
+            string reason = residency.Mode == SimpleDdgiProbeResidencyMode.Shadow
+                ? "Shadow demand collection is active; dense payload addressing remains authoritative."
+                : residency.FeedbackValid
+                    ? $"Sparse near-ring paging is authoritative with {residency.ResidentPageCount}/{residency.SparsePhysicalPageCapacity} physical pages resident."
+                    : "Sparse near-ring paging is authoritative; the first fence-complete residency summary is pending.";
+            return new GiFeatureState(
+                "simple-ddgi-probe-residency",
+                true,
+                true,
+                true,
+                true,
+                GiFeatureStateStatus.Active,
+                reason);
         }
 
         private static string NonEmptyOr(string value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
@@ -1683,6 +2261,8 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "gi.effectiveMode", diagnostics.GlobalIlluminationMode.ToString());
             AddSetting(settings, "gi.requestedDebugView", diagnostics.GlobalIlluminationRequestedDebugView.ToString());
             AddSetting(settings, "gi.effectiveDebugView", diagnostics.GlobalIlluminationDebugView.ToString());
+            AddSetting(settings, "gi.requestedDebugViewAvailable", diagnostics.GlobalIlluminationRequestedDebugViewAvailable);
+            AddSetting(settings, "gi.debugViewAvailabilityReason", diagnostics.GlobalIlluminationDebugViewAvailabilityReason);
             AddSetting(settings, "gi.active", diagnostics.GlobalIlluminationEnabled);
             AddSetting(settings, "gi.emergencyFallback", diagnostics.GlobalIlluminationEmergencyFallbackEnabled);
             AddSetting(settings, "gi.fallbackReason", diagnostics.GlobalIlluminationFallbackReason);
@@ -1731,6 +2311,9 @@ namespace Njulf.Rendering.Diagnostics
 
             AddLightingSettings(settings, diagnostics);
             AddLayoutSettings(settings, diagnostics.SimpleDdgiLayout);
+            AddProbeResidencySettings(
+                settings,
+                diagnostics.SimpleDdgiProbeResidency);
             AddSchedulerSettings(settings, diagnostics.SimpleDdgiScheduling, diagnostics.SimpleDdgiSchedulerPolicy);
             AddGpuSchedulerSettings(settings, diagnostics);
             AddFeatureStateSettings(settings, diagnostics);
@@ -1793,6 +2376,23 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "layout.acceptedVolumes", layout.AcceptedVolumeCount);
             AddSetting(settings, "layout.rejectedVolumes", layout.RejectedVolumeCount);
             AddSetting(settings, "layout.degraded", layout.WasDegraded ? 1 : 0);
+            AddSetting(settings, "layout.residency.mode", layout.ResidencyMode.ToString());
+            AddSetting(settings, "layout.residency.densePayloadProbes", layout.DensePayloadProbeCount);
+            AddSetting(settings, "layout.residency.sparseVirtualProbes", layout.SparseVirtualProbeCount);
+            AddSetting(settings, "layout.residency.sparseVirtualPages", layout.SparseVirtualPageCount);
+            AddSetting(settings, "layout.residency.sparsePhysicalPages", layout.SparsePhysicalPageCapacity);
+            AddSetting(settings, "layout.residency.physicalProbeCapacity", layout.PhysicalProbeCapacity);
+            AddSetting(settings, "layout.residency.sampledProbeCapacity", layout.SampledAtlasPhysicalProbeCapacity);
+            AddSetting(settings, "layout.residency.pagePaddingProbes", layout.SparsePagePaddingProbeCount);
+            AddSetting(settings, "layout.residency.sampledPaddingProbes", layout.SampledAtlasPaddingProbeCount);
+            AddSetting(settings, "layout.residency.sampledPaddingBytes", layout.SampledAtlasPaddingBytes);
+            AddSetting(settings, "layout.residency.denseEquivalentBytes", layout.DenseEquivalentBytes);
+            AddSetting(settings, "layout.residency.allocatedBytes", layout.AllocatedSparseBytes);
+            AddSetting(settings, "layout.residency.avoidedBytes", layout.AvoidedBytes);
+            AddSetting(settings, "layout.residency.arenaBytes", layout.ResidencyArenaBytes);
+            AddSetting(settings, "layout.residency.pageBudgetReduced", layout.PhysicalPageBudgetWasReduced ? 1 : 0);
+            AddSetting(settings, "layout.residency.pageBudgetDecision", layout.PhysicalPageBudgetDecision);
+            AddSetting(settings, "layout.residency.fallbackReason", layout.ResidencyFallbackReason);
 
             var volumes = new List<SimpleDdgiLayoutVolumeTelemetry>(layout.Volumes);
             volumes.Sort(static (left, right) =>
@@ -1837,6 +2437,29 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "scheduler.policy.unavailableReason", policy.UnavailableReason);
         }
 
+        private static void AddProbeResidencySettings(
+            List<string> settings,
+            SimpleDdgiProbeResidencyTelemetry residency)
+        {
+            AddSetting(settings, "residency.available", residency.IsAvailable ? 1 : 0);
+            AddSetting(settings, "residency.mode", residency.Mode.ToString());
+            AddSetting(settings, "residency.sparseAuthoritative", residency.SparseAuthoritative ? 1 : 0);
+            AddSetting(settings, "residency.mutationFrozen", residency.MutationFrozen ? 1 : 0);
+            AddSetting(settings, "residency.developmentMutationFrozen", residency.DevelopmentMutationFrozen ? 1 : 0);
+            AddSetting(settings, "residency.stateValid", residency.ResidencyStateValid ? 1 : 0);
+            AddSetting(settings, "residency.developmentPinnedPageCount", residency.DevelopmentPinnedPageCount);
+            AddSetting(settings, "residency.developmentControlCommandCount", residency.DevelopmentControlCommandCount);
+            AddSetting(settings, "residency.lastDevelopmentControlledVirtualPage", residency.LastDevelopmentControlledVirtualPage);
+            AddSetting(settings, "residency.lastDevelopmentPinState", residency.LastDevelopmentPinState ? 1 : 0);
+            AddSetting(settings, "residency.configuredPageBudget", residency.ConfiguredPhysicalPageBudget);
+            AddSetting(settings, "residency.minimumPageBudget", residency.ConfiguredMinimumPhysicalPageBudget);
+            AddSetting(settings, "residency.retentionFrames", residency.RetentionFrames);
+            AddSetting(settings, "residency.maximumAdmissionsPerFrame", residency.MaximumAdmissionsPerFrame);
+            AddSetting(settings, "residency.maximumReceiverFeedbackRequests", residency.MaximumReceiverFeedbackRequests);
+            AddSetting(settings, "residency.inactiveRetryFrames", residency.InactiveRetryFrames);
+            AddSetting(settings, "residency.fallbackReason", residency.FallbackReason);
+        }
+
         private static void AddGpuSchedulerSettings(
             List<string> settings,
             RendererDiagnostics diagnostics)
@@ -1853,6 +2476,16 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "scheduler.gpu.fallbackFreshResetPending", diagnostics.SimpleDdgiSchedulerFallbackFreshResetPending);
             AddSetting(settings, "scheduler.gpu.fallbackCount", diagnostics.SimpleDdgiSchedulerFallbackCount);
             AddSetting(settings, "scheduler.gpu.fallbackReason", diagnostics.SimpleDdgiSchedulerFallbackReason);
+            AddSetting(settings, "scheduler.gpu.fallbackExportPending", diagnostics.SimpleDdgiSchedulerFallbackExportPending);
+            AddSetting(settings, "scheduler.gpu.fallbackExportBytes", diagnostics.SimpleDdgiSchedulerFallbackExportBytes);
+            AddSetting(settings, "scheduler.gpu.stateExportSuccessCount", diagnostics.SimpleDdgiSchedulerStateExportSuccessCount);
+            AddSetting(settings, "scheduler.gpu.stateExportFailureCount", diagnostics.SimpleDdgiSchedulerStateExportFailureCount);
+            AddSetting(settings, "scheduler.gpu.reentryStableFrameCount", diagnostics.SimpleDdgiSchedulerReentryStableFrameCount);
+            AddSetting(settings, "scheduler.gpu.reentryCount", diagnostics.SimpleDdgiSchedulerReentryCount);
+            AddSetting(
+                settings,
+                "transport.tailCertification.fallbackReason",
+                diagnostics.SimpleDdgiTransportTailCertificationFallbackReason);
         }
 
         private static void AddFeatureStateSettings(List<string> settings, RendererDiagnostics diagnostics)

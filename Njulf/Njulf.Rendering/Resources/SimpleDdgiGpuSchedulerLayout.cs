@@ -54,6 +54,10 @@ public readonly record struct SimpleDdgiSchedulerArenaRegion(
 public sealed class SimpleDdgiGpuSchedulerLayout
 {
     public const ulong ArenaAlignmentBytes = 16;
+    // The sparse-capable internal proposal adds two full-width physical owner
+    // words. Keep the maximum shipping arena under an explicit 6.25 MiB gate;
+    // this is concrete allocated capacity, not current scheduler occupancy.
+    public const ulong ShippingArenaBudgetBytes = 25UL * 256UL * 1024UL;
     public const int ShippingFeedbackBytes = 4 * 1024;
     public const int MaxDirtyRegionCapacity = 1024;
     public const int SchedulerWorkgroupSize = 64;
@@ -71,11 +75,11 @@ public sealed class SimpleDdgiGpuSchedulerLayout
     // in CandidateInput, preserving the ABI while avoiding a second full-size
     // candidate pool.
     public const int CandidateCompactIndexStrideBytes = sizeof(uint);
-    // Internal update/proposal storage has seven words. The scheduler carries
+    // Internal update/proposal storage has nine words. The scheduler carries
     // the small classification proposal in private flag bits until emit
     // strips them from the public queue ABI; relocation then reuses all seven
     // words for its transaction-private state proposal.
-    public const int UpdateRecordStrideBytes = 28;
+    public const int UpdateRecordStrideBytes = 36;
     public const int OutcomeStrideBytes = 60;
     public const int IndirectCommandStrideBytes = 16;
     // Ray-bucket metadata and commands are separate ABI regions.  The command

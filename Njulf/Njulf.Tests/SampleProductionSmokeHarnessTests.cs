@@ -585,7 +585,7 @@ public sealed class SampleProductionSmokeHarnessTests
             Assert.That(completion.Report.RetainedSamples, Has.Count.EqualTo(2));
             Assert.That(completion.Report.Workload.PreparedFrameCount, Is.EqualTo(3));
             Assert.That(completion.Report.DeviceLossRecovery.Status, Is.EqualTo("rejected-unsupported"));
-            Assert.That(File.ReadAllText(reportPath), Does.Contain("\"SchemaVersion\": 3"));
+            Assert.That(File.ReadAllText(reportPath), Does.Contain("\"SchemaVersion\": 4"));
         });
     }
 

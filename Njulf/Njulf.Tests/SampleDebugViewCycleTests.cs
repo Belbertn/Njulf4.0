@@ -1,4 +1,5 @@
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Diagnostics;
 using NjulfHelloGame;
 using NUnit.Framework;
 
@@ -23,6 +24,9 @@ public sealed class SampleDebugViewCycleTests
             Assert.That(visited, Does.Contain(GlobalIlluminationDebugView.MaterialTransportHitProvenance));
             Assert.That(visited, Does.Contain(GlobalIlluminationDebugView.FarFieldOccupancySlice));
             Assert.That(visited, Does.Contain(GlobalIlluminationDebugView.FarFieldSunShadow));
+            Assert.That(
+                visited.All(RendererBuildFeatures.IsGlobalIlluminationDebugViewAvailable),
+                Is.True);
         });
     }
 

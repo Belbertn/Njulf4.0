@@ -1490,6 +1490,7 @@ namespace Njulf.Rendering.Resources
                 CollectionsMarshal.AsSpan(_gpuInstanceScratch),
                 barrierDescription: new UploadBarrierDescription(
                     PipelineStageFlags2.AccelerationStructureBuildBitKhr,
+                    AccessFlags2.ShaderReadBit |
                     AccessFlags2.AccelerationStructureReadBitKhr));
             GpuBufferUploader.UploadSpanToBuffer(
                 _context,

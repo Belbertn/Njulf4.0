@@ -12,7 +12,8 @@ namespace Njulf.Rendering.Diagnostics
         Present,
         DeviceWaitIdle,
         ResourceResize,
-        SynchronousUpload
+        SynchronousUpload,
+        ResourceGenerationFenceWait
     }
 
     public sealed record RuntimeStallEvent(RuntimeStallReason Reason, long Microseconds, string Description);

@@ -341,6 +341,9 @@ namespace Njulf.Rendering.Diagnostics
         /// <summary>Requested/accepted layout evidence, including rejected source volumes.</summary>
         public SimpleDdgiLayoutTelemetry SimpleDdgiLayout { get; init; } =
             SimpleDdgiLayoutTelemetry.Unavailable("Simple DDGI layout was not captured.");
+        public SimpleDdgiProbeResidencyTelemetry SimpleDdgiProbeResidency { get; init; } =
+            SimpleDdgiProbeResidencyTelemetry.Unavailable(
+                "Simple DDGI probe residency was not captured.");
         /// <summary>Visible-first scheduler class and pressure evidence.</summary>
         public SimpleDdgiSchedulerPolicyTelemetry SimpleDdgiSchedulerPolicy { get; init; } =
             SimpleDdgiSchedulerPolicyTelemetry.Unavailable("Simple DDGI scheduler policy was not captured.");
@@ -350,6 +353,21 @@ namespace Njulf.Rendering.Diagnostics
         public bool SimpleDdgiSchedulerFallbackFreshResetPending { get; init; }
         public ulong SimpleDdgiSchedulerFallbackCount { get; init; }
         public string SimpleDdgiSchedulerFallbackReason { get; init; } = string.Empty;
+        public bool SimpleDdgiSchedulerFallbackExportPending { get; init; }
+        public ulong SimpleDdgiSchedulerFallbackExportBytes { get; init; }
+        public ulong SimpleDdgiSchedulerStateExportSuccessCount { get; init; }
+        public ulong SimpleDdgiSchedulerStateExportFailureCount { get; init; }
+        public int SimpleDdgiSchedulerReentryStableFrameCount { get; init; }
+        public ulong SimpleDdgiSchedulerReentryCount { get; init; }
+        public string SimpleDdgiTailCertificationFallbackReason { get; init; } = string.Empty;
+        /// <summary>Compact receiver publication/resource evidence for this frame.</summary>
+        public ulong SimpleDdgiReceiverProbeBytes { get; init; }
+        public int SimpleDdgiReceiverProbeCapacity { get; init; }
+        public ulong SimpleDdgiReceiverInvalidationBytes { get; init; }
+        public int SimpleDdgiReceiverInvalidationRangeCount { get; init; }
+        public bool SimpleDdgiReceiverFullClear { get; init; }
+        public uint SimpleDdgiReceiverResourceGeneration { get; init; }
+        public int SimpleDdgiReceiverRecordsPublished { get; init; }
     }
 
     public sealed class PerformanceSnapshotWriter
@@ -688,6 +706,7 @@ namespace Njulf.Rendering.Diagnostics
             ulong scratchAndQueueBytes = SaturatingAdd(
                 diagnostics.SimpleDdgiRayScratchBytes,
                 diagnostics.SimpleDdgiProbeStateBytes,
+                diagnostics.SimpleDdgiReceiverProbeBytes,
                 diagnostics.SimpleDdgiProbeUpdateQueueBytes,
                 diagnostics.SimpleDdgiRelocationClassificationBytes);
             var findings = new List<string>();
@@ -1142,7 +1161,7 @@ namespace Njulf.Rendering.Diagnostics
             return bufferBytes > 0 ? "memory" : "no-timing";
         }
 
-        private static PerformanceGlobalIlluminationSnapshot CreateGlobalIlluminationSnapshot(RendererDiagnostics diagnostics)
+        internal static PerformanceGlobalIlluminationSnapshot CreateGlobalIlluminationSnapshot(RendererDiagnostics diagnostics)
         {
             long cpuRecordMicroseconds = diagnostics.GlobalIlluminationCpuTimingSampleCount > 0
                 ? diagnostics.CpuGlobalIlluminationRecordMicroseconds
@@ -1368,12 +1387,34 @@ namespace Njulf.Rendering.Diagnostics
                 SimpleDdgiSchedulerFallbackFreshResetPending = diagnostics.SimpleDdgiSchedulerFallbackFreshResetPending != 0,
                 SimpleDdgiSchedulerFallbackCount = diagnostics.SimpleDdgiSchedulerFallbackCount,
                 SimpleDdgiSchedulerFallbackReason = diagnostics.SimpleDdgiSchedulerFallbackReason,
+                SimpleDdgiSchedulerFallbackExportPending =
+                    diagnostics.SimpleDdgiSchedulerFallbackExportPending != 0,
+                SimpleDdgiSchedulerFallbackExportBytes =
+                    diagnostics.SimpleDdgiSchedulerFallbackExportBytes,
+                SimpleDdgiSchedulerStateExportSuccessCount =
+                    diagnostics.SimpleDdgiSchedulerStateExportSuccessCount,
+                SimpleDdgiSchedulerStateExportFailureCount =
+                    diagnostics.SimpleDdgiSchedulerStateExportFailureCount,
+                SimpleDdgiSchedulerReentryStableFrameCount =
+                    diagnostics.SimpleDdgiSchedulerReentryStableFrameCount,
+                SimpleDdgiSchedulerReentryCount =
+                    diagnostics.SimpleDdgiSchedulerReentryCount,
+                SimpleDdgiTailCertificationFallbackReason =
+                    diagnostics.SimpleDdgiTransportTailCertificationFallbackReason,
+                SimpleDdgiReceiverProbeBytes = diagnostics.SimpleDdgiReceiverProbeBytes,
+                SimpleDdgiReceiverProbeCapacity = diagnostics.SimpleDdgiReceiverProbeCapacity,
+                SimpleDdgiReceiverInvalidationBytes = diagnostics.SimpleDdgiReceiverInvalidationBytes,
+                SimpleDdgiReceiverInvalidationRangeCount = diagnostics.SimpleDdgiReceiverInvalidationRangeCount,
+                SimpleDdgiReceiverFullClear = diagnostics.SimpleDdgiReceiverFullClear != 0,
+                SimpleDdgiReceiverResourceGeneration = diagnostics.SimpleDdgiReceiverResourceGeneration,
+                SimpleDdgiReceiverRecordsPublished = diagnostics.SimpleDdgiReceiverRecordsPublished,
                 Requested = diagnostics.GlobalIlluminationRequested != 0,
                 RequestedMode = diagnostics.GlobalIlluminationRequestedMode,
                 RequestedDebugView = diagnostics.GlobalIlluminationRequestedDebugView,
                 EmergencyGiFallbackActive = diagnostics.GlobalIlluminationEmergencyFallbackEnabled != 0,
                 FallbackReason = diagnostics.GlobalIlluminationFallbackReason,
                 SimpleDdgiLayout = diagnostics.SimpleDdgiLayout,
+                SimpleDdgiProbeResidency = diagnostics.SimpleDdgiProbeResidency,
                 SimpleDdgiSchedulerPolicy = diagnostics.SimpleDdgiSchedulerPolicy
             };
         }

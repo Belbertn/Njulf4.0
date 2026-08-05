@@ -40,6 +40,12 @@ internal sealed record SampleLongRunDescriptorPressureSummary(
     int MaximumSamplerUsed,
     int MaximumSamplerCapacity);
 
+internal sealed record SampleTailDdgiLongSoakTimingGate(
+    string Name,
+    SampleBenchmarkTimingStats Statistics,
+    double FailureThresholdMilliseconds,
+    bool Passed);
+
 internal sealed record SampleLongRunReport(
     int SchemaVersion,
     string Kind,
@@ -68,7 +74,21 @@ internal sealed record SampleLongRunReport(
     SampleLongRunWorkloadSummary Workload,
     SampleRecoveryCapability DeviceLossRecovery,
     [property: JsonPropertyName("producerIdentity")]
-    MaterialGiProducerIdentity ProducerIdentity);
+    MaterialGiProducerIdentity ProducerIdentity)
+{
+    public string BuildConfiguration { get; init; } = string.Empty;
+    public string QualificationProfile { get; init; } = string.Empty;
+    public string GiGpuMetricSource { get; init; } = string.Empty;
+    public IReadOnlyList<string> NonApplicableBudgetMetrics { get; init; } =
+        Array.Empty<string>();
+    public int InformationalBudgetObservationFrameCount { get; init; }
+    public IReadOnlyList<string> InformationalBudgetObservations { get; init; } =
+        Array.Empty<string>();
+    public uint CaptureRenderWidth { get; init; }
+    public uint CaptureRenderHeight { get; init; }
+    public IReadOnlyList<SampleTailDdgiLongSoakTimingGate> TailTimingGates { get; init; } =
+        Array.Empty<SampleTailDdgiLongSoakTimingGate>();
+}
 
 internal sealed record SampleLongRunCompletion(
     bool Passed,
@@ -241,16 +261,21 @@ internal sealed class SampleLongRunMonitor
     private readonly Stopwatch _elapsed = Stopwatch.StartNew();
     private readonly HashSet<string> _budgetViolations = new(StringComparer.Ordinal);
     private readonly HashSet<string> _telemetryCoverageFailures = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _informationalBudgetObservations = new(StringComparer.Ordinal);
     private readonly LongRunMemoryTrendAccumulator _managedMemoryTrend = new();
     private readonly LongRunMemoryTrendAccumulator _trackedGpuMemoryTrend = new();
     private readonly LongRunMemoryTrendAccumulator _actualGpuMemoryTrend = new();
+    private readonly Dictionary<string, TailTimingAccumulator> _tailTiming =
+        new(StringComparer.Ordinal);
     private int _budgetViolationFrameCount;
     private int _telemetryCoverageFailureFrameCount;
+    private int _informationalBudgetObservationFrameCount;
     private int _lastPreparedFrameIndex = -1;
     private int _lastSampleInvocationFrameIndex = -1;
     private bool _warmupCollectionCompleted;
     private bool _completed;
     private RendererDiagnostics? _lastDiagnostics;
+    private RenderBudgetProfileKind? _lastBudgetProfileKind;
     private long _postWarmupDescriptorSampleCount;
     private long _textureExhaustionSampleCount;
     private long _samplerExhaustionSampleCount;
@@ -313,15 +338,6 @@ internal sealed class SampleLongRunMonitor
 
         _workload.PrepareFrame(frameIndex);
         _lastPreparedFrameIndex = frameIndex;
-        if (!_warmupCollectionCompleted && frameIndex >= _options.LongRunWarmupFrames)
-        {
-            // Establish one stable post-warmup managed baseline. The collection
-            // is part of the harness, outside the measured render budgets.
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
-            _warmupCollectionCompleted = true;
-        }
     }
 
     public void Sample(
@@ -351,14 +367,55 @@ internal sealed class SampleLongRunMonitor
             return;
         }
 
+        if (!_warmupCollectionCompleted &&
+            frameIndex >= _options.LongRunWarmupFrames)
+        {
+            // Sample() runs after this frame's renderer budgets have been
+            // finalized. Collect here so the managed baseline measures retained
+            // state, not the allocations made between PrepareFrame() and Draw().
+            CollectRetainedManagedMemory();
+            _warmupCollectionCompleted = true;
+        }
+
+        RenderBudgetSnapshot evaluatedBudget = budget;
+        RendererDiagnostics coverageDiagnostics = diagnostics;
+        if (_options.TailDdgiLongSoak)
+        {
+            BudgetMetric[] informationalOverBudget =
+                (budget.Metrics ?? Array.Empty<BudgetMetric>())
+                    .Where(metric =>
+                        metric.Status == RenderBudgetStatus.OverBudget &&
+                        SampleTailDdgiLongSoakProfile.IsNonApplicableBudgetMetric(
+                            metric.Name))
+                    .ToArray();
+            if (frameIndex >= _options.LongRunWarmupFrames &&
+                informationalOverBudget.Length > 0)
+            {
+                _informationalBudgetObservationFrameCount++;
+                foreach (BudgetMetric metric in informationalOverBudget)
+                {
+                    _informationalBudgetObservations.Add(
+                        $"{metric.Name} (not part of the tail-DDGI runtime budget)");
+                }
+            }
+
+            SampleTailDdgiLongSoakBudgetProjection projection =
+                SampleTailDdgiLongSoakProfile.ProjectBudget(
+                    budget,
+                    diagnostics);
+            evaluatedBudget = projection.Budget;
+            coverageDiagnostics = projection.CoverageDiagnostics;
+        }
+
         IReadOnlyList<BudgetMetric> metrics =
-            budget.Metrics ?? Array.Empty<BudgetMetric>();
+            evaluatedBudget.Metrics ?? Array.Empty<BudgetMetric>();
+        _lastBudgetProfileKind = evaluatedBudget.Profile.Kind;
         SampleBudgetMetricCoverage metricCoverage =
             SampleBudgetMetricCoverage.Evaluate(
                 metrics,
-                diagnostics,
+                coverageDiagnostics,
                 $"Long-run frame {frameIndex}",
-                budget.OverallStatus);
+                evaluatedBudget.OverallStatus);
         if (frameIndex >= _options.LongRunWarmupFrames && !metricCoverage.Passed)
         {
             _telemetryCoverageFailureFrameCount++;
@@ -372,10 +429,39 @@ internal sealed class SampleLongRunMonitor
 
         string[] overBudget = metrics
             .OfType<BudgetMetric>()
-            .Where(metric => metric.Status == RenderBudgetStatus.OverBudget)
+            .Where(metric =>
+                metric.Status == RenderBudgetStatus.OverBudget &&
+                !(_options.TailDdgiLongSoak &&
+                  SampleTailDdgiLongSoakProfile.IsPercentileTimingMetric(
+                      metric.Name)))
             .Select(metric =>
                 $"{metric.Name}={metric.Value:R}{metric.Unit}>{metric.FailureThreshold:R}{metric.Unit}")
             .ToArray();
+        if (_options.TailDdgiLongSoak &&
+            frameIndex >= _options.LongRunWarmupFrames)
+        {
+            foreach (BudgetMetric metric in metrics)
+            {
+                if (!SampleTailDdgiLongSoakProfile.IsPercentileTimingMetric(
+                        metric.Name) ||
+                    metric.Status is RenderBudgetStatus.Unavailable or
+                        RenderBudgetStatus.Unknown)
+                {
+                    continue;
+                }
+
+                if (!_tailTiming.TryGetValue(
+                        metric.Name,
+                        out TailTimingAccumulator? accumulator))
+                {
+                    accumulator = new TailTimingAccumulator(
+                        metric.Name,
+                        metric.FailureThreshold);
+                    _tailTiming.Add(metric.Name, accumulator);
+                }
+                accumulator.Add(metric.Value, metric.FailureThreshold);
+            }
+        }
         if (diagnostics.GpuMemoryBudgetQueryAvailable != 0 &&
             diagnostics.ActualGpuMemoryBudgetBytes > 0 &&
             diagnostics.ActualGpuMemoryUsageBytes > diagnostics.ActualGpuMemoryBudgetBytes)
@@ -416,7 +502,7 @@ internal sealed class SampleLongRunMonitor
             EffectiveGpuMemoryBudgetBytes = diagnostics.GpuMemoryBudgetQueryAvailable != 0
                 ? diagnostics.ActualGpuMemoryBudgetBytes
                 : diagnostics.GpuMemoryBudgetBytes,
-            BudgetStatus = budget.OverallStatus,
+            BudgetStatus = evaluatedBudget.OverallStatus,
             OverBudgetMetrics = overBudget
         });
         if (frameIndex >= _options.LongRunWarmupFrames)
@@ -456,6 +542,22 @@ internal sealed class SampleLongRunMonitor
         _elapsed.Stop();
 
         SampleLongRunWorkloadSummary workload = _workload.Restore();
+        if (_warmupCollectionCompleted &&
+            _managedMemoryTrend.SampleCount > 0 &&
+            _lastPreparedFrameIndex < int.MaxValue)
+        {
+            // Pair the collected warmup baseline with a collected terminal
+            // endpoint. Intermediate observations remain useful for slope and
+            // sawtooth visibility, while dead generation-zero garbage cannot
+            // masquerade as retained growth merely because the run ended just
+            // before a natural collection.
+            CollectRetainedManagedMemory();
+            _managedMemoryTrend.Add(
+                _lastPreparedFrameIndex + 1,
+                checked((ulong)Math.Max(
+                    0L,
+                    GC.GetTotalMemory(forceFullCollection: false))));
+        }
         LongRunMemoryTrend managedTrend = _managedMemoryTrend.Evaluate(
             "managed-memory",
             _options.LongRunMemoryGrowthToleranceBytes);
@@ -469,6 +571,8 @@ internal sealed class SampleLongRunMonitor
                 _options.LongRunMemoryGrowthToleranceBytes);
 
         var failures = new List<string>();
+        SampleTailDdgiLongSoakTimingGate[] tailTimingGates =
+            BuildTailTimingGates();
         if (managedTrend.SampleCount < 2 || gpuTrend.SampleCount < 2)
             failures.Add("Fewer than two post-warmup telemetry samples were captured.");
         if (managedTrend.HasPositiveTrend)
@@ -514,6 +618,53 @@ internal sealed class SampleLongRunMonitor
         if (!workload.MaterialRollbackSucceeded || !workload.CameraRollbackSucceeded)
             failures.Add("The long-run workload did not roll back cleanly without a restart.");
 
+        if (_options.TailDdgiLongSoak)
+        {
+            if (_lastBudgetProfileKind !=
+                RenderBudgetProfileKind.HighSpec1440p60)
+            {
+                failures.Add(
+                    "The tail-DDGI soak did not run under the HighSpec1440p60 budget profile.");
+            }
+            if (tailTimingGates.Length !=
+                SampleTailDdgiLongSoakProfile.RequiredPercentileTimingMetrics.Count)
+            {
+                failures.Add(
+                    "The tail-DDGI soak did not capture every required percentile timing metric.");
+            }
+            foreach (SampleTailDdgiLongSoakTimingGate gate in tailTimingGates)
+            {
+                if (!gate.Passed)
+                {
+                    failures.Add(
+                        $"{gate.Name} P95 exceeded its production budget " +
+                        $"({gate.Statistics.P95Milliseconds:R}ms > " +
+                        $"{gate.FailureThresholdMilliseconds:R}ms).");
+                }
+            }
+            RendererDiagnostics? tailDiagnostics = _lastDiagnostics;
+            if (tailDiagnostics == null ||
+                tailDiagnostics.ActiveQualityPreset != RenderQualityPreset.DdgiHigh ||
+                tailDiagnostics.SimpleDdgiSchedulerMode !=
+                    SimpleDdgiSchedulerMode.GpuResident ||
+                tailDiagnostics.SimpleDdgiActive == 0 ||
+                tailDiagnostics.SimpleDdgiTransportV2Active == 0 ||
+                !tailDiagnostics.SimpleDdgiTransportTailCertificationEnabled ||
+                !tailDiagnostics.SimpleDdgiTransportAccelerationEnabled)
+            {
+                failures.Add(
+                    "The tail-DDGI soak did not retain the accelerated, certified, gpu-resident DDGI identity.");
+            }
+            else if (tailDiagnostics.SimpleDdgiTrackingState ==
+                         SimpleDdgiTrackingState.StaticConverged &&
+                     !tailDiagnostics.SimpleDdgiTransportConvergence
+                         .TailCertificateCurrent)
+            {
+                failures.Add(
+                    "The tail-DDGI soak reported StaticConverged without a current accepted certificate.");
+            }
+        }
+
         string? failure = failures.Count == 0 ? null : string.Join(" ", failures);
         string reportPath = ResolveReportPath(_options.LongRunReportPath);
         var recovery = new SampleRecoveryCapability(
@@ -535,7 +686,7 @@ internal sealed class SampleLongRunMonitor
             _maximumSamplerUsed,
             _maximumSamplerCapacity);
         var report = new SampleLongRunReport(
-            SchemaVersion: 3,
+            SchemaVersion: 4,
             Kind: MaterialGiReleaseEvidenceContract.LongRunProducerKind,
             Status: failure == null ? "passed" : "failed",
             Failure: failure,
@@ -566,7 +717,29 @@ internal sealed class SampleLongRunMonitor
             ProducerIdentity:
                 SampleMaterialGiProducerIdentityFactory.Create(
                     producerDiagnostics,
-                    _getSettingsFingerprint()));
+                    _getSettingsFingerprint(),
+                    _options.TailDdgiLongSoak ? "High" : string.Empty))
+        {
+            BuildConfiguration = producerDiagnostics.CaptureRun.BuildConfiguration,
+            QualificationProfile = _options.TailDdgiLongSoak
+                ? SampleTailDdgiLongSoakProfile.Name
+                : string.Empty,
+            GiGpuMetricSource = _options.TailDdgiLongSoak
+                ? SampleTailDdgiLongSoakProfile.GiGpuMetricSource
+                : string.Empty,
+            NonApplicableBudgetMetrics = _options.TailDdgiLongSoak
+                ? SampleTailDdgiLongSoakProfile.NonApplicableBudgetMetrics
+                : Array.Empty<string>(),
+            InformationalBudgetObservationFrameCount =
+                _informationalBudgetObservationFrameCount,
+            InformationalBudgetObservations =
+                _informationalBudgetObservations
+                    .OrderBy(value => value, StringComparer.Ordinal)
+                    .ToArray(),
+            CaptureRenderWidth = producerDiagnostics.CaptureRenderWidth,
+            CaptureRenderHeight = producerDiagnostics.CaptureRenderHeight,
+            TailTimingGates = tailTimingGates
+        };
 
         WriteReportAtomically(reportPath, report);
         return new SampleLongRunCompletion(
@@ -605,6 +778,24 @@ internal sealed class SampleLongRunMonitor
             Path.Combine(Environment.CurrentDirectory, "material-gi-long-run-report.json"));
     }
 
+    private SampleTailDdgiLongSoakTimingGate[] BuildTailTimingGates()
+    {
+        if (!_options.TailDdgiLongSoak)
+            return Array.Empty<SampleTailDdgiLongSoakTimingGate>();
+
+        return _tailTiming.Values
+            .OrderBy(static accumulator => accumulator.Name, StringComparer.Ordinal)
+            .Select(static accumulator => accumulator.Build())
+            .ToArray();
+    }
+
+    private static void CollectRetainedManagedMemory()
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+    }
+
     private static void WriteReportAtomically(string path, SampleLongRunReport report)
     {
         var options = new JsonSerializerOptions
@@ -618,5 +809,50 @@ internal sealed class SampleLongRunMonitor
             payload,
             SampleEvidenceFileIo.MaximumJsonBytes,
             "Material/GI long-run report");
+    }
+
+    private sealed class TailTimingAccumulator
+    {
+        private readonly List<double> _values = new();
+        private bool _thresholdChanged;
+
+        public TailTimingAccumulator(
+            string name,
+            double failureThresholdMilliseconds)
+        {
+            Name = name;
+            FailureThresholdMilliseconds = failureThresholdMilliseconds;
+        }
+
+        public string Name { get; }
+        public double FailureThresholdMilliseconds { get; }
+
+        public void Add(double value, double failureThresholdMilliseconds)
+        {
+            if (!double.IsFinite(value))
+                return;
+            _thresholdChanged |=
+                failureThresholdMilliseconds !=
+                FailureThresholdMilliseconds;
+            _values.Add(value);
+        }
+
+        public SampleTailDdgiLongSoakTimingGate Build()
+        {
+            SampleBenchmarkTimingStats statistics =
+                SampleBenchmarkAnalyzer.BuildStats(Name, _values);
+            bool passed =
+                !_thresholdChanged &&
+                statistics.Count > 0 &&
+                double.IsFinite(FailureThresholdMilliseconds) &&
+                FailureThresholdMilliseconds > 0.0 &&
+                statistics.P95Milliseconds <=
+                    FailureThresholdMilliseconds;
+            return new SampleTailDdgiLongSoakTimingGate(
+                Name,
+                statistics,
+                FailureThresholdMilliseconds,
+                passed);
+        }
     }
 }

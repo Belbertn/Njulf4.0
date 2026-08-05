@@ -31,6 +31,8 @@ namespace Njulf.Rendering.Resources
 
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
+        private readonly FenceBasedDeleter _deleter;
+        private readonly SynchronizationManager _synchronizationManager;
         private readonly RenderSettings _settings;
         private readonly AccelerationStructureManager _accelerationStructureManager;
         private readonly MaterialManager _materialManager;
@@ -82,6 +84,9 @@ namespace Njulf.Rendering.Resources
         private ulong _pagingFrameSerial;
         private ulong _lastPagedSettingsSignature;
         private ulong _lastPagedSceneSignature;
+        private ulong _lastPagedStableFrameSignature;
+        private bool _hasPagedStableFrameSignature;
+        private bool _pagedGpuStateDirty;
         private Scene? _staticInstanceScene;
         private ulong _staticInstanceSceneContentRevision;
         private bool _hasStaticInstanceSnapshot;
@@ -101,12 +106,17 @@ namespace Njulf.Rendering.Resources
         public FarFieldClipmapManager(
             VulkanContext context,
             BufferManager bufferManager,
+            FenceBasedDeleter deleter,
+            SynchronizationManager synchronizationManager,
             RenderSettings settings,
             AccelerationStructureManager accelerationStructureManager,
             MaterialManager materialManager)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
+            _deleter = deleter ?? throw new ArgumentNullException(nameof(deleter));
+            _synchronizationManager = synchronizationManager ??
+                throw new ArgumentNullException(nameof(synchronizationManager));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _accelerationStructureManager = accelerationStructureManager ?? throw new ArgumentNullException(nameof(accelerationStructureManager));
             _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
@@ -272,12 +282,16 @@ namespace Njulf.Rendering.Resources
                 throw new InvalidOperationException("Paged far-field publication was requested while the legacy clipmap is active.");
 
             _pageCache.MarkBakePublished(request);
+            _pagedGpuStateDirty = true;
         }
 
         internal void MarkPageBakeFailed(FarFieldPageBakeRequest request)
         {
             if (_pagedMode)
+            {
                 _pageCache.MarkBakeFailed(request);
+                _pagedGpuStateDirty = true;
+            }
         }
 
         internal void CompletePagedBakeBatch()
@@ -351,6 +365,7 @@ namespace Njulf.Rendering.Resources
                     // explicit disabled parameter block so old valid pages cannot be
                     // sampled after a runtime toggle.
                     _pagedMode = false;
+                    _hasPagedStableFrameSignature = false;
                     _bakePending = false;
                     _distanceFieldValid = false;
                     _hasClipmapOrigin = false;
@@ -362,6 +377,7 @@ namespace Njulf.Rendering.Resources
                 }
 
                 _pagedMode = false;
+                _hasPagedStableFrameSignature = false;
                 int resolution = ResolveLegacyClipmapResolution(gi);
                 _legacyResolution = resolution;
                 EnsureVoxelCapacity(resolution);
@@ -436,6 +452,7 @@ namespace Njulf.Rendering.Resources
 
             if (!gi.FarFieldClipmapEnabled)
             {
+                _hasPagedStableFrameSignature = false;
                 ClearPageBakeQueue();
                 _bakePending = false;
                 _lastParams = CreateDisabledPagedParams(gi, cameraPosition);
@@ -447,6 +464,7 @@ namespace Njulf.Rendering.Resources
             int pagePoolCapacity = ResolvePagedPageCapacity(gi, pageResolution);
             if (pagePoolCapacity <= 0)
             {
+                _hasPagedStableFrameSignature = false;
                 // Keep the descriptor-safe disabled parameter block, but do not
                 // pretend a page cache exists when the tier cannot fund even one
                 // physical page at the resolved resolution.
@@ -462,32 +480,37 @@ namespace Njulf.Rendering.Resources
             }
             ulong settingsSignature = CreatePagedSettingsSignature(gi, pageResolution, pagePoolCapacity);
             bool pageLayoutChanged = _pageResolution != pageResolution || _pagePoolCapacity != pagePoolCapacity;
+            bool settingsChanged = pageLayoutChanged ||
+                settingsSignature != _lastPagedSettingsSignature;
 
             _pageResolution = pageResolution;
             _pagePoolCapacity = pagePoolCapacity;
             EnsurePagedCapacity(pageResolution, pagePoolCapacity);
             if (_pageCache.Capacity != pagePoolCapacity)
                 _pageCache.Configure(pagePoolCapacity);
-            if (pageLayoutChanged || settingsSignature != _lastPagedSettingsSignature)
+            if (settingsChanged)
             {
                 _pageCache.Clear();
                 ClearPageBakeQueue();
                 _lastPagedSettingsSignature = settingsSignature;
                 _lastPagedSceneSignature = 0;
                 _hasPagedSceneSignature = false;
+                _hasPagedStableFrameSignature = false;
+                _pagedGpuStateDirty = true;
             }
 
             _pageTableCapacity = _pageCache.RequiredGpuTableCapacity;
             if (_pageTableScratch.Length != _pageTableCapacity)
                 _pageTableScratch = new GPUFarFieldPageTableEntry[_pageTableCapacity];
 
-            _pageCache.BeginFrame(AdvancePagingFrameSerial());
             bool staticInstancesChanged = EnsureStaticInstances(
                 scene,
                 sceneContentRevision,
                 stagingRing,
                 commandBuffer);
-            if (staticInstancesChanged || !_hasPagedSceneSignature)
+            bool sceneStateChanged = staticInstancesChanged ||
+                !_hasPagedSceneSignature;
+            if (sceneStateChanged)
             {
                 ulong sceneSignature = CreatePagedSceneSignature(
                     _gpuInstances,
@@ -496,6 +519,33 @@ namespace Njulf.Rendering.Resources
                 _lastPagedSceneSignature = sceneSignature;
                 _hasPagedSceneSignature = true;
             }
+
+            ulong stableFrameSignature = CreatePagedStableFrameSignature(
+                gi,
+                cameraPosition,
+                settingsSignature,
+                _lastPagedSceneSignature,
+                _gpuInstances.Count,
+                _pageTableCapacity);
+            bool stableGpuState =
+                _hasPagedStableFrameSignature &&
+                stableFrameSignature == _lastPagedStableFrameSignature &&
+                !settingsChanged &&
+                !sceneStateChanged &&
+                !_pagedGpuStateDirty &&
+                !_bakePending &&
+                _pageBakeQueue.Count == 0 &&
+                _pageCache.PendingCount == 0;
+            if (stableGpuState)
+            {
+                // No camera, settings, static-scene, residency, or publication
+                // state changed. The immutable page table and params buffer are
+                // already resident, so avoid rebuilding and uploading both on
+                // every settled frame.
+                return;
+            }
+
+            _pageCache.BeginFrame(AdvancePagingFrameSerial());
 
             int evictionCountBeforeRequests = _pageCache.EvictionCount;
             RequestCameraPages(cameraPosition, gi, settingsSignature);
@@ -530,6 +580,9 @@ namespace Njulf.Rendering.Resources
             _bakePending = _pageBakeQueue.Count > 0;
             _lastParams = CreatePagedParams(gi, cameraPosition);
             UploadParams(stagingRing, commandBuffer);
+            _lastPagedStableFrameSignature = stableFrameSignature;
+            _hasPagedStableFrameSignature = true;
+            _pagedGpuStateDirty = false;
         }
 
         private bool EnsureStaticInstances(
@@ -876,7 +929,7 @@ namespace Njulf.Rendering.Resources
             ResizePagedBuffer(ref _voxelBuffer, ref _voxelBufferBytes, voxelBytes, "Far Field Page Pool Voxels");
             if (_bakeVoxelBuffer.IsValid)
             {
-                _bufferManager.DestroyBuffer(_bakeVoxelBuffer);
+                RetireReplacedBuffer(_bakeVoxelBuffer);
                 _bakeVoxelBuffer = BufferHandle.Invalid;
                 _bakeVoxelBufferBytes = 0;
             }
@@ -1074,6 +1127,27 @@ namespace Njulf.Rendering.Resources
             return hash;
         }
 
+        internal static ulong CreatePagedStableFrameSignature(
+            GlobalIlluminationSettings gi,
+            Vector3 cameraPosition,
+            ulong settingsSignature,
+            ulong sceneSignature,
+            int instanceCount,
+            int pageTableCapacity)
+        {
+            ArgumentNullException.ThrowIfNull(gi);
+            ulong hash = settingsSignature;
+            hash = HashAdd(hash, sceneSignature);
+            hash = HashAdd(hash, cameraPosition);
+            hash = HashAdd(hash, BitConverter.SingleToUInt32Bits(gi.FarFieldStartDistance));
+            hash = HashAdd(hash, unchecked((uint)gi.FarFieldMaxTraceSteps));
+            hash = HashAdd(hash, gi.FarFieldForceAll ? 1u : 0u);
+            hash = HashAdd(hash, unchecked((uint)gi.FarFieldPageRequestRadius));
+            hash = HashAdd(hash, unchecked((uint)gi.FarFieldPageUpdatesPerFrame));
+            hash = HashAdd(hash, unchecked((uint)Math.Max(instanceCount, 0)));
+            return HashAdd(hash, unchecked((uint)Math.Max(pageTableCapacity, 0)));
+        }
+
         private static ulong CreatePagedSettingsSignature(GlobalIlluminationSettings gi, int resolution, int capacity)
         {
             ulong hash = 14695981039346656037UL;
@@ -1180,7 +1254,7 @@ namespace Njulf.Rendering.Resources
                 return;
 
             if (handle.IsValid)
-                _bufferManager.DestroyBuffer(handle);
+                RetireReplacedBuffer(handle);
 
             handle = _bufferManager.CreateDeviceBuffer(
                 requiredBytes,
@@ -1198,10 +1272,26 @@ namespace Njulf.Rendering.Resources
                 return;
 
             if (handle.IsValid)
-                _bufferManager.DestroyBuffer(handle);
+                RetireReplacedBuffer(handle);
             handle = BufferHandle.Invalid;
             currentBytes = 0;
             EnsureBuffer(ref handle, ref currentBytes, requiredBytes, debugName);
+        }
+
+        private void RetireReplacedBuffer(BufferHandle handle)
+        {
+            if (!handle.IsValid)
+                return;
+
+            // Bindless descriptors are update-after-bind. A buffer replaced while
+            // assembling the current frame can therefore still be named by an
+            // earlier in-flight submission. Retire it against the current frame's
+            // terminal fence; same-queue ordering guarantees that fence completes
+            // after every older descriptor consumer as well.
+            _deleter.QueueBufferDeletion(
+                _synchronizationManager.GetInFlightFence(),
+                handle,
+                _bufferManager);
         }
 
         private void RegisterIfValid(int index, BufferHandle handle, ulong size)

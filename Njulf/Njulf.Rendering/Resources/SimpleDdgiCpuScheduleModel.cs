@@ -86,6 +86,31 @@ public static class SimpleDdgiSchedulerAbi
     // public probe record.
     public const uint ProbeMetadataRepair = 1u << 30;
 
+    /// <summary>
+    /// CPU mirror of the resident feedback/audit participant predicate.
+    /// Visibility is deliberately absent: offscreen active probes remain part
+    /// of the complete transport field certificate.
+    /// </summary>
+    public static bool IsTailCertificationParticipant(
+        bool inactive,
+        bool sourceReady,
+        bool fresh,
+        bool scrollExposed,
+        bool relocationPending,
+        bool sourceCacheInvalid) =>
+        !inactive &&
+        sourceReady &&
+        !fresh &&
+        !scrollExposed &&
+        !relocationPending &&
+        !sourceCacheInvalid;
+
+    public static uint AdvanceSourceEpoch(uint epoch)
+    {
+        uint next = epoch + 1u;
+        return next == 0u ? 1u : next;
+    }
+
     // GPUSimpleDdgiSchedulerProbeState.PackedTransportAndLifecycle:
     // source rays [0,8], transport generation [9,16], stable count [17,24],
     // routine state [25,27], fail-closed transaction state [28,31].
@@ -285,7 +310,8 @@ public readonly record struct SimpleDdgiCpuSchedulePolicy(
     ulong SourceCohortRayBudget,
     uint SourceLightingGeneration,
     int ActiveVolumeCount,
-    bool DeterministicFixedBudget);
+    bool DeterministicFixedBudget,
+    uint ResidencyResourceGeneration = 0u);
 
 public readonly record struct SimpleDdgiCpuScheduleResult(
     int ConsideredCandidateCount,
@@ -415,6 +441,27 @@ public static class SimpleDdgiCpuScheduleModel
         Span<int> laneCandidateCounts,
         Span<int> laneAcceptedCounts,
         Span<uint> laneCursors)
+        => Schedule(
+            candidates,
+            volumePolicies,
+            policy,
+            ReadOnlySpan<uint>.Empty,
+            ReadOnlySpan<uint>.Empty,
+            outputQueue,
+            laneCandidateCounts,
+            laneAcceptedCounts,
+            laneCursors);
+
+    public static SimpleDdgiCpuScheduleResult Schedule(
+        ReadOnlySpan<GPUSimpleDdgiSchedulerCandidate> candidates,
+        ReadOnlySpan<SimpleDdgiCpuVolumePolicy> volumePolicies,
+        SimpleDdgiCpuSchedulePolicy policy,
+        ReadOnlySpan<uint> committedSourceLightingGenerations,
+        ReadOnlySpan<uint> committedSourceEpochs,
+        Span<GPUSimpleDdgiProbeUpdate> outputQueue,
+        Span<int> laneCandidateCounts,
+        Span<int> laneAcceptedCounts,
+        Span<uint> laneCursors)
     {
         if (laneCandidateCounts.Length < SimpleDdgiSchedulerAbi.MaxLaneCount ||
             laneAcceptedCounts.Length < SimpleDdgiSchedulerAbi.MaxLaneCount ||
@@ -521,6 +568,8 @@ public static class SimpleDdgiCpuScheduleModel
                 candidateLanes,
                 volumePolicies,
                 policy,
+                committedSourceLightingGenerations,
+                committedSourceEpochs,
                 outputQueue,
                 laneCandidateCounts,
                 laneAcceptedCounts,
@@ -543,7 +592,8 @@ public static class SimpleDdgiCpuScheduleModel
         }
 
         AdmitCandidates(
-            candidates, candidateLanes, volumePolicies, policy, outputQueue,
+            candidates, candidateLanes, volumePolicies, policy,
+            committedSourceLightingGenerations, committedSourceEpochs, outputQueue,
             laneCandidateCounts, laneAcceptedCounts, laneCursors, admittedCandidates,
             quotas, volumeUsage, classReservations, classUsage,
             workClassFilter: null,
@@ -554,7 +604,8 @@ public static class SimpleDdgiCpuScheduleModel
             ref requestRejected, ref primaryRejected, ref sourceRejected);
 
         AdmitCandidates(
-            candidates, candidateLanes, volumePolicies, policy, outputQueue,
+            candidates, candidateLanes, volumePolicies, policy,
+            committedSourceLightingGenerations, committedSourceEpochs, outputQueue,
             laneCandidateCounts, laneAcceptedCounts, laneCursors, admittedCandidates,
             quotas, volumeUsage, classReservations, classUsage,
             workClassFilter: null,
@@ -565,7 +616,8 @@ public static class SimpleDdgiCpuScheduleModel
             ref requestRejected, ref primaryRejected, ref sourceRejected);
 
         AdmitCandidates(
-            candidates, candidateLanes, volumePolicies, policy, outputQueue,
+            candidates, candidateLanes, volumePolicies, policy,
+            committedSourceLightingGenerations, committedSourceEpochs, outputQueue,
             laneCandidateCounts, laneAcceptedCounts, laneCursors, admittedCandidates,
             quotas, volumeUsage, classReservations, classUsage,
             workClassFilter: null,
@@ -584,6 +636,8 @@ public static class SimpleDdgiCpuScheduleModel
                 candidateLanes,
                 volumePolicies,
                 policy,
+                committedSourceLightingGenerations,
+                committedSourceEpochs,
                 outputQueue,
                 laneCandidateCounts,
                 laneAcceptedCounts,
@@ -613,6 +667,8 @@ public static class SimpleDdgiCpuScheduleModel
                 candidateLanes,
                 volumePolicies,
                 policy,
+                committedSourceLightingGenerations,
+                committedSourceEpochs,
                 outputQueue,
                 laneCandidateCounts,
                 laneAcceptedCounts,
@@ -653,6 +709,8 @@ public static class SimpleDdgiCpuScheduleModel
         ReadOnlySpan<int> candidateLanes,
         ReadOnlySpan<SimpleDdgiCpuVolumePolicy> volumePolicies,
         SimpleDdgiCpuSchedulePolicy policy,
+        ReadOnlySpan<uint> committedSourceLightingGenerations,
+        ReadOnlySpan<uint> committedSourceEpochs,
         Span<GPUSimpleDdgiProbeUpdate> outputQueue,
         Span<int> laneCandidateCounts,
         Span<int> laneAcceptedCounts,
@@ -777,20 +835,32 @@ public static class SimpleDdgiCpuScheduleModel
                                 bool sourceWork = candidateCategory is
                                     SimpleDdgiSchedulerTransportCategory.HardSourceRepair or
                                     SimpleDdgiSchedulerTransportCategory.RoutineSourceValidation;
-                                // The resident candidate storage derives the
-                                // source cohort from the volume policy. The
-                                // CPU mirror receives that same cardinality in
-                                // the full candidate ABI; use it when present
-                                // and retain the active-ray fallback for small
-                                // hand-authored fixtures.
-                                uint sourceRays = sourceWork
+                                // SourceRayCount is cache identity, not this
+                                // transaction's primary-ray cost. V2
+                                // classification therefore carries the full
+                                // sequence for cached solver work as well as
+                                // source refreshes. A zero remains the V1
+                                // representation; source fixtures retain the
+                                // active-ray fallback for compatibility.
+                                uint sourceRays = candidate.SourceRayCount != 0u
                                     ? Math.Clamp(
-                                        candidate.SourceRayCount == 0
-                                            ? activeRays
-                                            : candidate.SourceRayCount,
+                                        candidate.SourceRayCount,
                                         1u,
                                         (uint)GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe)
-                                    : 0u;
+                                    : sourceWork
+                                        ? activeRays
+                                        : 0u;
+                                // A V2 cached solve is certified against every
+                                // entry in its immutable source sequence. Keep
+                                // the CPU oracle's projected work cardinality
+                                // identical to the resident shader while still
+                                // charging no primary/source budget below.
+                                bool cachedV2Work =
+                                    candidateCategory ==
+                                        SimpleDdgiSchedulerTransportCategory.CachedSolverPropagation &&
+                                    candidate.SourceRayCount != 0u;
+                                if (sourceWork || cachedV2Work)
+                                    activeRays = sourceRays;
                                 ulong primaryCost = sourceWork ? activeRays : 0UL;
                                 ulong sourceCost = sourceWork ? sourceRays : 0UL;
                                 if (primaryCost > policy.PrimaryRayBudget ||
@@ -841,6 +911,14 @@ public static class SimpleDdgiCpuScheduleModel
                                         flags |= SimpleDdgiSchedulerAbi.UpdateRoutineSourceRefreshFlag;
                                 }
                                 flags |= activeRays << (int)SimpleDdgiSchedulerAbi.UpdateRayCountShift;
+                                uint committedSourceGeneration =
+                                    candidate.ProbeIndex < (uint)committedSourceLightingGenerations.Length
+                                        ? committedSourceLightingGenerations[(int)candidate.ProbeIndex]
+                                        : 0u;
+                                uint committedSourceEpoch =
+                                    candidate.ProbeIndex < (uint)committedSourceEpochs.Length
+                                        ? committedSourceEpochs[(int)candidate.ProbeIndex]
+                                        : 0u;
                                 outputQueue[acceptedCount] = new GPUSimpleDdgiProbeUpdate
                                 {
                                     ProbeIndex = candidate.ProbeIndex,
@@ -852,8 +930,17 @@ public static class SimpleDdgiCpuScheduleModel
                                     SourceRayCount = sourceRays,
                                     SourceLightingGeneration = sourceWork
                                         ? policy.SourceLightingGeneration
-                                        : 0u,
-                                    OutcomeIndex = (uint)acceptedCount
+                                        : committedSourceGeneration,
+                                    OutcomeIndex = (uint)acceptedCount,
+                                    SourceEpoch = sourceWork
+                                        ? SimpleDdgiSchedulerAbi.AdvanceSourceEpoch(
+                                            committedSourceEpoch)
+                                        : committedSourceEpoch,
+                                    PhysicalProbeIndex = candidate.ProbeIndex,
+                                    PageMappingGeneration =
+                                        SimpleDdgiProbeAddress.DenseMappingGeneration,
+                                    ResidencyResourceGeneration =
+                                        policy.ResidencyResourceGeneration
                                 };
                                 admittedCandidates[candidateIndex] = 1;
                                 acceptedCount++;

@@ -115,12 +115,50 @@ namespace Njulf.Tests
         {
             Assert.Multiple(() =>
             {
-                Assert.That(Marshal.SizeOf<GPUSimpleDdgiParams>(), Is.EqualTo(208));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiParams>(), Is.EqualTo(240));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiVolume>(), Is.EqualTo(96));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiVolumePaging>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiResidencyHeader>(), Is.EqualTo(64));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiPageTableEntry>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiPageHistory>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiPageDevelopmentControl>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiPhysicalPageMetadata>(), Is.EqualTo(48));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiPageInitWork>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiResidencyFeedback>(), Is.EqualTo(1024));
+                Assert.That(
+                    Marshal.OffsetOf<GPUSimpleDdgiResidencyFeedback>(
+                        nameof(GPUSimpleDdgiResidencyFeedback.PredictorFalseNegativePageCount)).ToInt32(),
+                    Is.EqualTo(240));
+                Assert.That(
+                    Marshal.OffsetOf<GPUSimpleDdgiResidencyFeedback>(
+                        nameof(GPUSimpleDdgiResidencyFeedback.PredictorFalsePositivePageCount)).ToInt32(),
+                    Is.EqualTo(244));
+                Assert.That(
+                    Marshal.OffsetOf<GPUSimpleDdgiResidencyFeedback>(
+                        nameof(GPUSimpleDdgiResidencyFeedback.OpaqueGatherDemandPageCount)).ToInt32(),
+                    Is.EqualTo(248));
+                Assert.That(
+                    Marshal.OffsetOf<GPUSimpleDdgiResidencyFeedback>(
+                        nameof(GPUSimpleDdgiResidencyFeedback.PredictorTruePositivePageCount)).ToInt32(),
+                    Is.EqualTo(252));
+                Assert.That(
+                    Marshal.OffsetOf<GPUSimpleDdgiResidencyFeedback>(
+                        nameof(GPUSimpleDdgiResidencyFeedback.OrdinaryAllocationToPublicationP50)).ToInt32(),
+                    Is.EqualTo(328));
+                Assert.That(
+                    Marshal.OffsetOf<GPUSimpleDdgiResidencyFeedback>(
+                        nameof(GPUSimpleDdgiResidencyFeedback.CutAllocationToPublicationMax)).ToInt32(),
+                    Is.EqualTo(348));
+                Assert.That(
+                    Marshal.OffsetOf<GPUSimpleDdgiResidencyFeedback>(
+                        nameof(GPUSimpleDdgiResidencyFeedback.DevelopmentPinnedPageCount)).ToInt32(),
+                    Is.EqualTo(352));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiPageDemandPushConstants>(), Is.EqualTo(112));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiPageResidencyPushConstants>(), Is.EqualTo(72));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiRayResult>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportRayCache>(), Is.EqualTo(36));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiProbeState>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUSimpleDdgiProbeUpdate>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiProbeUpdate>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiRelocationClassification>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiPushConstants>(), Is.EqualTo(136));
                 Assert.That(Marshal.SizeOf<GPUFarFieldClipmapParams>(), Is.EqualTo(160));
@@ -901,6 +939,83 @@ namespace Njulf.Tests
                 Assert.That(changedMesh, Is.Not.EqualTo(baseline));
                 Assert.That(changedFarField, Is.Not.EqualTo(baseline));
                 Assert.That(changedProfile, Is.Not.EqualTo(baseline));
+            });
+        }
+
+        [Test]
+        public void RuntimeBufferReplacement_IsRetiredAfterTheTerminalFrameFence()
+        {
+            string manager = ReadRepoText(
+                "Njulf.Rendering",
+                "Resources",
+                "FarFieldClipmapManager.cs");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(manager, Does.Contain(
+                    "RetireReplacedBuffer(_bakeVoxelBuffer)"));
+                Assert.That(manager, Does.Contain(
+                    "RetireReplacedBuffer(handle)"));
+                Assert.That(manager, Does.Contain(
+                    "_synchronizationManager.GetInFlightFence()"));
+                Assert.That(manager, Does.Contain(
+                    "_deleter.QueueBufferDeletion("));
+            });
+        }
+
+        [Test]
+        public void PagedStableFrameSignature_TracksEveryReuseBoundary()
+        {
+            var gi = new GlobalIlluminationSettings();
+            var camera = new CoreVector3(1.0f, 2.0f, 3.0f);
+            const ulong settingsSignature = 101UL;
+            const ulong sceneSignature = 202UL;
+            ulong baseline = FarFieldClipmapManager.CreatePagedStableFrameSignature(
+                gi,
+                camera,
+                settingsSignature,
+                sceneSignature,
+                instanceCount: 7,
+                pageTableCapacity: 64);
+
+            ulong movedCamera = FarFieldClipmapManager.CreatePagedStableFrameSignature(
+                gi,
+                new CoreVector3(camera.X + 0.01f, camera.Y, camera.Z),
+                settingsSignature,
+                sceneSignature,
+                instanceCount: 7,
+                pageTableCapacity: 64);
+            ulong changedScene = FarFieldClipmapManager.CreatePagedStableFrameSignature(
+                gi,
+                camera,
+                settingsSignature,
+                sceneSignature + 1UL,
+                instanceCount: 7,
+                pageTableCapacity: 64);
+            float originalStartDistance = gi.FarFieldStartDistance;
+            gi.FarFieldStartDistance = originalStartDistance + 1.0f;
+            ulong changedTrace = FarFieldClipmapManager.CreatePagedStableFrameSignature(
+                gi,
+                camera,
+                settingsSignature,
+                sceneSignature,
+                instanceCount: 7,
+                pageTableCapacity: 64);
+            gi.FarFieldStartDistance = originalStartDistance;
+            ulong changedCapacity = FarFieldClipmapManager.CreatePagedStableFrameSignature(
+                gi,
+                camera,
+                settingsSignature,
+                sceneSignature,
+                instanceCount: 7,
+                pageTableCapacity: 128);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(movedCamera, Is.Not.EqualTo(baseline));
+                Assert.That(changedScene, Is.Not.EqualTo(baseline));
+                Assert.That(changedTrace, Is.Not.EqualTo(baseline));
+                Assert.That(changedCapacity, Is.Not.EqualTo(baseline));
             });
         }
 

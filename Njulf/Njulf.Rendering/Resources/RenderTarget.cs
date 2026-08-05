@@ -148,16 +148,33 @@ namespace Njulf.Rendering.Resources
                 AccessFlags2.DepthStencilAttachmentWriteBit | AccessFlags2.DepthStencilAttachmentReadBit);
         }
 
-        public void TransitionToDepthReadOnly(CommandBuffer cmd)
+        public void TransitionToDepthReadOnly(
+            CommandBuffer cmd,
+            bool synchronizeMatchingLayout = true)
         {
             EnsureUsage(ImageUsageFlags.SampledBit, ImageLayout.DepthStencilReadOnlyOptimal);
+            bool republishUnchangedLayout =
+                synchronizeMatchingLayout &&
+                Layout == ImageLayout.DepthStencilReadOnlyOptimal;
             Transition(
                 cmd,
                 ImageLayout.DepthStencilReadOnlyOptimal,
-                GetSourceStageForLayout(Layout),
-                GetSourceAccessForLayout(Layout),
-                PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.EarlyFragmentTestsBit,
-                AccessFlags2.ShaderSampledReadBit | AccessFlags2.DepthStencilAttachmentReadBit);
+                republishUnchangedLayout
+                    ? PipelineStageFlags2.AllCommandsBit
+                    : GetSourceStageForLayout(Layout),
+                republishUnchangedLayout
+                    ? AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit
+                    : GetSourceAccessForLayout(Layout),
+                PipelineStageFlags2.FragmentShaderBit |
+                    PipelineStageFlags2.ComputeShaderBit |
+                    PipelineStageFlags2.EarlyFragmentTestsBit |
+                    PipelineStageFlags2.LateFragmentTestsBit,
+                AccessFlags2.ShaderSampledReadBit |
+                    AccessFlags2.DepthStencilAttachmentReadBit,
+                // Layout equality is not an access dependency. Republish the
+                // existing layout because this target does not track its last
+                // shader-vs-attachment access scope.
+                force: republishUnchangedLayout);
         }
 
         public void TransitionToShaderRead(CommandBuffer cmd)

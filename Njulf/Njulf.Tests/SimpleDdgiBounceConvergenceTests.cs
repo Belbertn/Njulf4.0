@@ -369,26 +369,81 @@ public sealed class SimpleDdgiBounceConvergenceTests
         });
     }
 
-    [TestCase(240, 15_368, 2_048, 8, 3, 240)]
-    [TestCase(600, 15_368, 2_048, 8, 3, 600)]
-    [TestCase(900, 15_368, 2_048, 8, 3, 900)]
-    [TestCase(120, 1_024, 0, 8, 3, 120)]
-    public void PeriodicSourceRefresh_LeavesTwoCompleteConvergenceWindows(
+    [TestCase(240, 15_368, 2_048, 15_368, 256, 240)]
+    [TestCase(600, 15_368, 2_048, 15_368, 256, 600)]
+    [TestCase(900, 15_368, 2_048, 15_368, 256, 900)]
+    [TestCase(120, 1_024, 0, 1_024, 256, 120)]
+    [TestCase(1, 1_024, 128, 1_024, 256, 28)]
+    public void PeriodicSourceRefresh_ProvidesCompleteTailSolverOpportunity(
         int configuredFrames,
+        int participantCount,
+        int updateBudget,
         int probeCount,
-        int updatesPerFrame,
-        int solverGenerations,
-        int stableUpdates,
+        int auditChunkProbeCount,
         int expectedFrames)
     {
         Assert.That(
             SimpleDdgiVolumeManager.ResolveEffectiveTransportSourceRefreshFrames(
                 configuredFrames,
+                participantCount,
+                updateBudget,
                 probeCount,
-                updatesPerFrame,
-                solverGenerations,
-                stableUpdates),
+                auditChunkProbeCount),
             Is.EqualTo(expectedFrames));
+    }
+
+    [Test]
+    public void PeriodicSourceRefresh_V2IgnoresLegacyGenerationSettings()
+    {
+        static int Resolve() =>
+            SimpleDdgiVolumeManager.ResolveEffectiveTransportSourceRefreshFrames(
+                configuredRefreshFrames: 1,
+                participantCount: 1_024,
+                updateBudget: 128,
+                probeCount: 1_024,
+                auditChunkProbeCount: 256);
+
+        int maximumSolverGenerations = 1;
+        int stableMaintenanceUpdates = 1;
+        int first = Resolve();
+        maximumSolverGenerations = 64;
+        stableMaintenanceUpdates = 16;
+        int second = Resolve();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo(28));
+            Assert.That(second, Is.EqualTo(first));
+            Assert.That(maximumSolverGenerations, Is.EqualTo(64));
+            Assert.That(stableMaintenanceUpdates, Is.EqualTo(16));
+        });
+    }
+
+    [Test]
+    public void PeriodicSourceRefresh_V2RespondsToOpportunityInputs()
+    {
+        static int Resolve(
+            int configured = 1,
+            int participants = 1_024,
+            int budget = 128,
+            int probes = 1_024,
+            int auditChunk = 256) =>
+            SimpleDdgiVolumeManager.ResolveEffectiveTransportSourceRefreshFrames(
+                configured,
+                participants,
+                budget,
+                probes,
+                auditChunk);
+
+        int baseline = Resolve();
+        Assert.Multiple(() =>
+        {
+            Assert.That(baseline, Is.EqualTo(28));
+            Assert.That(Resolve(participants: 2_048), Is.EqualTo(52));
+            Assert.That(Resolve(budget: 256), Is.EqualTo(16));
+            Assert.That(Resolve(auditChunk: 128), Is.EqualTo(32));
+            Assert.That(Resolve(configured: 60), Is.EqualTo(60));
+        });
     }
 
     [TestCase(true, 24.0f, 60.0f)]

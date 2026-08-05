@@ -24,6 +24,7 @@ public static class SampleDdgiProductionGate
     public const double SimpleDdgiTransportBlendP95BudgetMilliseconds = 2.25;
     public const double SimpleDdgiUploadP95BudgetMilliseconds = 2.0;
     public const double SimpleDdgiCapacityP95BudgetMilliseconds = 0.1;
+    public const double SimpleDdgiPagingP95BudgetMilliseconds = 0.20;
     public const double MaximumTrackedMemoryBudgetFraction = 0.80;
     public const float MinimumPhase10CoverageMean = 0.25f;
     public const float MinimumPhase10VisibleSupportMean = 0.05f;
@@ -49,6 +50,9 @@ public static class SampleDdgiProductionGate
 
         RendererDiagnostics diagnostics = report.LastDiagnostics ?? RendererDiagnostics.Empty;
         SampleBenchmarkTimingStats? simpleDdgiTracePass = FindGpuPass(report, "SimpleDdgiTracePass");
+        SampleBenchmarkTimingStats? simpleDdgiPageDemandPass = FindGpuPass(report, "SimpleDdgiPageDemandPass");
+        SampleBenchmarkTimingStats? simpleDdgiPageResidencyPass = FindGpuPass(report, "SimpleDdgiPageResidencyPass");
+        SampleBenchmarkTimingStats? simpleDdgiPageFeedbackPass = FindGpuPass(report, "SimpleDdgiPageFeedbackPass");
         SampleBenchmarkTimingStats? simpleDdgiTransportPass = FindGpuPass(report, "SimpleDdgiTransportPass");
         SampleBenchmarkTimingStats? simpleDdgiBlendPass = FindGpuPass(report, "SimpleDdgiBlendPass");
         SampleBenchmarkTimingStats? simpleDdgiRelocateClassifyPass = FindGpuPass(report, "SimpleDdgiRelocateClassifyPass");
@@ -185,6 +189,20 @@ public static class SampleDdgiProductionGate
                 "simple-ddgi-transport-blend-p95-budget",
                 IsSimpleDdgiTransportBlendWithinBudget(report, diagnostics),
                 $"active={diagnostics.SimpleDdgiActive}, p95={CalculateSimpleDdgiTransportBlendP95Milliseconds(report):F3}ms, budget={SimpleDdgiTransportBlendP95BudgetMilliseconds:F3}ms"),
+            Criterion(
+                "simple-ddgi-paging-p95-budget",
+                !diagnostics.SimpleDdgiProbeResidency.Mode.CollectsDemand() ||
+                (simpleDdgiPageDemandPass != null &&
+                 simpleDdgiPageResidencyPass != null &&
+                 simpleDdgiPageFeedbackPass != null &&
+                 simpleDdgiPageDemandPass.P95Milliseconds +
+                     simpleDdgiPageResidencyPass.P95Milliseconds <=
+                     SimpleDdgiPagingP95BudgetMilliseconds),
+                $"mode={diagnostics.SimpleDdgiProbeResidency.Mode}, " +
+                $"demandP95={simpleDdgiPageDemandPass?.P95Milliseconds:F3}ms, " +
+                $"residencyP95={simpleDdgiPageResidencyPass?.P95Milliseconds:F3}ms, " +
+                $"feedbackP95={simpleDdgiPageFeedbackPass?.P95Milliseconds:F3}ms, " +
+                $"demandPlusResidencyBudget={SimpleDdgiPagingP95BudgetMilliseconds:F3}ms"),
             Criterion(
                 "simple-ddgi-upload-p95-budget",
                 IsSimpleDdgiCpuStageWithinBudget(
@@ -501,6 +519,12 @@ public static class SampleDdgiProductionGate
 
         SimpleDdgiTransportConvergenceTelemetry convergence =
             diagnostics.SimpleDdgiTransportConvergence;
+        if (diagnostics.SimpleDdgiTransportTailCertificationEnabled)
+        {
+            return SampleBenchmarkRunner
+                .HasAcceptedCurrentSimpleDdgiTailCertificate(diagnostics);
+        }
+
         // A scheduled refresh and its bounded propagation neighborhood are valid
         // settled-state maintenance; urgent repair and unexplained pending work
         // are not. The benchmark helper applies that exact population contract.
@@ -528,6 +552,11 @@ public static class SampleDdgiProductionGate
             ? qualified / (double)convergence.ParticipatingProbeCount
             : 1.0;
         return $"active={diagnostics.SimpleDdgiActive}, v2={diagnostics.SimpleDdgiTransportV2Active}, " +
+            $"tailEnabled={(diagnostics.SimpleDdgiTransportTailCertificationEnabled ? 1 : 0)}, " +
+            $"tailCurrent={(convergence.TailCertificateCurrent ? 1 : 0)}, " +
+            $"tailAudit={(convergence.TailAuditComplete ? 1 : 0)}, " +
+            $"tailParticipants={convergence.TailAuditedParticipantCount}/{convergence.TailExpectedParticipantCount}, " +
+            $"tailTexels={convergence.TailAuditedTexelCount}/{convergence.TailExpectedTexelCount}, " +
             $"readback={convergence.ReadbackValid}, globalPending={diagnostics.SimpleDdgiTransportGlobalConvergencePending}, " +
             $"sourceReady={sourceReady}, converged={convergence.ConvergedProbeCount}, " +
             $"routineSource={convergence.RoutineSourceRepairProbeCount}, " +

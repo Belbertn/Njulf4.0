@@ -27,4 +27,7 @@ internal sealed class SamplePerformanceScenarioRunner
         _scenario = scenario;
         return _builder.Apply(_scenario);
     }
+
+    public void SetScenarioUpdateablesEnabled(bool enabled) =>
+        _builder.SetScenarioUpdateablesEnabled(enabled);
 }

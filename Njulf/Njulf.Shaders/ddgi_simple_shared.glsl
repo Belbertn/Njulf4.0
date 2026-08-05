@@ -2,6 +2,7 @@
 #define NJULF_DDGI_SIMPLE_SHARED_GLSL
 
 #include "farfield_clipmap.glsl"
+#include "ddgi_simple_receiver_abi.glsl"
 
 // Only the forward fragment path has a meaningful screen-tile coordinate.
 // Compute, fog, and particle stages retain the canonical bounded table walk.
@@ -12,6 +13,39 @@
 #define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 0
 #endif
 
+// Producer/solver kernels need the authoritative 32-byte state because they
+// can observe transaction-private lifecycle metadata. Receiver shaders leave
+// this at zero and consume only the compact 16-byte publication projection.
+#ifndef SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE
+#define SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE 0
+#endif
+
+// Receiver entry points override this with a representative invocation for
+// their raster quad, compute tile, particle, or mesh workgroup. Keeping the
+// default true preserves correctness for validation shaders while production
+// receivers avoid issuing a redundant atomic for every lane that observes the
+// same nonresident page.
+#ifndef SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE
+#define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE true
+#endif
+
+// Receiver variants opt in so sparse resident pages remain relevant even when
+// they are absent from the proactive depth predictor.
+#ifndef SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT
+#define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 0
+#endif
+
+// Opaque receivers execute before the current reconciliation and use offset
+// zero. Transparent, particle, and fog receivers execute after feedback and
+// target the next epoch with offset one.
+#ifndef SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET
+#define SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 1u
+#endif
+
+#ifndef SIMPLE_DDGI_OPAQUE_GATHER_ORACLE
+#define SIMPLE_DDGI_OPAQUE_GATHER_ORACLE 0
+#endif
+
 // Release/ShippingPerformance pass zero from the shader project. This is a
 // compile-time boundary, not a runtime feature flag: production SPIR-V contains
 // no reachable DDGI investigation atomic or diagnostic sampling branch.
@@ -19,16 +53,31 @@
 #define NJULF_DDGI_DETAILED_COUNTERS 0
 #endif
 
+// The source cache is update-side authority, not part of the compact receiver
+// contract. Only the forward diagnostic artifact opts into the additional
+// compute-state/source-cache dependency; every other receiver stays compact in
+// detailed builds as well as production builds.
+#ifndef NJULF_SIMPLE_DDGI_SOURCE_CACHE_DIAGNOSTIC
+#define NJULF_SIMPLE_DDGI_SOURCE_CACHE_DIAGNOSTIC 0
+#endif
+
+#ifndef NJULF_SIMPLE_DDGI_GATHER_ATTRIBUTION
+#if NJULF_DDGI_DETAILED_COUNTERS
+#define NJULF_SIMPLE_DDGI_GATHER_ATTRIBUTION 1
+#elif defined(NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT) && NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
+#define NJULF_SIMPLE_DDGI_GATHER_ATTRIBUTION 1
+#else
+#define NJULF_SIMPLE_DDGI_GATHER_ATTRIBUTION 0
+#endif
+#endif
+
 const float SIMPLE_DDGI_PI = 3.14159265359;
-// Mirrors the resident scheduler outcome ABI. Producer shaders include this
-// file without the scheduler-stage shared header, so keep the stride local to
-// the common producer ABI as well.
-const uint SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS = 8u;
-// The scheduler arena keeps the accepted transaction/proposal record compact
-// at seven words.  The public queue has an explicit eighth padding word, so
-// producer shaders must not use the queue stride when indexing private arena
-// proposals.
-const uint SIMPLE_DDGI_SCHEDULER_UPDATE_RECORD_WORDS = 7u;
+// Producer shaders include this file without the scheduler-stage shared
+// header, so mirror both queue and private transaction strides here.
+const uint SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS = 12u;
+// Relocate/classify overwrites proposal words 0..6 while immutable sparse
+// physical identity remains in words 7..8 for commit validation.
+const uint SIMPLE_DDGI_SCHEDULER_UPDATE_RECORD_WORDS = 9u;
 const uint SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS = 15u;
 const uint SIMPLE_DDGI_FLAG_ENABLED = 1u << 0;
 const uint SIMPLE_DDGI_FLAG_FAR_FIELD_ENABLED = 1u << 1;
@@ -77,11 +126,18 @@ const uint SIMPLE_DDGI_IRRADIANCE_TEXELS = 8u;
 const uint SIMPLE_DDGI_VISIBILITY_TEXELS = 16u;
 const uint SIMPLE_DDGI_MAX_RAYS_PER_PROBE = 256u;
 const uint SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS = 8u;
-const uint SIMPLE_DDGI_TRANSPORT_RAY_CACHE_ABI_VERSION = 2u;
-const uint SIMPLE_DDGI_HEADER_WORDS = 52u;
+const uint SIMPLE_DDGI_TRANSPORT_RAY_CACHE_ABI_VERSION = 4u;
+const uint SIMPLE_DDGI_HEADER_WORDS = 60u;
 const uint SIMPLE_DDGI_FLAGS_WORD = 14u;
 const uint SIMPLE_DDGI_VOLUME_STRIDE_WORDS = 24u;
+const uint SIMPLE_DDGI_VOLUME_PAGING_STRIDE_WORDS = 8u;
 const uint SIMPLE_DDGI_MAX_VOLUME_COUNT = 16u;
+const uint SIMPLE_DDGI_VOLUME_PAGING_BASE_WORD =
+    SIMPLE_DDGI_HEADER_WORDS +
+    SIMPLE_DDGI_MAX_VOLUME_COUNT * SIMPLE_DDGI_VOLUME_STRIDE_WORDS;
+const uint SIMPLE_DDGI_RESIDENCY_MODE_DENSE = 0u;
+const uint SIMPLE_DDGI_RESIDENCY_MODE_SHADOW = 1u;
+const uint SIMPLE_DDGI_RESIDENCY_MODE_SPARSE_NEAR_RING = 2u;
 // The hot path normally samples one authoritative volume and one fallback.
 // Additional coarser recovery volumes are sampled only while the accumulated
 // ownership remains below the minimum support ramp. This closes inactive-probe
@@ -107,7 +163,7 @@ const uint SIMPLE_DDGI_GATHER_ROLE_PRIMARY = 0u;
 const uint SIMPLE_DDGI_GATHER_ROLE_FALLBACK = 1u;
 const uint SIMPLE_DDGI_GATHER_ROLE_RECOVERY = 2u;
 const uint SIMPLE_DDGI_GATHER_ROLE_COUNT = 3u;
-const uint SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT = 9u;
+const uint SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT = 10u;
 const uint SIMPLE_DDGI_GATHER_REJECT_FRESH = 1u << 0;
 const uint SIMPLE_DDGI_GATHER_REJECT_SCROLL_EXPOSED = 1u << 1;
 const uint SIMPLE_DDGI_GATHER_REJECT_RELOCATION_PENDING = 1u << 2;
@@ -117,6 +173,7 @@ const uint SIMPLE_DDGI_GATHER_REJECT_ZERO_ACTIVE_WEIGHT = 1u << 5;
 const uint SIMPLE_DDGI_GATHER_REJECT_INVALID_IRRADIANCE = 1u << 6;
 const uint SIMPLE_DDGI_GATHER_REJECT_INVALID_VISIBILITY = 1u << 7;
 const uint SIMPLE_DDGI_GATHER_REJECT_OUTSIDE_DOMAIN = 1u << 8;
+const uint SIMPLE_DDGI_GATHER_REJECT_NON_RESIDENT = 1u << 9;
 // Appended after the MaterialGi diagnostic family. Detailed diagnostics use a
 // sparse forward sample, so production gather frames pay no atomic cost.
 const uint SIMPLE_DDGI_GATHER_REJECTION_COUNTER_BASE = 262u;
@@ -164,7 +221,7 @@ const float SIMPLE_DDGI_MINIMUM_SKY_VISIBILITY = 0.10;
 const float SIMPLE_DDGI_ENVIRONMENT_FALLBACK_MIN_WEIGHT = 0.0001;
 const uint SIMPLE_DDGI_AUTHORED_VOLUME_CASCADE = 0xffffffffu;
 const uint SIMPLE_DDGI_PROBE_STATE_STRIDE_WORDS = 8u;
-const uint SIMPLE_DDGI_PROBE_UPDATE_STRIDE_WORDS = 8u;
+const uint SIMPLE_DDGI_PROBE_UPDATE_STRIDE_WORDS = 12u;
 const uint SIMPLE_DDGI_RELOCATION_CLASSIFICATION_STRIDE_WORDS = 12u;
 const uint SIMPLE_DDGI_PROBE_FLAG_FRESH = 1u << 0;
 const uint SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED = 1u << 1;
@@ -179,12 +236,14 @@ const uint SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING = 1u << 3;
 // bit and the CPU readback invalidates the physical slot for one full source
 // refresh on the following transaction.
 const uint SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID = 1u << 4;
+const uint SIMPLE_DDGI_PROBE_FLAG_NON_RESIDENT = 1u << 5;
 const uint SIMPLE_DDGI_UPDATE_MATERIAL_TEXTURE_CASCADE_SHIFT = 3u;
 const uint SIMPLE_DDGI_UPDATE_MATERIAL_TEXTURE_CASCADE_MASK = 0x7u << SIMPLE_DDGI_UPDATE_MATERIAL_TEXTURE_CASCADE_SHIFT;
 const uint SIMPLE_DDGI_UPDATE_MAX_SHADED_LIGHTS_SHIFT = 6u;
 const uint SIMPLE_DDGI_UPDATE_MAX_SHADED_LIGHTS_MASK = 0x3fu << SIMPLE_DDGI_UPDATE_MAX_SHADED_LIGHTS_SHIFT;
 const uint SIMPLE_DDGI_UPDATE_MAINTENANCE = 1u << 12;
 const uint SIMPLE_DDGI_UPDATE_SOURCE_REFRESH = 1u << 13;
+const uint SIMPLE_DDGI_UPDATE_INVALIDATE = 1u << 14;
 // The remaining state-flag bits carry a non-zero physical-slot generation.  An
 // update recorded for an old toroidal mapping must never mutate the slot after it
 // has been re-exposed for a new world cell.
@@ -362,6 +421,14 @@ struct SimpleDdgiParams
     float transportAlbedoClamp;
     float transportTailRelativeTolerance;
     uint transportAcceleratedSweepCount;
+    uint residencyArenaBufferIndex;
+    uint virtualPageCount;
+    uint physicalProbeCapacity;
+    uint residencyResourceGeneration;
+    uint residencyMode;
+    uint densePhysicalProbeCount;
+    uint sparsePhysicalPageCapacity;
+    uint residencyFlags;
 };
 
 bool SimpleDdgiDetailedDiagnosticsEnabled(SimpleDdgiParams params)
@@ -405,7 +472,7 @@ const uint SIMPLE_DDGI_BLEND_ENERGY_NONZERO_IRRADIANCE_COUNTER = SIMPLE_DDGI_BLE
 // Appended renderer diagnostics ABI. One bank per declared Simple-DDGI volume:
 // blend count/luminance/confidence, transport count/source/bounce/total,
 // solver gather count/ownership/fallback, and one-sided reverse-face count.
-const uint SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_BASE = 321u;
+const uint SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_BASE = 324u;
 const uint SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_STRIDE = 19u;
 const uint SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_COUNT = 16u;
 const float SIMPLE_DDGI_ENERGY_LUMINANCE_SCALE = 4096.0;
@@ -617,8 +684,19 @@ struct SimpleDdgiVolume
     vec3 worldMax;
     uint kind;
     uint probesToUpdate;
+    uint requiredSourceRayCount;
     uint sourceOrdinal;
     uvec3 physicalOffset;
+};
+
+struct SimpleDdgiVolumePaging
+{
+    uint virtualFirstProbe;
+    uint pageTableFirst;
+    uint densePhysicalFirstProbe;
+    uint residencyMode;
+    uvec3 pageGrid;
+    uint sparsePoolFirstProbe;
 };
 
 struct SimpleDdgiDebugSample
@@ -633,6 +711,13 @@ struct SimpleDdgiDebugSample
     float visibilityMomentVariance;
     float visibilityProbeDistance;
     float visibilityMaxRayDistance;
+    uint residencyTableFlags;
+    uint residencyHistoryFlags;
+    uint residencyDemandMask;
+    uint physicalPageIndex;
+    uint pageMappingGeneration;
+    uint pageAgeFrames;
+    float pageAgeNormalized;
 };
 
 struct SimpleDdgiProbeState
@@ -655,7 +740,12 @@ struct SimpleDdgiProbeUpdate
     // active ray count can be a smaller maintenance subset, but cache lookup must
     // select within this original sequence to reuse the exact traced directions.
     uint sourceRayCount;
+    uint sourceLightingGeneration;
     uint outcomeIndex;
+    uint sourceEpoch;
+    uint physicalProbeIndex;
+    uint pageMappingGeneration;
+    uint residencyResourceGeneration;
 };
 
 uint SimpleDdgiProbeStateBase(uint probeIndex)
@@ -698,7 +788,12 @@ SimpleDdgiProbeUpdate ReadSimpleDdgiProbeUpdate(uint bufferIndex, uint queueOffs
     update.flags = header.z;
     update.expectedGeneration = header.w;
     update.sourceRayCount = ReadStorageWordUniform(bufferIndex, baseWord + 4u);
+    update.sourceLightingGeneration = ReadStorageWordUniform(bufferIndex, baseWord + 5u);
     update.outcomeIndex = ReadStorageWordUniform(bufferIndex, baseWord + 6u);
+    update.sourceEpoch = ReadStorageWordUniform(bufferIndex, baseWord + 7u);
+    update.physicalProbeIndex = ReadStorageWordUniform(bufferIndex, baseWord + 8u);
+    update.pageMappingGeneration = ReadStorageWordUniform(bufferIndex, baseWord + 9u);
+    update.residencyResourceGeneration = ReadStorageWordUniform(bufferIndex, baseWord + 10u);
     return update;
 }
 
@@ -844,6 +939,8 @@ SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
     vec4 biasLimits = ReadStorageAlignedVec4Uniform(bufferIndex, 40u);
     vec4 transportIndices = ReadStorageAlignedVec4Uniform(bufferIndex, 44u);
     vec4 transportControls = ReadStorageAlignedVec4Uniform(bufferIndex, 48u);
+    vec4 residencyAndCounts = ReadStorageAlignedVec4Uniform(bufferIndex, 52u);
+    vec4 residencyControls = ReadStorageAlignedVec4Uniform(bufferIndex, 56u);
     p.origin = originAndSpacing.xyz;
     p.spacing = max(originAndSpacing.w, 0.001);
     p.gridCount = uvec3(max(grid.xyz, vec3(1.0)));
@@ -887,6 +984,14 @@ SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
     p.transportAlbedoClamp = clamp(transportControls.y, 0.50, 0.99);
     p.transportTailRelativeTolerance = clamp(transportControls.z, 0.0, 1.0);
     p.transportAcceleratedSweepCount = clamp(uint(max(transportControls.w, 1.0)), 1u, 4u);
+    p.residencyArenaBufferIndex = floatBitsToUint(residencyAndCounts.x);
+    p.virtualPageCount = floatBitsToUint(residencyAndCounts.y);
+    p.physicalProbeCapacity = floatBitsToUint(residencyAndCounts.z);
+    p.residencyResourceGeneration = floatBitsToUint(residencyAndCounts.w);
+    p.residencyMode = floatBitsToUint(residencyControls.x);
+    p.densePhysicalProbeCount = floatBitsToUint(residencyControls.y);
+    p.sparsePhysicalPageCapacity = floatBitsToUint(residencyControls.z);
+    p.residencyFlags = floatBitsToUint(residencyControls.w);
     return p;
 }
 
@@ -910,9 +1015,45 @@ SimpleDdgiVolume ReadSimpleDdgiVolume(uint bufferIndex, uint volumeIndex)
     volume.worldMax = worldMaxAndKind.xyz;
     volume.kind = uint(max(worldMaxAndKind.w, 0.0));
     volume.probesToUpdate = uint(max(updateRange.y, 0.0));
+    volume.requiredSourceRayCount = uint(max(updateRange.z, 0.0));
     volume.sourceOrdinal = uint(max(raysAndReserved.x, 0.0));
     volume.physicalOffset = uvec3(max(raysAndReserved.yzw, vec3(0.0)));
     return volume;
+}
+
+SimpleDdgiVolumePaging ReadSimpleDdgiVolumePaging(
+    uint bufferIndex,
+    uint volumeIndex)
+{
+    uint baseWord = SIMPLE_DDGI_VOLUME_PAGING_BASE_WORD +
+        volumeIndex * SIMPLE_DDGI_VOLUME_PAGING_STRIDE_WORDS;
+    uvec4 addressing = ReadStorageAlignedUVec4Uniform(
+        bufferIndex,
+        baseWord);
+    uvec4 pageLayout = ReadStorageAlignedUVec4Uniform(
+        bufferIndex,
+        baseWord + 4u);
+    SimpleDdgiVolumePaging paging;
+    paging.virtualFirstProbe = addressing.x;
+    paging.pageTableFirst = addressing.y;
+    paging.densePhysicalFirstProbe = addressing.z;
+    paging.residencyMode = addressing.w;
+    paging.pageGrid = pageLayout.xyz;
+    paging.sparsePoolFirstProbe = pageLayout.w;
+    return paging;
+}
+
+#include "ddgi_simple_page_shared.glsl"
+
+uint SimpleDdgiRequiredSourceRayCount(
+    SimpleDdgiParams params,
+    SimpleDdgiVolume volume)
+{
+    uint maximum = min(params.raysPerProbe, SIMPLE_DDGI_MAX_RAYS_PER_PROBE);
+    return volume.requiredSourceRayCount >= 1u &&
+        volume.requiredSourceRayCount <= maximum
+        ? volume.requiredSourceRayCount
+        : 0u;
 }
 
 uint SimpleDdgiVolumeQualityCascade(SimpleDdgiVolume volume)
@@ -1000,6 +1141,88 @@ uvec3 SimpleDdgiProbeCoord(uint localProbeIndex, SimpleDdgiVolume volume)
     return (physical + volume.gridCount - (volume.physicalOffset % volume.gridCount)) % volume.gridCount;
 }
 
+bool SimpleDdgiUpdateMatchesLiveAddress(
+    SimpleDdgiParams params,
+    SimpleDdgiProbeUpdate update)
+{
+    bool denseResidency = params.residencyMode ==
+        SIMPLE_DDGI_RESIDENCY_MODE_DENSE;
+    if ((denseResidency &&
+            update.residencyResourceGeneration != 0u) ||
+        (!denseResidency &&
+            (update.residencyResourceGeneration == 0u ||
+             update.residencyResourceGeneration !=
+                params.residencyResourceGeneration)))
+    {
+        SimpleDdgiRecordResidencyCounter(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_STALE_RESOURCE,
+            1u);
+        return false;
+    }
+    if (update.probeIndex >= params.probeCount ||
+        update.volumeIndex >= params.volumeCount ||
+        update.physicalProbeIndex >= params.physicalProbeCapacity ||
+        update.pageMappingGeneration == 0u)
+    {
+        SimpleDdgiRecordResidencyCounter(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_OUT_OF_RANGE,
+            1u);
+        return false;
+    }
+    SimpleDdgiVolume volume = ReadSimpleDdgiVolume(
+        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX),
+        update.volumeIndex);
+    uint probeCount = SimpleDdgiVolumeProbeCount(volume);
+    if (update.probeIndex < volume.firstProbeIndex ||
+        update.probeIndex - volume.firstProbeIndex >= probeCount)
+    {
+        SimpleDdgiRecordResidencyCounter(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_OUT_OF_RANGE,
+            1u);
+        return false;
+    }
+    uint localPhysical = update.probeIndex - volume.firstProbeIndex;
+    uvec3 logicalCoord = SimpleDdgiProbeCoord(localPhysical, volume);
+    SimpleDdgiVolumePaging paging = ReadSimpleDdgiVolumePaging(
+        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX),
+        update.volumeIndex);
+    SimpleDdgiProbeAddress live = ResolveSimpleDdgiProbeAddress(
+        params,
+        volume,
+        paging,
+        logicalCoord);
+    bool matches = live.resident &&
+        live.physicalProbeIndex == update.physicalProbeIndex &&
+        live.pageMappingGeneration == update.pageMappingGeneration;
+    if (!matches)
+    {
+        SimpleDdgiRecordResidencyCounter(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_STALE_MAPPING,
+            1u);
+    }
+    return matches;
+}
+
+bool SimpleDdgiUpdateMatchesProbeGenerationAndRecord(
+    SimpleDdgiParams params,
+    SimpleDdgiProbeUpdate update,
+    SimpleDdgiProbeState state)
+{
+    bool matches = SimpleDdgiUpdateMatchesProbeGeneration(update, state);
+    if (!matches)
+    {
+        SimpleDdgiRecordResidencyCounter(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_STALE_VIRTUAL,
+            1u);
+    }
+    return matches;
+}
+
 uint SimpleDdgiSolveTargetColor(uint flags)
 {
     return (flags & SIMPLE_DDGI_SOLVE_COLOR_MASK) >>
@@ -1038,6 +1261,18 @@ bool SimpleDdgiSolveIsFinalColor(uint flags)
 {
     return (flags & SIMPLE_DDGI_SOLVE_COLOR_FILTER) == 0u ||
         (flags & SIMPLE_DDGI_SOLVE_FINAL_COLOR) != 0u;
+}
+
+bool SimpleDdgiSolveIsFinalSweep(uint flags, uint acceleratedSweepCount)
+{
+    // The unfiltered source/update path is a complete transaction in one
+    // dispatch. Accelerated checkerboard work is complete when the probe's
+    // matching color executes in the configured final sweep; tying completion
+    // to the globally final color would permanently exclude the other parity.
+    if ((flags & SIMPLE_DDGI_SOLVE_COLOR_FILTER) == 0u)
+        return true;
+    uint sweepIndex = flags >> SIMPLE_DDGI_SOLVE_SWEEP_INDEX_SHIFT;
+    return sweepIndex + 1u >= max(acceleratedSweepCount, 1u);
 }
 
 vec3 SimpleDdgiProbeWorldPosition(uint globalProbeIndex, SimpleDdgiParams p, out uint volumeIndexOut)
@@ -1214,6 +1449,8 @@ struct SimpleDdgiTransportRayCache
     // frozen audit evaluate mixed-ring fields without a second metadata SSBO.
     uint sourceRayCount;
     uint generationAndFlags;
+    uint sourceLightingGeneration;
+    uint sourceEpoch;
 };
 
 uint SimpleDdgiTransportRayCacheBase(uint probeIndex, uint directionRayIndex, SimpleDdgiParams p)
@@ -1248,18 +1485,27 @@ void WriteSimpleDdgiTransportRayCache(
     float materialOcclusion,
     float hitKind,
     uint probeGeneration,
+    uint sourceLightingGeneration,
+    uint sourceEpoch,
     uint sourceRayCount)
 {
     uint baseWord = SimpleDdgiTransportRayCacheBase(probeIndex, directionRayIndex, p);
-    WriteStorageVec4Uniform(
-        bufferIndex,
-        baseWord,
-        vec4(clamp(sourceRadiance, vec3(0.0), vec3(65504.0)), max(distance, 0.0)));
-    WriteStorageWordUniform(bufferIndex, baseWord + 4u, PackSimpleDdgiTransportOctDirection(direction));
-    WriteStorageWordUniform(bufferIndex, baseWord + 5u, PackSimpleDdgiTransportOctDirection(normal));
+    vec4 sourceRadianceDistance = vec4(
+        clamp(sourceRadiance, vec3(0.0), vec3(65504.0)),
+        clamp(distance, 0.0, 65504.0));
     WriteStorageWordUniform(
         bufferIndex,
-        baseWord + 6u,
+        baseWord,
+        packHalf2x16(sourceRadianceDistance.xy));
+    WriteStorageWordUniform(
+        bufferIndex,
+        baseWord + 1u,
+        packHalf2x16(sourceRadianceDistance.zw));
+    WriteStorageWordUniform(bufferIndex, baseWord + 2u, PackSimpleDdgiTransportOctDirection(direction));
+    WriteStorageWordUniform(bufferIndex, baseWord + 3u, PackSimpleDdgiTransportOctDirection(normal));
+    WriteStorageWordUniform(
+        bufferIndex,
+        baseWord + 4u,
         packUnorm4x8(vec4(
             clamp(diffuseReflectance, vec3(0.0), vec3(1.0)),
             clamp(materialOcclusion, 0.0, 1.0))));
@@ -1275,14 +1521,16 @@ void WriteSimpleDdgiTransportRayCache(
         : clamp(sourceRayCount, 1u, 255u);
     packedTransmission = (packedTransmission & 0x00ffffffu) |
         (encodedSourceRayCount << 24u);
-    WriteStorageWordUniform(bufferIndex, baseWord + 7u, packedTransmission);
+    WriteStorageWordUniform(bufferIndex, baseWord + 5u, packedTransmission);
     uint flags = SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG |
         (hitKind >= 0.5 ? SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG : 0u) |
         (hitKind > 1.5 ? SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG : 0u);
     WriteStorageWordUniform(
         bufferIndex,
-        baseWord + 8u,
+        baseWord + 6u,
         (probeGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK) | flags);
+    WriteStorageWordUniform(bufferIndex, baseWord + 7u, sourceLightingGeneration);
+    WriteStorageWordUniform(bufferIndex, baseWord + 8u, sourceEpoch);
 }
 
 bool ReadSimpleDdgiTransportRayCache(
@@ -1302,11 +1550,13 @@ bool ReadSimpleDdgiTransportRayCache(
     cache.materialOcclusion = 1.0;
     cache.sourceRayCount = 0u;
     cache.generationAndFlags = 0u;
+    cache.sourceLightingGeneration = 0u;
+    cache.sourceEpoch = 0u;
     if (bufferIndex == 0u || directionRayIndex >= p.raysPerProbe)
         return false;
 
     uint baseWord = SimpleDdgiTransportRayCacheBase(probeIndex, directionRayIndex, p);
-    uint generationAndFlags = ReadStorageWordUniform(bufferIndex, baseWord + 8u);
+    uint generationAndFlags = ReadStorageWordUniform(bufferIndex, baseWord + 6u);
     if ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG) == 0u ||
         (generationAndFlags & SIMPLE_DDGI_UPDATE_GENERATION_MASK) !=
             (expectedProbeGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK))
@@ -1314,7 +1564,9 @@ bool ReadSimpleDdgiTransportRayCache(
         return false;
     }
 
-    vec4 sourceRadianceDistance = ReadStorageVec4Uniform(bufferIndex, baseWord);
+    vec4 sourceRadianceDistance = vec4(
+        unpackHalf2x16(ReadStorageWordUniform(bufferIndex, baseWord)),
+        unpackHalf2x16(ReadStorageWordUniform(bufferIndex, baseWord + 1u)));
     // The source trace normally clamps these values before writing the cache,
     // but the audit must not turn corrupted storage into a valid black sample.
     // Reject the raw payload before any max/clamp operation can hide a NaN,
@@ -1328,7 +1580,7 @@ bool ReadSimpleDdgiTransportRayCache(
     }
     cache.sourceRadiance = sourceRadianceDistance.rgb;
     cache.distance = sourceRadianceDistance.w;
-    uvec4 surface = ReadStorageUVec4Uniform(bufferIndex, baseWord + 4u);
+    uvec4 surface = ReadStorageUVec4Uniform(bufferIndex, baseWord + 2u);
     cache.direction = UnpackSimpleDdgiTransportOctDirection(surface.x);
     cache.normal = UnpackSimpleDdgiTransportOctDirection(surface.y);
     vec4 packedSurface = unpackUnorm4x8(surface.z);
@@ -1341,6 +1593,8 @@ bool ReadSimpleDdgiTransportRayCache(
         ? 256u
         : encodedSourceRayCount;
     cache.generationAndFlags = generationAndFlags;
+    cache.sourceLightingGeneration = ReadStorageWordUniform(bufferIndex, baseWord + 7u);
+    cache.sourceEpoch = ReadStorageWordUniform(bufferIndex, baseWord + 8u);
     return true;
 }
 
@@ -1361,6 +1615,17 @@ float SimpleDdgiTransportRayCacheHitKind(SimpleDdgiTransportRayCache cache)
 vec4 ReadSimpleDdgiAtlasTexel(uint bufferIndex, uint probeIndex, uint texelIndex, uint texelsPerProbe)
 {
     uint word = SimpleDdgiAtlasWord(probeIndex, texelIndex, texelsPerProbe);
+    vec2 xy = unpackHalf2x16(ReadStorageWordUniform(bufferIndex, word));
+    vec2 zw = unpackHalf2x16(ReadStorageWordUniform(bufferIndex, word + 1u));
+    return vec4(xy, zw);
+}
+
+vec4 ReadSimpleDdgiAtlasTexelAtBase(
+    uint bufferIndex,
+    uint probeBaseWord,
+    uint texelIndex)
+{
+    uint word = probeBaseWord + texelIndex * 2u;
     vec2 xy = unpackHalf2x16(ReadStorageWordUniform(bufferIndex, word));
     vec2 zw = unpackHalf2x16(ReadStorageWordUniform(bufferIndex, word + 1u));
     return vec4(xy, zw);
@@ -1474,6 +1739,133 @@ vec4 SampleSimpleDdgiAtlasImage(
         vec3(clamp(encodedDirection, vec2(0.0), vec2(1.0)), float(layerIndex)));
 }
 
+// One canonical logical slot is resolved per accepted corner and reused for
+// both atlases. Precomputing the SSBO bases also removes eight repeated
+// probe-stride multiplies from each bilinear pair.
+struct SimpleDdgiAtlasAddress
+{
+    uint probeIndex;
+    uint irradianceBaseWord;
+    uint visibilityBaseWord;
+    uint sampledGroupIndex;
+    uint sampledLayerIndex;
+};
+
+bool TryBuildSimpleDdgiAtlasAddress(
+    SimpleDdgiParams p,
+    uint atlasProbeAddress,
+    out SimpleDdgiAtlasAddress address)
+{
+    address.probeIndex = atlasProbeAddress;
+    address.irradianceBaseWord = 0u;
+    address.visibilityBaseWord = 0u;
+    address.sampledGroupIndex = 0u;
+    address.sampledLayerIndex = 0u;
+    if (atlasProbeAddress == SIMPLE_DDGI_RECEIVER_INVALID_ATLAS_ADDRESS ||
+        atlasProbeAddress >= p.physicalProbeCapacity ||
+        p.irradianceTexels == 0u || p.visibilityTexels == 0u ||
+        // floor(sqrt(UINT_MAX / two packed words per texel)). This
+        // validates the square before evaluating it, so corrupt parameters
+        // cannot wrap into a plausible nonzero stride.
+        p.irradianceTexels > 46340u || p.visibilityTexels > 46340u)
+    {
+        return false;
+    }
+
+    uint irradianceWordsPerProbe =
+        p.irradianceTexels * p.irradianceTexels * 2u;
+    uint visibilityWordsPerProbe =
+        p.visibilityTexels * p.visibilityTexels * 2u;
+    if (irradianceWordsPerProbe == 0u || visibilityWordsPerProbe == 0u ||
+        atlasProbeAddress >
+            (0xffffffffu - (irradianceWordsPerProbe - 1u)) /
+                irradianceWordsPerProbe ||
+        atlasProbeAddress >
+            (0xffffffffu - (visibilityWordsPerProbe - 1u)) /
+                visibilityWordsPerProbe)
+    {
+        return false;
+    }
+
+    address.irradianceBaseWord = atlasProbeAddress * irradianceWordsPerProbe;
+    address.visibilityBaseWord = atlasProbeAddress * visibilityWordsPerProbe;
+    if (p.sampledAtlasLayersPerTexture != 0u)
+    {
+        address.sampledGroupIndex =
+            atlasProbeAddress / p.sampledAtlasLayersPerTexture;
+        address.sampledLayerIndex = atlasProbeAddress -
+            address.sampledGroupIndex * p.sampledAtlasLayersPerTexture;
+    }
+    return true;
+}
+
+bool SimpleDdgiCanSampleAtlasImageAtAddress(
+    SimpleDdgiParams p,
+    uint bufferIndex,
+    SimpleDdgiAtlasAddress address)
+{
+    return SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS == 0 &&
+        p.sampledAtlasEnabled != 0u &&
+        p.sampledAtlasLayersPerTexture != 0u &&
+        p.sampledAtlasTextureGroupCount != 0u &&
+        (bufferIndex == uint(SIMPLE_DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX) ||
+         bufferIndex == uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX)) &&
+        address.sampledGroupIndex < p.sampledAtlasTextureGroupCount &&
+        address.sampledGroupIndex < uint(SIMPLE_DDGI_SAMPLED_ATLAS_TEXTURE_GROUP_COUNT);
+}
+
+vec4 SampleSimpleDdgiAtlasImageAtAddress(
+    uint bufferIndex,
+    SimpleDdgiAtlasAddress address,
+    vec2 encodedDirection)
+{
+    int textureIndex = bufferIndex == uint(SIMPLE_DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX)
+        ? SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX + int(address.sampledGroupIndex)
+        : SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX + int(address.sampledGroupIndex);
+    return texture(
+        BindlessArrayTextures[nonuniformEXT(textureIndex)],
+        vec3(
+            clamp(encodedDirection, vec2(0.0), vec2(1.0)),
+            float(address.sampledLayerIndex)));
+}
+
+vec4 SampleSimpleDdgiAtlasBilinearAtAddress(
+    uint bufferIndex,
+    SimpleDdgiAtlasAddress address,
+    vec3 direction,
+    uint texelsPerProbe,
+    uint probeBaseWord,
+    SimpleDdgiParams p)
+{
+    vec2 encodedDirection = SimpleDdgiOctEncode(direction);
+    vec2 texelUv = encodedDirection * float(texelsPerProbe) - vec2(0.5);
+    ivec2 base = ivec2(floor(texelUv));
+    vec2 f = fract(texelUv);
+    if (all(greaterThanEqual(base, ivec2(0))) &&
+        all(lessThan(base + ivec2(1), ivec2(int(texelsPerProbe)))) &&
+        SimpleDdgiCanSampleAtlasImageAtAddress(p, bufferIndex, address))
+    {
+        return SampleSimpleDdgiAtlasImageAtAddress(
+            bufferIndex,
+            address,
+            encodedDirection);
+    }
+
+    vec4 s00 = ReadSimpleDdgiAtlasTexelAtBase(
+        bufferIndex, probeBaseWord,
+        SimpleDdgiMirrorOctTexelIndex(base, texelsPerProbe));
+    vec4 s10 = ReadSimpleDdgiAtlasTexelAtBase(
+        bufferIndex, probeBaseWord,
+        SimpleDdgiMirrorOctTexelIndex(base + ivec2(1, 0), texelsPerProbe));
+    vec4 s01 = ReadSimpleDdgiAtlasTexelAtBase(
+        bufferIndex, probeBaseWord,
+        SimpleDdgiMirrorOctTexelIndex(base + ivec2(0, 1), texelsPerProbe));
+    vec4 s11 = ReadSimpleDdgiAtlasTexelAtBase(
+        bufferIndex, probeBaseWord,
+        SimpleDdgiMirrorOctTexelIndex(base + ivec2(1, 1), texelsPerProbe));
+    return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+}
+
 vec4 SampleSimpleDdgiAtlasBilinear(
     uint bufferIndex,
     uint probeIndex,
@@ -1481,25 +1873,20 @@ vec4 SampleSimpleDdgiAtlasBilinear(
     uint texelsPerProbe,
     SimpleDdgiParams p)
 {
-    vec2 encodedDirection = SimpleDdgiOctEncode(direction);
-    vec2 texelUv = encodedDirection * float(texelsPerProbe) - vec2(0.5);
-    ivec2 base = ivec2(floor(texelUv));
-    vec2 f = fract(texelUv);
-    // Hardware filtering is exactly equivalent for a strictly interior quad.
-    // At octahedral seams retain the SSBO mirror lookup, which preserves the
-    // established cross-edge convention instead of clamping the image border.
-    if (all(greaterThanEqual(base, ivec2(0))) &&
-        all(lessThan(base + ivec2(1), ivec2(int(texelsPerProbe)))) &&
-        SimpleDdgiCanSampleAtlasImage(p, bufferIndex, probeIndex))
-    {
-        return SampleSimpleDdgiAtlasImage(p, bufferIndex, probeIndex, encodedDirection);
-    }
-
-    vec4 s00 = ReadSimpleDdgiAtlasTexel(bufferIndex, probeIndex, SimpleDdgiMirrorOctTexelIndex(base, texelsPerProbe), texelsPerProbe);
-    vec4 s10 = ReadSimpleDdgiAtlasTexel(bufferIndex, probeIndex, SimpleDdgiMirrorOctTexelIndex(base + ivec2(1, 0), texelsPerProbe), texelsPerProbe);
-    vec4 s01 = ReadSimpleDdgiAtlasTexel(bufferIndex, probeIndex, SimpleDdgiMirrorOctTexelIndex(base + ivec2(0, 1), texelsPerProbe), texelsPerProbe);
-    vec4 s11 = ReadSimpleDdgiAtlasTexel(bufferIndex, probeIndex, SimpleDdgiMirrorOctTexelIndex(base + ivec2(1, 1), texelsPerProbe), texelsPerProbe);
-    return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+    SimpleDdgiAtlasAddress address;
+    if (!TryBuildSimpleDdgiAtlasAddress(p, probeIndex, address))
+        return vec4(0.0);
+    uint probeBaseWord =
+        bufferIndex == uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX)
+            ? address.visibilityBaseWord
+            : address.irradianceBaseWord;
+    return SampleSimpleDdgiAtlasBilinearAtAddress(
+        bufferIndex,
+        address,
+        direction,
+        texelsPerProbe,
+        probeBaseWord,
+        p);
 }
 
 float SimpleDdgiChebyshev(float mean, float mean2, float receiverDistance, float probeSpacing)
@@ -1534,10 +1921,10 @@ float SimpleDdgiVisibilitySelectionWeight(float transportVisibility)
         SIMPLE_DDGI_VISIBILITY_SELECTION_FLOOR);
 }
 
-vec3 SimpleDdgiBiasedSamplePosition(vec3 worldPos, vec3 normal, vec3 viewDir, SimpleDdgiParams p, float volumeSpacing)
+vec2 SimpleDdgiSampleBiasMagnitudes(
+    SimpleDdgiParams p,
+    float volumeSpacing)
 {
-    vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
-    vec3 safeView = length(viewDir) > 0.00001 ? normalize(viewDir) : safeNormal;
     // Settings are expressed as spacing-relative scales, but spacing is never
     // the only limit. The combined displacement is capped in world space and
     // by a conservative fraction of the declared architectural thickness so a
@@ -1549,7 +1936,15 @@ vec3 SimpleDdgiBiasedSamplePosition(vec3 worldPos, vec3 normal, vec3 viewDir, Si
     float normalBias = clamp(p.normalBias * spacing, 0.002, normalCap);
     float viewCap = min(max(totalBiasCap - normalBias, 0.0), max(0.0, spacing * 0.35));
     float viewBias = clamp(p.viewBias * spacing, 0.0, viewCap);
-    return worldPos + safeNormal * normalBias + safeView * viewBias;
+    return vec2(normalBias, viewBias);
+}
+
+vec3 SimpleDdgiBiasedSamplePosition(vec3 worldPos, vec3 normal, vec3 viewDir, SimpleDdgiParams p, float volumeSpacing)
+{
+    vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
+    vec3 safeView = length(viewDir) > 0.00001 ? normalize(viewDir) : safeNormal;
+    vec2 bias = SimpleDdgiSampleBiasMagnitudes(p, volumeSpacing);
+    return worldPos + safeNormal * bias.x + safeView * bias.y;
 }
 
 vec3 SimpleDdgiBiasedSamplePosition(vec3 worldPos, vec3 normal, vec3 viewDir, SimpleDdgiParams p)
@@ -1619,6 +2014,7 @@ bool FindSimpleDdgiFallbackVolume(
 struct SimpleDdgiGatherResult
 {
     vec3 irradiance;
+#if NJULF_DDGI_DETAILED_COUNTERS
     // Direct + emissive + sky source cache evaluated independently of recursive
     // bounce, using the same probe/cascade weights as the receiver gather.
     vec3 sourceCacheIrradiance;
@@ -1626,6 +2022,7 @@ struct SimpleDdgiGatherResult
     // lets the cascade-selection debug view show every volume that contributed,
     // rather than only the finest volume selected before fallback blending.
     vec3 contributingVolumeColor;
+#endif
     // Fraction of spatial interpolation mass backed by state-valid probe data.
     // Probe-to-receiver visibility is deliberately excluded: it selects which
     // valid probes represent irradiance, but it does not make their atlas data
@@ -1635,41 +2032,53 @@ struct SimpleDdgiGatherResult
     float spatialCoverage;
     float transportVisibility;
     float ownership;
+    uint nonResidentProbeCount;
+#if NJULF_SIMPLE_DDGI_GATHER_ATTRIBUTION
     uint selectedVolume;
     uint secondaryVolume;
+    float primaryContributionWeight;
+    float secondaryContributionWeight;
+#endif
+#if NJULF_DDGI_DETAILED_COUNTERS
     float selectedSpacing;
     float transitionWeight;
     float secondVolumeUsed;
-    float primaryContributionWeight;
-    float secondaryContributionWeight;
     uint validProbeCount;
     uint combinedRejectionMask;
     uint firstRejectionReason;
     uint rejectedProbeCount;
+#endif
 };
 
 SimpleDdgiGatherResult EmptySimpleDdgiGatherResult()
 {
     SimpleDdgiGatherResult result;
     result.irradiance = vec3(0.0);
+#if NJULF_DDGI_DETAILED_COUNTERS
     result.sourceCacheIrradiance = vec3(0.0);
     result.contributingVolumeColor = vec3(0.0);
+#endif
     result.validSupport = 0.0;
     result.directionalSupport = 0.0;
     result.spatialCoverage = 0.0;
     result.transportVisibility = 0.0;
     result.ownership = 0.0;
+    result.nonResidentProbeCount = 0u;
+#if NJULF_SIMPLE_DDGI_GATHER_ATTRIBUTION
     result.selectedVolume = 0u;
     result.secondaryVolume = SIMPLE_DDGI_INVALID_VOLUME_INDEX;
+    result.primaryContributionWeight = 0.0;
+    result.secondaryContributionWeight = 0.0;
+#endif
+#if NJULF_DDGI_DETAILED_COUNTERS
     result.selectedSpacing = 0.0;
     result.transitionWeight = 1.0;
     result.secondVolumeUsed = 0.0;
-    result.primaryContributionWeight = 0.0;
-    result.secondaryContributionWeight = 0.0;
     result.validProbeCount = 0u;
     result.combinedRejectionMask = 0u;
     result.firstRejectionReason = SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT;
     result.rejectedProbeCount = 0u;
+#endif
     return result;
 }
 
@@ -1742,16 +2151,42 @@ float SimpleDdgiLeakAttenuation(SimpleDdgiGatherResult gather, SimpleDdgiParams 
 }
 
 uint SimpleDdgiProbeGatherRejectionMask(SimpleDdgiProbeState state, vec4 irradiance, vec4 visibility);
+bool SimpleDdgiProbeStateSupportsGather(SimpleDdgiProbeState state);
 
 bool SimpleDdgiProbeSupportsGather(SimpleDdgiProbeState state, vec4 irradiance, vec4 visibility)
 {
-    return SimpleDdgiProbeGatherRejectionMask(state, irradiance, visibility) == 0u;
+    return SimpleDdgiProbeStateSupportsGather(state) &&
+        irradiance.w > 0.5 && visibility.z > 0.5;
+}
+
+bool SimpleDdgiProbeStateSupportsGather(SimpleDdgiProbeState state)
+{
+    return (state.flags & (
+            SIMPLE_DDGI_PROBE_FLAG_FRESH |
+            SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED |
+            SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING |
+            SIMPLE_DDGI_PROBE_FLAG_INACTIVE)) == 0u &&
+        state.classification != SIMPLE_DDGI_CLASSIFICATION_INACTIVE &&
+        state.activeWeight > SIMPLE_DDGI_RECEIVER_ACTIVE_WEIGHT_THRESHOLD;
+}
+
+bool SimpleDdgiReceiverProbeSupportsGather(SimpleDdgiReceiverProbe probe)
+{
+    return (probe.flags & SIMPLE_DDGI_RECEIVER_FLAG_PUBLISHED_COHERENT) != 0u &&
+        (probe.flags & SIMPLE_DDGI_RECEIVER_STATE_REJECTION_FLAGS) == 0u &&
+        probe.activeWeight > SIMPLE_DDGI_RECEIVER_ACTIVE_WEIGHT_THRESHOLD &&
+        probe.atlasProbeAddress != SIMPLE_DDGI_RECEIVER_INVALID_ATLAS_ADDRESS;
+}
+
+bool SimpleDdgiAtlasSupportsGather(vec4 irradiance, vec4 visibility)
+{
+    return irradiance.w > 0.5 && visibility.z > 0.5;
 }
 
 // Returns the reason mask as well as the legacy Boolean decision. Keeping this
 // pure makes it usable by diagnostic builds without adding work to production
 // gather paths.
-uint SimpleDdgiProbeGatherRejectionMask(SimpleDdgiProbeState state, vec4 irradiance, vec4 visibility)
+uint SimpleDdgiProbeStateRejectionMask(SimpleDdgiProbeState state)
 {
     uint mask = 0u;
     if ((state.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u) mask |= SIMPLE_DDGI_GATHER_REJECT_FRESH;
@@ -1759,10 +2194,45 @@ uint SimpleDdgiProbeGatherRejectionMask(SimpleDdgiProbeState state, vec4 irradia
     if ((state.flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u) mask |= SIMPLE_DDGI_GATHER_REJECT_RELOCATION_PENDING;
     if ((state.flags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u) mask |= SIMPLE_DDGI_GATHER_REJECT_INACTIVE_FLAG;
     if (state.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE) mask |= SIMPLE_DDGI_GATHER_REJECT_INACTIVE_CLASSIFICATION;
-    if (state.activeWeight <= 0.001) mask |= SIMPLE_DDGI_GATHER_REJECT_ZERO_ACTIVE_WEIGHT;
+    if (state.activeWeight <= SIMPLE_DDGI_RECEIVER_ACTIVE_WEIGHT_THRESHOLD) mask |= SIMPLE_DDGI_GATHER_REJECT_ZERO_ACTIVE_WEIGHT;
+    return mask;
+}
+
+uint SimpleDdgiReceiverProbeStateRejectionMask(SimpleDdgiReceiverProbe probe)
+{
+    uint mask = 0u;
+    if ((probe.flags & SIMPLE_DDGI_RECEIVER_FLAG_PUBLISHED_COHERENT) == 0u)
+        mask |= SIMPLE_DDGI_GATHER_REJECT_FRESH;
+    if ((probe.flags & SIMPLE_DDGI_RECEIVER_FLAG_FRESH) != 0u)
+        mask |= SIMPLE_DDGI_GATHER_REJECT_FRESH;
+    if ((probe.flags & SIMPLE_DDGI_RECEIVER_FLAG_SCROLL_EXPOSED) != 0u)
+        mask |= SIMPLE_DDGI_GATHER_REJECT_SCROLL_EXPOSED;
+    if ((probe.flags & SIMPLE_DDGI_RECEIVER_FLAG_RELOCATION_PENDING) != 0u)
+        mask |= SIMPLE_DDGI_GATHER_REJECT_RELOCATION_PENDING;
+    if ((probe.flags & SIMPLE_DDGI_RECEIVER_FLAG_INACTIVE) != 0u)
+        mask |= SIMPLE_DDGI_GATHER_REJECT_INACTIVE_FLAG;
+    if ((probe.flags & SIMPLE_DDGI_RECEIVER_FLAG_INACTIVE_CLASSIFICATION) != 0u)
+        mask |= SIMPLE_DDGI_GATHER_REJECT_INACTIVE_CLASSIFICATION;
+    if (probe.activeWeight <= SIMPLE_DDGI_RECEIVER_ACTIVE_WEIGHT_THRESHOLD)
+        mask |= SIMPLE_DDGI_GATHER_REJECT_ZERO_ACTIVE_WEIGHT;
+    if (probe.atlasProbeAddress == SIMPLE_DDGI_RECEIVER_INVALID_ATLAS_ADDRESS)
+        mask |= SIMPLE_DDGI_GATHER_REJECT_INVALID_IRRADIANCE |
+            SIMPLE_DDGI_GATHER_REJECT_INVALID_VISIBILITY;
+    return mask;
+}
+
+uint SimpleDdgiAtlasRejectionMask(vec4 irradiance, vec4 visibility)
+{
+    uint mask = 0u;
     if (irradiance.w <= 0.5) mask |= SIMPLE_DDGI_GATHER_REJECT_INVALID_IRRADIANCE;
     if (visibility.z <= 0.5) mask |= SIMPLE_DDGI_GATHER_REJECT_INVALID_VISIBILITY;
     return mask;
+}
+
+uint SimpleDdgiProbeGatherRejectionMask(SimpleDdgiProbeState state, vec4 irradiance, vec4 visibility)
+{
+    return SimpleDdgiProbeStateRejectionMask(state) |
+        SimpleDdgiAtlasRejectionMask(irradiance, visibility);
 }
 
 void RecordSimpleDdgiGatherRejectionMask(
@@ -1836,9 +2306,13 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     vec3 safeNormal)
 {
     SimpleDdgiGatherResult result = EmptySimpleDdgiGatherResult();
+#if NJULF_SIMPLE_DDGI_GATHER_ATTRIBUTION
     result.selectedVolume = volumeIndex;
     result.secondaryVolume = SIMPLE_DDGI_INVALID_VOLUME_INDEX;
+#endif
+#if NJULF_DDGI_DETAILED_COUNTERS
     result.selectedSpacing = volume.spacing;
+#endif
     vec3 grid = (biasedWorldPos - volume.origin) / volume.spacing;
     vec3 baseF = floor(grid);
     // Keep the interpolation affine inside each cell. Applying smoothstep to
@@ -1848,11 +2322,34 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     vec3 fracV = clamp(grid - baseF, vec3(0.0), vec3(1.0));
     ivec3 base = ivec3(baseF);
     vec3 accumulated = vec3(0.0);
+#if NJULF_DDGI_DETAILED_COUNTERS
     vec3 sourceCacheAccumulated = vec3(0.0);
+#endif
     float availableMass = 0.0;
     float validMass = 0.0;
     float directionalMass = 0.0;
     float visibleMass = 0.0;
+#if NJULF_DDGI_DETAILED_COUNTERS
+    uint validProbeCount = 0u;
+#endif
+    SimpleDdgiVolumePaging paging = ReadSimpleDdgiVolumePaging(
+        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX),
+        volumeIndex);
+#if !SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE && SIMPLE_DDGI_OPAQUE_GATHER_ORACLE != 0
+    uint opaqueDemandEpoch = SimpleDdgiDemandEpochForFrame(
+        p.frameIndex == 0xffffffffu
+            ? 1u
+            : p.frameIndex + 1u);
+    vec3 opaqueDemandVolumeCenter = volume.origin +
+        0.5 * volume.spacing * vec3(max(
+            volume.gridCount,
+            uvec3(1u)) - uvec3(1u));
+    uint opaqueDemandDistanceBucket = uint(clamp(
+        length(biasedWorldPos - opaqueDemandVolumeCenter) /
+            max(volume.spacing, 0.0001),
+        0.0,
+        255.0));
+#endif
 
     for (uint z = 0u; z < 2u; z++)
     for (uint y = 0u; y < 2u; y++)
@@ -1861,6 +2358,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
         ivec3 c = base + ivec3(int(x), int(y), int(z));
         if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, ivec3(volume.gridCount))))
         {
+#if NJULF_DDGI_DETAILED_COUNTERS
             result.combinedRejectionMask |= SIMPLE_DDGI_GATHER_REJECT_OUTSIDE_DOMAIN;
             if (result.firstRejectionReason >= SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT)
                 result.firstRejectionReason = 8u;
@@ -1869,6 +2367,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
                 p,
                 gatherRole,
                 SIMPLE_DDGI_GATHER_REJECT_OUTSIDE_DOMAIN);
+#endif
             continue;
         }
 
@@ -1876,22 +2375,208 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
         float trilinear = w3.x * w3.y * w3.z;
         result.spatialCoverage += trilinear;
 
-        uint probeIndex = SimpleDdgiProbeIndex(uvec3(c), volume);
-        SimpleDdgiProbeState state = ReadSimpleDdgiProbeState(uint(SIMPLE_DDGI_PROBE_STATE_BUFFER_INDEX), probeIndex);
-        vec3 probePos = volume.origin + vec3(c) * volume.spacing + state.relocation;
-        vec3 toSurface = biasedWorldPos - probePos;
-        float distanceToProbe = length(toSurface);
-        vec3 probeToSurface = distanceToProbe > 0.00001 ? toSurface / distanceToProbe : safeNormal;
-        vec4 irradiance = SampleSimpleDdgiAtlasBilinear(p.publishedIrradianceAtlasBufferIndex, probeIndex, safeNormal, p.irradianceTexels, p);
-        vec4 moments = SampleSimpleDdgiAtlasBilinear(uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), probeIndex, probeToSurface, p.visibilityTexels, p);
-        uint rejectionMask = SimpleDdgiProbeGatherRejectionMask(state, irradiance, moments);
-        if (rejectionMask != 0u)
+        SimpleDdgiProbeAddress probeAddress =
+#if SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE
+            ResolveSimpleDdgiProbeAddress(
+#else
+            ResolveSimpleDdgiReceiverProbeAddress(
+#endif
+            p,
+            volume,
+            paging,
+            uvec3(c));
+        uint probeIndex = probeAddress.virtualProbeIndex;
+#if !SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE
+        uint receiverDemandEpoch = SimpleDdgiDemandEpochForFrame(
+            p.frameIndex == 0xffffffffu
+                ? 1u
+                : p.frameIndex +
+                    SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET);
+#if SIMPLE_DDGI_OPAQUE_GATHER_ORACLE != 0
+        if (SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE &&
+            probeAddress.virtualPageIndex != 0xffffffffu)
         {
+            SimpleDdgiStampOpaqueGatherDemand(
+                p,
+                probeAddress.virtualPageIndex,
+                opaqueDemandEpoch,
+                opaqueDemandDistanceBucket);
+        }
+#endif
+        // Shadow keeps its exact opaque oracle separate. Non-depth receivers
+        // retain resident pages here; depth-visible opaque receivers defer to
+        // the compact publication-miss branch below. Keeping one static call
+        // site per shader variant also prevents duplicated atomic machinery.
+#if SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT != 0
+        if (SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE &&
+            probeAddress.virtualPageIndex != 0xffffffffu &&
+            (SIMPLE_DDGI_OPAQUE_GATHER_ORACLE == 0 ||
+                paging.residencyMode != SIMPLE_DDGI_RESIDENCY_MODE_SHADOW) &&
+            (paging.residencyMode == SIMPLE_DDGI_RESIDENCY_MODE_SHADOW ||
+                probeAddress.resident && probeAddress.published))
+        {
+            SimpleDdgiRecordReceiverPageDemand(
+                p,
+                probeAddress.virtualPageIndex,
+                receiverDemandEpoch);
+        }
+#endif
+#endif
+#if SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE
+        if (!probeAddress.resident || !probeAddress.published)
+        {
+            result.nonResidentProbeCount++;
+#if NJULF_DDGI_DETAILED_COUNTERS
+            result.combinedRejectionMask |=
+                SIMPLE_DDGI_GATHER_REJECT_NON_RESIDENT;
+            if (result.firstRejectionReason >=
+                SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT)
+            {
+                result.firstRejectionReason = 9u;
+            }
+            result.rejectedProbeCount++;
+            RecordSimpleDdgiGatherRejectionMask(
+                p,
+                gatherRole,
+                SIMPLE_DDGI_GATHER_REJECT_NON_RESIDENT);
+#endif
+            continue;
+        }
+#endif
+        vec3 relocation;
+        float activeWeight;
+        uint atlasProbeAddress = probeAddress.physicalProbeIndex;
+#if NJULF_DDGI_DETAILED_COUNTERS
+        uint rejectionMask;
+#endif
+        bool stateSupported;
+#if SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE
+        SimpleDdgiProbeState state = ReadSimpleDdgiProbeState(
+            uint(SIMPLE_DDGI_PROBE_STATE_BUFFER_INDEX),
+            probeIndex);
+        relocation = state.relocation;
+        activeWeight = state.activeWeight;
+#if NJULF_DDGI_DETAILED_COUNTERS
+        rejectionMask = SimpleDdgiProbeStateRejectionMask(state);
+        stateSupported = rejectionMask == 0u;
+#else
+        stateSupported = SimpleDdgiProbeStateSupportsGather(state);
+#endif
+#else
+        SimpleDdgiReceiverProbe receiverProbe = ReadSimpleDdgiReceiverProbe(
+            uint(SIMPLE_DDGI_RECEIVER_PROBE_BUFFER_INDEX),
+            probeIndex,
+            volume.spacing);
+        relocation = receiverProbe.relocation;
+        activeWeight = receiverProbe.activeWeight;
+        atlasProbeAddress = receiverProbe.atlasProbeAddress;
+        if (atlasProbeAddress ==
+                SIMPLE_DDGI_RECEIVER_INVALID_ATLAS_ADDRESS ||
+            atlasProbeAddress >= p.physicalProbeCapacity)
+        {
+#if SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT == 0
+            // Depth-visible opaque receivers avoid common-case residency
+            // atomics. A compact publication miss is the authoritative point
+            // at which supplemental feedback is required.
+            if (SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE &&
+                probeAddress.virtualPageIndex != 0xffffffffu &&
+                paging.residencyMode != SIMPLE_DDGI_RESIDENCY_MODE_SHADOW)
+            {
+                SimpleDdgiRecordReceiverPageDemand(
+                    p,
+                    probeAddress.virtualPageIndex,
+                    receiverDemandEpoch);
+            }
+#endif
+            result.nonResidentProbeCount++;
+#if NJULF_DDGI_DETAILED_COUNTERS
+            result.combinedRejectionMask |=
+                SIMPLE_DDGI_GATHER_REJECT_NON_RESIDENT;
+            if (result.firstRejectionReason >=
+                SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT)
+            {
+                result.firstRejectionReason = 9u;
+            }
+            result.rejectedProbeCount++;
+            RecordSimpleDdgiGatherRejectionMask(
+                p,
+                gatherRole,
+                SIMPLE_DDGI_GATHER_REJECT_NON_RESIDENT);
+#endif
+            continue;
+        }
+#if NJULF_DDGI_DETAILED_COUNTERS
+        rejectionMask =
+            SimpleDdgiReceiverProbeStateRejectionMask(receiverProbe);
+        stateSupported = rejectionMask == 0u;
+#else
+        stateSupported = SimpleDdgiReceiverProbeSupportsGather(receiverProbe);
+#endif
+#endif
+        // Reject lifecycle-invalid records immediately after the single aligned
+        // compact load. No address math, atlas load, or texture sample is
+        // reachable from this path in receiver shaders.
+        if (!stateSupported)
+        {
+#if NJULF_DDGI_DETAILED_COUNTERS
             result.combinedRejectionMask |= rejectionMask;
             if (result.firstRejectionReason >= SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT)
                 result.firstRejectionReason = uint(findLSB(rejectionMask));
             result.rejectedProbeCount++;
             RecordSimpleDdgiGatherRejectionMask(p, gatherRole, rejectionMask);
+#endif
+            continue;
+        }
+
+        SimpleDdgiAtlasAddress atlasAddress;
+        if (!TryBuildSimpleDdgiAtlasAddress(p, atlasProbeAddress, atlasAddress))
+        {
+#if NJULF_DDGI_DETAILED_COUNTERS
+            rejectionMask = SIMPLE_DDGI_GATHER_REJECT_INVALID_IRRADIANCE |
+                SIMPLE_DDGI_GATHER_REJECT_INVALID_VISIBILITY;
+            result.combinedRejectionMask |= rejectionMask;
+            if (result.firstRejectionReason >= SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT)
+                result.firstRejectionReason = uint(findLSB(rejectionMask));
+            result.rejectedProbeCount++;
+            RecordSimpleDdgiGatherRejectionMask(p, gatherRole, rejectionMask);
+#endif
+            continue;
+        }
+
+        vec3 probePos = volume.origin + vec3(c) * volume.spacing + relocation;
+        vec3 toSurface = biasedWorldPos - probePos;
+        float distanceToProbe = length(toSurface);
+        vec3 probeToSurface = distanceToProbe > 0.00001 ? toSurface / distanceToProbe : safeNormal;
+        vec4 irradiance = SampleSimpleDdgiAtlasBilinearAtAddress(
+            p.publishedIrradianceAtlasBufferIndex,
+            atlasAddress,
+            safeNormal,
+            p.irradianceTexels,
+            atlasAddress.irradianceBaseWord,
+            p);
+        vec4 moments = SampleSimpleDdgiAtlasBilinearAtAddress(
+            uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX),
+            atlasAddress,
+            probeToSurface,
+            p.visibilityTexels,
+            atlasAddress.visibilityBaseWord,
+            p);
+        bool atlasSupported;
+#if NJULF_DDGI_DETAILED_COUNTERS
+        rejectionMask = SimpleDdgiAtlasRejectionMask(irradiance, moments);
+        atlasSupported = rejectionMask == 0u;
+#else
+        atlasSupported = SimpleDdgiAtlasSupportsGather(irradiance, moments);
+#endif
+        if (!atlasSupported)
+        {
+#if NJULF_DDGI_DETAILED_COUNTERS
+            result.combinedRejectionMask |= rejectionMask;
+            if (result.firstRejectionReason >= SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT)
+                result.firstRejectionReason = uint(findLSB(rejectionMask));
+            result.rejectedProbeCount++;
+            RecordSimpleDdgiGatherRejectionMask(p, gatherRole, rejectionMask);
+#endif
             continue;
         }
 
@@ -1901,7 +2586,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
         // cell.  Keep a tiny directional floor so an entirely back-facing cell can
         // still produce a stable estimate while visibility remains authoritative.
         float directionalWeight = max(halfLambert * halfLambert, 1.0e-4);
-        float dataWeight = trilinear * clamp(state.activeWeight, 0.0, 1.0);
+        float dataWeight = trilinear * clamp(activeWeight, 0.0, 1.0);
         float directionalTransportWeight = dataWeight * directionalWeight;
         float visibilityBias = clamp(0.03 * p.selfShadowBiasScale * volume.spacing, 0.002, volume.spacing * 0.10);
         float transportVisibility = SimpleDdgiChebyshev(
@@ -1914,19 +2599,33 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
         float selectedDataWeight = dataWeight * visibilitySelectionWeight;
         float selectedDirectionalWeight = directionalTransportWeight * visibilitySelectionWeight;
         accumulated += max(irradiance.rgb, vec3(0.0)) * selectedDirectionalWeight;
+#if NJULF_DDGI_DETAILED_COUNTERS && NJULF_SIMPLE_DDGI_SOURCE_CACHE_DIAGNOSTIC
         if (p.debugView == SIMPLE_DDGI_DEBUG_SOURCE_CACHE_RADIANCE)
         {
+#if SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE
+            SimpleDdgiProbeState sourceDebugState = state;
+#else
+            // The source cache is producer-only data. Detailed investigation
+            // builds may inspect its generation metadata, but production
+            // receiver SPIR-V contains no 32-byte state load or ray loop.
+            SimpleDdgiProbeState sourceDebugState = ReadSimpleDdgiProbeState(
+                uint(SIMPLE_DDGI_PROBE_STATE_BUFFER_INDEX),
+                probeIndex);
+#endif
             sourceCacheAccumulated += SampleSimpleDdgiProbeSourceCacheIrradiance(
                 p,
-                probeIndex,
-                state,
+                probeAddress.physicalProbeIndex,
+                sourceDebugState,
                 safeNormal) * selectedDirectionalWeight;
         }
+#endif
         availableMass += dataWeight;
         validMass += selectedDataWeight;
         directionalMass += selectedDirectionalWeight;
         visibleMass += selectedDirectionalWeight * transportVisibility;
-        result.validProbeCount++;
+#if NJULF_DDGI_DETAILED_COUNTERS
+        validProbeCount++;
+#endif
     }
 
     float spatialCoverage = clamp(result.spatialCoverage, 0.0, 1.0);
@@ -1947,17 +2646,18 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     // the standard DDGI estimator and prevents probe-to-receiver visibility from
     // becoming a second ambient-occlusion term. Physical shadowing is already in
     // the radiance traced into each probe.
-    result.irradiance = result.validProbeCount > 0u && directionalMass > 0.000001
+    result.irradiance = directionalMass > 0.000001
         ? clamp(accumulated / directionalMass, vec3(0.0), vec3(64.0))
         : vec3(0.0);
-    result.sourceCacheIrradiance = result.validProbeCount > 0u && directionalMass > 0.000001
+#if NJULF_DDGI_DETAILED_COUNTERS
+    result.sourceCacheIrradiance = directionalMass > 0.000001
         ? clamp(sourceCacheAccumulated / directionalMass, vec3(0.0), vec3(64.0))
         : vec3(0.0);
-    result.contributingVolumeColor = result.validProbeCount > 0u && directionalMass > 0.000001
+    result.contributingVolumeColor = directionalMass > 0.000001
         ? SimpleDdgiVolumeContributorDebugColor(volumeIndex, volume.kind)
         : vec3(0.0);
-    result.primaryContributionWeight = result.validProbeCount > 0u && directionalMass > 0.000001 ? 1.0 : 0.0;
-    if (result.validProbeCount == 0u && result.spatialCoverage > 0.000001)
+    result.validProbeCount = validProbeCount;
+    if (validProbeCount == 0u && result.spatialCoverage > 0.000001)
     {
         AddSimpleDdgiGatherDiagnostic(
             p,
@@ -1965,6 +2665,10 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
             SIMPLE_DDGI_GATHER_ALL_FAILED_COUNTER_BASE +
                 min(gatherRole, SIMPLE_DDGI_GATHER_ROLE_COUNT - 1u));
     }
+#endif
+#if NJULF_SIMPLE_DDGI_GATHER_ATTRIBUTION
+    result.primaryContributionWeight = directionalMass > 0.000001 ? 1.0 : 0.0;
+#endif
     return result;
 }
 
@@ -2107,10 +2811,12 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
     float visibleMass = outerVisibleMass + innerVisibleMass;
     vec3 accumulated = outer.irradiance * outerDirectionalMass +
         inner.irradiance * innerDirectionalMass;
+#if NJULF_DDGI_DETAILED_COUNTERS
     vec3 sourceCacheAccumulated = outer.sourceCacheIrradiance * outerDirectionalMass +
         inner.sourceCacheIrradiance * innerDirectionalMass;
     vec3 contributorColorAccumulated = outer.contributingVolumeColor * outerDirectionalMass +
         inner.contributingVolumeColor * innerDirectionalMass;
+#endif
     SimpleDdgiGatherResult result;
     float innerSpatialMass = inner.spatialCoverage * w;
     float outerSpatialMass = outer.spatialCoverage * (1.0 - innerSpatialMass);
@@ -2134,24 +2840,31 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
         ? clamp(visibleMass / directionalMass, 0.0, 1.0)
         : 0.0;
     result.ownership = clamp(validMass, 0.0, 1.0);
+    result.nonResidentProbeCount =
+        inner.nonResidentProbeCount + outer.nonResidentProbeCount;
     result.irradiance = directionalMass > 0.000001
         ? clamp(accumulated / directionalMass, vec3(0.0), vec3(64.0))
         : vec3(0.0);
+#if NJULF_DDGI_DETAILED_COUNTERS
     result.sourceCacheIrradiance = directionalMass > 0.000001
         ? clamp(sourceCacheAccumulated / directionalMass, vec3(0.0), vec3(64.0))
         : vec3(0.0);
     result.contributingVolumeColor = directionalMass > 0.000001
         ? clamp(contributorColorAccumulated / directionalMass, vec3(0.0), vec3(1.0))
         : vec3(0.0);
+#endif
+#if NJULF_SIMPLE_DDGI_GATHER_ATTRIBUTION
     result.selectedVolume = inner.selectedVolume;
     result.secondaryVolume = outer.selectedVolume;
-    result.transitionWeight = w;
     result.primaryContributionWeight = directionalMass > 0.000001
         ? clamp(innerDirectionalMass / directionalMass, 0.0, 1.0)
         : 0.0;
     result.secondaryContributionWeight = directionalMass > 0.000001
         ? clamp(outerDirectionalMass / directionalMass, 0.0, 1.0)
         : 0.0;
+#endif
+#if NJULF_DDGI_DETAILED_COUNTERS
+    result.transitionWeight = w;
     result.selectedSpacing = mix(
         outer.selectedSpacing,
         inner.selectedSpacing,
@@ -2164,6 +2877,7 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
             ? inner.firstRejectionReason
             : outer.firstRejectionReason;
     result.rejectedProbeCount = inner.rejectedProbeCount + outer.rejectedProbeCount;
+#endif
     return result;
 }
 
@@ -2185,10 +2899,12 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
     float edgeWeight = 0.0;
     if (!SelectSimpleDdgiVolume(p, worldPos, selectedVolumeIndex, selectedVolume, edgeWeight))
     {
+#if NJULF_DDGI_DETAILED_COUNTERS
         RecordSimpleDdgiGatherRejectionMask(
             p,
             SIMPLE_DDGI_GATHER_ROLE_PRIMARY,
             SIMPLE_DDGI_GATHER_REJECT_OUTSIDE_DOMAIN);
+#endif
         return empty;
     }
     // Keep edge ownership in stable receiver space.  The old implementation
@@ -2210,6 +2926,16 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
         SIMPLE_DDGI_GATHER_ROLE_PRIMARY,
         selectedInterpolationPosition,
         safeNormal);
+#if !SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE
+    if (selected.nonResidentProbeCount != 0u)
+    {
+        SimpleDdgiRecordResidencyCounter(
+            p,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_NONRESIDENT_GATHER_REJECTIONS,
+            selected.nonResidentProbeCount);
+    }
+#endif
+#if NJULF_DDGI_DETAILED_COUNTERS
     uint diagnosticFrame = p.frameIndex % uint(FRAMES_IN_FLIGHT);
     AddSimpleDdgiGatherDiagnostic(
         p,
@@ -2223,6 +2949,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
         p,
         diagnosticFrame,
         DDGI_INVESTIGATION_SIMPLE_VOLUME_SAMPLED_GATHER_COUNTER_BASE + selectedVolumeIndex);
+#endif
     // Bound fallback work by probe-field ownership, not by receiver visibility
     // or the normal-facing interpolation weight. Those terms select a stable
     // estimate inside one field; treating them as missing coverage made almost
@@ -2237,13 +2964,17 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
     if (!selectedBiasOutsideSelectionDomain &&
         selectedTransitionOwnership >= p.secondVolumeOwnershipEarlyOutThreshold)
     {
+#if NJULF_DDGI_DETAILED_COUNTERS
         AddSimpleDdgiGatherDiagnostic(
             p,
             diagnosticFrame,
             SIMPLE_DDGI_ONE_GATHER_PIXEL_COUNTER);
+#endif
         selected.spatialCoverage *= edgeWeight;
         selected.ownership *= edgeWeight;
+#if NJULF_DDGI_DETAILED_COUNTERS
         selected.transitionWeight = edgeWeight;
+#endif
         return selected;
     }
 
@@ -2257,6 +2988,16 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
         fallbackVolume);
     if (foundFallback)
     {
+#if !SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE
+        if (selected.nonResidentProbeCount != 0u)
+        {
+            SimpleDdgiRecordResidencyCounter(
+                p,
+                SIMPLE_DDGI_RESIDENCY_COUNTER_COARSER_FALLBACK,
+                1u);
+        }
+#endif
+#if NJULF_DDGI_DETAILED_COUNTERS
         // Select one attribution before gathering. Recovery can replace this
         // classification below, but no receiver can contribute to two reason
         // buckets for the same second-volume event.
@@ -2267,7 +3008,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
             secondGatherReasonCounter =
                 SIMPLE_DDGI_SECOND_GATHER_COVERAGE_EDGE_COUNTER;
         }
-        else if (selected.validProbeCount == 0u || selected.validSupport <= 0.000001)
+        else if (selected.validSupport <= 0.000001)
         {
             secondGatherReasonCounter =
                 SIMPLE_DDGI_SECOND_GATHER_MISSING_INVALID_PRIMARY_COUNTER;
@@ -2283,6 +3024,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
             secondGatherReasonCounter =
                 SIMPLE_DDGI_SECOND_GATHER_OWNERSHIP_BELOW_COUNTER;
         }
+#endif
 
         bool fallbackBiasOutsideSelectionDomain;
         vec3 fallbackInterpolationPosition = SimpleDdgiResolveInterpolationPosition(
@@ -2303,6 +3045,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
             SIMPLE_DDGI_GATHER_ROLE_FALLBACK,
             fallbackInterpolationPosition,
             safeNormal);
+#if NJULF_DDGI_DETAILED_COUNTERS
         AddSimpleDdgiGatherDiagnostic(
             p,
             diagnosticFrame,
@@ -2311,6 +3054,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
             p,
             diagnosticFrame,
             DDGI_INVESTIGATION_SIMPLE_VOLUME_SAMPLED_GATHER_COUNTER_BASE + fallbackVolumeIndex);
+#endif
         // A fine cell with valid atlas data but no forward-facing corner must
         // not hide a usable coarser cell. Directional authority changes only
         // cascade composition; data availability remains independently visible
@@ -2326,7 +3070,9 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
         // let one containing coarser ring fill that missing mass instead of
         // promoting the tiny remainder to full radiometric authority.
         uint recoveryBaseVolumeIndex = fallbackVolumeIndex;
+#if NJULF_DDGI_DETAILED_COUNTERS
         bool recoveryGathered = false;
+#endif
         for (uint recoverySample = 0u;
              recoverySample < SIMPLE_DDGI_MAX_RECOVERY_GATHER_SAMPLES;
              recoverySample++)
@@ -2361,11 +3107,13 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
                     SIMPLE_DDGI_GATHER_ROLE_RECOVERY,
                     recoveryInterpolationPosition,
                     safeNormal);
+#if NJULF_DDGI_DETAILED_COUNTERS
                 recoveryGathered = true;
                 AddSimpleDdgiGatherDiagnostic(
                     p,
                     diagnosticFrame,
                     DDGI_INVESTIGATION_SIMPLE_VOLUME_SAMPLED_GATHER_COUNTER_BASE + recoveryVolumeIndex);
+#endif
                 float combinedDirectionalAuthority =
                     SimpleDdgiDirectionalGatherAuthority(combined);
                 combined = BlendSimpleDdgiGatherResults(
@@ -2375,6 +3123,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
             }
         }
 
+#if NJULF_DDGI_DETAILED_COUNTERS
         AddSimpleDdgiGatherDiagnostic(
             p,
             diagnosticFrame,
@@ -2387,6 +3136,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
             recoveryGathered
                 ? SIMPLE_DDGI_SECOND_GATHER_RECOVERY_COUNTER
                 : secondGatherReasonCounter);
+#endif
 
         return combined;
     }
@@ -2396,11 +3146,13 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
     // share exactly once.
     selected.spatialCoverage *= edgeWeight;
     selected.ownership *= edgeWeight;
+#if NJULF_DDGI_DETAILED_COUNTERS
     selected.transitionWeight = edgeWeight;
     AddSimpleDdgiGatherDiagnostic(
         p,
         diagnosticFrame,
         SIMPLE_DDGI_ONE_GATHER_PIXEL_COUNTER);
+#endif
     return selected;
 }
 
@@ -2607,12 +3359,57 @@ SimpleDdgiDebugSample SampleSimpleDdgiDebug(
     nearest = clamp(nearest, ivec3(0), ivec3(volume.gridCount) - ivec3(1));
     uint probeIndex = SimpleDdgiProbeIndex(uvec3(nearest), volume);
     vec3 logicalProbePos = volume.origin + vec3(nearest) * volume.spacing;
-    SimpleDdgiProbeState state = ReadSimpleDdgiProbeState(uint(SIMPLE_DDGI_PROBE_STATE_BUFFER_INDEX), probeIndex);
-    vec3 probePos = logicalProbePos + state.relocation;
+    SimpleDdgiVolumePaging paging = ReadSimpleDdgiVolumePaging(
+        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX),
+        selectedVolumeIndex);
+    SimpleDdgiProbeAddress probeAddress = ResolveSimpleDdgiProbeAddress(
+        p,
+        volume,
+        paging,
+        uvec3(nearest));
+    vec3 relocation = vec3(0.0);
+    uint atlasProbeAddress = SIMPLE_DDGI_RECEIVER_INVALID_ATLAS_ADDRESS;
+#if SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE
+    if (probeAddress.resident && probeAddress.published)
+    {
+        SimpleDdgiProbeState state = ReadSimpleDdgiProbeState(
+            uint(SIMPLE_DDGI_PROBE_STATE_BUFFER_INDEX),
+            probeIndex);
+        relocation = state.relocation;
+        atlasProbeAddress = probeAddress.physicalProbeIndex;
+    }
+#else
+    if (probeAddress.resident && probeAddress.published)
+    {
+        SimpleDdgiReceiverProbe receiverProbe = ReadSimpleDdgiReceiverProbe(
+            uint(SIMPLE_DDGI_RECEIVER_PROBE_BUFFER_INDEX),
+            probeIndex,
+            volume.spacing);
+        if (SimpleDdgiReceiverProbeSupportsGather(receiverProbe) &&
+            receiverProbe.atlasProbeAddress ==
+                probeAddress.physicalProbeIndex)
+        {
+            relocation = receiverProbe.relocation;
+            atlasProbeAddress = probeAddress.physicalProbeIndex;
+        }
+    }
+#endif
+    vec3 probePos = logicalProbePos + relocation;
     vec3 toSurface = interpolationPosition - probePos;
     float distanceToProbe = length(toSurface);
     vec3 probeToSurface = distanceToProbe > 0.00001 ? toSurface / distanceToProbe : normalize(normal);
-    vec4 moments = SampleSimpleDdgiAtlasBilinear(uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), probeIndex, probeToSurface, p.visibilityTexels, p);
+    SimpleDdgiAtlasAddress atlasAddress;
+    vec4 moments = vec4(0.0);
+    if (TryBuildSimpleDdgiAtlasAddress(p, atlasProbeAddress, atlasAddress))
+    {
+        moments = SampleSimpleDdgiAtlasBilinearAtAddress(
+            uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX),
+            atlasAddress,
+            probeToSurface,
+            p.visibilityTexels,
+            atlasAddress.visibilityBaseWord,
+            p);
+    }
     float mean = max(moments.x, 0.0);
     float variance = max(moments.y - mean * mean, 0.0);
 
@@ -2634,6 +3431,56 @@ SimpleDdgiDebugSample SampleSimpleDdgiDebug(
     result.visibilityMomentMean = mean;
     result.visibilityMomentVariance = variance;
     result.visibilityProbeDistance = distanceToProbe;
+    result.residencyTableFlags = probeAddress.published
+        ? SIMPLE_DDGI_PAGE_TABLE_VALID |
+            SIMPLE_DDGI_PAGE_TABLE_PUBLISHED
+        : 0u;
+    result.residencyHistoryFlags = 0u;
+    result.residencyDemandMask = 0u;
+    result.physicalPageIndex = probeAddress.physicalPageIndex != 0xffffffffu
+        ? probeAddress.physicalPageIndex
+        : (probeAddress.resident
+            ? probeAddress.physicalProbeIndex / SIMPLE_DDGI_PROBES_PER_PAGE
+            : 0xffffffffu);
+    result.pageMappingGeneration = probeAddress.pageMappingGeneration;
+    result.pageAgeFrames = 0u;
+    result.pageAgeNormalized = 0.0;
+    if (probeAddress.virtualPageIndex != 0xffffffffu &&
+        SimpleDdgiResidencyHeaderMatches(p))
+    {
+        uint tableBase = SIMPLE_DDGI_RESIDENCY_PAGE_TABLE_OFFSET_WORDS +
+            probeAddress.virtualPageIndex *
+                SIMPLE_DDGI_PAGE_TABLE_ENTRY_WORDS;
+        uvec4 table = ReadStorageAlignedUVec4Uniform(
+            p.residencyArenaBufferIndex,
+            tableBase);
+        uint historyBase = SimpleDdgiPageHistoryOffsetWords(p) +
+            probeAddress.virtualPageIndex * SIMPLE_DDGI_PAGE_HISTORY_WORDS;
+        uvec4 history = ReadStorageAlignedUVec4Uniform(
+            p.residencyArenaBufferIndex,
+            historyBase);
+        result.residencyTableFlags = table.z;
+        result.residencyHistoryFlags = history.w;
+        uint currentEpoch = SimpleDdgiDemandEpochForFrame(p.frameIndex);
+        uint previousEpoch = currentEpoch > 1u
+            ? currentEpoch - 1u
+            : SIMPLE_DDGI_DEMAND_EPOCH_MASK - 1u;
+        uint visibleEpoch = SimpleDdgiDemandStampEpoch(history.x);
+        uint receiverEpoch = SimpleDdgiDemandStampEpoch(history.y);
+        if (visibleEpoch == currentEpoch || visibleEpoch == previousEpoch)
+            result.residencyDemandMask |= 1u;
+        if (receiverEpoch == currentEpoch || receiverEpoch == previousEpoch)
+            result.residencyDemandMask |= 2u;
+        if (p.frameIndex >= history.z)
+            result.pageAgeFrames = p.frameIndex - history.z;
+        uint retentionFrames = max(ReadStorageWordUniform(
+            p.residencyArenaBufferIndex,
+            11u), 1u);
+        result.pageAgeNormalized = clamp(
+            float(result.pageAgeFrames) / float(retentionFrames),
+            0.0,
+            1.0);
+    }
     return result;
 }
 

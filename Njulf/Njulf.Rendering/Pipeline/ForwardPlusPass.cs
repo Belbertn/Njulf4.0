@@ -815,8 +815,7 @@ namespace Njulf.Rendering.Pipeline
             if (_recordingReflectionCapture)
             {
                 return _reflectionCaptureIncludesDdgi &&
-                       (_settings.GlobalIllumination.EffectiveUseDdgi ||
-                        _settings.GlobalIllumination.EffectiveUseDdgi) &&
+                       _settings.GlobalIllumination.EffectiveUseDdgi &&
                        sceneData.DdgiProbeCount > 0;
             }
 

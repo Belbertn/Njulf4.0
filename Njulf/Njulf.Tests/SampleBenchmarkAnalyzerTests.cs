@@ -1,5 +1,6 @@
 using System.Linq;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
 using Njulf.Rendering.Diagnostics;
 using NjulfHelloGame;
 using NUnit.Framework;
@@ -9,6 +10,117 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class SampleBenchmarkAnalyzerTests
 {
+    [Test]
+    public void ProducerIdentity_FreezesSettingsBeforePostMeasurementHdrMutation()
+    {
+        string reportPath = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            $"benchmark-settings-identity-{Guid.NewGuid():N}.json");
+        const string measuredFingerprint =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const string postMeasurementFingerprint =
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        string currentFingerprint = measuredFingerprint;
+        bool exited = false;
+        var options = new SampleBenchmarkOptions(
+            Enabled: true,
+            WarmupFrameCount: 0,
+            MeasureFrameCount: 1,
+            ReportPath: reportPath)
+        {
+            HdrReferencePath = "post-measurement-reference.pfm",
+            MaximumAdditionalSettlingFrameCount = 0
+        };
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            CaptureRun = PerformanceCaptureRunMetadata.Unknown with
+            {
+                Commit = "0123456789abcdef0123456789abcdef01234567",
+                ShaderBundleHash =
+                    "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            },
+            CaptureGpuDeviceName = "Synthetic benchmark GPU",
+            CaptureGpuDriverVersion = "1.0-test"
+        };
+
+        try
+        {
+            var runner = new SampleBenchmarkRunner(
+                options,
+                SamplePerformanceScenario.Normal,
+                () => exited = true,
+                () => currentFingerprint,
+                _ =>
+                {
+                    currentFingerprint = postMeasurementFingerprint;
+                    return false;
+                },
+                _ => new LinearHdrCaptureResult(
+                    string.Empty,
+                    LinearHdrCaptureState.Unknown,
+                    string.Empty));
+
+            runner.OnFrameRendered(
+                frameIndex: 0,
+                diagnostics,
+                RenderBudgetSnapshot.Empty);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(exited, Is.True);
+                Assert.That(currentFingerprint, Is.EqualTo(postMeasurementFingerprint));
+                Assert.That(
+                    runner.Report?.ProducerIdentity?.SettingsFingerprint,
+                    Is.EqualTo(measuredFingerprint["sha256:".Length..]));
+            });
+        }
+        finally
+        {
+            if (File.Exists(reportPath))
+                File.Delete(reportPath);
+        }
+    }
+
+    [TestCase(SamplePerformanceScenario.GiMovingPointLight)]
+    [TestCase(SamplePerformanceScenario.GiMovingRigidObject)]
+    public void DynamicQualificationScenario_FreezesAfterBoundedBenchmarkDisturbance(
+        SamplePerformanceScenario scenario)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                HelloGame.ShouldFreezeBenchmarkDynamicScenario(
+                    scenario,
+                    benchmarkEnabled: true,
+                    HelloGame.BenchmarkDynamicScenarioDisturbanceFrameCount - 1),
+                Is.False);
+            Assert.That(
+                HelloGame.ShouldFreezeBenchmarkDynamicScenario(
+                    scenario,
+                    benchmarkEnabled: true,
+                    HelloGame.BenchmarkDynamicScenarioDisturbanceFrameCount),
+                Is.True);
+            Assert.That(
+                HelloGame.ShouldFreezeBenchmarkDynamicScenario(
+                    scenario,
+                    benchmarkEnabled: false,
+                    HelloGame.BenchmarkDynamicScenarioDisturbanceFrameCount),
+                Is.False,
+                "Interactive scenarios must remain animated.");
+        });
+    }
+
+    [Test]
+    public void StaticQualificationScenario_IsNeverFrozenByDynamicBenchmarkControl()
+    {
+        Assert.That(
+            HelloGame.ShouldFreezeBenchmarkDynamicScenario(
+                SamplePerformanceScenario.GiSimpleDdgiFurnace,
+                benchmarkEnabled: true,
+                int.MaxValue),
+            Is.False);
+    }
+
     [Test]
     public void ResolvedGiSettingsDifference_ReportsNamedFieldsAndHonorsTheBound()
     {
@@ -104,6 +216,73 @@ public sealed class SampleBenchmarkAnalyzerTests
                         ready.SimpleDdgiTransportConvergence with
                         {
                             SourceRepairProbeCount = 51
+                        }
+                }),
+                Is.False);
+        });
+    }
+
+    [Test]
+    public void MeasurementReadiness_TailModeRequiresACompleteCurrentCertificate()
+    {
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            GpuTimingValid = 1,
+            SimpleDdgiActive = 1,
+            SimpleDdgiTransportV2Active = 1,
+            SimpleDdgiTransportTailCertificationEnabled = true,
+            CaptureFrame = new PerformanceCaptureFrameMetadata(
+                800,
+                800,
+                DdgiRuntimeWarmupState.SteadyState,
+                800,
+                800)
+            {
+                // A current certificate is the V2 authority even if legacy
+                // capture metadata arrives one frame late.
+                TransportConvergencePending = true
+            },
+            SimpleDdgiUploadTiming = new SimpleDdgiUploadTiming
+            {
+                CapacityDetails = new SimpleDdgiCapacityTiming
+                {
+                    StableKeyHit = true
+                }
+            },
+            SimpleDdgiTransportConvergence =
+                SimpleDdgiTransportConvergenceTelemetry.Empty with
+                {
+                    TailAuditComplete = true,
+                    TailCertificateCurrent = true,
+                    TailExpectedParticipantCount = 2,
+                    TailAuditedParticipantCount = 2,
+                    TailExpectedTexelCount = 128,
+                    TailAuditedTexelCount = 128
+                }
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SampleBenchmarkRunner.IsReadyForMeasurement(diagnostics),
+                Is.True);
+            Assert.That(
+                SampleBenchmarkRunner.IsReadyForMeasurement(diagnostics with
+                {
+                    SimpleDdgiTransportConvergence =
+                        diagnostics.SimpleDdgiTransportConvergence with
+                        {
+                            TailCertificateCurrent = false
+                        }
+                }),
+                Is.False);
+            Assert.That(
+                SampleBenchmarkRunner.IsReadyForMeasurement(diagnostics with
+                {
+                    SimpleDdgiTransportConvergence =
+                        diagnostics.SimpleDdgiTransportConvergence with
+                        {
+                            TailAuditedTexelCount = 127
                         }
                 }),
                 Is.False);
@@ -215,9 +394,14 @@ public sealed class SampleBenchmarkAnalyzerTests
             GpuTimingSupported = 1,
             GpuTimingValid = 1,
             SimpleDdgiActive = 1,
+            GpuSimpleDdgiPageDemandMicroseconds = 40,
+            GpuSimpleDdgiPageResidencyMicroseconds = 80,
+            GpuSimpleDdgiPageFeedbackMicroseconds = 20,
+            GpuSimpleDdgiScheduleMicroseconds = 300,
             GpuSimpleDdgiTraceMicroseconds = 1_000,
             GpuSimpleDdgiTransportMicroseconds = 200,
             GpuSimpleDdgiBlendMicroseconds = 250,
+            GpuSimpleDdgiCommitMicroseconds = 250,
             GpuDdgiUpdateMicroseconds = 1_500,
             GpuGiCompositeMicroseconds = 500
         }, RenderBudgetSnapshot.Empty);
@@ -232,9 +416,14 @@ public sealed class SampleBenchmarkAnalyzerTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(report.GpuPasses.Any(pass => pass.Name == "SimpleDdgiPageDemandPass"), Is.True);
+            Assert.That(report.GpuPasses.Any(pass => pass.Name == "SimpleDdgiPageResidencyPass"), Is.True);
+            Assert.That(report.GpuPasses.Any(pass => pass.Name == "SimpleDdgiPageFeedbackPass"), Is.True);
+            Assert.That(report.GpuPasses.Any(pass => pass.Name == "SimpleDdgiSchedulePass"), Is.True);
             Assert.That(report.GpuPasses.Any(pass => pass.Name == "SimpleDdgiTracePass"), Is.True);
             Assert.That(report.GpuPasses.Any(pass => pass.Name == "SimpleDdgiTransportPass"), Is.True);
             Assert.That(report.GpuPasses.Any(pass => pass.Name == "SimpleDdgiBlendPass"), Is.True);
+            Assert.That(report.GpuPasses.Any(pass => pass.Name == "SimpleDdgiSchedulerCommitPass"), Is.True);
             Assert.That(report.GpuPasses.Any(pass => pass.Name == "GlobalIlluminationCompositePass"), Is.True);
         });
     }
@@ -377,6 +566,14 @@ public sealed class SampleBenchmarkAnalyzerTests
                     metric.Name.StartsWith("Material GI", StringComparison.Ordinal))
                     .All(metric => metric.Status == RenderBudgetStatus.WithinBudget),
                 Is.True);
+            Assert.That(
+                report.MaterialTimingEvidence.CompileSequenceExact,
+                Is.True);
+            Assert.That(
+                report.MaterialTimingEvidence.UploadSequenceExact,
+                Is.True);
+            Assert.That(report.MaterialTimingEvidence.Compile.Count, Is.EqualTo(1));
+            Assert.That(report.MaterialTimingEvidence.Upload.Count, Is.EqualTo(1));
         });
     }
 

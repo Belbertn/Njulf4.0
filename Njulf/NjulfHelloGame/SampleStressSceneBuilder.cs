@@ -1486,6 +1486,12 @@ internal sealed class SampleStressSceneBuilder
         _updateables.Add(updateable);
     }
 
+    internal void SetScenarioUpdateablesEnabled(bool enabled)
+    {
+        foreach (IUpdateable updateable in _updateables)
+            updateable.Enabled = enabled;
+    }
+
     private SamplePerformanceScenarioSummary ValidationSummary(SamplePerformanceScenario scenario, string notes) =>
         new(
             scenario,

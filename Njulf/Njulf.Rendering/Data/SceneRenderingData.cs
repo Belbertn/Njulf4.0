@@ -765,9 +765,34 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiActive { get; set; }
         public SimpleDdgiSchedulerMode SimpleDdgiSchedulerMode { get; set; } = SimpleDdgiSchedulerMode.CpuReference;
         public int SimpleDdgiSchedulerReady { get; set; }
+        public int SimpleDdgiSchedulerFeedbackValid { get; set; }
+        public ulong SimpleDdgiSchedulerFeedbackFrameSerial { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackConsideredCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackEligibleCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackAcceptedCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackCommittedCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackFailedCommitCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackPendingFreshCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackPendingSourceCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackPendingSourceInvalidFlagCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackPendingSourcePrivateRepairCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackPendingSourceCardinalityCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackPendingSourceGenerationCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackSolveParticipantCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackSolveVisitedCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackSolveEpoch { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackPrimaryRayCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackSourceRayCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackTransportRayCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackSourceProbeCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackHardSourceProbeCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackRoutineSourceProbeCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackCachedSolverProbeCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackPublishedCount { get; set; }
         public uint SimpleDdgiSchedulerResourceGeneration { get; set; }
         public ulong SimpleDdgiSchedulerArenaBytes { get; set; }
         public ulong SimpleDdgiSchedulerFeedbackReadbackBytes { get; set; }
+        public ulong SimpleDdgiSchedulerAuditReadbackBytes { get; set; }
         public ulong SimpleDdgiSchedulerRetiredBytes { get; set; }
         public ulong SimpleDdgiSchedulerStaleFeedbackCount { get; set; }
         public ulong SimpleDdgiSchedulerFeedbackGenerationRejectionCount { get; set; }
@@ -775,6 +800,12 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiSchedulerFallbackFreshResetPending { get; set; }
         public ulong SimpleDdgiSchedulerFallbackCount { get; set; }
         public string SimpleDdgiSchedulerFallbackReason { get; set; } = string.Empty;
+        public int SimpleDdgiSchedulerFallbackExportPending { get; set; }
+        public ulong SimpleDdgiSchedulerFallbackExportBytes { get; set; }
+        public ulong SimpleDdgiSchedulerStateExportSuccessCount { get; set; }
+        public ulong SimpleDdgiSchedulerStateExportFailureCount { get; set; }
+        public int SimpleDdgiSchedulerReentryStableFrameCount { get; set; }
+        public ulong SimpleDdgiSchedulerReentryCount { get; set; }
         public int SimpleDdgiProbeCount { get; set; }
         public int SimpleDdgiProbesUpdated { get; set; }
         public ulong SimpleDdgiRaysPerFrame { get; set; }
@@ -822,6 +853,12 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiTransportGlobalConvergenceElapsedFrames { get; set; }
         public SimpleDdgiTransportConvergenceTelemetry SimpleDdgiTransportConvergence { get; set; } =
             SimpleDdgiTransportConvergenceTelemetry.Empty;
+        public SimpleDdgiTrackingState SimpleDdgiTrackingState { get; set; } =
+            global::Njulf.Rendering.Resources.SimpleDdgiTrackingState.Bootstrapping;
+        /// <summary>Complete cached-source sweeps actually recorded this frame.</summary>
+        public int SimpleDdgiTransportCachedSweepCount { get; set; }
+        /// <summary>Bounded tail-audit chunks actually recorded this frame.</summary>
+        public int SimpleDdgiTransportAuditChunkCount { get; set; }
         /// <summary>Monotonic live source/solver calibration changes that restarted V2 convergence.</summary>
         public ulong SimpleDdgiTransportCalibrationChangeCount { get; set; }
         public ulong SimpleDdgiTransportIrradianceAtlasBytes { get; set; }
@@ -832,6 +869,8 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiTransportAcceleratedSweepCount { get; set; }
         public bool SimpleDdgiTransportAccelerationEnabled { get; set; }
         public bool SimpleDdgiTransportTailCertificationEnabled { get; set; }
+        public string SimpleDdgiTransportTailCertificationFallbackReason { get; set; } =
+            string.Empty;
         // Legacy diagnostic aliases. They are populated from the new settings
         // for capture compatibility, but do not control V2 convergence.
         public float SimpleDdgiTransportResidualThreshold { get; set; }
@@ -1061,10 +1100,15 @@ namespace Njulf.Rendering.Data
         public long GpuDdgiPublishMicroseconds { get; set; }
         public long GpuDdgiUpdateMicroseconds { get; set; }
         public long GpuSimpleDdgiTraceMicroseconds { get; set; }
+        public long GpuSimpleDdgiPageDemandMicroseconds { get; set; }
+        public long GpuSimpleDdgiPageResidencyMicroseconds { get; set; }
+        public long GpuSimpleDdgiPageFeedbackMicroseconds { get; set; }
         public long GpuSimpleDdgiScheduleMicroseconds { get; set; }
         public long GpuSimpleDdgiTransportMicroseconds { get; set; }
         public long GpuSimpleDdgiAcceleratedSolveMicroseconds { get; set; }
         public long GpuSimpleDdgiBlendMicroseconds { get; set; }
+        public long GpuSimpleDdgiRelocateClassifyMicroseconds { get; set; }
+        public long GpuSimpleDdgiPublishMicroseconds { get; set; }
         public long GpuSimpleDdgiTransportAuditMicroseconds { get; set; }
         public long GpuSimpleDdgiCommitMicroseconds { get; set; }
         public long GpuFarFieldUpdateMicroseconds { get; set; }
@@ -1925,9 +1969,34 @@ namespace Njulf.Rendering.Data
             SimpleDdgiActive = 0;
             SimpleDdgiSchedulerMode = SimpleDdgiSchedulerMode.CpuReference;
             SimpleDdgiSchedulerReady = 0;
+            SimpleDdgiSchedulerFeedbackValid = 0;
+            SimpleDdgiSchedulerFeedbackFrameSerial = 0;
+            SimpleDdgiSchedulerFeedbackConsideredCount = 0;
+            SimpleDdgiSchedulerFeedbackEligibleCount = 0;
+            SimpleDdgiSchedulerFeedbackAcceptedCount = 0;
+            SimpleDdgiSchedulerFeedbackCommittedCount = 0;
+            SimpleDdgiSchedulerFeedbackFailedCommitCount = 0;
+            SimpleDdgiSchedulerFeedbackPendingFreshCount = 0;
+            SimpleDdgiSchedulerFeedbackPendingSourceCount = 0;
+            SimpleDdgiSchedulerFeedbackPendingSourceInvalidFlagCount = 0;
+            SimpleDdgiSchedulerFeedbackPendingSourcePrivateRepairCount = 0;
+            SimpleDdgiSchedulerFeedbackPendingSourceCardinalityCount = 0;
+            SimpleDdgiSchedulerFeedbackPendingSourceGenerationCount = 0;
+            SimpleDdgiSchedulerFeedbackSolveParticipantCount = 0;
+            SimpleDdgiSchedulerFeedbackSolveVisitedCount = 0;
+            SimpleDdgiSchedulerFeedbackSolveEpoch = 0;
+            SimpleDdgiSchedulerFeedbackPrimaryRayCount = 0;
+            SimpleDdgiSchedulerFeedbackSourceRayCount = 0;
+            SimpleDdgiSchedulerFeedbackTransportRayCount = 0;
+            SimpleDdgiSchedulerFeedbackSourceProbeCount = 0;
+            SimpleDdgiSchedulerFeedbackHardSourceProbeCount = 0;
+            SimpleDdgiSchedulerFeedbackRoutineSourceProbeCount = 0;
+            SimpleDdgiSchedulerFeedbackCachedSolverProbeCount = 0;
+            SimpleDdgiSchedulerFeedbackPublishedCount = 0;
             SimpleDdgiSchedulerResourceGeneration = 0;
             SimpleDdgiSchedulerArenaBytes = 0;
             SimpleDdgiSchedulerFeedbackReadbackBytes = 0;
+            SimpleDdgiSchedulerAuditReadbackBytes = 0;
             SimpleDdgiSchedulerRetiredBytes = 0;
             SimpleDdgiSchedulerStaleFeedbackCount = 0;
             SimpleDdgiSchedulerFeedbackGenerationRejectionCount = 0;
@@ -1935,6 +2004,12 @@ namespace Njulf.Rendering.Data
             SimpleDdgiSchedulerFallbackFreshResetPending = 0;
             SimpleDdgiSchedulerFallbackCount = 0;
             SimpleDdgiSchedulerFallbackReason = string.Empty;
+            SimpleDdgiSchedulerFallbackExportPending = 0;
+            SimpleDdgiSchedulerFallbackExportBytes = 0;
+            SimpleDdgiSchedulerStateExportSuccessCount = 0;
+            SimpleDdgiSchedulerStateExportFailureCount = 0;
+            SimpleDdgiSchedulerReentryStableFrameCount = 0;
+            SimpleDdgiSchedulerReentryCount = 0;
             SimpleDdgiProbeCount = 0;
             SimpleDdgiProbesUpdated = 0;
             SimpleDdgiRaysPerFrame = 0;
@@ -1979,6 +2054,10 @@ namespace Njulf.Rendering.Data
             SimpleDdgiTransportGlobalConvergenceElapsedFrames = 0;
             SimpleDdgiTransportConvergence =
                 SimpleDdgiTransportConvergenceTelemetry.Empty;
+            SimpleDdgiTrackingState =
+                global::Njulf.Rendering.Resources.SimpleDdgiTrackingState.Bootstrapping;
+            SimpleDdgiTransportCachedSweepCount = 0;
+            SimpleDdgiTransportAuditChunkCount = 0;
             SimpleDdgiTransportCalibrationChangeCount = 0;
             SimpleDdgiTransportIrradianceAtlasBytes = 0;
             SimpleDdgiTransportSourceCacheBytes = 0;
@@ -1988,6 +2067,7 @@ namespace Njulf.Rendering.Data
             SimpleDdgiTransportAcceleratedSweepCount = 0;
             SimpleDdgiTransportAccelerationEnabled = false;
             SimpleDdgiTransportTailCertificationEnabled = false;
+            SimpleDdgiTransportTailCertificationFallbackReason = string.Empty;
             SimpleDdgiTransportResidualThreshold = 0;
             SimpleDdgiTransportMaximumSolverGenerations = 0;
             SimpleDdgiTransportSourceRefreshFrames = 0;
@@ -2209,10 +2289,15 @@ namespace Njulf.Rendering.Data
             GpuDdgiPublishMicroseconds = 0;
             GpuDdgiUpdateMicroseconds = 0;
             GpuSimpleDdgiTraceMicroseconds = 0;
+            GpuSimpleDdgiPageDemandMicroseconds = 0;
+            GpuSimpleDdgiPageResidencyMicroseconds = 0;
+            GpuSimpleDdgiPageFeedbackMicroseconds = 0;
             GpuSimpleDdgiScheduleMicroseconds = 0;
             GpuSimpleDdgiTransportMicroseconds = 0;
             GpuSimpleDdgiAcceleratedSolveMicroseconds = 0;
             GpuSimpleDdgiBlendMicroseconds = 0;
+            GpuSimpleDdgiRelocateClassifyMicroseconds = 0;
+            GpuSimpleDdgiPublishMicroseconds = 0;
             GpuSimpleDdgiTransportAuditMicroseconds = 0;
             GpuSimpleDdgiCommitMicroseconds = 0;
             GpuFarFieldUpdateMicroseconds = 0;

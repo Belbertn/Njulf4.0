@@ -138,6 +138,7 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
             ? (int)(solveEpoch & 1u)
             : (int)(_volumeManager.FrameSerial & 1u);
         ReadOnlySpan<int> volumeOrder = _volumeManager.TransportSolveVolumeOrder;
+        bool recordedWork = false;
         for (int volumeOrderIndex = 0;
              volumeOrderIndex < volumeOrder.Length;
              volumeOrderIndex++)
@@ -145,6 +146,8 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
             int volumeIndex = volumeOrder[volumeOrderIndex];
             if (!_volumeManager.HasTransportWorkForVolume(volumeIndex))
                 continue;
+
+            recordedWork = true;
 
             for (int sweep = 0; sweep < sweepCount; sweep++)
             {
@@ -173,6 +176,12 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
                     InsertStorageBarrier(cmd);
                 }
             }
+        }
+
+        if (recordedWork)
+        {
+            sceneData.SimpleDdgiTransportCachedSweepCount = checked(
+                sceneData.SimpleDdgiTransportCachedSweepCount + sweepCount);
         }
 
         if (_volumeManager.SchedulerMode != SimpleDdgiSchedulerMode.GpuResident)

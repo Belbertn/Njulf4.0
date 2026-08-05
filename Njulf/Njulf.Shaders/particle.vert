@@ -3,7 +3,13 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 
 #include "common.glsl"
+#define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE ((uint(gl_VertexIndex) % 6u) == 0u)
+#define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 1
+#define SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 1u
 #include "ddgi_simple_shared.glsl"
+#undef SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET
+#undef SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT
+#undef SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE
 
 layout(location = 0) out vec2 outUv;
 layout(location = 1) out vec4 outColor;

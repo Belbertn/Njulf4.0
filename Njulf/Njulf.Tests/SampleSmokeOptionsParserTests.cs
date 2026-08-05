@@ -44,6 +44,9 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_WARMUP_FRAMES", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_MEASURE_FRAMES", null);
         Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_BENCHMARK_MAX_SETTLE_FRAMES",
+            null);
+        Environment.SetEnvironmentVariable(
             "NJULF_RENDERER_BENCHMARK_BUDGET_PROFILE",
             null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_PAIR_ID", null);
@@ -71,6 +74,7 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_LONG_RUN_MAX_SAMPLES", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_LONG_RUN_MEMORY_GROWTH_TOLERANCE_BYTES", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_LONG_RUN_MINUTES", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_TAIL_DDGI_LONG_SOAK", null);
     }
 
     [Test]
@@ -827,6 +831,7 @@ public sealed class SampleSmokeOptionsParserTests
             "--benchmark-report", reportPath,
             "--benchmark-warmup-frames", "0",
             "--benchmark-measure-frames", "8",
+            "--benchmark-max-settle-frames", "750",
             "--benchmark-budget-profile", "high"
         });
 
@@ -837,6 +842,9 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(options.Benchmark.ReportPath, Is.EqualTo(System.IO.Path.GetFullPath(reportPath)));
             Assert.That(options.Benchmark.WarmupFrameCount, Is.EqualTo(0));
             Assert.That(options.Benchmark.MeasureFrameCount, Is.EqualTo(8));
+            Assert.That(
+                options.Benchmark.MaximumAdditionalSettlingFrameCount,
+                Is.EqualTo(750));
             Assert.That(
                 options.Benchmark.BudgetProfileOverride,
                 Is.EqualTo(RenderBudgetProfileKind.HighSpec1440p60));
@@ -866,6 +874,20 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(options.Benchmark.WarmupFrameCount, Is.EqualTo(30));
             Assert.That(options.Benchmark.MeasureFrameCount, Is.EqualTo(120));
         });
+    }
+
+    [Test]
+    public void ProductionBenchmarkRejectsTruncatedTailSettlingWindow()
+    {
+        Assert.That(
+            () => SampleSmokeOptionsParser.Parse(
+            [
+                "--benchmark",
+                "--benchmark-require-production",
+                "--benchmark-max-settle-frames", "750"
+            ]),
+            Throws.ArgumentException.With.Message.Contains(
+                "--benchmark-max-settle-frames >= 4096"));
     }
 
     [Test]
@@ -1054,6 +1076,7 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [TestCase("quality-switch", SampleSmokeMode.QualitySwitch, 7)]
+    [TestCase("ddgi-residency-switch", SampleSmokeMode.DdgiResidencySwitch, 12)]
     [TestCase("texture-hot-reload", SampleSmokeMode.TextureHotReload, 4)]
     [TestCase("resize", SampleSmokeMode.Resize, 5)]
     [TestCase("minimize", SampleSmokeMode.Minimize, 4)]
@@ -1100,6 +1123,74 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(options.LongRunMemoryGrowthToleranceBytes, Is.EqualTo(2_097_152));
             Assert.That(options.LongRunReportPath, Is.EqualTo(Path.GetFullPath(report)));
         });
+    }
+
+    [Test]
+    public void TailDdgiLongSoak_LocksAcceleratedProductionIdentity()
+    {
+        string report = Path.Combine(
+            Path.GetTempPath(),
+            "tail-ddgi-long-soak.json");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--tail-ddgi-long-soak",
+            "--long-run-report", report
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.TailDdgiLongSoak, Is.True);
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.LongRun));
+            Assert.That(
+                options.FrameCount,
+                Is.EqualTo(SampleTailDdgiLongSoakProfile.RequiredFrameCount));
+            Assert.That(
+                options.LongRunWarmupFrames,
+                Is.EqualTo(
+                    SampleTailDdgiLongSoakProfile.MinimumWarmupFrameCount));
+            Assert.That(
+                options.PerformanceScenario,
+                Is.EqualTo(
+                    SamplePerformanceScenario.GiSimpleDdgiFurnace));
+            Assert.That(
+                options.QualityPresetOverride,
+                Is.EqualTo(RenderQualityPreset.DdgiHigh));
+            Assert.That(options.EnableGpuTiming, Is.True);
+            Assert.That(options.ValidationMode, Is.EqualTo(RendererValidationMode.Off));
+            Assert.That(
+                options.SimpleDdgiSchedulerModeOverride,
+                Is.EqualTo(SimpleDdgiSchedulerMode.GpuResident));
+            Assert.That(
+                options.AsyncComputeModeOverride,
+                Is.EqualTo(AsyncComputeMode.Disabled));
+            Assert.That(options.Benchmark.Enabled, Is.False);
+            Assert.That(options.UsesDeterministicSimulationClock, Is.True);
+            Assert.That(
+                options.LongRunReportPath,
+                Is.EqualTo(Path.GetFullPath(report)));
+        });
+    }
+
+    [TestCase("--smoke-frames", "3599", "at least 3600")]
+    [TestCase("--long-run-warmup-frames", "1199", "at least 1200")]
+    [TestCase("--simple-ddgi-scheduler-mode", "cpu-reference", "gpu-resident")]
+    [TestCase("--validation", "standard", "validation off")]
+    public void TailDdgiLongSoak_RejectsNonCanonicalOverrides(
+        string option,
+        string value,
+        string expectedFailure)
+    {
+        Assert.That(
+            () => SampleSmokeOptionsParser.Parse(
+            [
+                "--tail-ddgi-long-soak",
+                "--long-run-report", Path.Combine(
+                    Path.GetTempPath(),
+                    "tail-ddgi-long-soak.json"),
+                option, value
+            ]),
+            Throws.ArgumentException.With.Message.Contains(expectedFailure));
     }
 
     [Test]

@@ -89,7 +89,7 @@ public sealed class SimpleDdgiVolumeManagerTests
     }
 
     [Test]
-    public void BufferResizes_SynchronizeOrDeferOldGpuBuffersBeforeDestruction()
+    public void BufferResizes_UseObservedCompletionTokensWithoutDeviceIdle()
     {
         string source = File.ReadAllText(FindSourceFile(
             "Njulf.Rendering",
@@ -119,11 +119,22 @@ public sealed class SimpleDdgiVolumeManagerTests
         Assert.Multiple(() =>
         {
             Assert.That(source, Does.Contain("BeginFrameResourceRetirement();"));
-            Assert.That(source, Does.Contain("RenderingConstants.FramesInFlight + 1UL"));
-            Assert.That(source, Does.Contain("RecordCapacityDeviceWaitIdle();"));
-            Assert.That(source, Does.Contain("_recordRuntimeStall("));
-            Assert.That(source, Does.Contain("RuntimeStallReason.ResourceResize,"));
-            Assert.That(source, Does.Contain("_context.WaitIdle);"));
+            Assert.That(source, Does.Contain("ObserveFrameFenceCompletion("));
+            Assert.That(source, Does.Contain("GpuCompletionToken.ForFrameFence("));
+            Assert.That(source, Does.Contain("_bufferRetirement.Poll("));
+            Assert.That(source, Does.Not.Contain("RenderingConstants.FramesInFlight + 1UL"));
+            Assert.That(source, Does.Not.Contain("RecordCapacityDeviceWaitIdle();"));
+            Assert.That(source, Does.Not.Contain("_context.WaitIdle);"));
+            Assert.That(source, Does.Contain(
+                "EnsureBindlessDescriptorReadersComplete("));
+            Assert.That(source, Does.Contain(
+                "RuntimeStallReason.ResourceGenerationFenceWait"));
+            Assert.That(source, Does.Contain(
+                "_waitForBindlessDescriptorReaders()"));
+            Assert.That(source, Does.Contain(
+                "bindless-descriptor-readers-pending"));
+            Assert.That(source, Does.Contain(
+                "completion-pending-global-memory-budget"));
             Assert.That(synchronizedGuard, Is.GreaterThanOrEqualTo(0));
             Assert.That(synchronizedDestroy, Is.GreaterThan(synchronizedGuard));
             Assert.That(deferredRetirement, Is.GreaterThan(synchronizedDestroy));
@@ -475,6 +486,61 @@ public sealed class SimpleDdgiVolumeManagerTests
             Assert.That(queues, Does.Contain("public void MoveToQueue(int probeIndex, int queueIndex)"));
             Assert.That(queues, Does.Contain("public bool TryRotateNext(int queueIndex, out int probeIndex)"));
         });
+    }
+
+    [Test]
+    public void ResidencyArenaReplacement_CompletesBindlessReadersBeforePublication()
+    {
+        string manager = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiVolumeManager.cs"));
+        string pageCache = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiProbePageCache.cs"));
+        string renderer = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "VulkanRenderer.cs"));
+
+        int predictsReplacement = manager.IndexOf(
+            "_probePageCache.RequiresReplacement(",
+            StringComparison.Ordinal);
+        int completesReaders = manager.IndexOf(
+            "EnsureBindlessDescriptorReadersComplete(",
+            predictsReplacement,
+            StringComparison.Ordinal);
+        int replacesArena = manager.IndexOf(
+            "_probePageCache.EnsureCapacity(",
+            completesReaders,
+            StringComparison.Ordinal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pageCache, Does.Contain("public bool RequiresReplacement("));
+            Assert.That(predictsReplacement, Is.GreaterThanOrEqualTo(0));
+            Assert.That(completesReaders, Is.GreaterThan(predictsReplacement));
+            Assert.That(replacesArena, Is.GreaterThan(completesReaders));
+            Assert.That(renderer, Does.Contain(
+                "WaitForSimpleDdgiBindlessDescriptorReaders"));
+            Assert.That(renderer, Does.Contain("_sync.WaitForFence(frameIndex);"));
+            Assert.That(renderer, Does.Not.Contain(
+                "WaitForSimpleDdgiBindlessDescriptorReaders()\n        {\n            _context.WaitIdle"));
+        });
+    }
+
+    [TestCase(0UL, 0UL)]
+    [TestCase(5UL, 4UL)]
+    [TestCase(10UL, 8UL)]
+    [TestCase(2_147_483_648UL, 1_717_986_918UL)]
+    [TestCase(ulong.MaxValue, ulong.MaxValue)]
+    public void CapacityTransitionOverlap_UsesTheEightyPercentGlobalMemoryGate(
+        ulong budget,
+        ulong expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveTransitionMemoryLimit(budget),
+            Is.EqualTo(expected));
     }
 
     [Test]

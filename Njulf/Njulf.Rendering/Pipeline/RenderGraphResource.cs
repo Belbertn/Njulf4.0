@@ -70,7 +70,14 @@ namespace Njulf.Rendering.Pipeline
         TransientIntermediate,
         // Persistent GPU-resident Simple-DDGI scheduler arena. Appended to keep
         // existing graph resource identities stable for capture compatibility.
-        SimpleDdgiScheduler
+        SimpleDdgiScheduler,
+        // Receiver-only compact probe publication. Keep it distinct from the
+        // compute state so async ownership and visibility barriers match the
+        // buffer actually consumed by forward/fog/particle shaders.
+        SimpleDdgiReceiverProbes,
+        // Virtual-page residency arena. Appended to preserve graph-resource
+        // identities used by captures and serialized diagnostics.
+        SimpleDdgiResidency
     }
 
     public enum RenderGraphResourceKind

@@ -23,6 +23,14 @@ internal static class Program
 {
     public static int Main(string[] args)
     {
+        if (SampleTailDdgiQualificationCli.TryRun(
+                args,
+                Console.Out,
+                Console.Error,
+                out int tailDdgiQualificationExitCode))
+        {
+            return tailDdgiQualificationExitCode;
+        }
         if (SampleBenchmarkPairComparisonCli.TryRun(
                 args,
                 Console.Out,
@@ -82,6 +90,7 @@ internal sealed class HelloGame : Game
     private const SampleEnvironmentMode EnvironmentMode = SampleEnvironmentMode.ProceduralOutdoor;
     private const SamplePerformanceScenario DefaultInteractiveScenario = SamplePerformanceScenario.Normal;
     private const int BaselineCaptureFrameCount = 1;
+    internal const int BenchmarkDynamicScenarioDisturbanceFrameCount = 30;
     internal const float BenchmarkSimulationDeltaSeconds = 1.0f / 60.0f;
 
     private SampleInputController? _inputController;
@@ -98,6 +107,8 @@ internal sealed class HelloGame : Game
     private SampleSceneReloadRunner? _sceneReloadRunner;
     private SampleLongRunMonitor? _longRunMonitor;
     private SampleQualitySwitchSmokeRunner? _qualitySwitchSmokeRunner;
+    private SampleDdgiResidencySwitchSmokeRunner?
+        _ddgiResidencySwitchSmokeRunner;
     private SampleTextureHotReloadSmokeRunner? _textureHotReloadSmokeRunner;
     private SampleBenchmarkRunner? _benchmarkRunner;
     private SampleMaterialGiCaptureRunner? _materialGiCaptureRunner;
@@ -108,6 +119,7 @@ internal sealed class HelloGame : Game
     private string? _runtimeSmokeFailure;
     private int _drawnFrames;
     private bool _sponzaAtmosphereFrozen;
+    private bool _benchmarkDynamicScenarioFrozen;
     private int _baselineScenarioRenderedFrames;
     private bool _baselineSnapshotExported;
     private float _modelRotation;
@@ -136,13 +148,18 @@ internal sealed class HelloGame : Game
 
         Name = "Njulf Hello Game";
         WindowTitle = "Njulf Hello Game - Mesh Shader glTF Sample";
-        WindowWidth = _smokeOptions.Benchmark.Enabled ? 1920 : 1600;
-        WindowHeight = _smokeOptions.Benchmark.Enabled ? 1080 : 900;
-        WindowBorderStyle = _smokeOptions.Benchmark.Enabled
+        bool controlledProductionRun =
+            _smokeOptions.Benchmark.Enabled ||
+            _smokeOptions.TailDdgiLongSoak;
+        WindowWidth = controlledProductionRun ? 1920 : 1600;
+        WindowHeight = controlledProductionRun ? 1080 : 900;
+        WindowBorderStyle = controlledProductionRun
             ? Silk.NET.Windowing.WindowBorder.Hidden
             : Silk.NET.Windowing.WindowBorder.Resizable;
         VSync = _smokeOptions.KhronosMaterialGiRenderedGate is null &&
-                (!_smokeOptions.Benchmark.Enabled || !_smokeOptions.Benchmark.DisableVSync);
+                !(_smokeOptions.TailDdgiLongSoak ||
+                  (_smokeOptions.Benchmark.Enabled &&
+                   _smokeOptions.Benchmark.DisableVSync));
     }
 
     protected override void ConfigureServices(IServiceCollection services)
@@ -355,6 +372,23 @@ internal sealed class HelloGame : Game
                 RecordSmokeOperation,
                 Exit);
         }
+        else if (_smokeOptions.Mode == SampleSmokeMode.DdgiResidencySwitch)
+        {
+            SampleRenderSettingsSnapshot initialSettings =
+                SampleRenderSettingsSnapshot.Capture(renderer.Settings);
+            _ddgiResidencySwitchSmokeRunner =
+                new SampleDdgiResidencySwitchSmokeRunner(
+                    mode => renderer.Settings.GlobalIllumination
+                        .SimpleDdgiProbeResidencyMode = mode,
+                    () => initialSettings.Restore(renderer.Settings),
+                    () => renderer.Settings.GlobalIllumination
+                        .SimpleDdgiProbeResidencyMode,
+                    () => SampleRenderSettingsFingerprint.Capture(
+                        renderer.Settings),
+                    () => GetRendererDeviceIdentity(renderer),
+                    RecordSmokeOperation,
+                    Exit);
+        }
         else if (_smokeOptions.Mode == SampleSmokeMode.TextureHotReload)
         {
             var session = new SampleTextureHotReloadSession(
@@ -469,6 +503,28 @@ internal sealed class HelloGame : Game
             renderer.Settings.GlobalIllumination.SimpleDdgiSchedulerMode =
                 _smokeOptions.SimpleDdgiSchedulerModeOverride.Value;
         }
+        GlobalIlluminationSettings gi = renderer.Settings.GlobalIllumination;
+        if (_smokeOptions.SimpleDdgiProbeResidencyModeOverride.HasValue)
+            gi.SimpleDdgiProbeResidencyMode =
+                _smokeOptions.SimpleDdgiProbeResidencyModeOverride.Value;
+        if (_smokeOptions.SimpleDdgiSparsePhysicalPageBudgetOverride.HasValue)
+            gi.SimpleDdgiSparsePhysicalPageBudget =
+                _smokeOptions.SimpleDdgiSparsePhysicalPageBudgetOverride.Value;
+        if (_smokeOptions.SimpleDdgiSparseMinimumPhysicalPageBudgetOverride.HasValue)
+            gi.SimpleDdgiSparseMinimumPhysicalPageBudget =
+                _smokeOptions.SimpleDdgiSparseMinimumPhysicalPageBudgetOverride.Value;
+        if (_smokeOptions.SimpleDdgiSparseRetentionFramesOverride.HasValue)
+            gi.SimpleDdgiSparseRetentionFrames =
+                _smokeOptions.SimpleDdgiSparseRetentionFramesOverride.Value;
+        if (_smokeOptions.SimpleDdgiSparseMaximumAdmissionsOverride.HasValue)
+            gi.SimpleDdgiSparseMaximumAdmissionsPerFrame =
+                _smokeOptions.SimpleDdgiSparseMaximumAdmissionsOverride.Value;
+        if (_smokeOptions.SimpleDdgiSparseMaximumReceiverFeedbackOverride.HasValue)
+            gi.SimpleDdgiSparseMaximumReceiverFeedbackRequests =
+                _smokeOptions.SimpleDdgiSparseMaximumReceiverFeedbackOverride.Value;
+        if (_smokeOptions.SimpleDdgiSparseInactiveRetryFramesOverride.HasValue)
+            gi.SimpleDdgiSparseInactiveRetryFrames =
+                _smokeOptions.SimpleDdgiSparseInactiveRetryFramesOverride.Value;
         renderer.Settings.AsyncCompute.ForceValidationPath = _smokeOptions.AsyncComputeValidationPath;
         if (_smokeOptions.AsyncComputeValidationPath is { } validationPath)
         {
@@ -509,7 +565,11 @@ internal sealed class HelloGame : Game
 
         renderer.Settings.Transparency.Mode = _smokeOptions.TransparencyMode;
         _materialGiRolloutBootstrap.Apply(renderer.Settings, Console.Out);
-        if (_smokeOptions.Benchmark.Enabled)
+        if (_smokeOptions.TailDdgiLongSoak)
+        {
+            SampleTailDdgiLongSoakProfile.Apply(renderer.Settings);
+        }
+        else if (_smokeOptions.Benchmark.Enabled)
         {
             // A controlled timing window must not let completed GPU timings
             // change the following frame's update population. Adaptive DDGI
@@ -537,7 +597,7 @@ internal sealed class HelloGame : Game
     {
         float simulationDeltaTime = ResolveSimulationDeltaTime(
             deltaTime,
-            _smokeOptions.Benchmark.Enabled);
+            _smokeOptions.UsesDeterministicSimulationClock);
         ApplyPendingSmokeResize();
         ObserveSmokeWindowMutation();
         _smokeRunner?.OnUpdate(_drawnFrames);
@@ -563,6 +623,7 @@ internal sealed class HelloGame : Game
         }
 
         ApplySponzaScenarioFrameControls();
+        ApplyBenchmarkDynamicScenarioFrameControls();
 
         base.Update(simulationDeltaTime);
     }
@@ -583,6 +644,37 @@ internal sealed class HelloGame : Game
         renderer.Settings.Environment.AnimateTimeOfDay = false;
         _sponzaAtmosphereFrozen = true;
     }
+
+    private void ApplyBenchmarkDynamicScenarioFrameControls()
+    {
+        SamplePerformanceScenario scenario =
+            _performanceScenarioRunner?.CurrentScenario ??
+            _smokeOptions.PerformanceScenario;
+        if (_benchmarkDynamicScenarioFrozen ||
+            !ShouldFreezeBenchmarkDynamicScenario(
+                scenario,
+                _smokeOptions.Benchmark.Enabled,
+                _drawnFrames))
+        {
+            return;
+        }
+
+        _performanceScenarioRunner?.SetScenarioUpdateablesEnabled(false);
+        _benchmarkDynamicScenarioFrozen = true;
+        Console.WriteLine(
+            $"Benchmark disturbance complete: scenario={scenario}, " +
+            $"motionFrames={BenchmarkDynamicScenarioDisturbanceFrameCount}; " +
+            "holding scene state for DDGI recovery and certification.");
+    }
+
+    internal static bool ShouldFreezeBenchmarkDynamicScenario(
+        SamplePerformanceScenario scenario,
+        bool benchmarkEnabled,
+        int drawnFrames) =>
+        benchmarkEnabled &&
+        drawnFrames >= BenchmarkDynamicScenarioDisturbanceFrameCount &&
+        scenario is SamplePerformanceScenario.GiMovingPointLight or
+            SamplePerformanceScenario.GiMovingRigidObject;
 
     internal static float ResolveSimulationDeltaTime(
         float hostDeltaTime,
@@ -625,6 +717,9 @@ internal sealed class HelloGame : Game
                 _drawnFrames,
                 benchmarkRenderer.LastDiagnostics,
                 benchmarkRenderer.LastBudgetSnapshot);
+            _ddgiResidencySwitchSmokeRunner?.OnFrameRendered(
+                _drawnFrames,
+                benchmarkRenderer.LastDiagnostics);
             _textureHotReloadSmokeRunner?.OnFrameRendered(_drawnFrames);
             _benchmarkRunner?.OnFrameRendered(
                 _drawnFrames,

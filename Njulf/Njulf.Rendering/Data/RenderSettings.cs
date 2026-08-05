@@ -479,7 +479,11 @@ namespace Njulf.Rendering.Data
         /// Direct, emissive, and sky source-cache irradiance sampled with the
         /// receiver's normal and cascade weights, before recursive bounce.
         /// </summary>
-        DdgiSourceCacheRadiance = 51
+        DdgiSourceCacheRadiance = 51,
+        DdgiProbeResidency = 52,
+        DdgiResidencyFallback = 53,
+        DdgiPageAge = 54,
+        DdgiPhysicalPage = 55
     }
 
     public enum AntiAliasingMode : uint
@@ -1856,13 +1860,12 @@ namespace Njulf.Rendering.Data
         private bool _simpleDdgiTransportAccelerationEnabled = true;
         private bool _simpleDdgiTransportTailCertificationEnabled = true;
         private int _simpleDdgiTransportMaximumSolverGenerations = 8;
-        // A routine source refresh starts a bounded transport propagation wave.
-        // Keep the default comfortably above the worst-case eight-generation
-        // high-tier solve so a static
-        // field can actually reach a fixed point before the next maintenance
-        // cohort is admitted. Transform/material/light invalidations remain
-        // regional and are not delayed by this maintenance interval.
-        private int _simpleDdgiTransportSourceRefreshFrames = 600;
+        // The static source-age watchdog is independent of legacy generation
+        // counts. Its configured floor leaves room for full-field cached solve,
+        // chunked certification, delayed readback, and an identity-locked
+        // performance window. Real source/material/transform changes still
+        // invalidate immediately and do not wait for this interval.
+        private int _simpleDdgiTransportSourceRefreshFrames = 2_048;
         private float _simpleDdgiAutomaticProbeDensityScale = 0.70f;
         private float _simpleDdgiNormalBias = 0.1f;
         private float _simpleDdgiViewBias = 0.3f;
@@ -1873,6 +1876,15 @@ namespace Njulf.Rendering.Data
         private float _simpleDdgiMaximumWorldBiasMeters = 0.20f;
         private float _simpleDdgiArchitecturalThicknessMeters = 0.80f;
         private float _simpleDdgiSecondVolumeOwnershipEarlyOutThreshold = 0.95f;
+        private int _simpleDdgiSchedulerReentryStableFrameCount = 120;
+        private SimpleDdgiProbeResidencyMode _simpleDdgiProbeResidencyMode =
+            SimpleDdgiProbeResidencyMode.SparseNearRing;
+        private int _simpleDdgiSparsePhysicalPageBudget = 960;
+        private int _simpleDdgiSparseMinimumPhysicalPageBudget = 768;
+        private int _simpleDdgiSparseRetentionFrames = 120;
+        private int _simpleDdgiSparseMaximumAdmissionsPerFrame = 64;
+        private int _simpleDdgiSparseMaximumReceiverFeedbackRequests = 2_048;
+        private int _simpleDdgiSparseInactiveRetryFrames = 300;
         private int _simpleDdgiProbeUpdatesPerFrame = 2_048;
         // Independent per-ring controls. The scheduler consumes these explicit
         // values for near/authored, mid, and far camera-relative volumes.
@@ -2108,6 +2120,77 @@ namespace Njulf.Rendering.Data
         /// </summary>
         public SimpleDdgiSchedulerMode SimpleDdgiSchedulerMode { get; set; } =
             SimpleDdgiSchedulerMode.GpuResident;
+        /// <summary>
+        /// Consecutive healthy CPU-fallback frames required before a latched
+        /// GPU scheduler may bootstrap a fresh arena and regain authority.
+        /// </summary>
+        public int SimpleDdgiSchedulerReentryStableFrameCount
+        {
+            get => _simpleDdgiSchedulerReentryStableFrameCount;
+            set => _simpleDdgiSchedulerReentryStableFrameCount =
+                Math.Clamp(value, 1, 3_600);
+        }
+        /// <summary>
+        /// Selects identity, qualification-shadow, or authoritative near-ring
+        /// payload paging. High and Ultra presets enable the qualified sparse
+        /// path; unsupported runtime combinations fail closed to dense/coarse
+        /// lighting with an explicit diagnostic reason.
+        /// </summary>
+        public SimpleDdgiProbeResidencyMode SimpleDdgiProbeResidencyMode
+        {
+            get => _simpleDdgiProbeResidencyMode;
+            set => _simpleDdgiProbeResidencyMode = value.Sanitize();
+        }
+        /// <summary>Fixed sparse near-ring physical page capacity.</summary>
+        public int SimpleDdgiSparsePhysicalPageBudget
+        {
+            get => _simpleDdgiSparsePhysicalPageBudget;
+            set => _simpleDdgiSparsePhysicalPageBudget = Math.Clamp(
+                value,
+                0,
+                MaxSimpleDdgiTotalProbeCount / 8);
+        }
+        /// <summary>
+        /// Lowest explicit page capacity permitted by Degrade admission. A plan
+        /// below this value is rejected before Vulkan allocation.
+        /// </summary>
+        public int SimpleDdgiSparseMinimumPhysicalPageBudget
+        {
+            get => _simpleDdgiSparseMinimumPhysicalPageBudget;
+            set => _simpleDdgiSparseMinimumPhysicalPageBudget = Math.Clamp(
+                value,
+                0,
+                MaxSimpleDdgiTotalProbeCount / 8);
+        }
+        public int SimpleDdgiSparseRetentionFrames
+        {
+            get => _simpleDdgiSparseRetentionFrames;
+            set => _simpleDdgiSparseRetentionFrames = Math.Clamp(value, 1, 3_600);
+        }
+        public int SimpleDdgiSparseMaximumAdmissionsPerFrame
+        {
+            get => _simpleDdgiSparseMaximumAdmissionsPerFrame;
+            set => _simpleDdgiSparseMaximumAdmissionsPerFrame = Math.Clamp(
+                value,
+                1,
+                MaxSimpleDdgiTotalProbeCount / 8);
+        }
+        public int SimpleDdgiSparseMaximumReceiverFeedbackRequests
+        {
+            get => _simpleDdgiSparseMaximumReceiverFeedbackRequests;
+            set => _simpleDdgiSparseMaximumReceiverFeedbackRequests = Math.Clamp(
+                value,
+                0,
+                MaxSimpleDdgiTotalProbeCount);
+        }
+        public int SimpleDdgiSparseInactiveRetryFrames
+        {
+            get => _simpleDdgiSparseInactiveRetryFrames;
+            set => _simpleDdgiSparseInactiveRetryFrames = Math.Clamp(
+                value,
+                1,
+                36_000);
+        }
         public bool SimpleDdgiSharedMemoryBlendEnabled { get; set; } = true;
         public bool SimpleDdgiClassificationSchedulingEnabled { get; set; } = true;
         public bool SimpleDdgiClassificationReadbackEnabled { get; set; } = true;
@@ -2895,6 +2978,30 @@ namespace Njulf.Rendering.Data
             SimpleDdgiVerticalRecenterHysteresisFraction = 0.25f;
             SimpleDdgiReducedBlendEnabled = tier is DdgiQualityTier.DdgiLow or DdgiQualityTier.DdgiMedium;
             SimpleDdgiSampledAtlasEnabled = tier is DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra;
+            SimpleDdgiProbeResidencyMode = tier is
+                DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra
+                    ? SimpleDdgiProbeResidencyMode.SparseNearRing
+                    : SimpleDdgiProbeResidencyMode.Dense;
+            SimpleDdgiSparsePhysicalPageBudget = tier switch
+            {
+                DdgiQualityTier.DdgiUltra => 1_440,
+                DdgiQualityTier.DdgiHigh => 960,
+                _ => 0
+            };
+            SimpleDdgiSparseMinimumPhysicalPageBudget = tier switch
+            {
+                DdgiQualityTier.DdgiUltra => 1_152,
+                DdgiQualityTier.DdgiHigh => 768,
+                _ => 0
+            };
+            SimpleDdgiSparseRetentionFrames = tier == DdgiQualityTier.DdgiUltra
+                ? 150
+                : 120;
+            SimpleDdgiSparseMaximumAdmissionsPerFrame =
+                tier == DdgiQualityTier.DdgiUltra ? 96 : 64;
+            SimpleDdgiSparseMaximumReceiverFeedbackRequests =
+                tier == DdgiQualityTier.DdgiUltra ? 4_096 : 2_048;
+            SimpleDdgiSparseInactiveRetryFrames = 300;
             SimpleDdgiToroidalScrollingEnabled = true;
             SimpleDdgiRegionalInvalidationEnabled = true;
             SimpleDdgiRoughSpecularEnabled = false;
@@ -2929,14 +3036,13 @@ namespace Njulf.Rendering.Data
             };
             SimpleDdgiTransportSourceRefreshFrames = tier switch
             {
-                // Lower tiers update fewer probes per frame and therefore need
-                // a longer quiet interval for the same eight-generation fixed-point
-                // contract. Higher tiers may refresh more often without
-                // overlapping their own propagation waves.
-                DdgiQualityTier.DdgiLow => 1_200,
-                DdgiQualityTier.DdgiMedium => 900,
-                DdgiQualityTier.DdgiUltra => 480,
-                _ => 600
+                // Lower tiers have less per-frame solve throughput. These are
+                // source-age floors, not minimum-generation proxies; the live
+                // opportunity calculation may extend them for larger fields.
+                DdgiQualityTier.DdgiLow => 4_096,
+                DdgiQualityTier.DdgiMedium => 3_072,
+                DdgiQualityTier.DdgiUltra => 1_536,
+                _ => 2_048
             };
 
             switch (tier)
@@ -3708,7 +3814,7 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.EnvironmentFallbackIntensity = 1.0f;
                     GlobalIllumination.UseDdgi = false;
                     GlobalIllumination.UseRayQueryBackend = false;
-                    GlobalIllumination.DdgiQualityTier = DdgiQualityTier.DdgiLow;
+                    GlobalIllumination.ApplyDdgiQualityTier(DdgiQualityTier.DdgiLow);
                     GlobalIllumination.DdgiProbeClassificationEnabled = true;
                     GlobalIllumination.DdgiProbeRelocationEnabled = false;
                     GlobalIllumination.DdgiCameraRelativeEnabled = false;
@@ -3761,7 +3867,7 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.EnvironmentFallbackIntensity = 1.0f;
                     GlobalIllumination.UseDdgi = true;
                     GlobalIllumination.UseRayQueryBackend = true;
-                    GlobalIllumination.DdgiQualityTier = DdgiQualityTier.DdgiMedium;
+                    GlobalIllumination.ApplyDdgiQualityTier(DdgiQualityTier.DdgiMedium);
                     GlobalIllumination.DdgiProbeClassificationEnabled = true;
                     GlobalIllumination.DdgiProbeRelocationEnabled = false;
                     GlobalIllumination.DdgiCameraRelativeEnabled = false;
@@ -3923,6 +4029,7 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.EnvironmentFallbackIntensity = 1.0f;
                     GlobalIllumination.UseDdgi = true;
                     GlobalIllumination.UseRayQueryBackend = false;
+                    GlobalIllumination.ApplyDdgiQualityTier(DdgiQualityTier.DdgiHigh);
                     GlobalIllumination.DdgiProbeClassificationEnabled = true;
                     GlobalIllumination.DdgiProbeRelocationEnabled = true;
                     GlobalIllumination.DdgiCameraRelativeEnabled = true;
@@ -4384,6 +4491,14 @@ namespace Njulf.Rendering.Data
             // Nullable preserves the authored default for older settings files
             // while allowing an explicit CPU/mirror/resident value to round-trip.
             public SimpleDdgiSchedulerMode? SimpleDdgiSchedulerMode { get; init; }
+            public int? SimpleDdgiSchedulerReentryStableFrameCount { get; init; }
+            public SimpleDdgiProbeResidencyMode? SimpleDdgiProbeResidencyMode { get; init; }
+            public int? SimpleDdgiSparsePhysicalPageBudget { get; init; }
+            public int? SimpleDdgiSparseMinimumPhysicalPageBudget { get; init; }
+            public int? SimpleDdgiSparseRetentionFrames { get; init; }
+            public int? SimpleDdgiSparseMaximumAdmissionsPerFrame { get; init; }
+            public int? SimpleDdgiSparseMaximumReceiverFeedbackRequests { get; init; }
+            public int? SimpleDdgiSparseInactiveRetryFrames { get; init; }
             public SimpleDdgiAuthoredVolumeFile[] SimpleDdgiAuthoredVolumes { get; init; } = Array.Empty<SimpleDdgiAuthoredVolumeFile>();
             public bool SimpleDdgiSharedMemoryBlendEnabled { get; init; } = true;
             public bool SimpleDdgiClassificationSchedulingEnabled { get; init; } = true;
@@ -4456,7 +4571,7 @@ namespace Njulf.Rendering.Data
             // These two names are deliberately ignored on write. Unknown legacy
             // fields are retained in ExtensionData and read by ApplyTo below so
             // old files migrate without keeping obsolete authority in new files.
-            public int SimpleDdgiTransportSourceRefreshFrames { get; init; } = 600;
+            public int SimpleDdgiTransportSourceRefreshFrames { get; init; } = 2_048;
             public float SimpleDdgiAutomaticProbeDensityScale { get; init; } = 0.70f;
             // These are spacing-relative authoring controls used by the shared
             // forward gather.  Persist them with the layout so a capture or
@@ -4529,6 +4644,22 @@ namespace Njulf.Rendering.Data
                     DdgiThinWallPolicyEnabled = settings.DdgiThinWallPolicyEnabled,
                     DdgiAlphaMaskedTransportEnabled = settings.DdgiAlphaMaskedTransportEnabled,
                     SimpleDdgiSchedulerMode = settings.SimpleDdgiSchedulerMode.Sanitize(),
+                    SimpleDdgiSchedulerReentryStableFrameCount =
+                        settings.SimpleDdgiSchedulerReentryStableFrameCount,
+                    SimpleDdgiProbeResidencyMode =
+                        settings.SimpleDdgiProbeResidencyMode.Sanitize(),
+                    SimpleDdgiSparsePhysicalPageBudget =
+                        settings.SimpleDdgiSparsePhysicalPageBudget,
+                    SimpleDdgiSparseMinimumPhysicalPageBudget =
+                        settings.SimpleDdgiSparseMinimumPhysicalPageBudget,
+                    SimpleDdgiSparseRetentionFrames =
+                        settings.SimpleDdgiSparseRetentionFrames,
+                    SimpleDdgiSparseMaximumAdmissionsPerFrame =
+                        settings.SimpleDdgiSparseMaximumAdmissionsPerFrame,
+                    SimpleDdgiSparseMaximumReceiverFeedbackRequests =
+                        settings.SimpleDdgiSparseMaximumReceiverFeedbackRequests,
+                    SimpleDdgiSparseInactiveRetryFrames =
+                        settings.SimpleDdgiSparseInactiveRetryFrames,
                     SimpleDdgiAuthoredVolumes = settings.SimpleDdgiAuthoredVolumes
                         .Take(GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount)
                         .Select(SimpleDdgiAuthoredVolumeFile.FromSettings)
@@ -4674,6 +4805,40 @@ namespace Njulf.Rendering.Data
                     settings.SimpleDdgiSchedulerMode =
                         SimpleDdgiSchedulerMode.Value.Sanitize();
                 }
+                if (SimpleDdgiSchedulerReentryStableFrameCount.HasValue)
+                {
+                    settings.SimpleDdgiSchedulerReentryStableFrameCount =
+                        SimpleDdgiSchedulerReentryStableFrameCount.Value;
+                }
+                if (SimpleDdgiProbeResidencyMode.HasValue)
+                {
+                    settings.SimpleDdgiProbeResidencyMode =
+                        SimpleDdgiProbeResidencyMode.Value.Sanitize();
+                }
+                if (SimpleDdgiSparsePhysicalPageBudget.HasValue)
+                {
+                    settings.SimpleDdgiSparsePhysicalPageBudget =
+                        SimpleDdgiSparsePhysicalPageBudget.Value;
+                }
+                if (SimpleDdgiSparseMinimumPhysicalPageBudget.HasValue)
+                {
+                    settings.SimpleDdgiSparseMinimumPhysicalPageBudget =
+                        SimpleDdgiSparseMinimumPhysicalPageBudget.Value;
+                }
+                if (SimpleDdgiSparseRetentionFrames.HasValue)
+                    settings.SimpleDdgiSparseRetentionFrames = SimpleDdgiSparseRetentionFrames.Value;
+                if (SimpleDdgiSparseMaximumAdmissionsPerFrame.HasValue)
+                {
+                    settings.SimpleDdgiSparseMaximumAdmissionsPerFrame =
+                        SimpleDdgiSparseMaximumAdmissionsPerFrame.Value;
+                }
+                if (SimpleDdgiSparseMaximumReceiverFeedbackRequests.HasValue)
+                {
+                    settings.SimpleDdgiSparseMaximumReceiverFeedbackRequests =
+                        SimpleDdgiSparseMaximumReceiverFeedbackRequests.Value;
+                }
+                if (SimpleDdgiSparseInactiveRetryFrames.HasValue)
+                    settings.SimpleDdgiSparseInactiveRetryFrames = SimpleDdgiSparseInactiveRetryFrames.Value;
                 settings.SimpleDdgiAuthoredVolumes.Clear();
                 foreach (SimpleDdgiAuthoredVolumeFile? authoredVolume in
                     (SimpleDdgiAuthoredVolumes ?? Array.Empty<SimpleDdgiAuthoredVolumeFile>())

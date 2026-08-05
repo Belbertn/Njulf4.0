@@ -6,10 +6,88 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-uint SchedulerNextPhysicalGeneration(uint generation)
+const uint SIMPLE_DDGI_COMMIT_SOURCE_CACHE_STRIDE_WORDS = 9u;
+const uint SIMPLE_DDGI_COMMIT_SOURCE_CACHE_VALID_FLAG = 1u << 24u;
+const uint SIMPLE_DDGI_COMMIT_PHYSICAL_GENERATION_MASK = 0x00ffffffu;
+
+bool SealCommittedSourceCache(
+    uint probeIndex,
+    uint sourceRayCount,
+    uint currentGeneration,
+    uint committedGeneration,
+    uint sourceLightingGeneration,
+    uint sourceEpoch)
 {
-    uint next = (generation + 1u) & 0x00ffffffu;
-    return next == 0u ? 1u : next;
+    uint sourceCacheBufferIndex = ReadStorageWordUniform(pc.ParamsBufferIndex, 46u);
+    uint raysPerProbe = max(
+        uint(ReadStorageFloatUniform(pc.ParamsBufferIndex, 10u)),
+        1u);
+    if (sourceCacheBufferIndex == 0u ||
+        sourceRayCount == 0u ||
+        sourceRayCount > raysPerProbe)
+    {
+        return false;
+    }
+
+    // Validate the complete sequence before changing any ownership metadata.
+    // Trace may have stamped either the admitted owner or the transaction's
+    // future owner; no third generation is legal at this commit boundary.
+    for (uint sourceOrdinal = 0u;
+         sourceOrdinal < sourceRayCount;
+         sourceOrdinal++)
+    {
+        uint directionRayIndex =
+            sourceOrdinal * raysPerProbe / sourceRayCount;
+        uint cacheBase =
+            (probeIndex * raysPerProbe + directionRayIndex) *
+                SIMPLE_DDGI_COMMIT_SOURCE_CACHE_STRIDE_WORDS;
+        uint generationAndFlags = ReadStorageWordUniform(
+            sourceCacheBufferIndex,
+            cacheBase + 6u);
+        uint cachedGeneration =
+            generationAndFlags & SIMPLE_DDGI_COMMIT_PHYSICAL_GENERATION_MASK;
+        uint encodedSourceRayCount = ReadStorageWordUniform(
+            sourceCacheBufferIndex,
+            cacheBase + 5u) >> 24u;
+        uint cachedSourceRayCount = encodedSourceRayCount == 0u
+            ? 256u
+            : encodedSourceRayCount;
+        if ((generationAndFlags & SIMPLE_DDGI_COMMIT_SOURCE_CACHE_VALID_FLAG) == 0u ||
+            (cachedGeneration != currentGeneration &&
+                cachedGeneration != committedGeneration) ||
+            cachedSourceRayCount != sourceRayCount ||
+            ReadStorageWordUniform(sourceCacheBufferIndex, cacheBase + 7u) !=
+                sourceLightingGeneration ||
+            ReadStorageWordUniform(sourceCacheBufferIndex, cacheBase + 8u) !=
+                sourceEpoch)
+        {
+            return false;
+        }
+    }
+
+    // Physical ownership becomes public only after all entries have passed.
+    // Seal every entry to that same owner before publishing probe state.
+    for (uint sourceOrdinal = 0u;
+         sourceOrdinal < sourceRayCount;
+         sourceOrdinal++)
+    {
+        uint directionRayIndex =
+            sourceOrdinal * raysPerProbe / sourceRayCount;
+        uint cacheBase =
+            (probeIndex * raysPerProbe + directionRayIndex) *
+                SIMPLE_DDGI_COMMIT_SOURCE_CACHE_STRIDE_WORDS;
+        uint generationAndFlags = ReadStorageWordUniform(
+            sourceCacheBufferIndex,
+            cacheBase + 6u);
+        WriteStorageWordUniform(
+            sourceCacheBufferIndex,
+            cacheBase + 6u,
+            (generationAndFlags & ~SIMPLE_DDGI_COMMIT_PHYSICAL_GENERATION_MASK) |
+                (committedGeneration &
+                    SIMPLE_DDGI_COMMIT_PHYSICAL_GENERATION_MASK));
+    }
+    memoryBarrierBuffer();
+    return true;
 }
 
 void MarkPrivateRepair(uint probeIndex)
@@ -22,10 +100,31 @@ void MarkPrivateRepair(uint probeIndex)
     SchedulerArenaAtomicOr(stateBase + 5u, SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR);
 }
 
-void RejectOutcome(uint probeIndex)
+void ReleaseSparsePageForOutcome(uint probeIndex, uint outcomeIndex)
 {
+    uint volumeIndex;
+    if (!SchedulerFindVolume(probeIndex, volumeIndex))
+        return;
+
+    uint proposalBase = pc.UpdateRecordsOffsetWords +
+        outcomeIndex * SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS;
+    SchedulerReleaseSparsePage(
+        probeIndex,
+        volumeIndex,
+        SchedulerArenaRead(proposalBase + 7u),
+        SchedulerArenaRead(proposalBase + 8u));
+}
+
+void RejectOutcome(uint probeIndex, uint outcomeIndex)
+{
+    // Admission pins a sparse page before publishing its queue record. Every
+    // terminal path must drop that pin so reconciliation can later evict it.
+    ReleaseSparsePageForOutcome(probeIndex, outcomeIndex);
     SchedulerArenaAtomicAdd(
         pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_REJECTED,
+        1u);
+    SchedulerArenaAtomicAdd(
+        pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_COMMIT_REJECTED,
         1u);
     MarkPrivateRepair(probeIndex);
 }
@@ -63,7 +162,7 @@ void main()
         probeIndex >= SchedulerActiveProbeCount() ||
         expectedGeneration == 0u)
     {
-        RejectOutcome(probeIndex);
+        RejectOutcome(probeIndex, outcomeIndex);
         return;
     }
 
@@ -78,20 +177,49 @@ void main()
     // it is applied only after this compare succeeds.
     if (currentGeneration == 0u || currentGeneration != expectedGeneration)
     {
-        RejectOutcome(probeIndex);
+        RejectOutcome(probeIndex, outcomeIndex);
+        return;
+    }
+
+    uint stateBase = pc.SchedulerProbeStateOffsetWords +
+        probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+    uint committedSourceEpoch = SchedulerArenaRead(stateBase + 3u);
+    uint sourceEpoch =
+        (updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) != 0u
+            ? SchedulerAdvanceSourceEpoch(committedSourceEpoch)
+            : committedSourceEpoch;
+    if (sourceEpoch == 0u)
+    {
+        RejectOutcome(probeIndex, outcomeIndex);
         return;
     }
 
     uint proposalBase = pc.UpdateRecordsOffsetWords +
         outcomeIndex * SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS;
-    // RelocateClassify reuses the seven-word transaction record for its
+    // RelocateClassify reuses the first seven transaction words for its
     // relocation proposal, so words 0..6 no longer contain the emitted queue
-    // header by commit time. Recover the owning volume from the accepted probe
-    // rather than interpreting relocation.y as a volume index.
+    // header by commit time. Sparse physical identity remains immutable in
+    // words 7..8. Recover the owning volume from the accepted probe rather than
+    // interpreting relocation.y as a volume index.
     uint volumeIndex;
     if (!SchedulerFindVolume(probeIndex, volumeIndex))
     {
-        RejectOutcome(probeIndex);
+        RejectOutcome(probeIndex, outcomeIndex);
+        return;
+    }
+    uint physicalProbeIndex = SchedulerArenaRead(proposalBase + 7u);
+    uint pageMappingGeneration = SchedulerArenaRead(proposalBase + 8u);
+    uint livePhysicalProbeIndex;
+    uint livePageMappingGeneration;
+    if (!SchedulerResolvePayloadAddress(
+            probeIndex,
+            volumeIndex,
+            livePhysicalProbeIndex,
+            livePageMappingGeneration) ||
+        physicalProbeIndex != livePhysicalProbeIndex ||
+        pageMappingGeneration != livePageMappingGeneration)
+    {
+        RejectOutcome(probeIndex, outcomeIndex);
         return;
     }
     uint candidateReasons = 0u;
@@ -112,18 +240,77 @@ void main()
     uint proposedFlags = SchedulerArenaRead(proposalBase + 4u);
     uint proposedClassification = SchedulerArenaRead(proposalBase + 5u);
     float proposedActiveWeight = uintBitsToFloat(SchedulerArenaRead(proposalBase + 3u));
+    vec3 proposedRelocation = vec3(
+        uintBitsToFloat(SchedulerArenaRead(proposalBase + 0u)),
+        uintBitsToFloat(SchedulerArenaRead(proposalBase + 1u)),
+        uintBitsToFloat(SchedulerArenaRead(proposalBase + 2u)));
     float proposedLuminance = uintBitsToFloat(
         SchedulerArenaRead(proposalBase + 6u));
     float residual = uintBitsToFloat(SchedulerArenaRead(outcomeBase + 14u));
     proposedLuminance = max(proposedLuminance, residual);
-    if ((updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_INVALIDATE) != 0u)
+    bool sourceRefresh =
+        (updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) != 0u;
+    uint sourceRayCount = sourceRefresh
+        ? (SchedulerArenaRead(outcomeBase + 11u) & 0xffffu)
+        : 0u;
+    bool invalidatingUpdate =
+        (updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_INVALIDATE) != 0u;
+    // Physical ownership may change only in a transaction that also replaces
+    // the complete persistent source sequence.
+    if (invalidatingUpdate && !sourceRefresh)
+    {
+        RejectOutcome(probeIndex, outcomeIndex);
+        return;
+    }
+    if (invalidatingUpdate)
     {
         proposedFlags &= ~SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK;
-        proposedFlags |= SchedulerNextPhysicalGeneration(currentGeneration) <<
+        proposedFlags |= NextSimpleDdgiPhysicalGeneration(currentGeneration) <<
             SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT;
     }
     if ((updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) != 0u)
         proposedFlags &= ~SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID;
+
+    uint committedGeneration =
+        (proposedFlags & SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK) >>
+            SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT;
+    if (sourceRefresh && !SealCommittedSourceCache(
+            physicalProbeIndex,
+            sourceRayCount,
+            currentGeneration,
+            committedGeneration,
+            sourceGeneration,
+            sourceEpoch))
+    {
+        RejectOutcome(probeIndex, outcomeIndex);
+        return;
+    }
+
+    uint receiverFlags = 0u;
+    if ((proposedFlags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u)
+        receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_FRESH;
+    if ((proposedFlags & SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED) != 0u)
+        receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_SCROLL_EXPOSED;
+    if ((proposedFlags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u)
+        receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_RELOCATION_PENDING;
+    if ((proposedFlags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u)
+        receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_INACTIVE;
+    if (proposedClassification == 1u)
+        receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_INACTIVE_CLASSIFICATION;
+
+    uvec4 packedReceiver;
+    if (!TryPackSimpleDdgiReceiverProbe(
+            proposedRelocation,
+            SchedulerVolumeSpacing(volumeIndex),
+            proposedActiveWeight,
+            receiverFlags,
+            physicalProbeIndex,
+            packedReceiver))
+    {
+        WriteInvalidSimpleDdgiReceiverProbe(pc.ReceiverProbeBufferIndex, probeIndex);
+        RejectOutcome(probeIndex, outcomeIndex);
+        return;
+    }
 
     // Resident publication is the final receiver-visible write of the
     // transaction. The publish producer validates generations and marks its
@@ -131,7 +318,7 @@ void main()
     // predicate has accepted every producer outcome.
     if (SchedulerGpuResident())
     {
-        uint privateIrradianceBase = probeIndex *
+        uint privateIrradianceBase = physicalProbeIndex *
             SIMPLE_DDGI_SCHEDULER_IRRADIANCE_WORDS_PER_PROBE;
         uint publicIrradianceBase = privateIrradianceBase;
         for (uint word = 0u; word < SIMPLE_DDGI_SCHEDULER_IRRADIANCE_WORDS_PER_PROBE; word++)
@@ -143,8 +330,8 @@ void main()
                     privateIrradianceBase + word));
 
         uint privateVisibilityBase = pc.PrivateVisibilityAtlasOffsetWords +
-            probeIndex * SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE;
-        uint publicVisibilityBase = probeIndex *
+            physicalProbeIndex * SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE;
+        uint publicVisibilityBase = physicalProbeIndex *
             SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE;
         for (uint word = 0u; word < SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE; word++)
             WriteStorageWordUniform(
@@ -159,9 +346,7 @@ void main()
         pc.ProbeStateBufferIndex,
         publicStateBase,
         vec4(
-            uintBitsToFloat(SchedulerArenaRead(proposalBase + 0u)),
-            uintBitsToFloat(SchedulerArenaRead(proposalBase + 1u)),
-            uintBitsToFloat(SchedulerArenaRead(proposalBase + 2u)),
+            proposedRelocation,
             clamp(proposedActiveWeight, 0.0, 1.0)));
     WriteStorageWordUniform(pc.ProbeStateBufferIndex, publicStateBase + 4u, proposedFlags);
     WriteStorageWordUniform(pc.ProbeStateBufferIndex, publicStateBase + 5u, 0u);
@@ -171,20 +356,23 @@ void main()
         publicStateBase + 7u,
         floatBitsToUint(max(proposedLuminance, 0.0)));
 
-    uint stateBase = pc.SchedulerProbeStateOffsetWords +
-        probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+    // Commit the compact receiver record only after both canonical atlases and
+    // the authoritative compute state have been written. Its coherent bit is
+    // the final store in the receiver-visible transaction.
+    PublishPackedSimpleDdgiReceiverProbe(
+        pc.ReceiverProbeBufferIndex,
+        probeIndex,
+        packedReceiver);
+
     SchedulerArenaWrite(stateBase + 0u, SchedulerFrameIndex());
-    bool sourceRefresh = (updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) != 0u;
     // For a source refresh the admitted active-ray count is also the source
     // sequence cardinality. It is retained in the expected-ray-count word;
     // the former sixteenth outcome word was a duplicate of this value.
-    uint sourceRayCount = (updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) != 0u
-        ? (SchedulerArenaRead(outcomeBase + 11u) & 0xffffu)
-        : 0u;
     if (sourceRefresh)
     {
         SchedulerArenaWrite(stateBase + 1u, SchedulerFrameIndex());
         SchedulerArenaWrite(stateBase + 2u, sourceGeneration);
+        SchedulerArenaWrite(stateBase + 3u, sourceEpoch);
         SchedulerArenaWrite(stateBase + 7u, min(sourceRayCount, 0x1ffu));
         SchedulerArenaWrite(stateBase + 9u, 0u);
     }
@@ -211,7 +399,6 @@ void main()
         if (SchedulerTailCertification() && SchedulerSolveEpoch() != 0u)
             SchedulerArenaWrite(stateBase + 9u, SchedulerSolveEpoch());
     }
-    SchedulerArenaWrite(stateBase + 3u, SchedulerFrame(31u));
     SchedulerArenaWrite(stateBase + 4u, SchedulerVolumeGeneration());
     uint previousSchedulerMetadata = SchedulerArenaRead(stateBase + 5u);
     uint schedulerMetadata = previousSchedulerMetadata &
@@ -229,11 +416,19 @@ void main()
     // Apply the invalidation marker only after the public record and private
     // atlas publication have passed every generation/completion check. A
     // failed or partial request therefore remains eligible on the next frame.
-    uint appliedMarker = SchedulerVolumeDirtyGeneration(volumeIndex);
+    // Cached solver publication is not an invalidation event. Preserve the
+    // marker that acknowledged the last topology/source/dirty proposal;
+    // replacing it with an unrelated dirty generation can re-arm a still-live
+    // atlas-fresh signal and send a stable field back to source repair.
+    uint appliedMarker = SchedulerArenaRead(stateBase + 8u);
     if ((candidateReasons & (
+            SIMPLE_DDGI_SCHEDULER_REASON_FRESH |
             SIMPLE_DDGI_SCHEDULER_REASON_TOPOLOGY |
             SIMPLE_DDGI_SCHEDULER_REASON_SCROLL)) != 0u)
         appliedMarker = SchedulerVolumeGeneration();
+    else if ((candidateReasons &
+            SIMPLE_DDGI_SCHEDULER_REASON_REGIONAL_DIRTY) != 0u)
+        appliedMarker = SchedulerVolumeDirtyGeneration(volumeIndex);
     else if ((candidateReasons & (
             SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY |
             SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID)) != 0u)
@@ -251,4 +446,18 @@ void main()
             pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_PUBLISHED,
             1u);
     }
+
+    // The page becomes receiver-visible only after all valid page-local probes
+    // have completed this transaction. Publish before releasing the last pin;
+    // reconcile therefore cannot observe an evictable, half-published page.
+    SchedulerPublishSparsePageProbe(
+        probeIndex,
+        volumeIndex,
+        physicalProbeIndex,
+        pageMappingGeneration);
+    SchedulerReleaseSparsePage(
+        probeIndex,
+        volumeIndex,
+        physicalProbeIndex,
+        pageMappingGeneration);
 }

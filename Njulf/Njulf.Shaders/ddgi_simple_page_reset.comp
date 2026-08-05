@@ -1,0 +1,32 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_page_residency_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    if (gl_GlobalInvocationID.x != 0u ||
+        !SimpleDdgiResidencyHeaderMatches(params))
+    {
+        return;
+    }
+
+    uint counters = SimpleDdgiDemandCountersOffsetWords(params);
+    for (uint counter = SIMPLE_DDGI_RESIDENCY_COUNTER_ADMISSION_CANDIDATES;
+         counter <= SIMPLE_DDGI_RESIDENCY_COUNTER_DUPLICATE_PHYSICAL;
+         counter++)
+    {
+        ResidencyWrite(params, counters + counter, 0u);
+    }
+    for (uint counter = SIMPLE_DDGI_RESIDENCY_COUNTER_STALE_VIRTUAL;
+         counter <=
+            SIMPLE_DDGI_RESIDENCY_COUNTER_OTHER_GENERATION_EVICTION_PROBES;
+         counter++)
+    {
+        ResidencyWrite(params, counters + counter, 0u);
+    }
+}

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
@@ -42,14 +41,23 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
         new uint[RenderingConstants.FramesInFlight];
     private readonly uint[] _auditSubmittedEpoch =
         new uint[RenderingConstants.FramesInFlight];
-    private readonly List<RetiredArena> _retiredArenas = new();
+    private const int RetirementCapacity = 512;
+    private readonly GpuCompletionRetirementQueue _retirement =
+        new(RetirementCapacity);
+    private readonly GpuRetirementRecord[] _retirementScratch =
+        new GpuRetirementRecord[RetirementCapacity];
+    private BufferHandle _fallbackExportReadbackBuffer;
+    private ulong _fallbackExportReadbackBytes;
+    private bool _fallbackExportRecorded;
+    private GpuCompletionToken _fallbackExportCompletion;
+    private SimpleDdgiSchedulerStateExportTag _fallbackExportTag;
+    private ulong _fallbackExportPublicStateOffset;
 
     private BufferHandle _arenaBuffer;
     private SimpleDdgiGpuSchedulerLayout? _layout;
     private BindlessHeap? _registeredBindlessHeap;
     private SimpleDdgiSchedulerMode _mode = SimpleDdgiSchedulerMode.CpuReference;
     private uint _resourceGeneration = 1;
-    private ulong _retiredBytes;
     private ulong _staleFeedbackCount;
     private readonly uint[] _lastFeedbackLaneCursors =
         new uint[SimpleDdgiSchedulerAbi.MaxLaneCount];
@@ -84,8 +92,27 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
         CountValidFeedbackReadbackBytes();
     public ulong AuditReadbackBytes =>
         CountValidAuditReadbackBytes();
-    public ulong RetiredBytes => _retiredBytes;
+    public ulong FallbackStateExportBytes => _fallbackExportReadbackBytes;
+    public ulong RetiredBytes => _retirement.ActiveBytes;
     public ulong StaleFeedbackCount => _staleFeedbackCount;
+
+    public static ulong ResolveFallbackStateExportBytes(int probeCount)
+    {
+        if (probeCount <= 0 ||
+            probeCount > GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount)
+        {
+            return 0UL;
+        }
+
+        ulong privateBytes = checked(
+            (ulong)probeCount *
+            (ulong)Marshal.SizeOf<GPUSimpleDdgiSchedulerProbeState>());
+        ulong publicOffset = Align16(privateBytes);
+        ulong publicBytes = checked(
+            (ulong)probeCount *
+            (ulong)Marshal.SizeOf<GPUSimpleDdgiProbeState>());
+        return checked(publicOffset + publicBytes);
+    }
 
     /// <summary>
     /// Changes authority without allocating anything for the CPU reference
@@ -108,9 +135,10 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
     }
 
     /// <summary>
-    /// Ensures a single arena can contain the requested active field. Capacity
-    /// grows monotonically during a renderer lifetime, so ordinary camera
-    /// travel does not recreate or descriptor-update the resource every frame.
+    /// Ensures a single arena exactly describes the requested active field.
+    /// Ordinary camera travel leaves these topology capacities unchanged;
+    /// real topology/mode changes replace the complete generation so byte
+    /// accounting and private target bounds remain exact.
     /// </summary>
     public bool EnsureCapacity(
         int activeProbeCount,
@@ -128,23 +156,20 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 return false;
 
             if (_layout != null && _arenaBuffer.IsValid &&
-                activeProbeCount <= _layout.ActiveProbeCount &&
-                requestCapacity <= _layout.RequestCapacity &&
-                activeVolumeCount <= _layout.ActiveVolumeCount &&
-                dirtyRegionCapacity <= _layout.DirtyRegionCapacity)
+                activeProbeCount == _layout.ActiveProbeCount &&
+                requestCapacity == _layout.RequestCapacity &&
+                activeVolumeCount == _layout.ActiveVolumeCount &&
+                dirtyRegionCapacity == _layout.DirtyRegionCapacity &&
+                validationEnabled == _layout.ValidationEnabled)
             {
                 return false;
             }
 
-            int probeCapacity = Math.Max(activeProbeCount, _layout?.ActiveProbeCount ?? 0);
-            int requestCapacityCeiling = Math.Max(requestCapacity, _layout?.RequestCapacity ?? 0);
-            int volumeCapacity = Math.Max(activeVolumeCount, _layout?.ActiveVolumeCount ?? 0);
-            int dirtyCapacity = Math.Max(dirtyRegionCapacity, _layout?.DirtyRegionCapacity ?? 0);
             SimpleDdgiGpuSchedulerLayout nextLayout = SimpleDdgiGpuSchedulerLayout.Create(
-                probeCapacity,
-                requestCapacityCeiling,
-                volumeCapacity,
-                dirtyCapacity,
+                activeProbeCount,
+                requestCapacity,
+                activeVolumeCount,
+                dirtyRegionCapacity,
                 validationEnabled,
                 maxStorageBufferRange);
 
@@ -326,7 +351,8 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 FeedbackOffsetWords = _layout.FeedbackSummary.OffsetWords,
                 IrradianceAtlasBufferIndex = (uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer,
                 VisibilityAtlasBufferIndex = (uint)BindlessIndex.SimpleDdgiVisibilityAtlasBuffer,
-                TransportIrradianceAtlasBufferIndex = (uint)BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer
+                TransportIrradianceAtlasBufferIndex = (uint)BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer,
+                ReceiverProbeBufferIndex = (uint)BindlessIndex.SimpleDdgiReceiverProbeBuffer
             };
         }
     }
@@ -416,6 +442,170 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
             _feedbackSubmittedFrameSerial[frameIndex] = frameSerial;
             _feedbackSubmittedResourceGeneration[frameIndex] = _resourceGeneration;
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Records one exceptional, complete resident-state export. The copy is
+    /// ordered before the quiesced scheduler dispatches in the same submission;
+    /// the CPU may consume it only after the exact graphics-fence token signals.
+    /// </summary>
+    public bool RecordFallbackStateExport(
+        CommandBuffer commandBuffer,
+        BufferHandle publicProbeStateBuffer,
+        in SimpleDdgiSchedulerStateExportTag tag,
+        ulong pendingFrameFenceValue)
+    {
+        if (commandBuffer.Handle == 0 ||
+            !publicProbeStateBuffer.IsValid ||
+            pendingFrameFenceValue == 0UL)
+        {
+            return false;
+        }
+
+        lock (_lock)
+        {
+            ThrowIfDisposed();
+            if (_mode != SimpleDdgiSchedulerMode.GpuResident ||
+                !_arenaBuffer.IsValid ||
+                _layout == null ||
+                _fallbackExportRecorded ||
+                tag.ProbeCount <= 0 ||
+                tag.ProbeCount > _layout.ActiveProbeCount ||
+                tag.SchedulerResourceGeneration != _resourceGeneration)
+            {
+                return false;
+            }
+
+            ulong privateBytes = checked(
+                (ulong)tag.ProbeCount *
+                (ulong)Marshal.SizeOf<GPUSimpleDdgiSchedulerProbeState>());
+            ulong publicOffset = Align16(privateBytes);
+            ulong publicBytes = checked(
+                (ulong)tag.ProbeCount *
+                (ulong)Marshal.SizeOf<GPUSimpleDdgiProbeState>());
+            ulong totalBytes = ResolveFallbackStateExportBytes(tag.ProbeCount);
+            EnsureFallbackExportReadbackBuffer(totalBytes);
+            if (!_fallbackExportReadbackBuffer.IsValid)
+                return false;
+
+            VkBuffer arena = _bufferManager.GetBuffer(_arenaBuffer);
+            VkBuffer publicState = _bufferManager.GetBuffer(publicProbeStateBuffer);
+            VkBuffer destination = _bufferManager.GetBuffer(
+                _fallbackExportReadbackBuffer);
+
+            BufferMemoryBarrier2 privateBarrier = BarrierBuilder.BufferBarrier(
+                arena,
+                PipelineStageFlags2.ComputeShaderBit |
+                    PipelineStageFlags2.TransferBit,
+                AccessFlags2.ShaderStorageWriteBit |
+                    AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferReadBit,
+                _layout.ProbeState.Offset,
+                privateBytes);
+            ExecuteBufferBarrier(commandBuffer, privateBarrier);
+            BufferMemoryBarrier2 publicBarrier = BarrierBuilder.BufferBarrier(
+                publicState,
+                PipelineStageFlags2.ComputeShaderBit |
+                    PipelineStageFlags2.TransferBit,
+                AccessFlags2.ShaderStorageWriteBit |
+                    AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferReadBit,
+                0UL,
+                publicBytes);
+            ExecuteBufferBarrier(commandBuffer, publicBarrier);
+
+            BufferCopy privateCopy = new()
+            {
+                SrcOffset = _layout.ProbeState.Offset,
+                DstOffset = 0UL,
+                Size = privateBytes
+            };
+            _context.Api.CmdCopyBuffer(
+                commandBuffer,
+                arena,
+                destination,
+                1,
+                &privateCopy);
+            BufferCopy publicCopy = new()
+            {
+                SrcOffset = 0UL,
+                DstOffset = publicOffset,
+                Size = publicBytes
+            };
+            _context.Api.CmdCopyBuffer(
+                commandBuffer,
+                publicState,
+                destination,
+                1,
+                &publicCopy);
+
+            BufferMemoryBarrier2 hostBarrier = BarrierBuilder.BufferBarrier(
+                destination,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.HostBit,
+                AccessFlags2.HostReadBit,
+                0UL,
+                totalBytes);
+            ExecuteBufferBarrier(commandBuffer, hostBarrier);
+
+            _fallbackExportRecorded = true;
+            _fallbackExportCompletion =
+                GpuCompletionToken.ForFrameFence(pendingFrameFenceValue);
+            _fallbackExportTag = tag;
+            _fallbackExportPublicStateOffset = publicOffset;
+            return true;
+        }
+    }
+
+    public SimpleDdgiSchedulerStateExportReadStatus TryReadFallbackStateExport(
+        ulong completedFrameFenceValue,
+        Span<GPUSimpleDdgiSchedulerProbeState> schedulerStates,
+        Span<GPUSimpleDdgiProbeState> publicStates,
+        out SimpleDdgiSchedulerStateExportTag tag)
+    {
+        lock (_lock)
+        {
+            ThrowIfDisposed();
+            tag = default;
+            if (!_fallbackExportRecorded)
+                return SimpleDdgiSchedulerStateExportReadStatus.Unavailable;
+            if (completedFrameFenceValue < _fallbackExportCompletion.Value)
+                return SimpleDdgiSchedulerStateExportReadStatus.Pending;
+
+            int probeCount = _fallbackExportTag.ProbeCount;
+            if (!_fallbackExportReadbackBuffer.IsValid ||
+                schedulerStates.Length < probeCount ||
+                publicStates.Length < probeCount)
+            {
+                _fallbackExportRecorded = false;
+                return SimpleDdgiSchedulerStateExportReadStatus.Invalid;
+            }
+
+            _bufferManager.InvalidateBuffer(
+                _fallbackExportReadbackBuffer,
+                0UL,
+                _fallbackExportReadbackBytes);
+            byte* mapped = (byte*)_bufferManager.GetMappedPointer(
+                _fallbackExportReadbackBuffer);
+            if (mapped == null)
+            {
+                _fallbackExportRecorded = false;
+                return SimpleDdgiSchedulerStateExportReadStatus.Invalid;
+            }
+
+            new ReadOnlySpan<GPUSimpleDdgiSchedulerProbeState>(
+                mapped,
+                probeCount).CopyTo(schedulerStates);
+            new ReadOnlySpan<GPUSimpleDdgiProbeState>(
+                mapped + checked((nint)_fallbackExportPublicStateOffset),
+                probeCount).CopyTo(publicStates);
+            tag = _fallbackExportTag;
+            _fallbackExportRecorded = false;
+            return SimpleDdgiSchedulerStateExportReadStatus.Complete;
         }
     }
 
@@ -643,19 +833,31 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
         }
     }
 
-    public void CollectRetired(ulong completedFrameSerial, bool force = false)
+    public void CollectRetired(ulong completedFrameFenceValue, bool force = false)
     {
         lock (_lock)
         {
-            for (int i = _retiredArenas.Count - 1; i >= 0; i--)
+            int count = force
+                ? _retirement.DrainAfterExternalDeviceIdle(_retirementScratch)
+                : _retirement.Poll(
+                    new GpuCompletionProgress(
+                        completedFrameFenceValue,
+                        0UL,
+                        0UL),
+                    _retirementScratch,
+                    completedFrameFenceValue);
+            for (int index = 0; index < count; index++)
             {
-                RetiredArena retired = _retiredArenas[i];
-                if (!force && retired.RetireAfterFrameSerial > completedFrameSerial)
-                    continue;
-                if (retired.Buffer.IsValid)
-                    _bufferManager.DestroyBuffer(retired.Buffer);
-                _retiredBytes -= Math.Min(_retiredBytes, retired.Bytes);
-                _retiredArenas.RemoveAt(i);
+                GpuRetirementRecord retired = _retirementScratch[index];
+                if (retired.Resource.Kind != GpuRetirementResourceKind.Buffer)
+                {
+                    throw new InvalidOperationException(
+                        "Simple-DDGI scheduler retirement contained a non-buffer record.");
+                }
+                BufferHandle buffer = UnpackBufferHandle(retired.Resource.Handle);
+                if (buffer.IsValid)
+                    _bufferManager.DestroyBuffer(buffer);
+                _retirementScratch[index] = default;
             }
         }
     }
@@ -684,13 +886,21 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 _auditReadbackBuffers[i] = BufferHandle.Invalid;
                 _auditReadbackRecorded[i] = false;
             }
-            for (int i = 0; i < _retiredArenas.Count; i++)
+            if (_fallbackExportReadbackBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_fallbackExportReadbackBuffer);
+            _fallbackExportReadbackBuffer = BufferHandle.Invalid;
+            _fallbackExportReadbackBytes = 0UL;
+            _fallbackExportRecorded = false;
+            int retiredCount = _retirement.DrainAfterExternalDeviceIdle(
+                _retirementScratch);
+            for (int index = 0; index < retiredCount; index++)
             {
-                if (_retiredArenas[i].Buffer.IsValid)
-                    _bufferManager.DestroyBuffer(_retiredArenas[i].Buffer);
+                BufferHandle buffer = UnpackBufferHandle(
+                    _retirementScratch[index].Resource.Handle);
+                if (buffer.IsValid)
+                    _bufferManager.DestroyBuffer(buffer);
+                _retirementScratch[index] = default;
             }
-            _retiredArenas.Clear();
-            _retiredBytes = 0;
         }
     }
 
@@ -781,6 +991,30 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 $"Simple DDGI Transport Audit Frame {frameIndex}",
                 MemoryBudgetCategory.GlobalIllumination);
         }
+    }
+
+    private void EnsureFallbackExportReadbackBuffer(ulong requiredBytes)
+    {
+        if (_fallbackExportReadbackBuffer.IsValid &&
+            _fallbackExportReadbackBytes >= requiredBytes)
+        {
+            return;
+        }
+        if (_fallbackExportRecorded)
+            throw new InvalidOperationException(
+                "A pending Simple-DDGI state export cannot be resized.");
+
+        if (_fallbackExportReadbackBuffer.IsValid)
+            _bufferManager.DestroyBuffer(_fallbackExportReadbackBuffer);
+        _fallbackExportReadbackBuffer = _bufferManager.CreateBuffer(
+            requiredBytes,
+            BufferUsageFlags.TransferDstBit,
+            MemoryUsage.AutoPreferHost,
+            AllocationCreateFlags.MappedBit |
+                AllocationCreateFlags.HostAccessRandomBit,
+            "Simple DDGI Scheduler Fallback State Export",
+            MemoryBudgetCategory.GlobalIllumination);
+        _fallbackExportReadbackBytes = requiredBytes;
     }
 
     private ulong CountValidFeedbackReadbackBytes()
@@ -877,13 +1111,40 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
     {
         if (!arena.IsValid)
             return;
-        ulong retireAfter = checked(frameSerial + (ulong)RenderingConstants.FramesInFlight + 1UL);
-        _retiredArenas.Add(new RetiredArena(arena, bytes, retireAfter));
-        _retiredBytes = checked(_retiredBytes + bytes);
+        if (frameSerial == 0UL)
+        {
+            _bufferManager.DestroyBuffer(arena);
+            return;
+        }
+        GpuRetirementRecord record = new(
+            ResourceGeneration: arena.Generation,
+            ByteCharge: bytes,
+            EnqueuedFrame: frameSerial,
+            Completion: GpuCompletionToken.ForFrameFence(frameSerial),
+            Resource: new GpuRetirementResource(
+                GpuRetirementResourceKind.Buffer,
+                PackBufferHandle(arena)));
+        if (!_retirement.TryEnqueue(
+                record,
+                liveBytes: 0UL,
+                out GpuRetirementAdmissionFailure failure))
+        {
+            throw new InvalidOperationException(
+                $"Simple-DDGI scheduler retirement admission failed: {failure}.");
+        }
     }
+
+    private static ulong PackBufferHandle(BufferHandle buffer) =>
+        ((ulong)buffer.Generation << 32) | unchecked((uint)buffer.Index);
+
+    private static BufferHandle UnpackBufferHandle(ulong packed) =>
+        new(unchecked((int)(uint)packed), (uint)(packed >> 32));
 
     private static uint NextGeneration(uint generation) =>
         generation == uint.MaxValue ? 1u : generation + 1u;
+
+    private static ulong Align16(ulong value) =>
+        checked((value + 15UL) & ~15UL);
 
     private void ExecuteBufferBarrier(CommandBuffer commandBuffer, BufferMemoryBarrier2 barrier)
     {
@@ -902,13 +1163,37 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
             throw new ObjectDisposedException(nameof(SimpleDdgiGpuScheduler));
     }
 
-    private readonly record struct RetiredArena(
-        BufferHandle Buffer,
-        ulong Bytes,
-        ulong RetireAfterFrameSerial);
 }
 
 public readonly record struct SimpleDdgiTransportAuditReadback(
     uint AuditEpoch,
     ulong FrameSerial,
     GPUSimpleDdgiTransportAuditSummary Summary);
+
+public enum SimpleDdgiSchedulerStateExportReadStatus : byte
+{
+    Unavailable,
+    Pending,
+    Complete,
+    Invalid
+}
+
+public readonly record struct SimpleDdgiSchedulerStateExportTag(
+    int ProbeCount,
+    uint SchedulerResourceGeneration,
+    uint VolumeTableGeneration,
+    uint PhysicalOwnershipGeneration,
+    uint SourceLightingGeneration,
+    uint SourceEpochGeneration,
+    uint TransportGeneration,
+    ulong RequestedFrameSerial)
+{
+    public bool IsInitialized =>
+        ProbeCount > 0 &&
+        SchedulerResourceGeneration != 0u &&
+        VolumeTableGeneration != 0u &&
+        PhysicalOwnershipGeneration != 0u &&
+        SourceLightingGeneration != 0u &&
+        SourceEpochGeneration != 0u &&
+        TransportGeneration != 0u;
+}

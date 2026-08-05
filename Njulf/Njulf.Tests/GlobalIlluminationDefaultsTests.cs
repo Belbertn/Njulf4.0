@@ -48,19 +48,17 @@ public sealed class GlobalIlluminationDefaultsTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(settings.SimpleDdgiTransportResidualThreshold, Is.EqualTo(0.025f));
+            Assert.That(settings.SimpleDdgiTransportTailRelativeTolerance, Is.EqualTo(0.025f));
             Assert.That(settings.SimpleDdgiTransportMaximumSolverGenerations, Is.EqualTo(8));
-            Assert.That(settings.SimpleDdgiTransportSourceRefreshFrames, Is.EqualTo(600));
+            Assert.That(settings.SimpleDdgiTransportSourceRefreshFrames, Is.EqualTo(2_048));
         });
     }
 
-    // Low/Medium do not activate a DDGI quality tier and retain the safe
-    // transport default. The DDGI-capable presets apply their tier interval.
-    [TestCase(RenderQualityPreset.Low, 600)]
-    [TestCase(RenderQualityPreset.Medium, 600)]
-    [TestCase(RenderQualityPreset.High, 600)]
-    [TestCase(RenderQualityPreset.Ultra, 480)]
-    [TestCase(RenderQualityPreset.DdgiHigh, 600)]
+    [TestCase(RenderQualityPreset.Low, 4_096)]
+    [TestCase(RenderQualityPreset.Medium, 3_072)]
+    [TestCase(RenderQualityPreset.High, 2_048)]
+    [TestCase(RenderQualityPreset.Ultra, 1_536)]
+    [TestCase(RenderQualityPreset.DdgiHigh, 2_048)]
     public void QualityPreset_SourceRefreshLeavesACompleteSolverQuietWindow(
         RenderQualityPreset preset,
         int expectedRefreshFrames)
@@ -76,8 +74,7 @@ public sealed class GlobalIlluminationDefaultsTests
                 Is.EqualTo(expectedRefreshFrames));
             Assert.That(
                 settings.GlobalIllumination.SimpleDdgiTransportSourceRefreshFrames,
-                Is.GreaterThan(
-                    settings.GlobalIllumination.SimpleDdgiTransportMaximumSolverGenerations));
+                Is.GreaterThanOrEqualTo(120));
         });
     }
 
@@ -101,8 +98,46 @@ public sealed class GlobalIlluminationDefaultsTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(settings.GlobalIllumination.SimpleDdgiTransportResidualThreshold, Is.EqualTo(0.025f));
+            Assert.That(settings.GlobalIllumination.SimpleDdgiTransportTailRelativeTolerance, Is.EqualTo(0.025f));
             Assert.That(settings.GlobalIllumination.SimpleDdgiTransportMaximumSolverGenerations, Is.EqualTo(8));
+        });
+    }
+
+    [TestCase(RenderQualityPreset.Low, 2, 16, 8, 16, SimpleDdgiProbeResidencyMode.Dense, 0, 0)]
+    [TestCase(RenderQualityPreset.Medium, 2, 22, 11, 22, SimpleDdgiProbeResidencyMode.Dense, 0, 0)]
+    [TestCase(RenderQualityPreset.High, 3, 28, 14, 28, SimpleDdgiProbeResidencyMode.SparseNearRing, 960, 768)]
+    [TestCase(RenderQualityPreset.Ultra, 3, 32, 16, 32, SimpleDdgiProbeResidencyMode.SparseNearRing, 1_440, 1_152)]
+    [TestCase(RenderQualityPreset.DdgiHigh, 3, 28, 14, 28, SimpleDdgiProbeResidencyMode.SparseNearRing, 960, 768)]
+    public void QualityPreset_ReplacesTheCompleteSimpleDdgiProfileRegardlessOfPriorTier(
+        RenderQualityPreset preset,
+        int expectedRingCount,
+        int expectedNearX,
+        int expectedNearY,
+        int expectedNearZ,
+        SimpleDdgiProbeResidencyMode expectedResidencyMode,
+        int expectedPageBudget,
+        int expectedMinimumPageBudget)
+    {
+        var settings = new RenderSettings();
+        settings.ApplyQualityPreset(
+            preset == RenderQualityPreset.Ultra
+                ? RenderQualityPreset.Low
+                : RenderQualityPreset.Ultra);
+
+        settings.ApplyQualityPreset(preset);
+
+        GlobalIlluminationSettings gi = settings.GlobalIllumination;
+        Assert.Multiple(() =>
+        {
+            Assert.That(gi.SimpleDdgiRingCount, Is.EqualTo(expectedRingCount));
+            Assert.That(gi.SimpleDdgiNearRingGridSizeX, Is.EqualTo(expectedNearX));
+            Assert.That(gi.SimpleDdgiNearRingGridSizeY, Is.EqualTo(expectedNearY));
+            Assert.That(gi.SimpleDdgiNearRingGridSizeZ, Is.EqualTo(expectedNearZ));
+            Assert.That(gi.SimpleDdgiProbeResidencyMode, Is.EqualTo(expectedResidencyMode));
+            Assert.That(gi.SimpleDdgiSparsePhysicalPageBudget, Is.EqualTo(expectedPageBudget));
+            Assert.That(
+                gi.SimpleDdgiSparseMinimumPhysicalPageBudget,
+                Is.EqualTo(expectedMinimumPageBudget));
         });
     }
 

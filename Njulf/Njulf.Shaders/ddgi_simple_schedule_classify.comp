@@ -36,6 +36,28 @@ void main()
     }
 
     uint probeIndex = SchedulerSequenceProbeIndex(volumeIndex, localOrdinal);
+    uint physicalProbeIndex;
+    uint pageMappingGeneration;
+    if (!SchedulerResolvePayloadAddress(
+            probeIndex,
+            volumeIndex,
+            physicalProbeIndex,
+            pageMappingGeneration))
+    {
+        // Nonresident sparse probes are not convergence or maintenance
+        // participants. Page admission has a separate authority and wake path.
+        SchedulerWriteCandidate(
+            candidateBase,
+            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
+            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
+            0u,
+            sequenceOrdinal,
+            0u,
+            0u,
+            0u,
+            0u);
+        return;
+    }
     uint stateBase = probeIndex * SIMPLE_DDGI_PROBE_STATE_WORDS;
     uint stateFlags = ReadStorageWordUniform(pc.ProbeStateBufferIndex, stateBase + 4u);
     uint stateAge = ReadStorageWordUniform(pc.ProbeStateBufferIndex, stateBase + 5u);
@@ -101,14 +123,19 @@ void main()
         invalidationReasons |= SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY;
     if (exposed)
         invalidationReasons |= SIMPLE_DDGI_SCHEDULER_REASON_SCROLL;
-    if (topologyInvalid || SchedulerAtlasFresh())
+    bool atlasFresh = SchedulerAtlasFresh();
+    if (topologyInvalid || atlasFresh)
         invalidationReasons |= SIMPLE_DDGI_SCHEDULER_REASON_FRESH;
     if (topologyInvalid)
         invalidationReasons |= SIMPLE_DDGI_SCHEDULER_REASON_TOPOLOGY;
     if (sourceInvalid)
         invalidationReasons |= SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID;
 
-    uint marker = topologyInvalid || exposed
+    // Atlas freshness is a volume-layout event. Its dirty generation may be
+    // zero during startup, which means "always invalidate" and would trap the
+    // complete source cohort in hard-source work forever. Use the stable
+    // volume generation for the same one-shot semantics as topology/scroll.
+    uint marker = topologyInvalid || exposed || atlasFresh
         ? SchedulerVolumeGeneration()
         : (globalDirty || sourceInvalid
             ? SchedulerSourceGeneration()
@@ -128,10 +155,17 @@ void main()
     }
 
     uint sourceRays = SchedulerArenaRead(schedulerStateBase + 7u) & 0x1ffu;
-    bool sourceReady = SchedulerTransportV2() && sourceRays != 0u &&
+    uint requiredSourceRays = clamp(
+        SchedulerVolumeFullRays(volumeIndex),
+        1u,
+        SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
+    bool sourceReady = SchedulerTransportV2() &&
+        sourceRays == requiredSourceRays &&
         sourceGeneration == SchedulerSourceGeneration() && !sourceInvalid;
     uint lastSourceFrame = SchedulerArenaRead(schedulerStateBase + 1u);
     bool routineDue = SchedulerTransportV2() && sourceReady &&
+        (!SchedulerTailCertification() ||
+            (!SchedulerGlobalConvergence() && SchedulerSolveEpoch() == 0u)) &&
         (SchedulerFrameIndex() - lastSourceFrame >= max(SchedulerFrame(29u), 1u));
 
     uint ring = min(SchedulerVolumeRing(volumeIndex), 2u);
@@ -139,6 +173,13 @@ void main()
     uint transport;
     uint rayTier;
     uint reasons = 0u;
+    // Tail certification cannot begin until every active probe owns a complete
+    // current source sequence. Keep that cohort explicit even when the public
+    // invalid-cache flag was absent or a higher-priority visibility class also
+    // applies; admission uses this reason to prevent an always-hot visible
+    // zero-support lane from starving offscreen source repair.
+    if (!sourceReady)
+        reasons |= SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID;
     vec3 camera = vec3(
         uintBitsToFloat(SchedulerFrame(20u)),
         uintBitsToFloat(SchedulerFrame(21u)),
@@ -183,6 +224,55 @@ void main()
     float activeWeight = ReadStorageFloatUniform(
         pc.ProbeStateBufferIndex,
         stateBase + 3u);
+    bool stableTailParticipant =
+        sourceReady &&
+        !fresh &&
+        !scrollExposed &&
+        !relocationRetry &&
+        !inactive &&
+        activeWeight > 0.001 &&
+        !globalDirty &&
+        !regionalDirty &&
+        !sourceInvalid;
+    bool pendingTailSource =
+        !inactive &&
+        activeWeight > 0.001 &&
+        (!sourceReady ||
+            fresh ||
+            scrollExposed ||
+            relocationRetry ||
+            globalDirty ||
+            regionalDirty ||
+            sourceInvalid);
+    if (SchedulerTailCertification() && pendingTailSource)
+    {
+        atomicAdd(
+            BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[
+                pc.CountersOffsetWords +
+                    SIMPLE_DDGI_SCHEDULER_COUNTER_PENDING_TAIL_SOURCE],
+            1u);
+    }
+    if (SchedulerTailCertification() &&
+        SchedulerSolveEpoch() != 0u &&
+        !stableTailParticipant)
+    {
+        // A solve epoch and its audit certify one frozen source operator. Do
+        // not repair, relocate, classify, or reactivate a probe inside that
+        // epoch. Feedback still reports the pending source participant, which
+        // makes the CPU controller abandon this epoch and return to source
+        // repair before any replacement cache write is admitted.
+        SchedulerWriteCandidate(
+            candidateBase,
+            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
+            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
+            0u,
+            sequenceOrdinal,
+            0u,
+            0u,
+            0u,
+            0u);
+        return;
+    }
     bool zeroSupport = fresh || relocationRetry || activeWeight <= 0.0001 ||
         (SchedulerTransportV2() && sourceRays == 0u && !inactive);
     bool visibleZeroSupport = visible && zeroSupport;
@@ -212,13 +302,20 @@ void main()
     // The reason payload is the transaction-private classification proposal.
     // Persistent visibility and invalidation metadata are applied by
     // CommitLocal only after all producer completion bits have been validated.
-    reasons |= invalidationReasons & (
-        SIMPLE_DDGI_SCHEDULER_REASON_FRESH |
-        SIMPLE_DDGI_SCHEDULER_REASON_SCROLL |
-        SIMPLE_DDGI_SCHEDULER_REASON_REGIONAL_DIRTY |
-        SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY |
-        SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID |
-        SIMPLE_DDGI_SCHEDULER_REASON_TOPOLOGY);
+    // Raw dirty-region signals can remain present after this probe's marker is
+    // current. Do not leak those signals into a cached-solver candidate:
+    // admission interprets these reason bits as an ownership invalidation.
+    // Only the effective one-shot invalidation proposal may carry them.
+    if (invalidate)
+    {
+        reasons |= invalidationReasons & (
+            SIMPLE_DDGI_SCHEDULER_REASON_FRESH |
+            SIMPLE_DDGI_SCHEDULER_REASON_SCROLL |
+            SIMPLE_DDGI_SCHEDULER_REASON_REGIONAL_DIRTY |
+            SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY |
+            SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID |
+            SIMPLE_DDGI_SCHEDULER_REASON_TOPOLOGY);
+    }
     if (visibleZeroSupport)
     {
         workClass = SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_ZERO_SUPPORT;
@@ -252,17 +349,40 @@ void main()
         reasons |= relocationRetry ? SIMPLE_DDGI_SCHEDULER_REASON_RELOCATION_RETRY : 0u;
         reasons |= inactiveRetry ? SIMPLE_DDGI_SCHEDULER_REASON_INACTIVE_RETRY : 0u;
     }
-    else if (sourceInvalid || globalDirty || regionalDirty)
+    else if (!sourceReady || sourceInvalid || globalDirty || regionalDirty)
     {
         workClass = SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_DIRTY;
         transport = SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE;
         rayTier = SIMPLE_DDGI_SCHEDULER_RAY_FULL;
         reasons |= regionalDirty ? SIMPLE_DDGI_SCHEDULER_REASON_REGIONAL_DIRTY : 0u;
-        reasons |= sourceInvalid ? SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID : 0u;
+        reasons |= !sourceReady || sourceInvalid
+            ? SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID
+            : 0u;
         reasons |= globalDirty ? SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY : 0u;
     }
     else
     {
+        // A certified tail solve has an explicit source-cohort boundary. Do
+        // not run speculative cached transport while the controller still
+        // advertises epoch zero: failed pre-epoch work can set the private
+        // repair bit and prevent the source cohort from ever becoming whole.
+        // A genuinely due periodic source refresh remains legal after a
+        // certificate has returned the controller to epoch zero.
+        if (SchedulerTailCertification() &&
+            SchedulerSolveEpoch() == 0u &&
+            !routineDue)
+        {
+            SchedulerWriteCandidate(candidateBase,
+                SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
+                SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
+                0u,
+                sequenceOrdinal,
+                0u,
+                0u,
+                0u,
+                0u);
+            return;
+        }
         workClass = SIMPLE_DDGI_SCHEDULER_WORK_NEAR_MAINTENANCE + ring;
         transport = sourceReady
             ? SIMPLE_DDGI_SCHEDULER_TRANSPORT_CACHED_SOLVER
@@ -283,8 +403,13 @@ void main()
     uint fullRays = clamp(SchedulerVolumeFullRays(volumeIndex), 1u, SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
     uint maintenanceRays = clamp(SchedulerVolumeMaintenanceRays(volumeIndex), 1u, SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
     uint activeRayCount = rayTier == SIMPLE_DDGI_SCHEDULER_RAY_FULL ? fullRays : maintenanceRays;
-    uint sourceRayCount = (transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE ||
-        transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE) ? fullRays : 0u;
+    bool sourceWork = transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE ||
+        transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
+    // V2 cached transport indexes the complete immutable source sequence.
+    // Carry that sequence cardinality through classification; admission then
+    // expands cached solver work to this exact cardinality so solving and
+    // certification evaluate the same operator.
+    uint sourceRayCount = SchedulerTransportV2() || sourceWork ? fullRays : 0u;
     uint lane = SchedulerLaneIndex(volumeIndex, workClass, transport, rayTier);
     if (lane >= SIMPLE_DDGI_SCHEDULER_MAX_LANES)
     {

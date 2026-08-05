@@ -35,10 +35,12 @@ public static class SampleSmokeOptionsParser
         "--long-run-max-samples",
         "--long-run-memory-growth-tolerance-bytes",
         "--long-run-minutes",
+        "--tail-ddgi-long-soak",
         "--benchmark",
         "--benchmark-report",
         "--benchmark-warmup-frames",
         "--benchmark-measure-frames",
+        "--benchmark-max-settle-frames",
         "--benchmark-budget-profile",
         "--benchmark-pair-id",
         "--benchmark-variant",
@@ -61,6 +63,13 @@ public static class SampleSmokeOptionsParser
         "--async-compute-mode",
         "--async-compute-path",
         "--simple-ddgi-scheduler-mode",
+        "--simple-ddgi-residency-mode",
+        "--simple-ddgi-sparse-page-budget",
+        "--simple-ddgi-sparse-min-page-budget",
+        "--simple-ddgi-sparse-retention-frames",
+        "--simple-ddgi-sparse-max-admissions",
+        "--simple-ddgi-sparse-max-feedback",
+        "--simple-ddgi-sparse-inactive-retry-frames",
         "--far-field-clipmap",
         "--far-field-force-all"
     };
@@ -103,6 +112,9 @@ public static class SampleSmokeOptionsParser
             Environment.GetEnvironmentVariable("NJULF_RENDERER_LONG_RUN_WARMUP_FRAMES"),
             120,
             "NJULF_RENDERER_LONG_RUN_WARMUP_FRAMES");
+        bool longRunWarmupSpecified = !string.IsNullOrWhiteSpace(
+            Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_LONG_RUN_WARMUP_FRAMES"));
         int longRunSampleInterval = ParsePositiveInt(
             Environment.GetEnvironmentVariable("NJULF_RENDERER_LONG_RUN_SAMPLE_INTERVAL"),
             15,
@@ -119,7 +131,12 @@ public static class SampleSmokeOptionsParser
             Environment.GetEnvironmentVariable("NJULF_RENDERER_LONG_RUN_MINUTES"),
             0.0,
             "NJULF_RENDERER_LONG_RUN_MINUTES");
+        bool tailDdgiLongSoak = ParseBool(
+            Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_TAIL_DDGI_LONG_SOAK"),
+            "NJULF_RENDERER_TAIL_DDGI_LONG_SOAK");
         bool longRunOptionsSpecified =
+            tailDdgiLongSoak ||
             !string.IsNullOrWhiteSpace(longRunReportPath) ||
             !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("NJULF_RENDERER_LONG_RUN_WARMUP_FRAMES")) ||
             !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("NJULF_RENDERER_LONG_RUN_SAMPLE_INTERVAL")) ||
@@ -135,6 +152,8 @@ public static class SampleSmokeOptionsParser
         bool enableGpuTiming = ParseBool(
             Environment.GetEnvironmentVariable("NJULF_RENDERER_GPU_TIMING"),
             "NJULF_RENDERER_GPU_TIMING");
+        bool gpuTimingSpecified = !string.IsNullOrWhiteSpace(
+            Environment.GetEnvironmentVariable("NJULF_RENDERER_GPU_TIMING"));
         bool enableSceneGpuCompaction = ParseBool(
             Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_COMPACTION"),
             "NJULF_RENDERER_SCENE_GPU_COMPACTION");
@@ -159,6 +178,27 @@ public static class SampleSmokeOptionsParser
             Environment.GetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE_PATH"));
         SimpleDdgiSchedulerMode? simpleDdgiSchedulerModeOverride = ParseSimpleDdgiSchedulerMode(
             Environment.GetEnvironmentVariable("NJULF_RENDERER_SIMPLE_DDGI_SCHEDULER_MODE"));
+        SimpleDdgiProbeResidencyMode? simpleDdgiProbeResidencyModeOverride =
+            ParseSimpleDdgiProbeResidencyMode(Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_SIMPLE_DDGI_RESIDENCY_MODE"));
+        int? simpleDdgiSparsePhysicalPageBudgetOverride = ParseOptionalNonNegativeInt(
+            Environment.GetEnvironmentVariable("NJULF_RENDERER_SIMPLE_DDGI_SPARSE_PAGE_BUDGET"),
+            "NJULF_RENDERER_SIMPLE_DDGI_SPARSE_PAGE_BUDGET");
+        int? simpleDdgiSparseMinimumPhysicalPageBudgetOverride = ParseOptionalNonNegativeInt(
+            Environment.GetEnvironmentVariable("NJULF_RENDERER_SIMPLE_DDGI_SPARSE_MIN_PAGE_BUDGET"),
+            "NJULF_RENDERER_SIMPLE_DDGI_SPARSE_MIN_PAGE_BUDGET");
+        int? simpleDdgiSparseRetentionFramesOverride = ParseOptionalPositiveInt(
+            Environment.GetEnvironmentVariable("NJULF_RENDERER_SIMPLE_DDGI_SPARSE_RETENTION_FRAMES"),
+            "NJULF_RENDERER_SIMPLE_DDGI_SPARSE_RETENTION_FRAMES");
+        int? simpleDdgiSparseMaximumAdmissionsOverride = ParseOptionalPositiveInt(
+            Environment.GetEnvironmentVariable("NJULF_RENDERER_SIMPLE_DDGI_SPARSE_MAX_ADMISSIONS"),
+            "NJULF_RENDERER_SIMPLE_DDGI_SPARSE_MAX_ADMISSIONS");
+        int? simpleDdgiSparseMaximumReceiverFeedbackOverride = ParseOptionalNonNegativeInt(
+            Environment.GetEnvironmentVariable("NJULF_RENDERER_SIMPLE_DDGI_SPARSE_MAX_FEEDBACK"),
+            "NJULF_RENDERER_SIMPLE_DDGI_SPARSE_MAX_FEEDBACK");
+        int? simpleDdgiSparseInactiveRetryFramesOverride = ParseOptionalPositiveInt(
+            Environment.GetEnvironmentVariable("NJULF_RENDERER_SIMPLE_DDGI_SPARSE_INACTIVE_RETRY_FRAMES"),
+            "NJULF_RENDERER_SIMPLE_DDGI_SPARSE_INACTIVE_RETRY_FRAMES");
         if (asyncComputeModeOverride.HasValue)
             enableAsyncCompute =
                 asyncComputeModeOverride == AsyncComputeMode.ForceEnabledForValidation;
@@ -177,6 +217,11 @@ public static class SampleSmokeOptionsParser
             !string.IsNullOrWhiteSpace(benchmarkReportPath);
         int benchmarkWarmupFrames = ParseNonNegativeInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_WARMUP_FRAMES"), 30, "NJULF_RENDERER_BENCHMARK_WARMUP_FRAMES");
         int benchmarkMeasureFrames = ParsePositiveInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_MEASURE_FRAMES"), 120, "NJULF_RENDERER_BENCHMARK_MEASURE_FRAMES");
+        int benchmarkMaximumSettlingFrames = ParsePositiveInt(
+            Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_BENCHMARK_MAX_SETTLE_FRAMES"),
+            SampleBenchmarkOptions.ProductionMinimumAdditionalSettlingFrameCount,
+            "NJULF_RENDERER_BENCHMARK_MAX_SETTLE_FRAMES");
         string benchmarkPairId =
             Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_PAIR_ID")?.Trim() ??
             string.Empty;
@@ -313,6 +358,7 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--long-run-warmup-frames":
                     longRunWarmupFrames = ParseNonNegativeInt(value, 120, "--long-run-warmup-frames");
+                    longRunWarmupSpecified = true;
                     longRunOptionsSpecified = true;
                     break;
                 case "--long-run-sample-interval":
@@ -334,6 +380,10 @@ public static class SampleSmokeOptionsParser
                     longRunMinutes = ParsePositiveDouble(value, 0.0, "--long-run-minutes");
                     longRunOptionsSpecified = true;
                     break;
+                case "--tail-ddgi-long-soak":
+                    tailDdgiLongSoak = ParseBool(value, optionName);
+                    longRunOptionsSpecified |= tailDdgiLongSoak;
+                    break;
                 case "--benchmark":
                     enableBenchmark = ParseBool(value, optionName);
                     break;
@@ -346,6 +396,12 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--benchmark-measure-frames":
                     benchmarkMeasureFrames = ParsePositiveInt(value, 120, "--benchmark-measure-frames");
+                    break;
+                case "--benchmark-max-settle-frames":
+                    benchmarkMaximumSettlingFrames = ParsePositiveInt(
+                        value,
+                        SampleBenchmarkOptions.ProductionMinimumAdditionalSettlingFrameCount,
+                        "--benchmark-max-settle-frames");
                     break;
                 case "--benchmark-budget-profile":
                     benchmarkBudgetProfile =
@@ -398,6 +454,7 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--gpu-timing":
                     enableGpuTiming = ParseBool(value, optionName);
+                    gpuTimingSpecified = true;
                     break;
                 case "--scene-gpu-compaction":
                     enableSceneGpuCompaction = ParseBool(value, optionName);
@@ -434,6 +491,36 @@ public static class SampleSmokeOptionsParser
                     simpleDdgiSchedulerModeOverride = ParseSimpleDdgiSchedulerMode(value) ??
                         throw new ArgumentException(
                             "--simple-ddgi-scheduler-mode requires cpu-reference, gpu-mirror, or gpu-resident.");
+                    break;
+                case "--simple-ddgi-residency-mode":
+                    simpleDdgiProbeResidencyModeOverride =
+                        ParseSimpleDdgiProbeResidencyMode(value) ??
+                        throw new ArgumentException(
+                            "--simple-ddgi-residency-mode requires dense, shadow, or sparse-near-ring.");
+                    break;
+                case "--simple-ddgi-sparse-page-budget":
+                    simpleDdgiSparsePhysicalPageBudgetOverride =
+                        ParseNonNegativeInt(value, 0, optionName);
+                    break;
+                case "--simple-ddgi-sparse-min-page-budget":
+                    simpleDdgiSparseMinimumPhysicalPageBudgetOverride =
+                        ParseNonNegativeInt(value, 0, optionName);
+                    break;
+                case "--simple-ddgi-sparse-retention-frames":
+                    simpleDdgiSparseRetentionFramesOverride =
+                        ParsePositiveInt(value, 1, optionName);
+                    break;
+                case "--simple-ddgi-sparse-max-admissions":
+                    simpleDdgiSparseMaximumAdmissionsOverride =
+                        ParsePositiveInt(value, 1, optionName);
+                    break;
+                case "--simple-ddgi-sparse-max-feedback":
+                    simpleDdgiSparseMaximumReceiverFeedbackOverride =
+                        ParseNonNegativeInt(value, 0, optionName);
+                    break;
+                case "--simple-ddgi-sparse-inactive-retry-frames":
+                    simpleDdgiSparseInactiveRetryFramesOverride =
+                        ParsePositiveInt(value, 1, optionName);
                     break;
                 case "--far-field-clipmap":
                     enableFarFieldClipmap = ParseBool(value, optionName);
@@ -533,6 +620,136 @@ public static class SampleSmokeOptionsParser
             performanceScenario =
                 SamplePerformanceScenario.GiSimpleDdgiFurnace;
             qualityPresetOverride = RenderQualityPreset.DdgiHigh;
+        }
+
+        if (tailDdgiLongSoak)
+        {
+            if (enableBenchmark)
+            {
+                throw new ArgumentException(
+                    "--tail-ddgi-long-soak owns the long-run frame sequence and cannot be combined with benchmark mode.");
+            }
+            if (mode is not (SampleSmokeMode.None or SampleSmokeMode.LongRun))
+            {
+                throw new ArgumentException(
+                    "--tail-ddgi-long-soak requires --smoke-mode long-run when a smoke mode is specified.");
+            }
+            if (sceneSpecified &&
+                sceneKind != SampleSceneKind.GlobalIlluminationTest)
+            {
+                throw new ArgumentException(
+                    "--tail-ddgi-long-soak owns the GlobalIlluminationTest scene.");
+            }
+            if (performanceScenario is not (
+                    SamplePerformanceScenario.Normal or
+                    SamplePerformanceScenario.GiSimpleDdgiFurnace))
+            {
+                throw new ArgumentException(
+                    "--tail-ddgi-long-soak requires the GiSimpleDdgiFurnace performance scenario.");
+            }
+            if (qualityPresetOverride.HasValue &&
+                qualityPresetOverride != RenderQualityPreset.DdgiHigh)
+            {
+                throw new ArgumentException(
+                    "--tail-ddgi-long-soak requires the DDGI-high quality preset.");
+            }
+            if (validationSpecified &&
+                validationMode != RendererValidationMode.Off)
+            {
+                throw new ArgumentException(
+                    "--tail-ddgi-long-soak requires --validation off for ShippingPerformance timing evidence.");
+            }
+            if (gpuTimingSpecified && !enableGpuTiming)
+            {
+                throw new ArgumentException(
+                    "--tail-ddgi-long-soak requires GPU timing and cannot be combined with --gpu-timing=false.");
+            }
+            if (asyncComputeModeOverride is not null and
+                not AsyncComputeMode.Disabled ||
+                enableAsyncCompute ||
+                asyncComputeValidationPath.HasValue)
+            {
+                throw new ArgumentException(
+                    "--tail-ddgi-long-soak requires the canonical disabled async-compute mode.");
+            }
+            if (simpleDdgiSchedulerModeOverride.HasValue &&
+                simpleDdgiSchedulerModeOverride !=
+                    SimpleDdgiSchedulerMode.GpuResident)
+            {
+                throw new ArgumentException(
+                    "--tail-ddgi-long-soak requires the gpu-resident Simple-DDGI scheduler.");
+            }
+            if (forceMissingAssets ||
+                transparencyMode != TransparencyMode.SortedAlphaBlend ||
+                enableSceneGpuCompaction ||
+                enableSceneIndirectDispatch ||
+                enableSceneGpuLodSelection ||
+                enableSceneGpuShadowCompaction ||
+                enableSceneSubmissionValidation ||
+                enableFarFieldClipmap ||
+                enableFarFieldForceAll)
+            {
+                throw new ArgumentException(
+                    "--tail-ddgi-long-soak cannot be combined with renderer behavior overrides.");
+            }
+            if (!string.IsNullOrWhiteSpace(baselineSnapshotDirectory) ||
+                !string.IsNullOrWhiteSpace(sponzaGiCaptureDirectory) ||
+                !string.IsNullOrWhiteSpace(materialGiCaptureDirectory) ||
+                !string.IsNullOrWhiteSpace(materialGiQualificationManifestPath) ||
+                khronosRenderValueCount != 0)
+            {
+                throw new ArgumentException(
+                    "--tail-ddgi-long-soak cannot be combined with another capture or qualification mode.");
+            }
+            if (string.IsNullOrWhiteSpace(longRunReportPath))
+            {
+                throw new ArgumentException(
+                    "--tail-ddgi-long-soak requires --long-run-report for durable evidence.");
+            }
+            if (frameCount > 0 &&
+                frameCount < SampleTailDdgiLongSoakProfile.RequiredFrameCount)
+            {
+                throw new ArgumentException(
+                    $"--tail-ddgi-long-soak requires at least {SampleTailDdgiLongSoakProfile.RequiredFrameCount} frames, or a duration-owned run with no frame cap.");
+            }
+            if (frameCount > 0 && longRunMinutes > 0.0)
+            {
+                throw new ArgumentException(
+                    "--tail-ddgi-long-soak accepts either a frame count or --long-run-minutes, not both.");
+            }
+            if (longRunWarmupSpecified &&
+                longRunWarmupFrames <
+                    SampleTailDdgiLongSoakProfile.MinimumWarmupFrameCount)
+            {
+                throw new ArgumentException(
+                    $"--tail-ddgi-long-soak requires at least {SampleTailDdgiLongSoakProfile.MinimumWarmupFrameCount} warmup frames so late driver residency is outside the measured memory window.");
+            }
+            if (longRunMemoryGrowthToleranceBytes >
+                SampleTailDdgiLongSoakProfile.MaximumMemoryGrowthToleranceBytes)
+            {
+                throw new ArgumentException(
+                    "--tail-ddgi-long-soak cannot loosen the one-MiB memory-growth tolerance.");
+            }
+
+            mode = SampleSmokeMode.LongRun;
+            if (frameCount == 0 && longRunMinutes <= 0.0)
+                frameCount = SampleTailDdgiLongSoakProfile.RequiredFrameCount;
+            if (!longRunWarmupSpecified)
+            {
+                longRunWarmupFrames =
+                    SampleTailDdgiLongSoakProfile.MinimumWarmupFrameCount;
+            }
+            sceneKind = SampleSceneKind.GlobalIlluminationTest;
+            performanceScenario =
+                SamplePerformanceScenario.GiSimpleDdgiFurnace;
+            qualityPresetOverride = RenderQualityPreset.DdgiHigh;
+            validationMode = RendererValidationMode.Off;
+            enableGpuTiming = true;
+            enableAsyncCompute = false;
+            asyncComputeModeOverride = AsyncComputeMode.Disabled;
+            simpleDdgiSchedulerModeOverride =
+                SimpleDdgiSchedulerMode.GpuResident;
+            longRunOptionsSpecified = true;
         }
 
         if (!string.IsNullOrWhiteSpace(materialGiCaptureDirectory) &&
@@ -734,6 +951,15 @@ public static class SampleSmokeOptionsParser
                         "--benchmark-require-production requires --validation off.");
                 }
                 if (benchmarkRequireProduction &&
+                    benchmarkMaximumSettlingFrames <
+                    SampleBenchmarkOptions.ProductionMinimumAdditionalSettlingFrameCount)
+                {
+                    throw new ArgumentException(
+                        "--benchmark-require-production requires " +
+                        $"--benchmark-max-settle-frames >= " +
+                        $"{SampleBenchmarkOptions.ProductionMinimumAdditionalSettlingFrameCount}.");
+                }
+                if (benchmarkRequireProduction &&
                     RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled)
                 {
                     throw new ArgumentException(
@@ -783,6 +1009,18 @@ public static class SampleSmokeOptionsParser
                     mode = SampleSmokeMode.Startup;
                 if (mode == SampleSmokeMode.None && simpleDdgiSchedulerModeOverride.HasValue && !smokeModeSpecified)
                     mode = SampleSmokeMode.Startup;
+                if (mode == SampleSmokeMode.None &&
+                    (simpleDdgiProbeResidencyModeOverride.HasValue ||
+                     simpleDdgiSparsePhysicalPageBudgetOverride.HasValue ||
+                     simpleDdgiSparseMinimumPhysicalPageBudgetOverride.HasValue ||
+                     simpleDdgiSparseRetentionFramesOverride.HasValue ||
+                     simpleDdgiSparseMaximumAdmissionsOverride.HasValue ||
+                     simpleDdgiSparseMaximumReceiverFeedbackOverride.HasValue ||
+                     simpleDdgiSparseInactiveRetryFramesOverride.HasValue) &&
+                    !smokeModeSpecified)
+                {
+                    mode = SampleSmokeMode.Startup;
+                }
                 if (mode == SampleSmokeMode.None && (enableFarFieldClipmap || enableFarFieldForceAll) && !smokeModeSpecified)
                     mode = SampleSmokeMode.Startup;
                 if (mode == SampleSmokeMode.None && qualityPresetOverride.HasValue && !smokeModeSpecified)
@@ -823,6 +1061,7 @@ public static class SampleSmokeOptionsParser
                         ? int.MaxValue
                         : (sceneReloadCount * 2) + 6),
                 SampleSmokeMode.QualitySwitch => 7,
+                SampleSmokeMode.DdgiResidencySwitch => 12,
                 SampleSmokeMode.TextureHotReload => 4,
                 _ => 3
             };
@@ -848,7 +1087,8 @@ public static class SampleSmokeOptionsParser
             HdrReferencePath = benchmarkHdrReferencePath,
             HdrCandidatePath = benchmarkHdrCandidatePath,
             ShaderProfileArtifactPath = benchmarkShaderProfilePath,
-            RequireShaderProfileEvidence = benchmarkRequireShaderProfile
+            RequireShaderProfileEvidence = benchmarkRequireShaderProfile,
+            MaximumAdditionalSettlingFrameCount = benchmarkMaximumSettlingFrames
         };
         return new SampleSmokeOptions(
             mode,
@@ -886,7 +1126,15 @@ public static class SampleSmokeOptionsParser
             khronosRenderedGate,
             materialGiQualificationManifestPath,
             asyncComputeValidationPath,
-            simpleDdgiSchedulerModeOverride);
+            simpleDdgiSchedulerModeOverride,
+            tailDdgiLongSoak,
+            simpleDdgiProbeResidencyModeOverride,
+            simpleDdgiSparsePhysicalPageBudgetOverride,
+            simpleDdgiSparseMinimumPhysicalPageBudgetOverride,
+            simpleDdgiSparseRetentionFramesOverride,
+            simpleDdgiSparseMaximumAdmissionsOverride,
+            simpleDdgiSparseMaximumReceiverFeedbackOverride,
+            simpleDdgiSparseInactiveRetryFramesOverride);
     }
 
     private static AsyncComputePath? ParseAsyncComputePath(string? value)
@@ -919,6 +1167,37 @@ public static class SampleSmokeOptionsParser
         };
     }
 
+    private static SimpleDdgiProbeResidencyMode? ParseSimpleDdgiProbeResidencyMode(
+        string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        string normalized = value.Trim()
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .ToLowerInvariant();
+        return normalized switch
+        {
+            "dense" => SimpleDdgiProbeResidencyMode.Dense,
+            "shadow" => SimpleDdgiProbeResidencyMode.Shadow,
+            "sparsenearring" or "sparse" =>
+                SimpleDdgiProbeResidencyMode.SparseNearRing,
+            _ => throw new ArgumentException(
+                $"Invalid Simple DDGI residency mode '{value}'. Valid values: dense, shadow, sparse-near-ring.")
+        };
+    }
+
+    private static int? ParseOptionalPositiveInt(string? value, string name) =>
+        string.IsNullOrWhiteSpace(value)
+            ? null
+            : ParsePositiveInt(value, 1, name);
+
+    private static int? ParseOptionalNonNegativeInt(string? value, string name) =>
+        string.IsNullOrWhiteSpace(value)
+            ? null
+            : ParseNonNegativeInt(value, 0, name);
+
     private static string ReadValue(string[] args, ref int index)
     {
         string arg = args[index];
@@ -932,6 +1211,7 @@ public static class SampleSmokeOptionsParser
             "--benchmark-require-production" or
             "--benchmark-require-shader-profile" or
             "--material-gi-qualification-candidate" or
+            "--tail-ddgi-long-soak" or
             "--gpu-timing" or
             "--scene-gpu-compaction" or
             "--scene-indirect-dispatch" or
@@ -983,9 +1263,11 @@ public static class SampleSmokeOptionsParser
             "missing-assets" or "missing_assets" or "missingassets" => SampleSmokeMode.MissingAssets,
             "long-run" or "long_run" or "longrun" => SampleSmokeMode.LongRun,
             "quality-switch" or "quality_switch" or "qualityswitch" => SampleSmokeMode.QualitySwitch,
+            "ddgi-residency-switch" or "ddgi_residency_switch" or
+                "ddgiresidencyswitch" => SampleSmokeMode.DdgiResidencySwitch,
             "texture-hot-reload" or "texture_hot_reload" or "texturehotreload" => SampleSmokeMode.TextureHotReload,
             "all" => SampleSmokeMode.All,
-            _ => throw new ArgumentException($"Invalid smoke mode '{value}'. Valid values: none, startup, resize, fullscreen, minimize, scene-reload, missing-assets, long-run, quality-switch, texture-hot-reload, all.")
+            _ => throw new ArgumentException($"Invalid smoke mode '{value}'. Valid values: none, startup, resize, fullscreen, minimize, scene-reload, missing-assets, long-run, quality-switch, ddgi-residency-switch, texture-hot-reload, all.")
         };
     }
 

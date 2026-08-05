@@ -14,6 +14,7 @@ layout(push_constant) uniform SimpleDdgiPublishPushBlock
     uint IrradianceAtlasBufferIndex;
     uint VisibilityAtlasBufferIndex;
     uint ProbeStateBufferIndex;
+    uint ReceiverProbeBufferIndex;
     uint ProbeUpdateQueueBufferIndex;
     uint TransportIrradianceAtlasBufferIndex;
     uint PrivateVisibilityAtlasOffsetWords;
@@ -39,8 +40,7 @@ void main()
         (ReadStorageWordUniform(
             pc.SchedulerArenaBufferIndex,
             pc.SchedulerFrameOffsetWords + 27u) & 1u) != 0u;
-    if ((!residentTransaction && (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) == 0u) ||
-        queueOffset >= requestCount || params.probeCount == 0u)
+    if (queueOffset >= requestCount || params.probeCount == 0u)
         return;
 
     SimpleDdgiProbeUpdate update =
@@ -59,7 +59,9 @@ void main()
             SIMPLE_DDGI_SCHEDULER_FAILURE_PUBLICATION_GUARD);
         return;
     }
-    if (update.probeIndex >= params.probeCount)
+    if (update.probeIndex >= params.probeCount ||
+        update.volumeIndex >= params.volumeCount ||
+        !SimpleDdgiUpdateMatchesLiveAddress(params, update))
     {
         SimpleDdgiSchedulerFailOutcome(
             pc.SchedulerArenaBufferIndex,
@@ -71,7 +73,10 @@ void main()
 
     SimpleDdgiProbeState state =
         ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, update.probeIndex);
-    if (!SimpleDdgiUpdateMatchesProbeGeneration(update, state))
+    if (!SimpleDdgiUpdateMatchesProbeGenerationAndRecord(
+            params,
+            update,
+            state))
     {
         SimpleDdgiSchedulerFailOutcome(
             pc.SchedulerArenaBufferIndex,
@@ -80,6 +85,9 @@ void main()
             1u << 0u);
         return;
     }
+
+    SimpleDdgiVolume volume =
+        ReadSimpleDdgiVolume(pc.ParamsBufferIndex, update.volumeIndex);
 
     // Resident mode keeps receiver-visible atlases immutable during the
     // producer phase. CommitLocal performs the final copy after all producer
@@ -98,42 +106,23 @@ void main()
         return;
     }
 
-    uint texelCount = params.irradianceTexels * params.irradianceTexels;
-    for (uint texel = gl_LocalInvocationID.x;
-         texel < texelCount;
-         texel += gl_WorkGroupSize.x)
+    if ((params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u)
     {
-        vec4 value = ReadSimpleDdgiAtlasTexel(
-            pc.TransportIrradianceAtlasBufferIndex,
-            update.probeIndex,
-            texel,
-            params.irradianceTexels);
-        WriteSimpleDdgiAtlasTexel(
-            pc.IrradianceAtlasBufferIndex,
-            update.probeIndex,
-            texel,
-            params.irradianceTexels,
-            value);
-    }
-
-    if (residentTransaction)
-    {
-        uint visibilityTexelCount = params.visibilityTexels * params.visibilityTexels;
+        uint texelCount = params.irradianceTexels * params.irradianceTexels;
         for (uint texel = gl_LocalInvocationID.x;
-             texel < visibilityTexelCount;
+             texel < texelCount;
              texel += gl_WorkGroupSize.x)
         {
-            vec4 value = ReadSimpleDdgiAtlasTexelAtOffset(
+            vec4 value = ReadSimpleDdgiAtlasTexel(
                 pc.TransportIrradianceAtlasBufferIndex,
-                pc.PrivateVisibilityAtlasOffsetWords,
-                update.probeIndex,
+                update.physicalProbeIndex,
                 texel,
-                params.visibilityTexels);
+                params.irradianceTexels);
             WriteSimpleDdgiAtlasTexel(
-                pc.VisibilityAtlasBufferIndex,
-                update.probeIndex,
+                pc.IrradianceAtlasBufferIndex,
+                update.physicalProbeIndex,
                 texel,
-                params.visibilityTexels,
+                params.irradianceTexels,
                 value);
         }
     }
@@ -142,9 +131,42 @@ void main()
     memoryBarrierBuffer();
     barrier();
     if (gl_LocalInvocationID.x == 0u)
-        SimpleDdgiSchedulerCompleteSingle(
-            pc.SchedulerArenaBufferIndex,
-            pc.SchedulerOutcomesOffsetWords,
-            update.outcomeIndex,
-            1u << 5u);
+    {
+        uint receiverFlags = 0u;
+        if ((state.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u)
+            receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_FRESH;
+        if ((state.flags & SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED) != 0u)
+            receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_SCROLL_EXPOSED;
+        if ((state.flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u)
+            receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_RELOCATION_PENDING;
+        if ((state.flags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u)
+            receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_INACTIVE;
+        if (state.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE)
+            receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_INACTIVE_CLASSIFICATION;
+
+        bool published = PublishSimpleDdgiReceiverProbe(
+            pc.ReceiverProbeBufferIndex,
+            update.probeIndex,
+            state.relocation,
+            volume.spacing,
+            state.activeWeight,
+            receiverFlags,
+            update.physicalProbeIndex);
+        if (published)
+        {
+            SimpleDdgiSchedulerCompleteSingle(
+                pc.SchedulerArenaBufferIndex,
+                pc.SchedulerOutcomesOffsetWords,
+                update.outcomeIndex,
+                1u << 5u);
+        }
+        else
+        {
+            SimpleDdgiSchedulerFailOutcome(
+                pc.SchedulerArenaBufferIndex,
+                pc.SchedulerOutcomesOffsetWords,
+                update.outcomeIndex,
+                1u << 3u);
+        }
+    }
 }

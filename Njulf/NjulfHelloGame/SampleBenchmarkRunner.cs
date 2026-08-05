@@ -14,7 +14,10 @@ namespace NjulfHelloGame;
 
 public sealed class SampleBenchmarkRunner
 {
-    private const int MaximumAdditionalSettlingFrameCount = 2_048;
+    // A production tail run may consume the complete source interval, one
+    // solve epoch, every audit chunk, and an equal scheduling/readback margin
+    // after scene/resource startup. Keep the harness fail-closed, but do not
+    // terminate at the exact frame that source repair hands off to solving.
     private const int RequiredConsecutiveReadyFrameCount = 30;
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -27,7 +30,8 @@ public sealed class SampleBenchmarkRunner
     private readonly Func<string> _getSettingsFingerprint;
     private readonly Func<string, bool>? _requestLinearHdrCapture;
     private readonly Func<string, LinearHdrCaptureResult>? _getLinearHdrCaptureResult;
-    private readonly SampleBenchmarkAnalyzer _analyzer = new();
+    private readonly SampleBenchmarkAnalyzer _analyzer;
+    private readonly SampleTailDdgiRunObserver _tailDdgiObserver = new();
     private int _samplesCaptured;
     private int _firstMeasurementFrame = -1;
     private int _lastMeasurementFrame = -1;
@@ -39,6 +43,7 @@ public sealed class SampleBenchmarkRunner
     private bool _settlingWaitTimedOut;
     private RendererDiagnostics? _lastPreMeasurementDiagnostics;
     private int _consecutiveReadyFrameCount;
+    private string? _measurementSettingsFingerprint;
 
     public SampleBenchmarkRunner(
         SampleBenchmarkOptions options,
@@ -49,6 +54,9 @@ public sealed class SampleBenchmarkRunner
         Func<string, LinearHdrCaptureResult>? getLinearHdrCaptureResult = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _analyzer = new SampleBenchmarkAnalyzer(
+            SampleBenchmarkCaptureVariant.IsTailVariant(
+                _options.CaptureVariant));
         _scenario = scenario;
         _exit = exit ?? throw new ArgumentNullException(nameof(exit));
         _getSettingsFingerprint = getSettingsFingerprint ??
@@ -68,6 +76,8 @@ public sealed class SampleBenchmarkRunner
             throw new ArgumentNullException(nameof(diagnostics));
         if (budget == null)
             throw new ArgumentNullException(nameof(budget));
+
+        _tailDdgiObserver.Observe(diagnostics);
 
         if (_waitingForHdrCapture)
         {
@@ -91,7 +101,8 @@ public sealed class SampleBenchmarkRunner
 
             if (_consecutiveReadyFrameCount < RequiredConsecutiveReadyFrameCount)
             {
-                if (_additionalSettlingFrameCount < MaximumAdditionalSettlingFrameCount)
+                if (_additionalSettlingFrameCount <
+                    _options.MaximumAdditionalSettlingFrameCount)
                 {
                     _additionalSettlingFrameCount++;
                     _lastPreMeasurementDiagnostics = diagnostics;
@@ -115,6 +126,11 @@ public sealed class SampleBenchmarkRunner
         if (_samplesCaptured < _options.MeasureFrameCount)
             return;
 
+        // Freeze producer identity at the exact end of the measurement window.
+        // Post-measurement HDR capture intentionally enables debug/screenshot
+        // permissions and must not make an otherwise identical timing run look
+        // like it used different render settings.
+        _measurementSettingsFingerprint = _getSettingsFingerprint();
         BeginPostMeasurementEvidence();
     }
 
@@ -220,7 +236,8 @@ public sealed class SampleBenchmarkRunner
             _options.WarmupFrameCount,
             _samplesCaptured,
             _firstMeasurementFrame,
-            _lastMeasurementFrame);
+            _lastMeasurementFrame,
+            _tailDdgiObserver.Snapshot());
         Report = Report with
         {
             HdrDifference = hdrDifference,
@@ -232,7 +249,9 @@ public sealed class SampleBenchmarkRunner
             ProducerIdentity =
                 SampleMaterialGiProducerIdentityFactory.Create(
                     Report.LastDiagnostics,
-                    _getSettingsFingerprint(),
+                    _measurementSettingsFingerprint ??
+                        throw new InvalidOperationException(
+                            "Benchmark completion requires the measurement-window settings fingerprint."),
                     ResolveQualityTier(
                         Report.LastDiagnostics.ActiveBudgetProfile))
         };
@@ -241,7 +260,8 @@ public sealed class SampleBenchmarkRunner
             CaptureContract = ApplyEvidenceContract(
                 ApplySettlingWaitContract(
                     Report.CaptureContract,
-                    _settlingWaitTimedOut),
+                    _settlingWaitTimedOut,
+                    _options.MaximumAdditionalSettlingFrameCount),
                 _options,
                 Report.HdrDifference,
                 Report.ShaderProfile)
@@ -268,9 +288,12 @@ public sealed class SampleBenchmarkRunner
 
     internal static bool IsReadyForMeasurement(RendererDiagnostics diagnostics)
     {
+        bool acceptedTailCertificate =
+            HasAcceptedCurrentSimpleDdgiTailCertificate(diagnostics);
         if (diagnostics.GpuTimingValid == 0 ||
             diagnostics.CaptureFrame.WarmupState != DdgiRuntimeWarmupState.SteadyState ||
-            diagnostics.CaptureFrame.TransportConvergencePending)
+            (diagnostics.CaptureFrame.TransportConvergencePending &&
+                !acceptedTailCertificate))
         {
             return false;
         }
@@ -280,8 +303,43 @@ public sealed class SampleBenchmarkRunner
         if (!diagnostics.SimpleDdgiUploadTiming.CapacityDetails.StableKeyHit)
             return false;
 
-        return diagnostics.SimpleDdgiTransportV2Active == 0 ||
-            HasSourceReadySimpleDdgiTransportPopulation(diagnostics);
+        if (diagnostics.SimpleDdgiTransportV2Active == 0)
+            return true;
+
+        return diagnostics.SimpleDdgiTransportTailCertificationEnabled
+            ? acceptedTailCertificate
+            : HasSourceReadySimpleDdgiTransportPopulation(diagnostics);
+    }
+
+    internal static bool HasAcceptedCurrentSimpleDdgiTailCertificate(
+        RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.SimpleDdgiActive == 0 ||
+            diagnostics.SimpleDdgiTransportV2Active == 0 ||
+            !diagnostics.SimpleDdgiTransportTailCertificationEnabled)
+        {
+            return false;
+        }
+
+        SimpleDdgiTransportConvergenceTelemetry tail =
+            diagnostics.SimpleDdgiTransportConvergence;
+        return tail.TailCertificateCurrent &&
+            tail.TailAuditComplete &&
+            tail.TailExpectedParticipantCount > 0u &&
+            tail.TailAuditedParticipantCount ==
+                tail.TailExpectedParticipantCount &&
+            tail.TailExpectedTexelCount > 0u &&
+            tail.TailAuditedTexelCount == tail.TailExpectedTexelCount &&
+            tail.TailExcludedNotVisibleCount == 0u &&
+            tail.TailExcludedStaleSourceCount == 0u &&
+            tail.TailExcludedInvalidCacheCount == 0u &&
+            tail.TailCacheIdentityFailureCount == 0u &&
+            tail.TailCacheCardinalityFailureCount == 0u &&
+            tail.TailCacheSourceGenerationFailureCount == 0u &&
+            tail.TailCacheSourceEpochFailureCount == 0u &&
+            tail.TailCachePhysicalGenerationFailureCount == 0u &&
+            tail.TailNonFiniteCount == 0u &&
+            tail.TailCounterOverflowCount == 0u;
     }
 
     internal static bool HasSourceReadySimpleDdgiTransportPopulation(
@@ -317,7 +375,8 @@ public sealed class SampleBenchmarkRunner
 
     private static SampleBenchmarkCaptureContract ApplySettlingWaitContract(
         SampleBenchmarkCaptureContract contract,
-        bool timedOut)
+        bool timedOut,
+        int maximumAdditionalSettlingFrameCount)
     {
         if (!timedOut)
             return contract;
@@ -325,7 +384,7 @@ public sealed class SampleBenchmarkRunner
         string[] mismatches = contract.Mismatches
             .Append(
                 $"The benchmark did not settle within " +
-                $"{MaximumAdditionalSettlingFrameCount} additional frames.")
+                $"{maximumAdditionalSettlingFrameCount} additional frames.")
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         return contract with
@@ -416,6 +475,7 @@ public sealed class SampleBenchmarkRunner
 
 public sealed class SampleBenchmarkAnalyzer
 {
+    private readonly bool _tailDdgiTimingProjection;
     private static readonly IReadOnlyList<TimingSelector> GpuTimings =
     [
         new("DepthPrePass", d => d.GpuDepthPrePassMicroseconds),
@@ -427,9 +487,18 @@ public sealed class SampleBenchmarkAnalyzer
         new("AmbientOcclusionBlurPass", d => d.GpuAmbientOcclusionBlurMicroseconds),
         new("AccelerationStructureBlasPass", d => d.GpuAccelerationStructureBlasMicroseconds),
         new("AccelerationStructureTlasPass", d => d.GpuAccelerationStructureTlasMicroseconds),
+        new("SimpleDdgiPageDemandPass", d => d.GpuSimpleDdgiPageDemandMicroseconds),
+        new("SimpleDdgiPageResidencyPass", d => d.GpuSimpleDdgiPageResidencyMicroseconds),
+        new("SimpleDdgiPageFeedbackPass", d => d.GpuSimpleDdgiPageFeedbackMicroseconds),
+        new("SimpleDdgiSchedulePass", d => d.GpuSimpleDdgiScheduleMicroseconds),
         new("SimpleDdgiTracePass", d => d.GpuSimpleDdgiTraceMicroseconds),
+        new("SimpleDdgiAcceleratedSolvePass", d => d.GpuSimpleDdgiAcceleratedSolveMicroseconds),
         new("SimpleDdgiTransportPass", d => d.GpuSimpleDdgiTransportMicroseconds),
         new("SimpleDdgiBlendPass", d => d.GpuSimpleDdgiBlendMicroseconds),
+        new("SimpleDdgiRelocateClassifyPass", d => d.GpuSimpleDdgiRelocateClassifyMicroseconds),
+        new("SimpleDdgiPublishPass", d => d.GpuSimpleDdgiPublishMicroseconds),
+        new("SimpleDdgiTransportAuditPass", d => d.GpuSimpleDdgiTransportAuditMicroseconds),
+        new("SimpleDdgiSchedulerCommitPass", d => d.GpuSimpleDdgiCommitMicroseconds),
         new("GlobalIlluminationCompositePass", d => d.GpuGiCompositeMicroseconds),
         new("TiledLightCullingPass", d => d.GpuLightCullMicroseconds),
         new("ForwardPlusPass", d => d.GpuForwardOpaqueMicroseconds),
@@ -538,6 +607,11 @@ public sealed class SampleBenchmarkAnalyzer
         new(StringComparer.Ordinal);
     private RendererDiagnostics? _measurementBaseline;
 
+    public SampleBenchmarkAnalyzer(bool tailDdgiTimingProjection = false)
+    {
+        _tailDdgiTimingProjection = tailDdgiTimingProjection;
+    }
+
     internal void SetMeasurementBaseline(RendererDiagnostics diagnostics)
     {
         if (diagnostics == null)
@@ -557,7 +631,15 @@ public sealed class SampleBenchmarkAnalyzer
             throw new ArgumentNullException(nameof(budget));
 
         _samples.Add(diagnostics);
-        AccumulateWorstBudgetMetrics(budget.Metrics);
+        RenderBudgetSnapshot measuredBudget = budget;
+        if (_tailDdgiTimingProjection)
+        {
+            measuredBudget = SampleTailDdgiLongSoakProfile.ProjectBudget(
+                budget,
+                diagnostics,
+                materialStressMetricsNotApplicable: false).Budget;
+        }
+        AccumulateWorstBudgetMetrics(measuredBudget.Metrics);
     }
 
     public SampleBenchmarkReport CreateReport(
@@ -566,7 +648,8 @@ public sealed class SampleBenchmarkAnalyzer
         int warmupFrameCount,
         int measurementFrameCount,
         int firstMeasurementFrameIndex,
-        int lastMeasurementFrameIndex)
+        int lastMeasurementFrameIndex,
+        SampleTailDdgiRunObservation? tailObservation = null)
     {
         if (options == null)
             throw new ArgumentNullException(nameof(options));
@@ -606,7 +689,11 @@ public sealed class SampleBenchmarkAnalyzer
         BudgetMetric[] budgetMetrics = _worstBudgetMetrics.Values
             .OrderBy(static metric => metric.Name, StringComparer.Ordinal)
             .ToArray();
-        ApplyMeasurementWindowTimingMetrics(budgetMetrics, cpuFrame, gpuFrame);
+        MaterialWindowTiming materialTiming =
+            ApplyMeasurementWindowTimingMetrics(
+                budgetMetrics,
+                cpuFrame,
+                gpuFrame);
 
         return new SampleBenchmarkReport(
             Kind: "njulf-renderer-benchmark",
@@ -633,7 +720,18 @@ public sealed class SampleBenchmarkAnalyzer
             GpuIndependentPassSumMilliseconds = gpuPassSum,
             GpuUnexplainedMilliseconds = gpuUnexplained,
             SimpleDdgiTransportBlendMilliseconds = simpleDdgiTransportBlend,
-            SimpleDdgiSchedulerRefresh = schedulerRefreshEvidence
+            SimpleDdgiSchedulerRefresh = schedulerRefreshEvidence,
+            TailDdgiEvidence = SampleTailDdgiRuntimeEvidenceBuilder.Create(
+                _samples,
+                tailObservation ?? SampleTailDdgiRunObservation.Empty,
+                options.CaptureVariant),
+            MaterialTimingEvidence =
+                new SampleBenchmarkMaterialTimingEvidence(
+                    materialTiming.Compile,
+                    materialTiming.Upload,
+                    materialTiming.Pipeline,
+                    materialTiming.CompileExact,
+                    materialTiming.UploadExact)
         };
     }
 
@@ -763,7 +861,7 @@ public sealed class SampleBenchmarkAnalyzer
         return metric.Value;
     }
 
-    private void ApplyMeasurementWindowTimingMetrics(
+    private MaterialWindowTiming ApplyMeasurementWindowTimingMetrics(
         BudgetMetric[] metrics,
         SampleBenchmarkTimingStats cpuFrame,
         SampleBenchmarkTimingStats gpuFrame)
@@ -794,7 +892,10 @@ public sealed class SampleBenchmarkAnalyzer
 
         SampleBenchmarkTimingStats giGpu = BuildStats(
             "GI GPU",
-            giSamples.Select(ResolveGlobalIlluminationGpuMilliseconds));
+            giSamples.Select(sample =>
+                _tailDdgiTimingProjection
+                    ? ResolveTailDdgiGpuMilliseconds(sample)
+                    : ResolveGlobalIlluminationGpuMilliseconds(sample)));
         bool giGpuAvailable = giSamples.Length > 0 &&
             giGpu.Count == giSamples.Length;
         ReplaceTimingMetric(metrics, "GI GPU", giGpu, giGpuAvailable);
@@ -835,6 +936,7 @@ public sealed class SampleBenchmarkAnalyzer
             materialTiming.CompileExact &&
                 materialTiming.UploadExact &&
                 materialTiming.Pipeline.Count > 0);
+        return materialTiming;
     }
 
     private MaterialWindowTiming BuildMaterialWindowTiming()
@@ -912,6 +1014,16 @@ public sealed class SampleBenchmarkAnalyzer
         return MicrosecondsToMilliseconds(microseconds);
     }
 
+    private static double ResolveTailDdgiGpuMilliseconds(
+        RendererDiagnostics diagnostics) =>
+        diagnostics.GpuTimingValid != 0 &&
+        diagnostics.SimpleDdgiActive != 0 &&
+        diagnostics.SimpleDdgiTransportV2Active != 0 &&
+        diagnostics.SimpleDdgiTransportTailCertificationEnabled
+            ? MicrosecondsToMilliseconds(
+                diagnostics.GpuDdgiUpdateMicroseconds)
+            : double.NaN;
+
     private static bool HasForwardGiIncrementalTiming(
         RendererDiagnostics diagnostics) =>
         diagnostics.GpuForwardGiIncrementalAttribution is
@@ -957,7 +1069,7 @@ public sealed class SampleBenchmarkAnalyzer
         bool CompileExact,
         bool UploadExact);
 
-    private static SampleBenchmarkTimingStats BuildStats(string name, IEnumerable<double> values)
+    internal static SampleBenchmarkTimingStats BuildStats(string name, IEnumerable<double> values)
     {
         double[] samples = values.Where(value => !double.IsNaN(value) && !double.IsInfinity(value)).ToArray();
         if (samples.Length == 0)
@@ -965,7 +1077,8 @@ public sealed class SampleBenchmarkAnalyzer
 
         Array.Sort(samples);
         double sum = samples.Sum();
-        int p95Index = Math.Min(samples.Length - 1, (int)Math.Ceiling(samples.Length * 0.95) - 1);
+        int p95Index = PercentileIndex(samples.Length, 0.95);
+        int p99Index = PercentileIndex(samples.Length, 0.99);
         double median = samples.Length % 2 == 0
             ? (samples[samples.Length / 2 - 1] + samples[samples.Length / 2]) * 0.5
             : samples[samples.Length / 2];
@@ -977,9 +1090,14 @@ public sealed class SampleBenchmarkAnalyzer
             samples[^1],
             samples[p95Index])
         {
-            MedianMilliseconds = median
+            MedianMilliseconds = median,
+            P50Milliseconds = median,
+            P99Milliseconds = samples[p99Index]
         };
     }
+
+    private static int PercentileIndex(int sampleCount, double percentile) =>
+        Math.Min(sampleCount - 1, (int)Math.Ceiling(sampleCount * percentile) - 1);
 
     private SampleDdgiSchedulerRefreshEvidence BuildSimpleDdgiSchedulerRefreshEvidence()
     {
@@ -1167,11 +1285,18 @@ public sealed class SampleBenchmarkAnalyzer
             CompareInvariant(mismatches, index, "DDGI cache generation", first.CaptureFrame.DdgiCacheGeneration, sample.CaptureFrame.DdgiCacheGeneration);
             if (sample.CaptureFrame.WarmupState != DdgiRuntimeWarmupState.SteadyState)
                 mismatches.Add($"Frame {index} warmup state is {sample.CaptureFrame.WarmupState}.");
-            if (sample.CaptureFrame.TransportConvergencePending)
+            bool acceptedTailCertificate =
+                SampleBenchmarkRunner.HasAcceptedCurrentSimpleDdgiTailCertificate(
+                    sample);
+            if (sample.CaptureFrame.TransportConvergencePending &&
+                !acceptedTailCertificate)
                 mismatches.Add($"Frame {index} still has pending transport convergence.");
             if (sample.SimpleDdgiActive != 0 &&
                 sample.SimpleDdgiTransportV2Active != 0 &&
-                !SampleBenchmarkRunner.HasSourceReadySimpleDdgiTransportPopulation(sample))
+                !(sample.SimpleDdgiTransportTailCertificationEnabled
+                    ? acceptedTailCertificate
+                    : SampleBenchmarkRunner.HasSourceReadySimpleDdgiTransportPopulation(
+                        sample)))
             {
                 SimpleDdgiTransportConvergenceTelemetry convergence =
                     sample.SimpleDdgiTransportConvergence;

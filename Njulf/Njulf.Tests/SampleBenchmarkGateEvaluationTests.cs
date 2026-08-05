@@ -126,6 +126,81 @@ public sealed class SampleBenchmarkGateEvaluationTests
     }
 
     [Test]
+    public void Evaluate_AcceptsExactZeroEventMaterialTimingWindow()
+    {
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            GlobalIlluminationEnabled = 1,
+            MaterialGiV2ActiveFeatures =
+                MaterialGiV2Feature.MaterialTransport,
+            MaterialCompileTimingSampleCount = 7,
+            MaterialUploadTimingSampleCount = 3
+        };
+        BudgetMetric[] metrics = SampleBudgetMetricCoverage
+            .GetRequiredMetricNames(diagnostics)
+            .Select(name => new BudgetMetric(
+                name,
+                0,
+                1,
+                2,
+                "count",
+                name is RenderBudgetEvaluator.MaterialGiCompileP95MetricName or
+                    RenderBudgetEvaluator.MaterialGiUploadP95MetricName or
+                    RenderBudgetEvaluator.MaterialGiPipelineP95MetricName
+                        ? RenderBudgetStatus.Unavailable
+                        : RenderBudgetStatus.WithinBudget))
+            .ToArray();
+        SampleBenchmarkReport report = CreateReport(metrics) with
+        {
+            LastDiagnostics = diagnostics,
+            MaterialTimingEvidence = new SampleBenchmarkMaterialTimingEvidence(
+                SampleBenchmarkTimingStats.Empty(
+                    RenderBudgetEvaluator.MaterialGiCompileP95MetricName),
+                SampleBenchmarkTimingStats.Empty(
+                    RenderBudgetEvaluator.MaterialGiUploadP95MetricName),
+                SampleBenchmarkTimingStats.Empty(
+                    RenderBudgetEvaluator.MaterialGiPipelineP95MetricName),
+                CompileSequenceExact: true,
+                UploadSequenceExact: true)
+        };
+
+        SampleBenchmarkGateEvaluation evaluation =
+            SampleBenchmarkGateEvaluation.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(evaluation.Passed, Is.True, evaluation.Failure);
+            Assert.That(evaluation.Failure, Is.Null);
+        });
+    }
+
+    [Test]
+    public void Evaluate_RejectsInexactMaterialTimingWindow()
+    {
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            GlobalIlluminationEnabled = 1,
+            MaterialGiV2ActiveFeatures =
+                MaterialGiV2Feature.MaterialTransport
+        };
+        SampleBenchmarkReport report = CreateReport(metrics: []) with
+        {
+            LastDiagnostics = diagnostics,
+            MaterialTimingEvidence =
+                SampleBenchmarkMaterialTimingEvidence.Unavailable
+        };
+
+        SampleBenchmarkGateEvaluation evaluation =
+            SampleBenchmarkGateEvaluation.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(evaluation.Passed, Is.False);
+            Assert.That(evaluation.Failure, Does.Contain("not an exact"));
+        });
+    }
+
+    [Test]
     public void Evaluate_FailsClosedWithoutGpuTiming()
     {
         SampleBenchmarkReport report = CreateReport(metrics: []) with

@@ -63,5 +63,33 @@ namespace Njulf.Tests
                 Assert.That(snapshot.RecentEvents[1].Description, Is.EqualTo("Render target profile rebuild"));
             });
         }
+
+        [Test]
+        public void ResourceGenerationFenceWait_IsAppendOnlyAndNotDeviceIdle()
+        {
+            var tracker = new RuntimeStallTracker();
+            tracker.BeginFrame();
+            tracker.Record(
+                RuntimeStallReason.ResourceGenerationFenceWait,
+                25,
+                "bindless generation transition");
+
+            RuntimeStallSnapshot snapshot = tracker.CreateSnapshot();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That((int)RuntimeStallReason.DeviceWaitIdle, Is.EqualTo(5));
+                Assert.That((int)RuntimeStallReason.ResourceResize, Is.EqualTo(6));
+                Assert.That((int)RuntimeStallReason.SynchronousUpload, Is.EqualTo(7));
+                Assert.That(
+                    (int)RuntimeStallReason.ResourceGenerationFenceWait,
+                    Is.EqualTo(8));
+                Assert.That(snapshot.DeviceWaitIdleCount, Is.Zero);
+                Assert.That(
+                    snapshot.WorstReasonThisFrame,
+                    Is.EqualTo(
+                        RuntimeStallReason.ResourceGenerationFenceWait));
+            });
+        }
     }
 }

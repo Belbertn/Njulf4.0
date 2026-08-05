@@ -63,7 +63,13 @@ public readonly record struct GiAtmosphereCohortFeedback(
     uint StaticConvergedGeneration = 0U,
     bool StaticConvergencePending = false,
     ulong StaleReadbackRejectionCount = 0UL,
-    ulong ResourceGenerationRejectionCount = 0UL);
+    ulong ResourceGenerationRejectionCount = 0UL,
+    bool ResidencyFeedbackComplete = true,
+    uint ResidencyEventSourceGeneration = 0U,
+    uint ResidencyEventCohortGeneration = 0U,
+    int ResidencyAdmissionProbeCount = 0,
+    int ResidencyEvictionProbeCount = 0,
+    int ResidencyOtherGenerationEvictionProbeCount = 0);
 
 public readonly record struct GiAtmosphereAdmissionInput(
     ulong CandidateSignature,
@@ -202,6 +208,22 @@ public struct GiAtmosphereAdmissionController
     private static bool HasGenerationMismatch(in GiAtmosphereAdmissionInput input)
     {
         GiAtmosphereCohortFeedback cohort = input.Cohort;
+        if (!cohort.ResidencyFeedbackComplete)
+            return true;
+        bool hasResidencyEvent = cohort.ResidencyAdmissionProbeCount > 0 ||
+            cohort.ResidencyEvictionProbeCount > 0 ||
+            cohort.ResidencyOtherGenerationEvictionProbeCount > 0;
+        if (hasResidencyEvent &&
+            input.CurrentSourceCohortGeneration != 0U &&
+            (cohort.ResidencyEventSourceGeneration !=
+                input.CurrentSourceCohortGeneration ||
+             cohort.ResidencyEventCohortGeneration !=
+                input.CurrentSourceCohortGeneration))
+        {
+            return true;
+        }
+        if (cohort.ResidencyOtherGenerationEvictionProbeCount > 0)
+            return true;
         if (input.CurrentVolumeResourceGeneration != 0U &&
             cohort.VolumeResourceGeneration != 0U &&
             cohort.VolumeResourceGeneration != input.CurrentVolumeResourceGeneration)

@@ -8,6 +8,10 @@ $resolvedDirectory = (Resolve-Path -LiteralPath $ShaderDirectory).Path
 $allShaderFiles = @(
     Get-ChildItem -LiteralPath $resolvedDirectory -File -Filter 'forward*.frag.spv'
     Get-ChildItem -LiteralPath $resolvedDirectory -File -Filter 'ddgi_simple_*.comp.spv'
+    Get-ChildItem -LiteralPath $resolvedDirectory -File -Filter 'fog.comp.spv'
+    Get-ChildItem -LiteralPath $resolvedDirectory -File -Filter 'particle.vert.spv'
+    Get-ChildItem -LiteralPath $resolvedDirectory -File -Filter 'foliage_grass.mesh.spv'
+    Get-ChildItem -LiteralPath $resolvedDirectory -File -Filter 'foliage_mesh.mesh.spv'
 ) | Sort-Object FullName -Unique
 
 if ($allShaderFiles.Count -eq 0) {
@@ -16,9 +20,11 @@ if ($allShaderFiles.Count -eq 0) {
 
 # Scheduler stages use bounded atomics for deterministic compaction, admission,
 # and lifecycle accounting. They are algorithmic synchronization, not renderer
-# diagnostic instrumentation. Keep the no-diagnostic-atomic gate strict for
-# forward and update-consumer modules, and make the scheduler exclusion explicit
-# so a newly named scheduler module cannot slip through unnoticed.
+# diagnostic instrumentation. Sparse residency adds bounded demand handshakes,
+# lifecycle counters, and fixed-summary reductions to the remaining producers
+# and consumers. Pin every optimized OpAtomicIAdd count instead of broadly
+# exempting those modules. This keeps the no-unreviewed-atomic gate strict and
+# makes any new production atomic an intentional ABI review.
 $schedulerModuleNames = @(
     'ddgi_simple_schedule_admit.comp.spv',
     'ddgi_simple_schedule_classify.comp.spv',
@@ -44,6 +50,48 @@ if ($missingSchedulerModules.Count -ne 0) {
 $shaderFiles = @($allShaderFiles | Where-Object {
     $_.Name -notin $schedulerModuleNames
 })
+
+$algorithmicAtomicCounts = @{
+    # Lock-free, bounded receiver demand and exact gather attribution.
+    'forward.frag.spv' = 11
+    'forward_opaque_ddgi.frag.spv' = 11
+    'forward_opaque_ddgi_provenance.frag.spv' = 11
+    'forward_opaque_simple_ddgi.frag.spv' = 11
+    'forward_opaque_simple_ddgi_provenance.frag.spv' = 11
+    'forward_opaque_simple_full_input_ddgi.frag.spv' = 11
+    'forward_opaque_simple_full_input_ddgi_provenance.frag.spv' = 11
+    'forward_weighted_oit.frag.spv' = 11
+    'fog.comp.spv' = 11
+    'particle.vert.spv' = 11
+    'foliage_grass.mesh.spv' = 11
+    'foliage_mesh.mesh.spv' = 11
+
+    # Sparse page classification, reconciliation, fixed feedback reduction,
+    # and generation-safe update lifecycle attribution.
+    'ddgi_simple_blend.comp.spv' = 8
+    'ddgi_simple_page_classify.comp.spv' = 8
+    # Workgroup-parallel virtual/reverse-map summary reductions use 23
+    # additional functional shared-memory atomics. Pin the exact count so a
+    # future diagnostic call site or accidental serialization cannot hide.
+    'ddgi_simple_page_feedback.comp.spv' = 44
+    'ddgi_simple_page_reconcile.comp.spv' = 4
+    'ddgi_simple_publish.comp.spv' = 5
+    'ddgi_simple_publish_sampled.comp.spv' = 5
+    'ddgi_simple_relocate_classify.comp.spv' = 5
+    'ddgi_simple_trace.comp.spv' = 7
+    'ddgi_simple_transport.comp.spv' = 7
+    # Fifteen certificate reductions plus ten bounded cache-rejection
+    # attribution paths (five metadata checks and five per-entry checks), plus
+    # the sparse residency attribution helper.
+    'ddgi_simple_transport_audit.comp.spv' = 26
+    'ddgi_simple_transport_intermediate_publish.comp.spv' = 5
+}
+$missingAlgorithmicModules = @($algorithmicAtomicCounts.Keys | Where-Object {
+    -not $availableNames.Contains($_)
+})
+if ($missingAlgorithmicModules.Count -ne 0) {
+    throw "Expected production Simple-DDGI algorithmic-atomic module(s) missing from '$resolvedDirectory': $($missingAlgorithmicModules -join ', ')."
+}
 
 $spirvMagic = [uint32]0x07230203
 $opAtomicIAdd = 234
@@ -71,8 +119,14 @@ foreach ($shader in $shaderFiles) {
         $byteOffset += $wordCount * 4
     }
 
-    if ($atomicAdds -ne 0) {
-        $violations.Add("$($shader.Name): $atomicAdds OpAtomicIAdd instruction(s)")
+    $expectedAtomicAdds = if ($algorithmicAtomicCounts.ContainsKey($shader.Name)) {
+        [int]$algorithmicAtomicCounts[$shader.Name]
+    }
+    else {
+        0
+    }
+    if ($atomicAdds -ne $expectedAtomicAdds) {
+        $violations.Add("$($shader.Name): found $atomicAdds OpAtomicIAdd instruction(s), expected $expectedAtomicAdds")
     }
 }
 
@@ -80,4 +134,4 @@ if ($violations.Count -ne 0) {
     throw "Production DDGI diagnostic atomic verification failed: $($violations -join '; ')."
 }
 
-Write-Host "Verified $($shaderFiles.Count) production forward/non-scheduler Simple-DDGI modules contain no OpAtomicIAdd diagnostics; $($schedulerModuleNames.Count) bounded scheduler modules are intentionally excluded."
+Write-Host "Verified $($shaderFiles.Count) production forward/non-scheduler Simple-DDGI modules contain no unexpected OpAtomicIAdd diagnostics; $($algorithmicAtomicCounts.Count) receiver/update modules have exact pinned functional counts and $($schedulerModuleNames.Count) bounded scheduler modules are intentionally excluded."

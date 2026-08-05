@@ -11,6 +11,8 @@ public sealed record SampleBenchmarkOptions(
     RenderBudgetProfileKind? BudgetProfileOverride = null,
     bool MaterialGiQualificationCandidate = false)
 {
+    public const int ProductionMinimumAdditionalSettlingFrameCount = 4_096;
+
     public static SampleBenchmarkOptions Disabled { get; } = new(
         Enabled: false,
         WarmupFrameCount: 0,
@@ -33,4 +35,10 @@ public sealed record SampleBenchmarkOptions(
     /// <summary>Validated njulf-nsight-shader-profile-v1 JSON artifact.</summary>
     public string ShaderProfileArtifactPath { get; init; } = string.Empty;
     public bool RequireShaderProfileEvidence { get; init; }
+    /// <summary>
+    /// Maximum post-warmup frames available to convergence/readback settling.
+    /// Production captures must retain at least the full tail-opportunity window.
+    /// </summary>
+    public int MaximumAdditionalSettlingFrameCount { get; init; } =
+        ProductionMinimumAdditionalSettlingFrameCount;
 }

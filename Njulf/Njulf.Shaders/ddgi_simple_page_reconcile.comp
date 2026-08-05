@@ -1,0 +1,487 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_page_residency_shared.glsl"
+
+// Reconciliation is one bounded authority. Classification is parallel, but
+// winner selection scans the virtual-page class records in stable index order
+// and follows a complete total order. It never depends on atomic arrival order
+// and does not require a second serial prefix/list-construction pass.
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+bool AdmissionPrecedes(
+    SimpleDdgiParams params,
+    uint candidate,
+    uint best)
+{
+    if (best == 0xffffffffu)
+        return true;
+    uint candidateBase = ResidencyClassBase(params, candidate);
+    uint bestBase = ResidencyClassBase(params, best);
+    uint candidateDemand = ResidencyRead(params, candidateBase + 3u);
+    uint bestDemand = ResidencyRead(params, bestBase + 3u);
+    uint candidateClass = candidateDemand & 0xffu;
+    uint bestClass = bestDemand & 0xffu;
+    if (candidateClass != bestClass)
+        return candidateClass > bestClass;
+    uint candidateDistance = (candidateDemand >> 8u) & 0xffu;
+    uint bestDistance = (bestDemand >> 8u) & 0xffu;
+    if (candidateDistance != bestDistance)
+        return candidateDistance < bestDistance;
+    uint candidateFirstDemand = ResidencyRead(params, candidateBase + 1u);
+    uint bestFirstDemand = ResidencyRead(params, bestBase + 1u);
+    if (candidateFirstDemand != bestFirstDemand)
+        return candidateFirstDemand < bestFirstDemand;
+    uint candidateVolume = (candidateDemand >> 16u) & 0xffu;
+    uint bestVolume = (bestDemand >> 16u) & 0xffu;
+    if (candidateVolume != bestVolume)
+        return candidateVolume < bestVolume;
+    return candidate < best;
+}
+
+bool VictimPrecedes(
+    SimpleDdgiParams params,
+    uint candidatePhysical,
+    uint candidateVirtual,
+    uint bestPhysical,
+    uint bestVirtual)
+{
+    if (bestPhysical == 0xffffffffu)
+        return true;
+    uint candidateClass = ResidencyRead(
+        params,
+        ResidencyClassBase(params, candidateVirtual) + 0u);
+    uint bestClass = ResidencyRead(
+        params,
+        ResidencyClassBase(params, bestVirtual) + 0u);
+    bool candidateSuppressed =
+        (candidateClass & SIMPLE_DDGI_PAGE_CLASS_SUPPRESSED) != 0u;
+    bool bestSuppressed =
+        (bestClass & SIMPLE_DDGI_PAGE_CLASS_SUPPRESSED) != 0u;
+    if (candidateSuppressed != bestSuppressed)
+        return candidateSuppressed;
+    bool candidateExpiresWhenIdle =
+        (candidateClass & SIMPLE_DDGI_PAGE_CLASS_EVICT_WHEN_IDLE) != 0u;
+    bool bestExpiresWhenIdle =
+        (bestClass & SIMPLE_DDGI_PAGE_CLASS_EVICT_WHEN_IDLE) != 0u;
+    if (candidateExpiresWhenIdle != bestExpiresWhenIdle)
+        return candidateExpiresWhenIdle;
+    uint candidateRelevant = ResidencyRead(
+        params,
+        ResidencyClassBase(params, candidateVirtual) + 1u);
+    uint bestRelevant = ResidencyRead(
+        params,
+        ResidencyClassBase(params, bestVirtual) + 1u);
+    if (candidateRelevant != bestRelevant)
+        return candidateRelevant < bestRelevant;
+    return candidatePhysical < bestPhysical;
+}
+
+uint FindFirstFreePhysicalPage(SimpleDdgiParams params)
+{
+    for (uint physicalPage = 0u;
+         physicalPage < params.sparsePhysicalPageCapacity;
+         physicalPage++)
+    {
+        uint reverseBase = ResidencyPhysicalBase(params, physicalPage);
+        if (ResidencyRead(params, reverseBase + 0u) == 0u)
+            return physicalPage;
+    }
+    return 0xffffffffu;
+}
+
+void InvalidatePageVirtualState(
+    SimpleDdgiParams params,
+    uint virtualPage,
+    bool nonResident)
+{
+    uint volumeIndex;
+    uint localPage;
+    SimpleDdgiVolume volume;
+    SimpleDdgiVolumePaging paging;
+    if (!SimpleDdgiFindSparsePageVolume(
+            params,
+            virtualPage,
+            volumeIndex,
+            volume,
+            paging,
+            localPage))
+    {
+        return;
+    }
+    for (uint slot = 0u; slot < SIMPLE_DDGI_PROBES_PER_PAGE; slot++)
+    {
+        uint virtualProbe;
+        if (SimpleDdgiVirtualProbeForPageSlot(
+                volume,
+                paging,
+                localPage,
+                slot,
+                virtualProbe))
+        {
+            ResidencyInvalidateVirtualProbe(
+                params,
+                virtualProbe,
+                nonResident);
+        }
+    }
+}
+
+void ClearPhysicalPageMetadata(
+    SimpleDdgiParams params,
+    uint physicalPage)
+{
+    uint reverseBase = ResidencyPhysicalBase(params, physicalPage);
+    for (uint word = 0u;
+         word < SIMPLE_DDGI_PHYSICAL_PAGE_METADATA_WORDS;
+         word++)
+    {
+        ResidencyWrite(params, reverseBase + word, 0u);
+    }
+}
+
+uint ValidProbeCountForVirtualPage(
+    SimpleDdgiParams params,
+    uint virtualPage)
+{
+    uint volumeIndex;
+    uint localPage;
+    SimpleDdgiVolume volume;
+    SimpleDdgiVolumePaging paging;
+    if (!SimpleDdgiFindSparsePageVolume(
+            params,
+            virtualPage,
+            volumeIndex,
+            volume,
+            paging,
+            localPage))
+    {
+        return 0u;
+    }
+    return bitCount(SimpleDdgiValidPageProbeMask(
+        volume,
+        paging,
+        localPage));
+}
+
+void EvictPhysicalPage(
+    SimpleDdgiParams params,
+    uint physicalPage,
+    uint virtualPage)
+{
+    uint reverseBase = ResidencyPhysicalBase(params, physicalPage);
+    uint ownerSourceGeneration = ResidencyRead(params, reverseBase + 6u);
+    uint ownerCohortGeneration = ResidencyRead(params, reverseBase + 7u);
+    uint retiredProbeCount = ValidProbeCountForVirtualPage(
+        params,
+        virtualPage);
+    uint retirementCounter =
+        ownerSourceGeneration == pc.SourceGeneration &&
+        ownerCohortGeneration == pc.CohortGeneration
+            ? SIMPLE_DDGI_RESIDENCY_COUNTER_EVICTION_PROBES
+            : SIMPLE_DDGI_RESIDENCY_COUNTER_OTHER_GENERATION_EVICTION_PROBES;
+    ResidencyAtomicAdd(
+        params,
+        ResidencyCounterWord(params, retirementCounter),
+        retiredProbeCount);
+
+    uint classBase = ResidencyClassBase(params, virtualPage);
+    ResidencyWrite(
+        params,
+        classBase + 0u,
+        ResidencyRead(params, classBase + 0u) |
+            SIMPLE_DDGI_PAGE_CLASS_SELECTED);
+    uint tableBase = ResidencyTableBase(virtualPage);
+    ResidencyWrite(params, tableBase + 0u, 0u);
+    ResidencyWrite(params, tableBase + 1u, 0u);
+    ResidencyWrite(params, tableBase + 2u, 0u);
+    if (params.residencyMode != SIMPLE_DDGI_RESIDENCY_MODE_SHADOW)
+        ResidencyWrite(params, tableBase + 3u, 0u);
+    if (params.residencyMode ==
+        SIMPLE_DDGI_RESIDENCY_MODE_SPARSE_NEAR_RING)
+    {
+        InvalidatePageVirtualState(params, virtualPage, true);
+    }
+    ClearPhysicalPageMetadata(params, physicalPage);
+}
+
+void main()
+{
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    if (gl_GlobalInvocationID.x != 0u ||
+        !SimpleDdgiResidencyHeaderMatches(params) ||
+        (params.residencyFlags & SIMPLE_DDGI_RESIDENCY_FLAG_FROZEN) != 0u)
+    {
+        return;
+    }
+
+    uint candidateCount = ResidencyRead(
+        params,
+        ResidencyCounterWord(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_ADMISSION_CANDIDATES));
+    uint victimCount = ResidencyRead(
+        params,
+        ResidencyCounterWord(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_VICTIMS));
+    uint initBase = SimpleDdgiInitWorkOffsetWords(params);
+    uint admissionLimit = min(
+        ResidencyRead(params, 12u),
+        params.sparsePhysicalPageCapacity);
+    uint admissions = 0u;
+    uint evictions = 0u;
+
+    while (admissions < min(admissionLimit, candidateCount))
+    {
+        uint bestVirtual = 0xffffffffu;
+        for (uint virtualPage = 0u;
+             virtualPage < params.virtualPageCount;
+             virtualPage++)
+        {
+            uint classFlags = ResidencyRead(
+                params,
+                ResidencyClassBase(params, virtualPage) + 0u);
+            if ((classFlags & SIMPLE_DDGI_PAGE_CLASS_MISSING) == 0u ||
+                (classFlags & SIMPLE_DDGI_PAGE_CLASS_SELECTED) != 0u)
+            {
+                continue;
+            }
+            if (AdmissionPrecedes(params, virtualPage, bestVirtual))
+                bestVirtual = virtualPage;
+        }
+        if (bestVirtual == 0xffffffffu)
+            break;
+
+        uint physicalPage = FindFirstFreePhysicalPage(params);
+        uint previousOwner = 0xffffffffu;
+        if (physicalPage == 0xffffffffu)
+        {
+            uint bestVictimPhysical = 0xffffffffu;
+            uint bestVictimVirtual = 0xffffffffu;
+            for (uint candidateVirtual = 0u;
+                 candidateVirtual < params.virtualPageCount;
+                 candidateVirtual++)
+            {
+                uint classFlags = ResidencyRead(
+                    params,
+                    ResidencyClassBase(params, candidateVirtual) + 0u);
+                if ((classFlags & SIMPLE_DDGI_PAGE_CLASS_VICTIM) == 0u ||
+                    (classFlags & SIMPLE_DDGI_PAGE_CLASS_SELECTED) != 0u)
+                {
+                    continue;
+                }
+                uint candidatePhysical = ResidencyRead(
+                    params,
+                    ResidencyClassBase(params, candidateVirtual) + 2u);
+                if (candidatePhysical >= params.sparsePhysicalPageCapacity)
+                    continue;
+                if (VictimPrecedes(
+                        params,
+                        candidatePhysical,
+                        candidateVirtual,
+                        bestVictimPhysical,
+                        bestVictimVirtual))
+                {
+                    bestVictimPhysical = candidatePhysical;
+                    bestVictimVirtual = candidateVirtual;
+                }
+            }
+            if (bestVictimPhysical == 0xffffffffu)
+                break;
+            physicalPage = bestVictimPhysical;
+            previousOwner = bestVictimVirtual;
+            EvictPhysicalPage(
+                params,
+                physicalPage,
+                previousOwner);
+            evictions++;
+        }
+
+        uint mappingGeneration =
+            ResidencyAdvanceMappingGeneration(params);
+        if (mappingGeneration == 0u)
+        {
+            // Header flags describe the immutable bootstrap and cannot revoke
+            // the CPU-published params flags. Report the reserved wrap range as
+            // a hard mapping fault; delayed feedback freezes mutation and
+            // installs a fresh arena generation at a frame boundary.
+            ResidencyAtomicAdd(
+                params,
+                ResidencyCounterWord(
+                    params,
+                    SIMPLE_DDGI_RESIDENCY_COUNTER_MAPPING_ERRORS),
+                1u);
+            break;
+        }
+
+        uint classBase = ResidencyClassBase(params, bestVirtual);
+        ResidencyWrite(
+            params,
+            classBase + 0u,
+            ResidencyRead(params, classBase + 0u) |
+                SIMPLE_DDGI_PAGE_CLASS_SELECTED);
+        uint reverseBase = ResidencyPhysicalBase(params, physicalPage);
+        ResidencyWrite(params, reverseBase + 0u, bestVirtual + 1u);
+        ResidencyWrite(params, reverseBase + 1u, mappingGeneration);
+        ResidencyWrite(
+            params,
+            reverseBase + 2u,
+            params.residencyResourceGeneration);
+        uint bestHistoryFlags = ResidencyRead(
+            params,
+            ResidencyHistoryBase(params, bestVirtual) + 3u) & 0xffffu;
+        ResidencyWrite(
+            params,
+            reverseBase + 3u,
+            (bestHistoryFlags &
+                SIMPLE_DDGI_PAGE_HISTORY_DEVELOPMENT_PIN) != 0u
+                ? SIMPLE_DDGI_PHYSICAL_PAGE_PINNED
+                : 0u);
+        ResidencyWrite(params, reverseBase + 4u, pc.CurrentFrame);
+        ResidencyWrite(params, reverseBase + 5u, 0u);
+        ResidencyWrite(params, reverseBase + 6u, pc.SourceGeneration);
+        ResidencyWrite(params, reverseBase + 7u, pc.CohortGeneration);
+        ResidencyWrite(params, reverseBase + 8u, pc.CurrentFrame + 1u);
+        ResidencyWrite(params, reverseBase + 9u, 0u);
+        ResidencyWrite(params, reverseBase + 10u, 0u);
+        ResidencyWrite(
+            params,
+            reverseBase + 11u,
+            pc.CameraCut != 0u
+                ? SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_CAMERA_CUT
+                : 0u);
+        ResidencyAtomicAdd(
+            params,
+            ResidencyCounterWord(
+                params,
+                SIMPLE_DDGI_RESIDENCY_COUNTER_ADMISSION_PROBES),
+            ValidProbeCountForVirtualPage(params, bestVirtual));
+
+        uint workBase = initBase + admissions * 4u;
+        ResidencyWrite(params, workBase + 0u, bestVirtual);
+        ResidencyWrite(params, workBase + 1u, physicalPage);
+        ResidencyWrite(params, workBase + 2u, mappingGeneration);
+        ResidencyWrite(
+            params,
+            workBase + 3u,
+            ResidencyRead(params, classBase + 3u));
+        admissions++;
+    }
+
+    // Expired and confirmed-empty pages leave the working set even when no
+    // new admission immediately needs their slot. This keeps the resident set
+    // faithful to retention/suppression policy and makes subsequent admissions
+    // use deterministic free pages. Churn remains bounded by the same per-frame
+    // transaction cap as initialization.
+    while (evictions < min(admissionLimit, victimCount))
+    {
+        uint bestVictimPhysical = 0xffffffffu;
+        uint bestVictimVirtual = 0xffffffffu;
+        for (uint candidateVirtual = 0u;
+             candidateVirtual < params.virtualPageCount;
+             candidateVirtual++)
+        {
+            uint classFlags = ResidencyRead(
+                params,
+                ResidencyClassBase(params, candidateVirtual) + 0u);
+            if ((classFlags & SIMPLE_DDGI_PAGE_CLASS_VICTIM) == 0u ||
+                (classFlags & SIMPLE_DDGI_PAGE_CLASS_EVICT_WHEN_IDLE) == 0u ||
+                (classFlags & SIMPLE_DDGI_PAGE_CLASS_SELECTED) != 0u)
+            {
+                continue;
+            }
+            uint candidatePhysical = ResidencyRead(
+                params,
+                ResidencyClassBase(params, candidateVirtual) + 2u);
+            if (candidatePhysical >= params.sparsePhysicalPageCapacity)
+                continue;
+            if (VictimPrecedes(
+                    params,
+                    candidatePhysical,
+                    candidateVirtual,
+                    bestVictimPhysical,
+                    bestVictimVirtual))
+            {
+                bestVictimPhysical = candidatePhysical;
+                bestVictimVirtual = candidateVirtual;
+            }
+        }
+        if (bestVictimPhysical == 0xffffffffu)
+            break;
+        EvictPhysicalPage(
+            params,
+            bestVictimPhysical,
+            bestVictimVirtual);
+        evictions++;
+    }
+
+    uint failedAdmissions = candidateCount > admissions
+        ? candidateCount - admissions
+        : 0u;
+    ResidencyWrite(
+        params,
+        ResidencyCounterWord(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_ADMISSIONS),
+        admissions);
+    ResidencyWrite(
+        params,
+        ResidencyCounterWord(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_EVICTIONS),
+        evictions);
+    ResidencyWrite(
+        params,
+        ResidencyCounterWord(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_FAILED_ADMISSIONS),
+        failedAdmissions);
+
+    uint consecutivePressure = ResidencyRead(
+        params,
+        ResidencyCounterWord(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_CONSECUTIVE_PRESSURE));
+    if (failedAdmissions != 0u)
+    {
+        consecutivePressure++;
+        ResidencyWrite(
+            params,
+            ResidencyCounterWord(
+                params,
+                SIMPLE_DDGI_RESIDENCY_COUNTER_PRESSURE_FRAMES),
+            ResidencyRead(
+                params,
+                ResidencyCounterWord(
+                    params,
+                    SIMPLE_DDGI_RESIDENCY_COUNTER_PRESSURE_FRAMES)) + 1u);
+        ResidencyWrite(
+            params,
+            ResidencyCounterWord(
+                params,
+                SIMPLE_DDGI_RESIDENCY_COUNTER_MAX_CONSECUTIVE_PRESSURE),
+            max(
+                ResidencyRead(
+                    params,
+                    ResidencyCounterWord(
+                        params,
+                        SIMPLE_DDGI_RESIDENCY_COUNTER_MAX_CONSECUTIVE_PRESSURE)),
+                consecutivePressure));
+    }
+    else
+        consecutivePressure = 0u;
+    ResidencyWrite(
+        params,
+        ResidencyCounterWord(
+            params,
+            SIMPLE_DDGI_RESIDENCY_COUNTER_CONSECUTIVE_PRESSURE),
+        consecutivePressure);
+
+    uint indirectBase = SimpleDdgiIndirectCommandsOffsetWords(params);
+    ResidencyWrite(params, indirectBase + 0u, admissions);
+    ResidencyWrite(params, indirectBase + 1u, 1u);
+    ResidencyWrite(params, indirectBase + 2u, 1u);
+    ResidencyWrite(params, indirectBase + 3u, 0u);
+}

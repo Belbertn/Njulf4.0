@@ -69,10 +69,36 @@ internal readonly record struct SampleBenchmarkGateEvaluation(
             }
         }
 
+        RendererDiagnostics coverageDiagnostics = report.LastDiagnostics;
+        bool materialTimingApplicable =
+            coverageDiagnostics.GlobalIlluminationEnabled != 0 &&
+            (coverageDiagnostics.MaterialGiV2ActiveFeatures &
+             MaterialGiV2Feature.MaterialTransport) != 0;
+        if (materialTimingApplicable)
+        {
+            SampleBenchmarkMaterialTimingEvidence materialTiming =
+                report.MaterialTimingEvidence;
+            if (!materialTiming.CompileSequenceExact ||
+                !materialTiming.UploadSequenceExact)
+            {
+                return new SampleBenchmarkGateEvaluation(
+                    false,
+                    "Benchmark material compile/upload timing deltas are not an exact measurement-window sequence.");
+            }
+
+            coverageDiagnostics = coverageDiagnostics with
+            {
+                MaterialCompileTimingSampleCount =
+                    materialTiming.Compile.Count,
+                MaterialUploadTimingSampleCount =
+                    materialTiming.Upload.Count
+            };
+        }
+
         SampleBudgetMetricCoverage metricCoverage =
             SampleBudgetMetricCoverage.Evaluate(
                 report.BudgetMetrics,
-                report.LastDiagnostics,
+                coverageDiagnostics,
                 "Benchmark");
         if (!metricCoverage.Passed)
             return new SampleBenchmarkGateEvaluation(false, metricCoverage.Failure);

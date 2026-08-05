@@ -71,6 +71,24 @@ public sealed class SimpleDdgiSampledAtlasTests
     }
 
     [Test]
+    public void FullSyncCopy_ExcludesRoundedImagePaddingBeyondCanonicalPayloadBuffers()
+    {
+        const int virtualProbeCount = 15_368;
+        const int physicalProbeCapacity = 12_072;
+        const int sampledProbeCapacity = 12_288;
+        const ulong irradianceBytesPerProbe = 8UL * 8UL * 8UL;
+        const ulong visibilityBytesPerProbe = 16UL * 16UL * 8UL;
+
+        int copiedProbeCount = SimpleDdgiSampledAtlas.CalculateSafeCopyProbeCount(
+            virtualProbeCount,
+            sampledProbeCapacity,
+            physicalProbeCapacity * irradianceBytesPerProbe,
+            physicalProbeCapacity * visibilityBytesPerProbe);
+
+        Assert.That(copiedProbeCount, Is.EqualTo(physicalProbeCapacity));
+    }
+
+    [Test]
     public void StableCapacityReconciliation_ShrinksAfterQualityRollback()
     {
         int ultraCapacity =
@@ -138,12 +156,15 @@ public sealed class SimpleDdgiSampledAtlasTests
                 Does.Contain("_resolvedLayersPerTexture = ResolveLayersPerTexture();"));
             Assert.That(
                 constructor,
-                Does.Contain("_recordRuntimeStall = recordRuntimeStall"));
+                Does.Contain("_ = recordRuntimeStall ??"));
             Assert.That(
                 ensureCapacity,
                 Does.Contain("int layersPerTexture = _resolvedLayersPerTexture;"));
             Assert.That(ensureCapacity, Does.Not.Contain("ResolveLayersPerTexture("));
             Assert.That(ensureCapacity, Does.Not.Contain("GetPhysicalDeviceProperties("));
+            Assert.That(source, Does.Contain("GpuCompletionToken.ForFrameFence("));
+            Assert.That(source, Does.Not.Contain("WaitForDeviceIdle("));
+            Assert.That(source, Does.Not.Contain("_context.WaitIdle"));
         });
     }
 

@@ -46,7 +46,8 @@ layout(push_constant) uniform SimpleDdgiPushBlock
 } pc;
 
 const float SIMPLE_DDGI_RELOCATION_TARGET_DISTANCE = 0.10;
-const float SIMPLE_DDGI_RELOCATION_MAX_DISTANCE = 0.45;
+const float SIMPLE_DDGI_RELOCATION_MAX_DISTANCE =
+    SIMPLE_DDGI_RELOCATION_UPDATE_MAX_SPACINGS;
 const float SIMPLE_DDGI_RELOCATION_MIN_BACKFACE_RATIO = 0.10;
 
 vec4 ReadSimpleRayDirectionHit(uint rayResultIndex)
@@ -107,6 +108,15 @@ void main()
             1u << 2u);
         return;
     }
+    if (!SimpleDdgiUpdateMatchesLiveAddress(params, update))
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 0u);
+        return;
+    }
 
     SimpleDdgiVolume volume;
     uint localProbeIndex;
@@ -121,7 +131,10 @@ void main()
     }
 
     SimpleDdgiProbeState previous = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
-    if (!SimpleDdgiUpdateMatchesProbeGeneration(update, previous))
+    if (!SimpleDdgiUpdateMatchesProbeGenerationAndRecord(
+            params,
+            update,
+            previous))
     {
         SimpleDdgiSchedulerFailOutcome(
             pc.SchedulerArenaBufferIndex,

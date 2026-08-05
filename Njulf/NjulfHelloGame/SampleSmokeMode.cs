@@ -11,6 +11,7 @@ public enum SampleSmokeMode
     MissingAssets,
     LongRun,
     QualitySwitch,
+    DdgiResidencySwitch,
     TextureHotReload,
     All
 }

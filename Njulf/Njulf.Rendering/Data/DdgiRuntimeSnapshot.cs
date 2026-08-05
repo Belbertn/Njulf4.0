@@ -89,7 +89,23 @@ namespace Njulf.Rendering.Data
         long SimpleGpuBlendMicroseconds,
         float SimpleAverageBackfaceRatio = 0.0f,
         float SimpleAverageCloseRatio = 0.0f,
-        float SimpleAverageHardInvalidProbeScore = 0.0f)
+        float SimpleAverageHardInvalidProbeScore = 0.0f,
+        SimpleDdgiProbeResidencyMode SimpleProbeResidencyMode =
+            SimpleDdgiProbeResidencyMode.Dense,
+        int SimpleProbeResidencyFeedbackValid = 0,
+        int SimpleVirtualPageCount = 0,
+        int SimpleSparsePhysicalPageCapacity = 0,
+        int SimpleResidentPageCount = 0,
+        int SimpleDemandedPageCount = 0,
+        int SimplePageAdmissionCount = 0,
+        int SimplePageEvictionCount = 0,
+        int SimplePageFailedAdmissionCount = 0,
+        int SimplePageMappingErrorCount = 0,
+        int SimpleNonResidentGatherRejectionCount = 0,
+        int SimpleCoarserFallbackCount = 0,
+        long SimpleGpuPageDemandMicroseconds = 0,
+        long SimpleGpuPageResidencyMicroseconds = 0,
+        long SimpleGpuPageFeedbackMicroseconds = 0)
     {
         public static DdgiRuntimeSnapshot Empty { get; } = new(
             VolumeCount: 0,

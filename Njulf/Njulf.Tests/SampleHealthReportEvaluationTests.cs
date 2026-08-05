@@ -169,6 +169,7 @@ public sealed class SampleHealthReportEvaluationTests
     }
 
     [TestCase("quality-switch", "quality-switch")]
+    [TestCase("ddgi-residency-switch", "ddgi-residency-switch")]
     [TestCase("texture-hot-reload", "texture-hot-reload")]
     public void FindIncompleteSmokeOperation_RejectsMissingRollbackRunnerResult(
         string mode,
@@ -184,6 +185,28 @@ public sealed class SampleHealthReportEvaluationTests
                 options.FrameCount);
 
         Assert.That(actual!.Detail, Does.Contain(expectedOperation));
+    }
+
+    [TestCase("quality-switch", "quality-switch")]
+    [TestCase("ddgi-residency-switch", "ddgi-residency-switch")]
+    [TestCase("texture-hot-reload", "texture-hot-reload")]
+    public void FindIncompleteSmokeOperation_AcceptsSpecializedTerminalEvidence(
+        string mode,
+        string operation)
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--smoke-mode", mode,
+            "--smoke-frames", "120"
+        ]);
+
+        SampleSmokeOperationResult? actual =
+            SampleHealthReportEvaluation.FindIncompleteSmokeOperation(
+                options,
+                [Passed(operation)],
+                renderedFrameCount: 1);
+
+        Assert.That(actual, Is.Null);
     }
 
     [Test]

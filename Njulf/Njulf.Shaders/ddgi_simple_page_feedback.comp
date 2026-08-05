@@ -1,0 +1,860 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_page_residency_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+const uint SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS = 256u;
+shared uint scheduleLatencyHistogram[SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS];
+shared uint publicationLatencyHistogram[SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS];
+shared uint ordinaryPublicationLatencyHistogram[
+    SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS];
+shared uint cutPublicationLatencyHistogram[
+    SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS];
+shared uint scheduleLatencySampleCount;
+shared uint publicationLatencySampleCount;
+shared uint ordinaryPublicationLatencySampleCount;
+shared uint cutPublicationLatencySampleCount;
+shared uint scheduleLatencyMaximum;
+shared uint publicationLatencyMaximum;
+shared uint ordinaryPublicationLatencyMaximum;
+shared uint cutPublicationLatencyMaximum;
+shared uint residentProbeCount;
+shared uint inactiveResidentProbeCount;
+shared uint activeResidentProbeCount;
+shared uint convergedResidentProbeCount;
+shared uint duplicateVirtualOwnerCount;
+shared uint duplicatePhysicalOwnerCount;
+shared uint feedbackResidentPageCount;
+shared uint feedbackPublishedPageCount;
+shared uint feedbackInitializingPageCount;
+shared uint feedbackSuppressedPageCount;
+shared uint feedbackVisibleDemandPageCount;
+shared uint feedbackReceiverDemandPageCount;
+shared uint feedbackOpaqueGatherDemandPageCount;
+shared uint feedbackPredictorTruePositivePageCount;
+shared uint feedbackPredictorFalseNegativePageCount;
+shared uint feedbackPredictorFalsePositivePageCount;
+shared uint feedbackDevelopmentPinnedPageCount;
+shared uint feedbackRetainedPageCount;
+shared uint feedbackVisibleDemandResidentHitPageCount;
+shared uint feedbackVisibleDemandMissingPageCount;
+shared uint feedbackRetainedAge0To15PageCount;
+shared uint feedbackRetainedAge16To63PageCount;
+shared uint feedbackRetainedAge64To255PageCount;
+shared uint feedbackRetainedAge256PlusPageCount;
+shared uint feedbackMappingErrorCount;
+// Six exact counters for each of near/mid/far: virtual, resident, active,
+// inactive, demanded pages, and converged resident probes.
+shared uint ringPopulation[18];
+
+bool ResidencyProbeVolume(
+    SimpleDdgiParams params,
+    uint virtualProbe,
+    out SimpleDdgiVolume volume,
+    out SimpleDdgiVolumePaging paging)
+{
+    volume = ReadSimpleDdgiVolume(pc.ParamsBufferIndex, 0u);
+    paging = ReadSimpleDdgiVolumePaging(pc.ParamsBufferIndex, 0u);
+    for (uint volumeIndex = 0u;
+         volumeIndex < params.volumeCount;
+         volumeIndex++)
+    {
+        SimpleDdgiVolume candidate = ReadSimpleDdgiVolume(
+            pc.ParamsBufferIndex,
+            volumeIndex);
+        uint volumeProbeCount = candidate.gridCount.x *
+            candidate.gridCount.y * candidate.gridCount.z;
+        if (virtualProbe >= candidate.firstProbeIndex &&
+            virtualProbe - candidate.firstProbeIndex < volumeProbeCount)
+        {
+            volume = candidate;
+            paging = ReadSimpleDdgiVolumePaging(
+                pc.ParamsBufferIndex,
+                volumeIndex);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ResidencyVirtualProbeResident(
+    SimpleDdgiParams params,
+    uint virtualProbe,
+    SimpleDdgiVolume volume,
+    SimpleDdgiVolumePaging paging)
+{
+    if (paging.residencyMode !=
+        SIMPLE_DDGI_RESIDENCY_MODE_SPARSE_NEAR_RING)
+    {
+        return true;
+    }
+    uint localProbe = virtualProbe - volume.firstProbeIndex;
+    uvec3 physicalCoord = SimpleDdgiProbeCoord(localProbe, volume);
+    uvec3 pageCoord = physicalCoord / SIMPLE_DDGI_PAGE_DIMENSIONS;
+    if (any(greaterThanEqual(pageCoord, paging.pageGrid)))
+        return false;
+    uint virtualPage = paging.pageTableFirst +
+        SimpleDdgiFlattenPage(pageCoord, paging.pageGrid);
+    if (virtualPage >= params.virtualPageCount)
+        return false;
+    uvec4 table = ReadStorageAlignedUVec4Uniform(
+        params.residencyArenaBufferIndex,
+        ResidencyTableBase(virtualPage));
+    uint physicalPage;
+    return ResidencyPageIdentityValid(
+        params,
+        virtualPage,
+        table,
+        physicalPage);
+}
+
+uint ResidencyLatencyPercentile(bool publication, uint sampleCount, uint percent)
+{
+    if (sampleCount == 0u)
+        return 0u;
+    uint target = max((sampleCount * percent + 99u) / 100u, 1u);
+    uint cumulative = 0u;
+    for (uint bucket = 0u;
+         bucket < SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS;
+         bucket++)
+    {
+        cumulative += publication
+            ? publicationLatencyHistogram[bucket]
+            : scheduleLatencyHistogram[bucket];
+        if (cumulative >= target)
+            return bucket;
+    }
+    return SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS - 1u;
+}
+
+uint ResidencyPublicationLatencyPercentile(
+    bool cameraCut,
+    uint sampleCount,
+    uint percent)
+{
+    if (sampleCount == 0u)
+        return 0u;
+    uint target = max((sampleCount * percent + 99u) / 100u, 1u);
+    uint cumulative = 0u;
+    for (uint bucket = 0u;
+         bucket < SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS;
+         bucket++)
+    {
+        cumulative += cameraCut
+            ? cutPublicationLatencyHistogram[bucket]
+            : ordinaryPublicationLatencyHistogram[bucket];
+        if (cumulative >= target)
+            return bucket;
+    }
+    return SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS - 1u;
+}
+
+void main()
+{
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    if (!SimpleDdgiResidencyHeaderMatches(params))
+        return;
+    uint feedbackBase = SimpleDdgiFeedbackOffsetWords(params);
+    uint local = gl_LocalInvocationID.x;
+    // The copied region is fixed at 1 KiB. Clear it deterministically so future
+    // extensions never expose stale bytes from an earlier ABI.
+    for (uint word = local; word < 256u; word += gl_WorkGroupSize.x)
+        ResidencyWrite(params, feedbackBase + word, 0u);
+    barrier();
+    memoryBarrierBuffer();
+    barrier();
+
+    for (uint bucket = local;
+         bucket < SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS;
+         bucket += gl_WorkGroupSize.x)
+    {
+        scheduleLatencyHistogram[bucket] = 0u;
+        publicationLatencyHistogram[bucket] = 0u;
+        ordinaryPublicationLatencyHistogram[bucket] = 0u;
+        cutPublicationLatencyHistogram[bucket] = 0u;
+    }
+    if (local == 0u)
+    {
+        scheduleLatencySampleCount = 0u;
+        publicationLatencySampleCount = 0u;
+        ordinaryPublicationLatencySampleCount = 0u;
+        cutPublicationLatencySampleCount = 0u;
+        scheduleLatencyMaximum = 0u;
+        publicationLatencyMaximum = 0u;
+        ordinaryPublicationLatencyMaximum = 0u;
+        cutPublicationLatencyMaximum = 0u;
+        residentProbeCount = 0u;
+        inactiveResidentProbeCount = 0u;
+        activeResidentProbeCount = 0u;
+        convergedResidentProbeCount = 0u;
+        duplicateVirtualOwnerCount = 0u;
+        duplicatePhysicalOwnerCount = 0u;
+        feedbackResidentPageCount = 0u;
+        feedbackPublishedPageCount = 0u;
+        feedbackInitializingPageCount = 0u;
+        feedbackSuppressedPageCount = 0u;
+        feedbackVisibleDemandPageCount = 0u;
+        feedbackReceiverDemandPageCount = 0u;
+        feedbackOpaqueGatherDemandPageCount = 0u;
+        feedbackPredictorTruePositivePageCount = 0u;
+        feedbackPredictorFalseNegativePageCount = 0u;
+        feedbackPredictorFalsePositivePageCount = 0u;
+        feedbackDevelopmentPinnedPageCount = 0u;
+        feedbackRetainedPageCount = 0u;
+        feedbackVisibleDemandResidentHitPageCount = 0u;
+        feedbackVisibleDemandMissingPageCount = 0u;
+        feedbackRetainedAge0To15PageCount = 0u;
+        feedbackRetainedAge16To63PageCount = 0u;
+        feedbackRetainedAge64To255PageCount = 0u;
+        feedbackRetainedAge256PlusPageCount = 0u;
+        feedbackMappingErrorCount = 0u;
+    }
+    for (uint index = local; index < 18u; index += gl_WorkGroupSize.x)
+        ringPopulation[index] = 0u;
+    barrier();
+
+    // Reconciliation has finished consuming these fixed-capacity scratch
+    // regions. Reuse them for a bounded ownership-collision audit instead of
+    // reading a page list back to the CPU. Each collision count is the number
+    // of excess claims, so two owners report one duplicate deterministically.
+    uint duplicateVirtualScratch =
+        SimpleDdgiPrefixScratchOffsetWords(params);
+    uint duplicatePhysicalScratch =
+        SimpleDdgiVictimScratchOffsetWords(params);
+    for (uint virtualPage = local;
+         virtualPage < params.virtualPageCount;
+         virtualPage += gl_WorkGroupSize.x)
+    {
+        ResidencyWrite(
+            params,
+            duplicateVirtualScratch + virtualPage,
+            0u);
+    }
+    for (uint physicalPage = local;
+         physicalPage < params.sparsePhysicalPageCapacity;
+         physicalPage += gl_WorkGroupSize.x)
+    {
+        ResidencyWrite(
+            params,
+            duplicatePhysicalScratch + physicalPage * 2u,
+            0u);
+    }
+    memoryBarrierBuffer();
+    barrier();
+
+    for (uint virtualPage = local;
+         virtualPage < params.virtualPageCount;
+         virtualPage += gl_WorkGroupSize.x)
+    {
+        uint physicalPlusOne = ResidencyRead(
+            params,
+            ResidencyTableBase(virtualPage) + 0u);
+        if (physicalPlusOne != 0u &&
+            physicalPlusOne - 1u < params.sparsePhysicalPageCapacity)
+        {
+            uint previous = atomicAdd(
+                BindlessStorageBuffers[nonuniformEXT(
+                    params.residencyArenaBufferIndex)].Words[
+                        duplicatePhysicalScratch +
+                        (physicalPlusOne - 1u) * 2u],
+                1u);
+            if (previous != 0u)
+                atomicAdd(duplicatePhysicalOwnerCount, 1u);
+        }
+    }
+    for (uint physicalPage = local;
+         physicalPage < params.sparsePhysicalPageCapacity;
+         physicalPage += gl_WorkGroupSize.x)
+    {
+        uint ownerPlusOne = ResidencyRead(
+            params,
+            ResidencyPhysicalBase(params, physicalPage) + 0u);
+        if (ownerPlusOne != 0u &&
+            ownerPlusOne - 1u < params.virtualPageCount)
+        {
+            uint previous = atomicAdd(
+                BindlessStorageBuffers[nonuniformEXT(
+                    params.residencyArenaBufferIndex)].Words[
+                        duplicateVirtualScratch + ownerPlusOne - 1u],
+                1u);
+            if (previous != 0u)
+                atomicAdd(duplicateVirtualOwnerCount, 1u);
+        }
+    }
+    memoryBarrierBuffer();
+    barrier();
+
+    for (uint physicalPage = local;
+         physicalPage < params.sparsePhysicalPageCapacity;
+         physicalPage += gl_WorkGroupSize.x)
+    {
+        uint reverseBase = ResidencyPhysicalBase(params, physicalPage);
+        uint allocationStamp = ResidencyRead(params, reverseBase + 8u);
+        uint firstScheduleStamp = ResidencyRead(params, reverseBase + 9u);
+        uint firstPublicationStamp = ResidencyRead(params, reverseBase + 10u);
+        bool allocatedDuringCameraCut = (ResidencyRead(
+            params,
+            reverseBase + 11u) &
+            SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_CAMERA_CUT) != 0u;
+        if (allocationStamp != 0u && firstScheduleStamp >= allocationStamp)
+        {
+            uint latency = firstScheduleStamp - allocationStamp;
+            atomicAdd(
+                scheduleLatencyHistogram[min(
+                    latency,
+                    SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS - 1u)],
+                1u);
+            atomicAdd(scheduleLatencySampleCount, 1u);
+            atomicMax(scheduleLatencyMaximum, latency);
+        }
+        if (allocationStamp != 0u &&
+            firstPublicationStamp >= allocationStamp)
+        {
+            uint latency = firstPublicationStamp - allocationStamp;
+            atomicAdd(
+                publicationLatencyHistogram[min(
+                    latency,
+                    SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS - 1u)],
+                1u);
+            atomicAdd(publicationLatencySampleCount, 1u);
+            atomicMax(publicationLatencyMaximum, latency);
+            if (allocatedDuringCameraCut)
+            {
+                atomicAdd(
+                    cutPublicationLatencyHistogram[min(
+                        latency,
+                        SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS - 1u)],
+                    1u);
+                atomicAdd(cutPublicationLatencySampleCount, 1u);
+                atomicMax(cutPublicationLatencyMaximum, latency);
+            }
+            else
+            {
+                atomicAdd(
+                    ordinaryPublicationLatencyHistogram[min(
+                        latency,
+                        SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS - 1u)],
+                    1u);
+                atomicAdd(ordinaryPublicationLatencySampleCount, 1u);
+                atomicMax(ordinaryPublicationLatencyMaximum, latency);
+            }
+        }
+    }
+    barrier();
+
+    for (uint virtualProbe = local;
+         virtualProbe < params.probeCount;
+         virtualProbe += gl_WorkGroupSize.x)
+    {
+        SimpleDdgiVolume volume;
+        SimpleDdgiVolumePaging paging;
+        if (!ResidencyProbeVolume(
+                params,
+                virtualProbe,
+                volume,
+                paging))
+        {
+            continue;
+        }
+        bool residentProbe = ResidencyVirtualProbeResident(
+            params,
+            virtualProbe,
+            volume,
+            paging);
+        uint ringIndex = SimpleDdgiVolumeQualityCascade(volume);
+        bool trackedRing = volume.kind == SIMPLE_DDGI_VOLUME_KIND_RING &&
+            ringIndex < 3u;
+        uint ringBase = ringIndex * 6u;
+        if (trackedRing)
+            atomicAdd(ringPopulation[ringBase + 0u], 1u);
+        if (!residentProbe)
+            continue;
+
+        atomicAdd(residentProbeCount, 1u);
+        if (trackedRing)
+            atomicAdd(ringPopulation[ringBase + 1u], 1u);
+        SimpleDdgiProbeState state = ReadSimpleDdgiProbeState(
+            pc.ProbeStateBufferIndex,
+            virtualProbe);
+        bool inactive =
+            state.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE ||
+            (state.flags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u ||
+            state.activeWeight <= 0.001;
+        if (inactive)
+        {
+            atomicAdd(inactiveResidentProbeCount, 1u);
+            if (trackedRing)
+                atomicAdd(ringPopulation[ringBase + 3u], 1u);
+            continue;
+        }
+
+        atomicAdd(activeResidentProbeCount, 1u);
+        if (trackedRing)
+            atomicAdd(ringPopulation[ringBase + 2u], 1u);
+        bool converged =
+            (state.flags & (SIMPLE_DDGI_PROBE_FLAG_FRESH |
+                SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID |
+                SIMPLE_DDGI_PROBE_FLAG_NON_RESIDENT)) == 0u;
+        if (converged && pc.SchedulerArenaBufferIndex != 0u &&
+            virtualProbe < pc.SchedulerActiveProbeCount)
+        {
+            uint schedulerBase = pc.SchedulerProbeStateOffsetWords +
+                virtualProbe * 10u;
+            uint schedulerMetadata = ReadStorageWordUniform(
+                pc.SchedulerArenaBufferIndex,
+                schedulerBase + 5u);
+            converged = ReadStorageWordUniform(
+                    pc.SchedulerArenaBufferIndex,
+                    schedulerBase + 2u) == pc.SourceGeneration &&
+                (schedulerMetadata &
+                    SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR) == 0u;
+        }
+        if (converged)
+        {
+            atomicAdd(convergedResidentProbeCount, 1u);
+            if (trackedRing)
+                atomicAdd(ringPopulation[ringBase + 5u], 1u);
+        }
+    }
+    barrier();
+
+    // Page and reverse-map summaries are independent reductions. Keep all 64
+    // lanes active instead of making lane zero serially scan both bounded
+    // tables; lane zero remains the sole fixed-summary publisher below.
+    for (uint virtualPage = local;
+         virtualPage < params.virtualPageCount;
+         virtualPage += gl_WorkGroupSize.x)
+    {
+        uint tableBase = ResidencyTableBase(virtualPage);
+        uvec4 table = ReadStorageAlignedUVec4Uniform(
+            params.residencyArenaBufferIndex,
+            tableBase);
+        uint physicalPage;
+        bool valid = ResidencyPageIdentityValid(
+            params,
+            virtualPage,
+            table,
+            physicalPage);
+        if (valid)
+        {
+            atomicAdd(feedbackResidentPageCount, 1u);
+            if ((table.z & SIMPLE_DDGI_PAGE_TABLE_PUBLISHED) != 0u &&
+                (table.z & SIMPLE_DDGI_PAGE_TABLE_INITIALIZING) == 0u)
+                atomicAdd(feedbackPublishedPageCount, 1u);
+            if ((table.z & SIMPLE_DDGI_PAGE_TABLE_INITIALIZING) != 0u)
+                atomicAdd(feedbackInitializingPageCount, 1u);
+        }
+        else if (table.x != 0u ||
+                 (table.z & SIMPLE_DDGI_PAGE_TABLE_VALID) != 0u)
+            atomicAdd(feedbackMappingErrorCount, 1u);
+        if ((table.z & SIMPLE_DDGI_PAGE_TABLE_SUPPRESSED_EMPTY) != 0u)
+            atomicAdd(feedbackSuppressedPageCount, 1u);
+
+        uint historyBase = ResidencyHistoryBase(params, virtualPage);
+        uint visibleStamp = ResidencyRead(params, historyBase + 0u);
+        uint receiverStamp = ResidencyRead(params, historyBase + 1u);
+        uint lastRelevant = ResidencyRead(params, historyBase + 2u);
+        uint historyFlags = ResidencyRead(params, historyBase + 3u);
+        if ((historyFlags &
+                SIMPLE_DDGI_PAGE_HISTORY_DEVELOPMENT_PIN) != 0u)
+        {
+            atomicAdd(feedbackDevelopmentPinnedPageCount, 1u);
+        }
+        bool visibleDemanded =
+            SimpleDdgiDemandStampEpoch(visibleStamp) == pc.DemandEpoch;
+        bool receiverDemanded =
+            SimpleDdgiDemandStampEpoch(receiverStamp) == pc.DemandEpoch;
+        bool opaqueGatherDemanded =
+            params.residencyMode == SIMPLE_DDGI_RESIDENCY_MODE_SHADOW &&
+            SimpleDdgiDemandStampEpoch(table.w) == pc.DemandEpoch;
+        if (visibleDemanded)
+        {
+            atomicAdd(feedbackVisibleDemandPageCount, 1u);
+            bool receiverUsable = valid &&
+                (table.z & SIMPLE_DDGI_PAGE_TABLE_PUBLISHED) != 0u &&
+                (table.z & (SIMPLE_DDGI_PAGE_TABLE_INITIALIZING |
+                    SIMPLE_DDGI_PAGE_TABLE_SUPPRESSED_EMPTY)) == 0u;
+            if (receiverUsable)
+                atomicAdd(feedbackVisibleDemandResidentHitPageCount, 1u);
+            else
+                atomicAdd(feedbackVisibleDemandMissingPageCount, 1u);
+        }
+        if (receiverDemanded)
+            atomicAdd(feedbackReceiverDemandPageCount, 1u);
+        if (opaqueGatherDemanded)
+            atomicAdd(feedbackOpaqueGatherDemandPageCount, 1u);
+        if (opaqueGatherDemanded && visibleDemanded)
+            atomicAdd(feedbackPredictorTruePositivePageCount, 1u);
+        if (opaqueGatherDemanded && !visibleDemanded)
+            atomicAdd(feedbackPredictorFalseNegativePageCount, 1u);
+        if (visibleDemanded && !opaqueGatherDemanded)
+            atomicAdd(feedbackPredictorFalsePositivePageCount, 1u);
+        if ((historyFlags & SIMPLE_DDGI_PAGE_HISTORY_SUPPRESSED) != 0u &&
+            (table.z & SIMPLE_DDGI_PAGE_TABLE_SUPPRESSED_EMPTY) == 0u)
+            atomicAdd(feedbackSuppressedPageCount, 1u);
+        if (valid && lastRelevant != 0u && pc.CurrentFrame >= lastRelevant)
+        {
+            uint age = pc.CurrentFrame - lastRelevant;
+            if (age < ResidencyRead(params, 11u))
+            {
+                atomicAdd(feedbackRetainedPageCount, 1u);
+                if (age <= 15u)
+                    atomicAdd(feedbackRetainedAge0To15PageCount, 1u);
+                else if (age <= 63u)
+                    atomicAdd(feedbackRetainedAge16To63PageCount, 1u);
+                else if (age <= 255u)
+                    atomicAdd(feedbackRetainedAge64To255PageCount, 1u);
+                else
+                    atomicAdd(feedbackRetainedAge256PlusPageCount, 1u);
+            }
+        }
+
+        if (visibleDemanded || receiverDemanded || opaqueGatherDemanded)
+        {
+            uint demandVolumeIndex;
+            uint demandLocalPage;
+            SimpleDdgiVolume demandVolume;
+            SimpleDdgiVolumePaging demandPaging;
+            if (SimpleDdgiFindSparsePageVolume(
+                    params,
+                    virtualPage,
+                    demandVolumeIndex,
+                    demandVolume,
+                    demandPaging,
+                    demandLocalPage))
+            {
+                uint ringIndex = SimpleDdgiVolumeQualityCascade(demandVolume);
+                if (demandVolume.kind == SIMPLE_DDGI_VOLUME_KIND_RING &&
+                    ringIndex < 3u)
+                {
+                    atomicAdd(ringPopulation[ringIndex * 6u + 4u], 1u);
+                }
+            }
+        }
+    }
+
+    for (uint physicalPage = local;
+         physicalPage < params.sparsePhysicalPageCapacity;
+         physicalPage += gl_WorkGroupSize.x)
+    {
+        uint reverseBase = ResidencyPhysicalBase(params, physicalPage);
+        uint ownerPlusOne = ResidencyRead(params, reverseBase + 0u);
+        if (ownerPlusOne == 0u)
+            continue;
+        uint owner = ownerPlusOne - 1u;
+        if (owner >= params.virtualPageCount)
+        {
+            atomicAdd(feedbackMappingErrorCount, 1u);
+            continue;
+        }
+        uvec4 table = ReadStorageAlignedUVec4Uniform(
+            params.residencyArenaBufferIndex,
+            ResidencyTableBase(owner));
+        if (table.x != physicalPage + 1u ||
+            table.y != ResidencyRead(params, reverseBase + 1u) ||
+            ResidencyRead(params, reverseBase + 2u) !=
+                params.residencyResourceGeneration)
+        {
+            atomicAdd(feedbackMappingErrorCount, 1u);
+        }
+    }
+
+    memoryBarrierShared();
+    barrier();
+    if (local != 0u)
+        return;
+
+    uint resident = feedbackResidentPageCount;
+    uint published = feedbackPublishedPageCount;
+    uint initializing = feedbackInitializingPageCount;
+    uint suppressed = feedbackSuppressedPageCount;
+    uint visibleDemand = feedbackVisibleDemandPageCount;
+    uint receiverDemand = feedbackReceiverDemandPageCount;
+    uint opaqueGatherDemand = feedbackOpaqueGatherDemandPageCount;
+    uint predictorTruePositives = feedbackPredictorTruePositivePageCount;
+    uint predictorFalseNegatives = feedbackPredictorFalseNegativePageCount;
+    uint predictorFalsePositives = feedbackPredictorFalsePositivePageCount;
+    uint developmentPinnedPages = feedbackDevelopmentPinnedPageCount;
+    uint retained = feedbackRetainedPageCount;
+    uint visibleDemandResidentHits = feedbackVisibleDemandResidentHitPageCount;
+    uint visibleDemandMissing = feedbackVisibleDemandMissingPageCount;
+    uint retainedAge0To15 = feedbackRetainedAge0To15PageCount;
+    uint retainedAge16To63 = feedbackRetainedAge16To63PageCount;
+    uint retainedAge64To255 = feedbackRetainedAge64To255PageCount;
+    uint retainedAge256Plus = feedbackRetainedAge256PlusPageCount;
+    uint mappingErrors = feedbackMappingErrorCount;
+
+    uint counters = SimpleDdgiDemandCountersOffsetWords(params);
+    ResidencyWrite(params, feedbackBase + 0u, pc.Reserved0);
+    ResidencyWrite(params, feedbackBase + 1u, pc.Reserved1);
+    ResidencyWrite(
+        params,
+        feedbackBase + 2u,
+        params.residencyResourceGeneration);
+    ResidencyWrite(params, feedbackBase + 3u, ResidencyRead(params, 3u));
+    ResidencyWrite(params, feedbackBase + 4u, params.probeCount);
+    ResidencyWrite(params, feedbackBase + 5u, params.virtualPageCount);
+    ResidencyWrite(params, feedbackBase + 6u, params.densePhysicalProbeCount);
+    ResidencyWrite(
+        params,
+        feedbackBase + 7u,
+        params.sparsePhysicalPageCapacity);
+    ResidencyWrite(params, feedbackBase + 8u, params.physicalProbeCapacity);
+    ResidencyWrite(params, feedbackBase + 9u, resident);
+    ResidencyWrite(
+        params,
+        feedbackBase + 10u,
+        params.sparsePhysicalPageCapacity > resident
+            ? params.sparsePhysicalPageCapacity - resident
+            : 0u);
+    ResidencyWrite(params, feedbackBase + 11u, initializing);
+    ResidencyWrite(params, feedbackBase + 12u, published);
+    ResidencyWrite(params, feedbackBase + 13u, suppressed);
+    ResidencyWrite(params, feedbackBase + 14u, visibleDemand);
+    ResidencyWrite(params, feedbackBase + 15u, receiverDemand);
+    ResidencyWrite(params, feedbackBase + 16u, retained);
+    ResidencyWrite(
+        params,
+        feedbackBase + 17u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_ADMISSIONS));
+    ResidencyWrite(
+        params,
+        feedbackBase + 18u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_EVICTIONS));
+    ResidencyWrite(
+        params,
+        feedbackBase + 19u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_FAILED_ADMISSIONS));
+    ResidencyWrite(
+        params,
+        feedbackBase + 20u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_PRESSURE_FRAMES));
+    ResidencyWrite(
+        params,
+        feedbackBase + 21u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_CONSECUTIVE_PRESSURE));
+    ResidencyWrite(
+        params,
+        feedbackBase + 22u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_MAX_CONSECUTIVE_PRESSURE));
+    ResidencyWrite(
+        params,
+        feedbackBase + 23u,
+        mappingErrors + ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_MAPPING_ERRORS));
+    ResidencyWrite(
+        params,
+        feedbackBase + 24u,
+        duplicateVirtualOwnerCount + ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_DUPLICATE_VIRTUAL));
+    ResidencyWrite(
+        params,
+        feedbackBase + 25u,
+        duplicatePhysicalOwnerCount + ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_DUPLICATE_PHYSICAL));
+    ResidencyWrite(
+        params,
+        feedbackBase + 26u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_STALE_VIRTUAL));
+    ResidencyWrite(
+        params,
+        feedbackBase + 27u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_STALE_MAPPING));
+    ResidencyWrite(
+        params,
+        feedbackBase + 28u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_STALE_RESOURCE));
+    ResidencyWrite(
+        params,
+        feedbackBase + 29u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_OUT_OF_RANGE));
+    ResidencyWrite(
+        params,
+        feedbackBase + 30u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_NONRESIDENT_GATHER_REJECTIONS));
+    ResidencyWrite(
+        params,
+        feedbackBase + 31u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_COARSER_FALLBACK));
+    ResidencyWrite(params, feedbackBase + 32u, suppressed);
+    ResidencyWrite(
+        params,
+        feedbackBase + 33u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_RETRY));
+    ResidencyWrite(
+        params,
+        feedbackBase + 34u,
+        ResidencyLatencyPercentile(
+            false,
+            scheduleLatencySampleCount,
+            50u));
+    ResidencyWrite(
+        params,
+        feedbackBase + 35u,
+        ResidencyLatencyPercentile(
+            false,
+            scheduleLatencySampleCount,
+            95u));
+    ResidencyWrite(params, feedbackBase + 36u, scheduleLatencyMaximum);
+    ResidencyWrite(
+        params,
+        feedbackBase + 37u,
+        ResidencyLatencyPercentile(
+            true,
+            publicationLatencySampleCount,
+            50u));
+    ResidencyWrite(
+        params,
+        feedbackBase + 38u,
+        ResidencyLatencyPercentile(
+            true,
+            publicationLatencySampleCount,
+            95u));
+    ResidencyWrite(params, feedbackBase + 39u, publicationLatencyMaximum);
+    ResidencyWrite(
+        params,
+        feedbackBase + 40u,
+        ((params.residencyFlags & SIMPLE_DDGI_RESIDENCY_FLAG_FROZEN) != 0u
+            ? 1u
+            : 0u) |
+        (mappingErrors != 0u ||
+         duplicateVirtualOwnerCount != 0u ||
+         duplicatePhysicalOwnerCount != 0u
+            ? 1u << 1u
+            : 0u) |
+        (ResidencyRead(params, 3u) >= 0xffff0000u ? 1u << 2u : 0u));
+    ResidencyWrite(params, feedbackBase + 41u, pc.SourceGeneration);
+    ResidencyWrite(params, feedbackBase + 42u, pc.CohortGeneration);
+    ResidencyWrite(
+        params,
+        feedbackBase + 43u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_ADMISSION_PROBES));
+    ResidencyWrite(
+        params,
+        feedbackBase + 44u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_EVICTION_PROBES));
+    ResidencyWrite(
+        params,
+        feedbackBase + 45u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_OTHER_GENERATION_EVICTION_PROBES));
+    ResidencyWrite(
+        params,
+        feedbackBase + 46u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_RECEIVER_OVERFLOW));
+    ResidencyWrite(
+        params,
+        feedbackBase + 47u,
+        params.probeCount > residentProbeCount
+            ? params.probeCount - residentProbeCount
+            : 0u);
+    ResidencyWrite(params, feedbackBase + 48u, inactiveResidentProbeCount);
+    ResidencyWrite(params, feedbackBase + 49u, activeResidentProbeCount);
+    ResidencyWrite(params, feedbackBase + 50u, residentProbeCount);
+    ResidencyWrite(params, feedbackBase + 51u, convergedResidentProbeCount);
+    ResidencyWrite(params, feedbackBase + 52u, visibleDemandResidentHits);
+    ResidencyWrite(params, feedbackBase + 53u, visibleDemandMissing);
+    ResidencyWrite(params, feedbackBase + 54u, retainedAge0To15);
+    ResidencyWrite(params, feedbackBase + 55u, retainedAge16To63);
+    ResidencyWrite(params, feedbackBase + 56u, retainedAge64To255);
+    ResidencyWrite(params, feedbackBase + 57u, retainedAge256Plus);
+    ResidencyWrite(params, feedbackBase + 58u, pc.DemandEpoch);
+    ResidencyWrite(
+        params,
+        feedbackBase + 59u,
+        ResidencyRead(params, counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_RECEIVER_REQUESTS));
+    ResidencyWrite(params, feedbackBase + 60u, predictorFalseNegatives);
+    ResidencyWrite(params, feedbackBase + 61u, predictorFalsePositives);
+    ResidencyWrite(params, feedbackBase + 62u, opaqueGatherDemand);
+    ResidencyWrite(params, feedbackBase + 63u, predictorTruePositives);
+    for (uint ringWord = 0u; ringWord < 18u; ringWord++)
+        ResidencyWrite(
+            params,
+            feedbackBase + 64u + ringWord,
+            ringPopulation[ringWord]);
+    ResidencyWrite(
+        params,
+        feedbackBase + 82u,
+        ResidencyPublicationLatencyPercentile(
+            false,
+            ordinaryPublicationLatencySampleCount,
+            50u));
+    ResidencyWrite(
+        params,
+        feedbackBase + 83u,
+        ResidencyPublicationLatencyPercentile(
+            false,
+            ordinaryPublicationLatencySampleCount,
+            95u));
+    ResidencyWrite(
+        params,
+        feedbackBase + 84u,
+        ordinaryPublicationLatencyMaximum);
+    ResidencyWrite(
+        params,
+        feedbackBase + 85u,
+        ResidencyPublicationLatencyPercentile(
+            true,
+            cutPublicationLatencySampleCount,
+            50u));
+    ResidencyWrite(
+        params,
+        feedbackBase + 86u,
+        ResidencyPublicationLatencyPercentile(
+            true,
+            cutPublicationLatencySampleCount,
+            95u));
+    ResidencyWrite(
+        params,
+        feedbackBase + 87u,
+        cutPublicationLatencyMaximum);
+    ResidencyWrite(
+        params,
+        feedbackBase + 88u,
+        developmentPinnedPages);
+
+    // Interval counters include opaque requests before reconciliation and late
+    // transparent/fog requests after the previous feedback pass. Clear only
+    // after their values have been copied into this generation-stamped summary.
+    memoryBarrierBuffer();
+    atomicExchange(
+        BindlessStorageBuffers[nonuniformEXT(
+            params.residencyArenaBufferIndex)].Words[counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_RECEIVER_REQUESTS],
+        0u);
+    atomicExchange(
+        BindlessStorageBuffers[nonuniformEXT(
+            params.residencyArenaBufferIndex)].Words[counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_RECEIVER_OVERFLOW],
+        0u);
+    atomicExchange(
+        BindlessStorageBuffers[nonuniformEXT(
+            params.residencyArenaBufferIndex)].Words[counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_COARSER_FALLBACK],
+        0u);
+    atomicExchange(
+        BindlessStorageBuffers[nonuniformEXT(
+            params.residencyArenaBufferIndex)].Words[counters +
+            SIMPLE_DDGI_RESIDENCY_COUNTER_NONRESIDENT_GATHER_REJECTIONS],
+        0u);
+}

@@ -57,6 +57,11 @@ public sealed record SampleBenchmarkReport(
     public SampleShaderProfileEvidence ShaderProfile { get; init; } =
         SampleShaderProfileEvidence.Unavailable(
             "Nsight shader-profile evidence was not supplied.");
+    public SampleTailDdgiRuntimeEvidence TailDdgiEvidence { get; init; } =
+        SampleTailDdgiRuntimeEvidence.Unavailable(
+            "Tail-certified DDGI was not observed in this capture.");
+    public SampleBenchmarkMaterialTimingEvidence MaterialTimingEvidence { get; init; } =
+        SampleBenchmarkMaterialTimingEvidence.Unavailable;
 }
 
 public sealed record SampleBenchmarkTimingStats(
@@ -68,9 +73,32 @@ public sealed record SampleBenchmarkTimingStats(
     double P95Milliseconds)
 {
     public double MedianMilliseconds { get; init; }
+    public double P50Milliseconds { get; init; }
+    public double P99Milliseconds { get; init; }
 
     public static SampleBenchmarkTimingStats Empty(string name) =>
-        new(name, 0, 0, 0, 0, 0) { MedianMilliseconds = 0 };
+        new(name, 0, 0, 0, 0, 0)
+        {
+            MedianMilliseconds = 0,
+            P50Milliseconds = 0,
+            P99Milliseconds = 0
+        };
+}
+
+public sealed record SampleBenchmarkMaterialTimingEvidence(
+    SampleBenchmarkTimingStats Compile,
+    SampleBenchmarkTimingStats Upload,
+    SampleBenchmarkTimingStats Pipeline,
+    bool CompileSequenceExact,
+    bool UploadSequenceExact)
+{
+    public static SampleBenchmarkMaterialTimingEvidence Unavailable { get; } =
+        new(
+            SampleBenchmarkTimingStats.Empty("Material GI compile P95"),
+            SampleBenchmarkTimingStats.Empty("Material GI upload P95"),
+            SampleBenchmarkTimingStats.Empty("Material GI compile/upload P95"),
+            CompileSequenceExact: false,
+            UploadSequenceExact: false);
 }
 
 public sealed record SampleBenchmarkCaptureContract(
