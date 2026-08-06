@@ -13,7 +13,7 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 // would require more descriptors than this production layout.
 const uint SIMPLE_DDGI_PUBLISH_MAX_IMAGE_GROUPS = 16u;
 layout(set = 2, binding = 0, rgba16f) uniform image2DArray IrradianceImages[16];
-layout(set = 2, binding = 1, rgba16f) uniform image2DArray VisibilityImages[16];
+layout(set = 2, binding = 1, rg16f) uniform image2DArray VisibilityImages[16];
 
 layout(push_constant) uniform SimpleDdgiPublishPushBlock
 {
@@ -32,6 +32,18 @@ layout(push_constant) uniform SimpleDdgiPublishPushBlock
     uint SchedulerCountersOffsetWords;
     uint SchedulerFrameOffsetWords;
 } pc;
+
+void CompleteSampledPublication(SimpleDdgiProbeUpdate update)
+{
+    if (gl_LocalInvocationID.x == 0u)
+    {
+        SimpleDdgiSchedulerCompleteSingle(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 6u);
+    }
+}
 
 void main()
 {
@@ -93,15 +105,62 @@ void main()
         return;
     }
 
-    uint groupIndex = update.physicalProbeIndex / pc.SampledAtlasLayersPerTexture;
-    uint layerIndex = update.physicalProbeIndex - groupIndex * pc.SampledAtlasLayersPerTexture;
-    if (groupIndex >= min(pc.SampledAtlasGroupCount, SIMPLE_DDGI_PUBLISH_MAX_IMAGE_GROUPS))
+    SimpleDdgiVolume volume = ReadSimpleDdgiVolume(
+        pc.ParamsBufferIndex,
+        update.volumeIndex);
+    bool irradianceMirrored =
+        (volume.cacheLayoutFlags & SIMPLE_DDGI_CACHE_IRRADIANCE_MIRROR_BIT) != 0u;
+    bool visibilityMirrored =
+        (volume.cacheLayoutFlags & SIMPLE_DDGI_CACHE_VISIBILITY_MIRROR_BIT) != 0u;
+
+    // A receiver-relevant mirror intentionally excludes complete volumes. Such
+    // updates still satisfy the publication stage because receivers fall back
+    // to the canonical SSBO payload for that volume.
+    if (volume.compactMirrorFirstLayerPlusOne == 0u &&
+        !irradianceMirrored && !visibilityMirrored)
     {
-        SimpleDdgiSchedulerFailOutcome(
-            pc.SchedulerArenaBufferIndex,
-            pc.SchedulerOutcomesOffsetWords,
-            update.outcomeIndex,
-            1u << 2u);
+        CompleteSampledPublication(update);
+        return;
+    }
+
+    SimpleDdgiVolumePaging paging = ReadSimpleDdgiVolumePaging(
+        pc.ParamsBufferIndex,
+        update.volumeIndex);
+    SimpleDdgiAtlasAddress address;
+    bool atlasAddressValid = TryBuildSimpleDdgiAtlasAddress(
+        params,
+        volume,
+        paging,
+        update.physicalProbeIndex,
+        address);
+    bool addressValid = irradianceMirrored && visibilityMirrored &&
+        volume.compactMirrorFirstLayerPlusOne != 0u &&
+        params.sampledAtlasLayersPerTexture == pc.SampledAtlasLayersPerTexture &&
+        params.sampledAtlasTextureGroupCount == pc.SampledAtlasGroupCount &&
+        atlasAddressValid &&
+        (address.sampledStatusFlags &
+            SIMPLE_DDGI_ATLAS_ADDRESS_MAPPING_VALID_BIT) != 0u;
+    uint groupIndex = address.sampledGroupIndex;
+    uint layerIndex = address.sampledLayerIndex;
+    if (!addressValid ||
+        groupIndex >= min(pc.SampledAtlasGroupCount, SIMPLE_DDGI_PUBLISH_MAX_IMAGE_GROUPS))
+    {
+        // The image is an optional accelerator. Corrupt or stale mirror
+        // metadata must never reject an otherwise complete canonical update;
+        // receivers validate the same mapping and take the SSBO fallback.
+        CompleteSampledPublication(update);
+        return;
+    }
+    ivec3 irradianceDimensions = imageSize(
+        IrradianceImages[nonuniformEXT(groupIndex)]);
+    ivec3 visibilityDimensions = imageSize(
+        VisibilityImages[nonuniformEXT(groupIndex)]);
+    if (layerIndex >= uint(max(irradianceDimensions.z, 0)) ||
+        layerIndex >= uint(max(visibilityDimensions.z, 0)) ||
+        any(notEqual(irradianceDimensions.xy, ivec2(params.irradianceTexels))) ||
+        any(notEqual(visibilityDimensions.xy, ivec2(params.visibilityTexels))))
+    {
+        CompleteSampledPublication(update);
         return;
     }
 
@@ -113,12 +172,12 @@ void main()
         uint x = texel % params.irradianceTexels;
         uint y = texel / params.irradianceTexels;
         vec4 value = residentTransaction
-            ? ReadSimpleDdgiAtlasTexel(
+            ? ReadSimpleDdgiIrradianceTexel(
                 pc.TransportIrradianceAtlasBufferIndex,
                 update.physicalProbeIndex,
                 texel,
                 params.irradianceTexels)
-            : ReadSimpleDdgiAtlasTexel(
+            : ReadSimpleDdgiIrradianceTexel(
                 pc.IrradianceAtlasBufferIndex,
                 update.physicalProbeIndex,
                 texel,
@@ -136,14 +195,14 @@ void main()
     {
         uint x = texel % params.visibilityTexels;
         uint y = texel / params.visibilityTexels;
-        vec4 value = residentTransaction
-            ? ReadSimpleDdgiAtlasTexelAtOffset(
+        vec2 moments = residentTransaction
+            ? ReadSimpleDdgiVisibilityMomentsAtOffset(
                 pc.TransportIrradianceAtlasBufferIndex,
                 pc.PrivateVisibilityAtlasOffsetWords,
                 update.physicalProbeIndex,
                 texel,
                 params.visibilityTexels)
-            : ReadSimpleDdgiAtlasTexel(
+            : ReadSimpleDdgiVisibilityMoments(
                 pc.VisibilityAtlasBufferIndex,
                 update.physicalProbeIndex,
                 texel,
@@ -151,17 +210,12 @@ void main()
         imageStore(
             VisibilityImages[nonuniformEXT(groupIndex)],
             ivec3(int(x), int(y), int(layerIndex)),
-            value);
+            vec4(moments, 0.0, 1.0));
     }
 
     memoryBarrierImage();
     barrier();
     memoryBarrierBuffer();
     barrier();
-    if (gl_LocalInvocationID.x == 0u)
-        SimpleDdgiSchedulerCompleteSingle(
-            pc.SchedulerArenaBufferIndex,
-            pc.SchedulerOutcomesOffsetWords,
-            update.outcomeIndex,
-            1u << 6u);
+    CompleteSampledPublication(update);
 }

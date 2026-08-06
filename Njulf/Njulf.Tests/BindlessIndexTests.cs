@@ -38,10 +38,14 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.FarFieldClipmapParamsBuffer, Is.EqualTo(BindlessIndex.SimpleDdgiEmissiveSourceBuffer + 1));
             Assert.That(BindlessIndex.SimpleDdgiReceiverProbeBuffer, Is.EqualTo(BindlessIndex.SimpleDdgiSchedulerArenaBuffer + 1));
             Assert.That(BindlessIndex.SimpleDdgiResidencyArenaBuffer, Is.EqualTo(BindlessIndex.SimpleDdgiReceiverProbeBuffer + 1));
+            Assert.That(BindlessIndex.SimpleDdgiStorageValidationBufferBase, Is.EqualTo(BindlessIndex.SimpleDdgiResidencyArenaBuffer + 1));
+            Assert.That(BindlessIndex.SimpleDdgiStorageValidationBufferFrame1, Is.EqualTo(BindlessIndex.SimpleDdgiStorageValidationBufferBase + 1));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiRayQueryInstanceBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiRayQueryInstanceBuffer)));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiEmissiveSourceBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiEmissiveSourceBuffer)));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiReceiverProbeBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiReceiverProbeBuffer)));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiResidencyArenaBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiResidencyArenaBuffer)));
+            Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiStorageValidationBufferBase), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiStorageValidationBufferBase)));
+            Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiStorageValidationBufferFrame1), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiStorageValidationBufferFrame1)));
         });
     }
 
@@ -63,6 +67,7 @@ public sealed class BindlessIndexTests
             ["SIMPLE_DDGI_EMISSIVE_SOURCE_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiEmissiveSourceBuffer,
             ["SIMPLE_DDGI_RECEIVER_PROBE_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiReceiverProbeBuffer,
             ["SIMPLE_DDGI_RESIDENCY_ARENA_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiResidencyArenaBuffer,
+            ["SIMPLE_DDGI_STORAGE_VALIDATION_BUFFER_BASE_INDEX"] = BindlessIndex.SimpleDdgiStorageValidationBufferBase,
             ["FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapParamsBuffer,
             ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount
         };

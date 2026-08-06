@@ -140,6 +140,23 @@ namespace Njulf.Rendering.Data
         public float TailRelativeBound { get; init; }
         public float TailTolerance { get; init; }
         public float TailCanonicalQuantizationFloor { get; init; }
+        public uint TailMaximumDefectWitnessProbeIndex { get; init; }
+        public uint TailMaximumDefectWitnessTexelIndex { get; init; }
+        public bool TailDetailedWitnessValid { get; init; }
+        public uint TailDetailedWitnessProbeIndex { get; init; }
+        public uint TailDetailedWitnessTexelIndex { get; init; }
+        public float TailDetailedWitnessWeightSum { get; init; }
+        public float TailDetailedWitnessCandidateR { get; init; }
+        public float TailDetailedWitnessCandidateG { get; init; }
+        public float TailDetailedWitnessCandidateB { get; init; }
+        public float TailDetailedWitnessCanonicalR { get; init; }
+        public float TailDetailedWitnessCanonicalG { get; init; }
+        public float TailDetailedWitnessCanonicalB { get; init; }
+        public float TailDetailedWitnessProbeResidual { get; init; }
+        public uint TailDetailedWitnessSourceRayCount { get; init; }
+        public float TailDetailedWitnessPrivateR { get; init; }
+        public float TailDetailedWitnessPrivateG { get; init; }
+        public float TailDetailedWitnessPrivateB { get; init; }
         public ulong TailAuditMicroseconds { get; init; }
         public ulong TailAuditFirstFrameSerial { get; init; }
         public ulong TailAuditFinalFrameSerial { get; init; }
@@ -1237,6 +1254,8 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiSampledAtlasGroupCount { get; init; }
         public int SimpleDdgiSampledAtlasLayersPerTexture { get; init; }
         public ulong SimpleDdgiSampledAtlasImageBytes { get; init; }
+        public SimpleDdgiStorageDiagnostics SimpleDdgiStorage { get; init; } =
+            SimpleDdgiStorageDiagnostics.Unavailable;
         public ulong SimpleDdgiRayScratchBytes { get; init; }
         public ulong SimpleDdgiProbeStateBytes { get; init; }
         public ulong SimpleDdgiReceiverProbeBytes { get; init; }

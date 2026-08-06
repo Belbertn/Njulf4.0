@@ -120,7 +120,8 @@ void ResidencyInvalidateVirtualProbe(
         stateBase + 4u);
     flags = ResidencyAdvanceVirtualGeneration(flags);
     flags &= ~(SIMPLE_DDGI_PROBE_FLAG_INACTIVE |
-        SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING);
+        SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING |
+        SIMPLE_DDGI_PROBE_FLAG_VISIBILITY_VALID);
     flags |= SIMPLE_DDGI_PROBE_FLAG_FRESH |
         SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID;
     if (remainNonResident)

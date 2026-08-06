@@ -6,25 +6,32 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-const uint SIMPLE_DDGI_COMMIT_SOURCE_CACHE_STRIDE_WORDS = 9u;
 const uint SIMPLE_DDGI_COMMIT_SOURCE_CACHE_VALID_FLAG = 1u << 24u;
 const uint SIMPLE_DDGI_COMMIT_PHYSICAL_GENERATION_MASK = 0x00ffffffu;
+const uint SIMPLE_DDGI_COMMIT_DIRECTION_EPOCH_SHIFT = 27u;
+const uint SIMPLE_DDGI_COMMIT_DIRECTION_EPOCH_MASK = 0x1fu <<
+    SIMPLE_DDGI_COMMIT_DIRECTION_EPOCH_SHIFT;
 
 bool SealCommittedSourceCache(
-    uint probeIndex,
+    uint volumeIndex,
+    uint cacheProbeBaseWordPlusOne,
     uint sourceRayCount,
     uint currentGeneration,
     uint committedGeneration,
-    uint sourceLightingGeneration,
     uint sourceEpoch)
 {
     uint sourceCacheBufferIndex = ReadStorageWordUniform(pc.ParamsBufferIndex, 46u);
     uint raysPerProbe = max(
         uint(ReadStorageFloatUniform(pc.ParamsBufferIndex, 10u)),
         1u);
+    uint cacheWordsPerProbe = SchedulerVolumeCacheWordsPerProbe(volumeIndex);
+    uint cacheStrideWords = cacheWordsPerProbe / raysPerProbe;
+    uint cacheLayoutFlags = SchedulerVolumeCacheLayoutFlags(volumeIndex);
     if (sourceCacheBufferIndex == 0u ||
         sourceRayCount == 0u ||
-        sourceRayCount > raysPerProbe)
+        sourceRayCount > raysPerProbe || cacheProbeBaseWordPlusOne == 0u ||
+        cacheStrideWords == 0u ||
+        cacheStrideWords * raysPerProbe != cacheWordsPerProbe)
     {
         return false;
     }
@@ -36,30 +43,51 @@ bool SealCommittedSourceCache(
          sourceOrdinal < sourceRayCount;
          sourceOrdinal++)
     {
-        uint directionRayIndex =
-            sourceOrdinal * raysPerProbe / sourceRayCount;
-        uint cacheBase =
-            (probeIndex * raysPerProbe + directionRayIndex) *
-                SIMPLE_DDGI_COMMIT_SOURCE_CACHE_STRIDE_WORDS;
+        uint directionRayIndex = SimpleDdgiStorageDirectionRayIndex(
+            sourceOrdinal,
+            sourceRayCount,
+            sourceRayCount,
+            raysPerProbe);
+        uint cacheBase;
+        uint cacheFormat;
+        if (!TryResolveSimpleDdgiTransportCacheAddressFromProbeBase(
+                cacheProbeBaseWordPlusOne,
+                directionRayIndex,
+                raysPerProbe,
+                cacheStrideWords,
+                cacheLayoutFlags,
+                cacheBase,
+                cacheFormat))
+        {
+            return false;
+        }
+        uint generationWord = cacheBase +
+            SimpleDdgiStorageExpectedStride(cacheFormat) - 1u;
         uint generationAndFlags = ReadStorageWordUniform(
             sourceCacheBufferIndex,
-            cacheBase + 6u);
+            generationWord);
         uint cachedGeneration =
             generationAndFlags & SIMPLE_DDGI_COMMIT_PHYSICAL_GENERATION_MASK;
-        uint encodedSourceRayCount = ReadStorageWordUniform(
-            sourceCacheBufferIndex,
-            cacheBase + 5u) >> 24u;
-        uint cachedSourceRayCount = encodedSourceRayCount == 0u
-            ? 256u
-            : encodedSourceRayCount;
+        bool metadataMatches =
+            ((generationAndFlags &
+                SIMPLE_DDGI_COMMIT_DIRECTION_EPOCH_MASK) >>
+                SIMPLE_DDGI_COMMIT_DIRECTION_EPOCH_SHIFT) ==
+                    (sourceEpoch & 0x1fu);
+        if (cacheFormat == SIMPLE_DDGI_STORAGE_FORMAT_LEGACY_36)
+        {
+            uint encodedSourceRayCount = ReadStorageWordUniform(
+                sourceCacheBufferIndex,
+                cacheBase + 7u) >> 24u;
+            uint cachedSourceRayCount = encodedSourceRayCount == 0u
+                ? 256u
+                : encodedSourceRayCount;
+            metadataMatches = metadataMatches &&
+                cachedSourceRayCount == sourceRayCount;
+        }
         if ((generationAndFlags & SIMPLE_DDGI_COMMIT_SOURCE_CACHE_VALID_FLAG) == 0u ||
             (cachedGeneration != currentGeneration &&
                 cachedGeneration != committedGeneration) ||
-            cachedSourceRayCount != sourceRayCount ||
-            ReadStorageWordUniform(sourceCacheBufferIndex, cacheBase + 7u) !=
-                sourceLightingGeneration ||
-            ReadStorageWordUniform(sourceCacheBufferIndex, cacheBase + 8u) !=
-                sourceEpoch)
+            !metadataMatches)
         {
             return false;
         }
@@ -71,17 +99,32 @@ bool SealCommittedSourceCache(
          sourceOrdinal < sourceRayCount;
          sourceOrdinal++)
     {
-        uint directionRayIndex =
-            sourceOrdinal * raysPerProbe / sourceRayCount;
-        uint cacheBase =
-            (probeIndex * raysPerProbe + directionRayIndex) *
-                SIMPLE_DDGI_COMMIT_SOURCE_CACHE_STRIDE_WORDS;
+        uint directionRayIndex = SimpleDdgiStorageDirectionRayIndex(
+            sourceOrdinal,
+            sourceRayCount,
+            sourceRayCount,
+            raysPerProbe);
+        uint cacheBase;
+        uint cacheFormat;
+        if (!TryResolveSimpleDdgiTransportCacheAddressFromProbeBase(
+                cacheProbeBaseWordPlusOne,
+                directionRayIndex,
+                raysPerProbe,
+                cacheStrideWords,
+                cacheLayoutFlags,
+                cacheBase,
+                cacheFormat))
+        {
+            return false;
+        }
+        uint generationWord = cacheBase +
+            SimpleDdgiStorageExpectedStride(cacheFormat) - 1u;
         uint generationAndFlags = ReadStorageWordUniform(
             sourceCacheBufferIndex,
-            cacheBase + 6u);
+            generationWord);
         WriteStorageWordUniform(
             sourceCacheBufferIndex,
-            cacheBase + 6u,
+            generationWord,
             (generationAndFlags & ~SIMPLE_DDGI_COMMIT_PHYSICAL_GENERATION_MASK) |
                 (committedGeneration &
                     SIMPLE_DDGI_COMMIT_PHYSICAL_GENERATION_MASK));
@@ -199,7 +242,7 @@ void main()
     // RelocateClassify reuses the first seven transaction words for its
     // relocation proposal, so words 0..6 no longer contain the emitted queue
     // header by commit time. Sparse physical identity remains immutable in
-    // words 7..8. Recover the owning volume from the accepted probe rather than
+    // words 7..9. Recover the owning volume from the accepted probe rather than
     // interpreting relocation.y as a volume index.
     uint volumeIndex;
     if (!SchedulerFindVolume(probeIndex, volumeIndex))
@@ -209,13 +252,23 @@ void main()
     }
     uint physicalProbeIndex = SchedulerArenaRead(proposalBase + 7u);
     uint pageMappingGeneration = SchedulerArenaRead(proposalBase + 8u);
+    uint cacheProbeBaseWordPlusOne = SchedulerArenaRead(proposalBase + 9u);
     uint livePhysicalProbeIndex;
     uint livePageMappingGeneration;
+    uint liveCacheProbeBaseWordPlusOne;
     if (!SchedulerResolvePayloadAddress(
             probeIndex,
             volumeIndex,
             livePhysicalProbeIndex,
             livePageMappingGeneration) ||
+        !TryResolveSimpleDdgiTransportCacheProbeBase(
+            SchedulerVolumeCacheBaseWord(volumeIndex),
+            SchedulerVolumeCacheWordsPerProbe(volumeIndex),
+            SchedulerVolumeCachePhysicalFirstProbe(volumeIndex),
+            SchedulerVolumeCachePhysicalProbeCount(volumeIndex),
+            livePhysicalProbeIndex,
+            liveCacheProbeBaseWordPlusOne) ||
+        cacheProbeBaseWordPlusOne != liveCacheProbeBaseWordPlusOne ||
         physicalProbeIndex != livePhysicalProbeIndex ||
         pageMappingGeneration != livePageMappingGeneration)
     {
@@ -271,15 +324,30 @@ void main()
     if ((updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) != 0u)
         proposedFlags &= ~SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID;
 
+    // Blend refreshes the complete private visibility tile before signaling
+    // completion. Solver-only V2 transactions preserve the prior bit. Failed,
+    // inactive, or relocation-pending transactions remain fail-closed.
+    if (!SchedulerTransportV2() || sourceRefresh ||
+        (updateFlags & SIMPLE_DDGI_SCHEDULER_PROBE_FRESH) != 0u)
+    {
+        proposedFlags |= SIMPLE_DDGI_PROBE_FLAG_VISIBILITY_VALID;
+    }
+    if ((proposedFlags & (SIMPLE_DDGI_PROBE_FLAG_INACTIVE |
+            SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING)) != 0u ||
+        proposedClassification == 1u || proposedActiveWeight <= 0.001)
+    {
+        proposedFlags &= ~SIMPLE_DDGI_PROBE_FLAG_VISIBILITY_VALID;
+    }
+
     uint committedGeneration =
         (proposedFlags & SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK) >>
             SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT;
     if (sourceRefresh && !SealCommittedSourceCache(
-            physicalProbeIndex,
+            volumeIndex,
+            cacheProbeBaseWordPlusOne,
             sourceRayCount,
             currentGeneration,
             committedGeneration,
-            sourceGeneration,
             sourceEpoch))
     {
         RejectOutcome(probeIndex, outcomeIndex);
@@ -288,6 +356,8 @@ void main()
 
     uint receiverFlags = 0u;
     if ((proposedFlags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u)
+        receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_FRESH;
+    if ((proposedFlags & SIMPLE_DDGI_PROBE_FLAG_VISIBILITY_VALID) == 0u)
         receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_FRESH;
     if ((proposedFlags & SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED) != 0u)
         receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_SCROLL_EXPOSED;
@@ -365,6 +435,12 @@ void main()
         packedReceiver);
 
     SchedulerArenaWrite(stateBase + 0u, SchedulerFrameIndex());
+    // Persist the exact producer-validated address only after every producer
+    // and receiver-visible publication has succeeded. Lightweight diagnostic
+    // consumers can use this one-based base without compiling the sparse page
+    // resolver into their hot ray kernel; reduction independently revalidates
+    // the current publication and ownership context before certifying it.
+    SchedulerArenaWrite(stateBase + 10u, cacheProbeBaseWordPlusOne);
     // For a source refresh the admitted active-ray count is also the source
     // sequence cardinality. It is retained in the expected-ray-count word;
     // the former sixteenth outcome word was a duplicate of this value.

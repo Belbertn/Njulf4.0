@@ -101,17 +101,33 @@ namespace Njulf.Rendering.Resources
             SimpleDdgiGatherMultiplicityCounterBase +
             SimpleDdgiGatherMultiplicityCounterCount;
         public const int DecalFragmentAttributionCounterCount = 6;
-        public const int CounterCount =
+        // Packed-storage and compact-mirror qualification. This family is
+        // emitted only by detailed DDGI shader variants.
+        public const int SimpleDdgiStorageValidationCounterBase =
             DecalFragmentAttributionCounterBase +
             DecalFragmentAttributionCounterCount;
+        public const int SimpleDdgiStorageValidationCounterCount = 23;
+        public const int CounterCount =
+            SimpleDdgiStorageValidationCounterBase +
+            SimpleDdgiStorageValidationCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const float DdgiShadowHitDistanceScale = 256.0f;
         public const ulong CounterBufferSize = CounterCount * sizeof(uint);
+        // Storage qualification remains appended to the public logical counter
+        // ABI, but uses a small low-offset physical bank. This keeps bounded
+        // detailed atomics isolated from hot renderer counters and avoids making
+        // native-driver code generation depend on a growing heterogeneous SSBO.
+        public const ulong SimpleDdgiStorageValidationBufferSize = 256;
+        private const int SimpleDdgiStorageValidationSentinelWord =
+            (int)(SimpleDdgiStorageValidationBufferSize / sizeof(uint)) - 1;
+        private const uint SimpleDdgiStorageValidationSentinel = 0x51dda11du;
 
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
         private readonly BufferHandle[] _buffers = new BufferHandle[FramesInFlight];
+        private readonly BufferHandle[] _simpleDdgiStorageValidationBuffers =
+            new BufferHandle[FramesInFlight];
         private readonly GpuMeshletCounters[] _lastCompletedCounters = new GpuMeshletCounters[FramesInFlight];
         private readonly DdgiForwardEstimateCounters[] _lastCompletedDdgiForwardEstimateCounters = new DdgiForwardEstimateCounters[FramesInFlight];
         private readonly DdgiInvestigationCounters[] _lastCompletedDdgiInvestigationCounters = new DdgiInvestigationCounters[FramesInFlight];
@@ -139,6 +155,13 @@ namespace Njulf.Rendering.Resources
                     AllocationCreateFlags.MappedBit | AllocationCreateFlags.HostAccessRandomBit,
                     $"Renderer Diagnostics Buffer Frame {i}",
                     MemoryBudgetCategory.DiagnosticsAndDebug);
+                _simpleDdgiStorageValidationBuffers[i] = _bufferManager.CreateBuffer(
+                    SimpleDdgiStorageValidationBufferSize,
+                    BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
+                    MemoryUsage.AutoPreferHost,
+                    AllocationCreateFlags.MappedBit | AllocationCreateFlags.HostAccessRandomBit,
+                    $"Simple DDGI Storage Validation Buffer Frame {i}",
+                    MemoryBudgetCategory.DiagnosticsAndDebug);
             }
         }
 
@@ -150,7 +173,18 @@ namespace Njulf.Rendering.Resources
             for (int i = 0; i < FramesInFlight; i++)
             {
                 VkBuffer buffer = _bufferManager.GetBuffer(_buffers[i]);
-                bindlessHeap.RegisterStorageBuffer(BindlessIndex.RendererDiagnosticsBufferBase + i, buffer, 0, CounterBufferSize);
+                bindlessHeap.RegisterStorageBuffer(
+                    BindlessIndex.RendererDiagnosticsBufferBase + i,
+                    buffer,
+                    0,
+                    CounterBufferSize);
+                VkBuffer storageValidationBuffer = _bufferManager.GetBuffer(
+                    _simpleDdgiStorageValidationBuffers[i]);
+                bindlessHeap.RegisterStorageBuffer(
+                    BindlessIndex.SimpleDdgiStorageValidationBufferBase + i,
+                    storageValidationBuffer,
+                    0,
+                    SimpleDdgiStorageValidationBufferSize);
             }
         }
 
@@ -159,6 +193,12 @@ namespace Njulf.Rendering.Resources
             ValidateFrameIndex(frameIndex);
             _bufferManager.InvalidateBuffer(_buffers[frameIndex], 0, CounterBufferSize);
             uint* counters = (uint*)_bufferManager.GetMappedPointer(_buffers[frameIndex]);
+            _bufferManager.InvalidateBuffer(
+                _simpleDdgiStorageValidationBuffers[frameIndex],
+                0,
+                SimpleDdgiStorageValidationBufferSize);
+            uint* storageValidationCounters = (uint*)_bufferManager.GetMappedPointer(
+                _simpleDdgiStorageValidationBuffers[frameIndex]);
 
             _lastCompletedThinSurfaceTransportCounters[frameIndex] = new ThinSurfaceTransportCounters(
                 DetailedHitCount: counters[ThinSurfaceTransportCounterBase + 0],
@@ -354,6 +394,19 @@ namespace Njulf.Rendering.Resources
                     break;
                 }
             }
+#if NJULF_DETAILED_INVESTIGATION
+            // A transfer-written marker distinguishes a valid all-zero result
+            // from an unreadable or wrong-frame bank. The last aligned word is
+            // outside the shader counter family and is checked after the frame
+            // fence before any qualification snapshot is published.
+            bool storageValidationValid =
+                storageValidationCounters[SimpleDdgiStorageValidationSentinelWord] ==
+                    SimpleDdgiStorageValidationSentinel;
+#else
+            bool storageValidationValid = false;
+#endif
+            if (storageValidationValid)
+                investigationValid = true;
 
             float invInvestigationSampleCount = ddgiInvestigationSampleCount > 0 ? 1.0f / ddgiInvestigationSampleCount : 0.0f;
             float invSimpleVisibilitySampleCount = simpleVisibilitySampleCount > 0 ? 1.0f / simpleVisibilitySampleCount : 0.0f;
@@ -379,6 +432,9 @@ namespace Njulf.Rendering.Resources
             uint[] simpleGatherRecoveryRejectionCounts = investigationValid
                 ? new uint[SimpleDdgiGatherRejectionReasonCount]
                 : Array.Empty<uint>();
+            uint[] directionAngularHistogram = storageValidationValid
+                ? new uint[8]
+                : Array.Empty<uint>();
             for (int i = 0; i < simpleVolumePrimaryGatherCounts.Length; i++)
             {
                 simpleVolumePrimaryGatherCounts[i] = counters[SimpleDdgiVolumePrimaryGatherCounterBase + i];
@@ -397,7 +453,11 @@ namespace Njulf.Rendering.Resources
                         SimpleDdgiGatherRejectionReasonCount + reason];
                 simpleGatherRecoveryRejectionCounts[reason] =
                     counters[SimpleDdgiGatherRejectionCounterBase +
-                        SimpleDdgiGatherRejectionReasonCount * 2 + reason];
+                    SimpleDdgiGatherRejectionReasonCount * 2 + reason];
+            }
+            for (int bucket = 0; bucket < directionAngularHistogram.Length; bucket++)
+            {
+                directionAngularHistogram[bucket] = storageValidationCounters[13 + bucket];
             }
 
             _lastCompletedDdgiInvestigationCounters[frameIndex] = investigationValid
@@ -472,7 +532,27 @@ namespace Njulf.Rendering.Resources
                         EstimatedCoverageKilledCount: counters[DecalFragmentAttributionCounterBase + 2],
                         EstimatedSurvivingCount: counters[DecalFragmentAttributionCounterBase + 3],
                         EstimatedDdgiGatherCount: counters[DecalFragmentAttributionCounterBase + 4],
-                        EstimatedShadowEvaluationCount: counters[DecalFragmentAttributionCounterBase + 5])
+                        EstimatedShadowEvaluationCount: counters[DecalFragmentAttributionCounterBase + 5]),
+                    StorageValidation = storageValidationValid
+                        ? new SimpleDdgiStorageValidationCounters(
+                            ReadbackValid: 1,
+                            MirrorInteriorOpportunityCount: storageValidationCounters[0],
+                            MirrorImageHitCount: storageValidationCounters[1],
+                            MirrorSeamFallbackCount: storageValidationCounters[2],
+                            MirrorUnmirroredFallbackCount: storageValidationCounters[3],
+                            MirrorInvalidMapFallbackCount: storageValidationCounters[4],
+                            CachePackAttemptCount: storageValidationCounters[5],
+                            CachePackNonFiniteCount: storageValidationCounters[6],
+                            CachePackRadianceSaturationCount: storageValidationCounters[7],
+                            CachePackMaximumRadianceError: storageValidationCounters[8] / 1_000_000.0f,
+                            CachePackMaximumDistanceError: storageValidationCounters[9] / 1_000_000.0f,
+                            DirectionComparisonSampleCount: storageValidationCounters[10],
+                            DirectionEpochMismatchCount: storageValidationCounters[11],
+                            DirectionMaximumAngularErrorRadians: storageValidationCounters[12] / 1_000_000.0f,
+                            DirectionAngularErrorHistogram: directionAngularHistogram,
+                            InvalidSourceEpochCount: storageValidationCounters[21],
+                            InvalidHitKindCount: storageValidationCounters[22])
+                        : SimpleDdgiStorageValidationCounters.Empty
                 }
                 : DdgiInvestigationCounters.Empty;
             if (sampleCount > 0 ||
@@ -776,8 +856,23 @@ namespace Njulf.Rendering.Resources
                 0,
                 CounterBufferSize,
                 0);
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                _bufferManager.GetBuffer(_simpleDdgiStorageValidationBuffers[frameIndex]),
+                0,
+                SimpleDdgiStorageValidationBufferSize,
+                0);
+#if NJULF_DETAILED_INVESTIGATION
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                _bufferManager.GetBuffer(_simpleDdgiStorageValidationBuffers[frameIndex]),
+                (ulong)SimpleDdgiStorageValidationSentinelWord * sizeof(uint),
+                sizeof(uint),
+                SimpleDdgiStorageValidationSentinel);
+#endif
 
-            var barrier = new BufferMemoryBarrier2
+            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[2];
+            barriers[0] = new BufferMemoryBarrier2
             {
                 SType = StructureType.BufferMemoryBarrier2,
                 SrcStageMask = PipelineStageFlags2.TransferBit,
@@ -790,12 +885,16 @@ namespace Njulf.Rendering.Resources
                 Offset = 0,
                 Size = CounterBufferSize
             };
+            barriers[1] = barriers[0];
+            barriers[1].Buffer = _bufferManager.GetBuffer(
+                _simpleDdgiStorageValidationBuffers[frameIndex]);
+            barriers[1].Size = SimpleDdgiStorageValidationBufferSize;
 
             var dependencyInfo = new DependencyInfo
             {
                 SType = StructureType.DependencyInfo,
-                BufferMemoryBarrierCount = 1,
-                PBufferMemoryBarriers = &barrier
+                BufferMemoryBarrierCount = 2,
+                PBufferMemoryBarriers = barriers
             };
 
             _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
@@ -811,6 +910,8 @@ namespace Njulf.Rendering.Resources
             {
                 if (_buffers[i].IsValid)
                     _bufferManager.DestroyBuffer(_buffers[i]);
+                if (_simpleDdgiStorageValidationBuffers[i].IsValid)
+                    _bufferManager.DestroyBuffer(_simpleDdgiStorageValidationBuffers[i]);
             }
         }
     }

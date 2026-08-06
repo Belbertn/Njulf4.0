@@ -339,9 +339,22 @@ public sealed class SimpleDdgiTransportSolveController
             !summary.IsCertified)
         {
             LastSummary = summary;
-            LastReason = summary.CanonicalQuantizationFloor > summary.Tolerance
-                ? SimpleDdgiTransportCertificationReason.QuantizationLimited
-                : SimpleDdgiTransportCertificationReason.TailAboveTolerance;
+            LastReason = summary.Reason switch
+            {
+                SimpleDdgiTransportCertificationReason.ParticipantCoverageIncomplete =>
+                    SimpleDdgiTransportCertificationReason.ParticipantCoverageIncomplete,
+                SimpleDdgiTransportCertificationReason.CounterOverflow =>
+                    SimpleDdgiTransportCertificationReason.CounterOverflow,
+                SimpleDdgiTransportCertificationReason.NonFiniteEvidence =>
+                    SimpleDdgiTransportCertificationReason.NonFiniteEvidence,
+                SimpleDdgiTransportCertificationReason.QuantizationLimited =>
+                    SimpleDdgiTransportCertificationReason.QuantizationLimited,
+                SimpleDdgiTransportCertificationReason.TailAboveTolerance =>
+                    SimpleDdgiTransportCertificationReason.TailAboveTolerance,
+                _ => summary.CanonicalQuantizationFloor > summary.Tolerance
+                    ? SimpleDdgiTransportCertificationReason.QuantizationLimited
+                    : SimpleDdgiTransportCertificationReason.TailAboveTolerance
+            };
             // A finite, complete audit above tolerance is useful evidence, but
             // it does not authorize another audit of the byte-identical field.
             // Start a distinct epoch and clear its visit witness so every probe

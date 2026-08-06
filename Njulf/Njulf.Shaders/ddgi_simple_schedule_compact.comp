@@ -19,8 +19,8 @@ void main()
         return;
 
     uint volumeIndex = SchedulerCandidateWord(inputBase, 1u);
-    uint workClassAndTransport = SchedulerCandidateWord(inputBase, 4u);
-    uint rayTierAndReason = SchedulerCandidateWord(inputBase, 5u);
+    uint workClassAndTransport = SchedulerCandidateWord(inputBase, 2u);
+    uint rayTierAndReason = SchedulerCandidateWord(inputBase, 3u);
     uint workClass = workClassAndTransport & 7u;
     uint transport = (workClassAndTransport >> 3u) & 3u;
     uint rayTier = rayTierAndReason & 0xffu;
@@ -42,8 +42,8 @@ void main()
         if (priorProbe == SIMPLE_DDGI_SCHEDULER_INVALID_PROBE)
             continue;
         uint priorVolume = SchedulerCandidateWord(priorBase, 1u);
-        uint priorClassTransport = SchedulerCandidateWord(priorBase, 4u);
-        uint priorRayReason = SchedulerCandidateWord(priorBase, 5u);
+        uint priorClassTransport = SchedulerCandidateWord(priorBase, 2u);
+        uint priorRayReason = SchedulerCandidateWord(priorBase, 3u);
         uint priorLane = SchedulerLaneIndex(
             priorVolume,
             priorClassTransport & 7u,

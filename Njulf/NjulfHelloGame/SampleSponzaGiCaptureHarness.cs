@@ -529,7 +529,10 @@ public sealed class SampleSponzaGiCaptureContract
         IReadOnlyList<SampleSponzaGiCapturedArtifact> artifacts,
         string status,
         string? failureReason = null,
-        SampleSponzaGiCaptureMode captureMode = SampleSponzaGiCaptureMode.DetailedDiagnostics)
+        SampleSponzaGiCaptureMode captureMode = SampleSponzaGiCaptureMode.DetailedDiagnostics,
+        SimpleDdgiStoragePackingMode storagePackingMode = SimpleDdgiStoragePackingMode.Packed,
+        SimpleDdgiSampledAtlasCoverageMode sampledAtlasCoverageMode =
+            SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant)
     {
         if (string.IsNullOrWhiteSpace(outputDirectory))
             throw new ArgumentException("An output directory is required.", nameof(outputDirectory));
@@ -539,6 +542,10 @@ public sealed class SampleSponzaGiCaptureContract
             throw new ArgumentException("A capture status is required.", nameof(status));
         if (!Enum.IsDefined(captureMode))
             throw new ArgumentOutOfRangeException(nameof(captureMode));
+        if (!Enum.IsDefined(storagePackingMode))
+            throw new ArgumentOutOfRangeException(nameof(storagePackingMode));
+        if (!Enum.IsDefined(sampledAtlasCoverageMode))
+            throw new ArgumentOutOfRangeException(nameof(sampledAtlasCoverageMode));
 
         string normalizedStatus = status.Trim().ToLowerInvariant();
         if (normalizedStatus is not ("running" or "awaiting-renderer-screenshots" or "completed" or "failed"))
@@ -571,6 +578,8 @@ public sealed class SampleSponzaGiCaptureContract
             status = normalizedStatus,
             failureReason,
             captureMode,
+            simpleDdgiStoragePackingMode = storagePackingMode,
+            simpleDdgiSampledAtlasCoverageMode = sampledAtlasCoverageMode,
             timingClassification = GetTimingClassification(captureMode),
             artifactHashAlgorithm = "SHA-256",
             artifacts = manifestArtifacts

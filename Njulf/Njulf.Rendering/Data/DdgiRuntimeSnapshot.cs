@@ -415,6 +415,7 @@ namespace Njulf.Rendering.Data
         public static DdgiInvestigationCounters Empty { get; } = default;
         public SimpleDdgiGatherMultiplicityCounters GatherMultiplicity { get; init; }
         public DecalFragmentAttributionCounters DecalFragmentAttribution { get; init; }
+        public SimpleDdgiStorageValidationCounters StorageValidation { get; init; }
     }
 
     public readonly record struct ThinSurfaceTransportCounters(

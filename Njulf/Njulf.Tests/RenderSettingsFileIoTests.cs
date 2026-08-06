@@ -191,6 +191,39 @@ public sealed class RenderSettingsFileIoTests
     }
 
     [Test]
+    public void SaveLoad_PreservesExplicitSimpleDdgiRepresentationRollback()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "ddgi-representation-rollback.json");
+        try
+        {
+            var settings = new RenderSettings();
+            settings.GlobalIllumination.SimpleDdgiStoragePackingMode =
+                SimpleDdgiStoragePackingMode.Legacy;
+            settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled = true;
+            settings.GlobalIllumination.SimpleDdgiSampledAtlasCoverageMode =
+                SimpleDdgiSampledAtlasCoverageMode.FullCanonical;
+
+            settings.Save(path);
+            RenderSettings loaded = RenderSettings.Load(path);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(loaded.GlobalIllumination.SimpleDdgiStoragePackingMode,
+                    Is.EqualTo(SimpleDdgiStoragePackingMode.Legacy));
+                Assert.That(loaded.GlobalIllumination.SimpleDdgiSampledAtlasEnabled,
+                    Is.True);
+                Assert.That(loaded.GlobalIllumination.SimpleDdgiSampledAtlasCoverageMode,
+                    Is.EqualTo(SimpleDdgiSampledAtlasCoverageMode.FullCanonical));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
     public void Load_MigratesLegacyTransportNamesAndSaveWritesOnlyCurrentNames()
     {
         string directory = CreateTemporaryDirectory();

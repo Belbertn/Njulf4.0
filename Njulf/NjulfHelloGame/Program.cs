@@ -292,7 +292,11 @@ internal sealed class HelloGame : Game
             _inputController.StartSponzaGiCapture(
                 _smokeOptions.SponzaGiCaptureDirectory,
                 exitWhenComplete: true,
-                captureMode: SampleSponzaGiCaptureMode.DetailedDiagnostics);
+                captureMode: SampleSponzaGiCaptureMode.DetailedDiagnostics,
+                storagePackingModeOverride:
+                    _smokeOptions.SimpleDdgiStoragePackingModeOverride,
+                sampledAtlasCoverageModeOverride:
+                    _smokeOptions.SimpleDdgiSampledAtlasCoverageModeOverride);
         }
         else if (!string.IsNullOrWhiteSpace(_smokeOptions.BaselineSnapshotDirectory))
         {
@@ -504,6 +508,19 @@ internal sealed class HelloGame : Game
                 _smokeOptions.SimpleDdgiSchedulerModeOverride.Value;
         }
         GlobalIlluminationSettings gi = renderer.Settings.GlobalIllumination;
+        if (_smokeOptions.SimpleDdgiStoragePackingModeOverride.HasValue)
+        {
+            gi.SimpleDdgiStoragePackingMode =
+                _smokeOptions.SimpleDdgiStoragePackingModeOverride.Value;
+        }
+        if (_smokeOptions.SimpleDdgiSampledAtlasCoverageModeOverride.HasValue)
+        {
+            gi.SimpleDdgiSampledAtlasCoverageMode =
+                _smokeOptions.SimpleDdgiSampledAtlasCoverageModeOverride.Value;
+            gi.SimpleDdgiSampledAtlasEnabled =
+                gi.SimpleDdgiSampledAtlasCoverageMode !=
+                    SimpleDdgiSampledAtlasCoverageMode.Disabled;
+        }
         if (_smokeOptions.SimpleDdgiProbeResidencyModeOverride.HasValue)
             gi.SimpleDdgiProbeResidencyMode =
                 _smokeOptions.SimpleDdgiProbeResidencyModeOverride.Value;

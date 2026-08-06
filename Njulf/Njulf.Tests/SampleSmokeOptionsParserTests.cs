@@ -31,6 +31,8 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_FAR_FIELD_CLIPMAP", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_FAR_FIELD_FORCE_ALL", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SIMPLE_DDGI_SCHEDULER_MODE", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_SIMPLE_DDGI_STORAGE_MODE", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_SIMPLE_DDGI_MIRROR_COVERAGE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR", null);
         Environment.SetEnvironmentVariable("NJULF_SPONZA_GI_CAPTURE_DIR", null);
@@ -1122,6 +1124,51 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(options.LongRunMaxRetainedSamples, Is.EqualTo(512));
             Assert.That(options.LongRunMemoryGrowthToleranceBytes, Is.EqualTo(2_097_152));
             Assert.That(options.LongRunReportPath, Is.EqualTo(Path.GetFullPath(report)));
+        });
+    }
+
+    [Test]
+    public void ParsesSimpleDdgiStorageQualificationOverrides()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--simple-ddgi-storage-mode", "packed",
+            "--simple-ddgi-mirror-coverage", "receiver-relevant"
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+            Assert.That(
+                options.SimpleDdgiStoragePackingModeOverride,
+                Is.EqualTo(SimpleDdgiStoragePackingMode.Packed));
+            Assert.That(
+                options.SimpleDdgiSampledAtlasCoverageModeOverride,
+                Is.EqualTo(SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant));
+        });
+    }
+
+    [Test]
+    public void ParsesSimpleDdgiStorageQualificationOverridesFromEnvironment()
+    {
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_SIMPLE_DDGI_STORAGE_MODE",
+            "validate");
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_SIMPLE_DDGI_MIRROR_COVERAGE",
+            "full-canonical");
+
+        SampleSmokeOptions options =
+            SampleSmokeOptionsParser.Parse(Array.Empty<string>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                options.SimpleDdgiStoragePackingModeOverride,
+                Is.EqualTo(SimpleDdgiStoragePackingMode.Validate));
+            Assert.That(
+                options.SimpleDdgiSampledAtlasCoverageModeOverride,
+                Is.EqualTo(SimpleDdgiSampledAtlasCoverageMode.FullCanonical));
         });
     }
 

@@ -47,12 +47,12 @@ public sealed class SimpleDdgiLayoutCompilerTests
 
         Assert.Multiple(() =>
         {
-            // Same-binary fixture after the resident scheduler and 48-byte
-            // generation-complete update queue became part of the live plan.
-            Assert.That(dense.LiveBytes, Is.EqualTo(201_263_392UL));
-            Assert.That(sparse.LiveBytes, Is.EqualTo(160_821_296UL));
+            // Production fixture with Compact-28 cache rays and 20-byte
+            // direction-free scratch selected by the default packed ABI.
+            Assert.That(dense.LiveBytes, Is.EqualTo(134_803_040UL));
+            Assert.That(sparse.LiveBytes, Is.EqualTo(107_894_128UL));
             Assert.That(dense.LiveBytes - sparse.LiveBytes,
-                Is.EqualTo(40_442_096UL));
+                Is.EqualTo(26_908_912UL));
             Assert.That(sparse.VirtualProbeCount, Is.EqualTo(15_368));
             Assert.That(sparse.DensePayloadProbeCount, Is.EqualTo(4_392));
             Assert.That(sparse.SparseVirtualPageCount, Is.EqualTo(1_372));
@@ -62,7 +62,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(sparse.SampledAtlasPhysicalProbeCapacity, Is.EqualTo(12_288));
             Assert.That(sparse.SampledAtlasPaddingProbeCount, Is.EqualTo(216));
             Assert.That(sparse.SampledAtlasPaddingBytes,
-                Is.EqualTo(216UL * (512UL + 2_048UL)));
+                Is.EqualTo(216UL * (512UL + 1_024UL)));
             Assert.That(sparse.ResidencyArenaBytes,
                 Is.LessThanOrEqualTo(SimpleDdgiProbePageLayout.CurrentProfileOverheadGateBytes));
             Assert.That(sparse.ResidencyArenaBytes, Is.EqualTo(139_024UL));
@@ -101,7 +101,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(plan.RayScratchBytes, Is.EqualTo(16UL));
             Assert.That(plan.ProbeStateReadbackBytes, Is.EqualTo(32UL));
             Assert.That(plan.SampledAtlasImageBytes, Is.Zero);
-            Assert.That(plan.LiveBytes, Is.EqualTo(2_464UL));
+            Assert.That(plan.LiveBytes, Is.EqualTo(2_720UL));
         });
     }
 
@@ -133,7 +133,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(
                 SimpleDdgiMemoryPlan.TransportRayCacheBytes,
                 Is.EqualTo((ulong)Marshal.SizeOf<GPUSimpleDdgiTransportRayCache>()));
-            Assert.That(SimpleDdgiMemoryPlan.TransportRayCacheAbiVersion, Is.EqualTo(4u));
+            Assert.That(SimpleDdgiMemoryPlan.TransportRayCacheAbiVersion, Is.EqualTo(5u));
             Assert.That(
                 SimpleDdgiMemoryPlan.ProbeStateBytesPerProbe,
                 Is.EqualTo((ulong)Marshal.SizeOf<GPUSimpleDdgiProbeState>()));
@@ -154,14 +154,17 @@ public sealed class SimpleDdgiLayoutCompilerTests
                 (SimpleDdgiMemoryPlan.VolumeBytes +
                     SimpleDdgiMemoryPlan.VolumePagingBytes)));
             Assert.That(plan.IrradianceAtlasBytes, Is.EqualTo((ulong)probes * 512UL));
-            Assert.That(plan.VisibilityAtlasBytes, Is.EqualTo((ulong)probes * 2_048UL));
+            Assert.That(plan.VisibilityAtlasBytes, Is.EqualTo((ulong)probes * 1_024UL));
             Assert.That(plan.TransportIrradianceBytes, Is.EqualTo((ulong)probes * 512UL));
             Assert.That(
                 plan.TransportSourceCacheBytes,
                 Is.EqualTo(
                     (ulong)probes *
                     rays *
-                    SimpleDdgiMemoryPlan.TransportRayCacheBytes));
+                    SimpleDdgiMemoryPlan.Compact28TransportRayCacheBytes));
+            Assert.That(plan.TransportSourceCacheLegacyBytes, Is.Zero);
+            Assert.That(plan.TransportSourceCacheCompact28Bytes,
+                Is.EqualTo(plan.TransportSourceCacheBytes));
             Assert.That(plan.ProbeStateBytes, Is.EqualTo((ulong)probes * 32UL));
             Assert.That(plan.ReceiverProbeBytes, Is.EqualTo((ulong)probes * 16UL));
             Assert.That(plan.UpdateQueueBytes,
@@ -177,9 +180,15 @@ public sealed class SimpleDdgiLayoutCompilerTests
                 Is.EqualTo(SimpleDdgiMemoryPlan.ResolveProbeStateReadbackBufferBytes(probes)));
             Assert.That(
                 plan.RayScratchBytes,
-                Is.EqualTo((ulong)updates * rays * 32UL));
+                Is.EqualTo((ulong)updates * rays * SimpleDdgiMemoryPlan.RayResultBytes));
+            Assert.That(plan.RayResultStrideBytes,
+                Is.EqualTo(SimpleDdgiMemoryPlan.RayResultBytes));
+            Assert.That(plan.StoragePackingMode,
+                Is.EqualTo(SimpleDdgiStoragePackingMode.Packed));
+            Assert.That(plan.SampledAtlasCoverageMode,
+                Is.EqualTo(SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant));
             Assert.That(plan.SampledAtlasProbeCapacity, Is.EqualTo(1_024));
-            Assert.That(plan.SampledAtlasImageBytes, Is.EqualTo(1_024UL * 2_560UL));
+            Assert.That(plan.SampledAtlasImageBytes, Is.EqualTo(1_024UL * 1_536UL));
             Assert.That(plan.SchedulerMode, Is.EqualTo(SimpleDdgiSchedulerMode.CpuReference));
             Assert.That(plan.SchedulerBufferBytes, Is.Zero);
             Assert.That(
@@ -212,7 +221,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(plan.SampledAtlasPhysicalProbeCapacity, Is.EqualTo(256));
             Assert.That(plan.SampledAtlasPaddingProbeCount, Is.EqualTo(235));
             Assert.That(plan.SampledAtlasPaddingBytes,
-                Is.EqualTo(235UL * (512UL + 2_048UL)));
+                Is.EqualTo(235UL * (512UL + 1_024UL)));
         });
     }
 
@@ -333,11 +342,13 @@ public sealed class SimpleDdgiLayoutCompilerTests
         const int probes = 257;
         const int updates = 64;
         const int rays = 32;
+        // Canonical admission has its own hard boundary. Optional image bytes
+        // are selected only after this accepted volume set is frozen.
         SimpleDdgiMemoryPlan expected = SimpleDdgiMemoryPlan.Create(
             probes,
             updateRequestCapacity: 128,
             rayCapacity: rays,
-            sampledAtlasRequested: true,
+            sampledAtlasRequested: false,
             concreteTransportBuffers: true,
             readbackBufferCount: RenderingConstants.FramesInFlight);
         SimpleDdgiLayoutVolumeRequest[] requests =
@@ -359,7 +370,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
                 probes,
                 expected.LiveBytes,
                 1),
-            sampledAtlasRequested: true,
+            sampledAtlasRequested: false,
             SimpleDdgiLayoutAdmissionMode.Reject,
             transportV2Enabled: true,
             transportRayCapacity: rays,
@@ -373,7 +384,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
                 probes,
                 expected.LiveBytes - 1UL,
                 1),
-            sampledAtlasRequested: true,
+            sampledAtlasRequested: false,
             SimpleDdgiLayoutAdmissionMode.Reject,
             transportV2Enabled: true,
             transportRayCapacity: rays,
@@ -385,7 +396,8 @@ public sealed class SimpleDdgiLayoutCompilerTests
         {
             Assert.That(accepted.AcceptedProbeCount, Is.EqualTo(probes));
             Assert.That(accepted.AcceptedPersistentBytes, Is.EqualTo(expected.LiveBytes));
-            Assert.That(accepted.AcceptedMemoryPlan, Is.EqualTo(expected));
+            Assert.That(accepted.AcceptedMemoryPlan.LiveBytes, Is.EqualTo(expected.LiveBytes));
+            Assert.That(accepted.AcceptedMemoryPlan.SampledAtlasImageBytes, Is.Zero);
             Assert.That(rejected.AcceptedProbeCount, Is.Zero);
             Assert.That(
                 rejected.Volumes.Single().Reason,
@@ -421,6 +433,17 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(
                 graphWithoutTransport.TransportSourceCacheBytes,
                 Is.EqualTo(SimpleDdgiMemoryPlan.GraphSafePlaceholderBytes));
+            Assert.That(
+                graphWithoutTransport.TransportSourceCacheLegacyBytes +
+                graphWithoutTransport.TransportSourceCacheCompact28Bytes +
+                graphWithoutTransport.TransportSourceCacheCompact24Bytes +
+                graphWithoutTransport.TransportSourceCacheAlignmentBytes,
+                Is.EqualTo(graphWithoutTransport.TransportSourceCacheBytes));
+            Assert.That(
+                graphWithoutTransport.TransportSourceCacheLegacyRayCount +
+                graphWithoutTransport.TransportSourceCacheCompact28RayCount +
+                graphWithoutTransport.TransportSourceCacheCompact24RayCount,
+                Is.Zero);
             Assert.That(
                 graphConcrete.LiveBytes - graphWithoutTransport.LiveBytes,
                 Is.EqualTo(
@@ -528,7 +551,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
     }
 
     [Test]
-    public void ResidentHighLayout_FallsBackToCanonicalAtlasesBeforeDroppingTheFarRing()
+    public void ResidentHighLayout_PreservesCanonicalFarRingWhenOptionalMirrorDoesNotFit()
     {
         const int nearProbes = 10_976;
         const int midProbes = 3_240;
@@ -544,16 +567,16 @@ public sealed class SimpleDdgiLayoutCompilerTests
             new("mid", 10_001, false, SimpleDdgiVolumePurpose.TransitionSupport, 0, 3.0f, midProbes),
             new("far", 10_002, false, SimpleDdgiVolumePurpose.TransitionSupport, 0, 9.0f, farProbes)
         ];
-        var budget = new SimpleDdgiLayoutBudget(
+        var broadBudget = new SimpleDdgiLayoutBudget(
             DdgiQualityTier.DdgiHigh,
             16_384,
             budgetBytes,
             GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount);
 
-        SimpleDdgiLayoutReport sampled = SimpleDdgiLayoutCompiler.Compile(
+        SimpleDdgiLayoutReport canonicalOnly = SimpleDdgiLayoutCompiler.Compile(
             requests,
-            budget,
-            sampledAtlasRequested: true,
+            broadBudget,
+            sampledAtlasRequested: false,
             SimpleDdgiLayoutAdmissionMode.Reject,
             transportV2Enabled: true,
             transportRayCapacity: rays,
@@ -561,10 +584,14 @@ public sealed class SimpleDdgiLayoutCompilerTests
             lightingDirtyBoostEnabled: true,
             readbackBufferCount: 0,
             residentPrivateTargets: true);
-        SimpleDdgiLayoutReport canonicalOnly = SimpleDdgiLayoutCompiler.Compile(
+        var tightCanonicalBudget = broadBudget with
+        {
+            PersistentMemoryBudgetBytes = canonicalOnly.AcceptedMemoryPlan.LiveBytes
+        };
+        SimpleDdgiLayoutReport sampled = SimpleDdgiLayoutCompiler.Compile(
             requests,
-            budget,
-            sampledAtlasRequested: false,
+            tightCanonicalBudget,
+            sampledAtlasRequested: true,
             SimpleDdgiLayoutAdmissionMode.Reject,
             transportV2Enabled: true,
             transportRayCapacity: rays,
@@ -575,18 +602,15 @@ public sealed class SimpleDdgiLayoutCompilerTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(sampled.AcceptedProbeCount, Is.EqualTo(nearProbes + midProbes));
-            Assert.That(sampled.WasDegraded, Is.True);
+            Assert.That(sampled.AcceptedProbeCount, Is.EqualTo(requestedProbes));
+            Assert.That(sampled.WasDegraded, Is.False);
             Assert.That(canonicalOnly.AcceptedProbeCount, Is.EqualTo(requestedProbes));
             Assert.That(canonicalOnly.WasDegraded, Is.False);
             Assert.That(canonicalOnly.AcceptedMemoryPlan.LiveBytes, Is.LessThanOrEqualTo(budgetBytes));
-            Assert.That(
-                SimpleDdgiVolumeManager.ShouldUseCanonicalOnlyResidentLayout(
-                    residentPrivateTargets: true,
-                    sampledAtlasRequested: true,
-                    sampled,
-                    canonicalOnly),
-                Is.True);
+            Assert.That(sampled.AcceptedSourceOrdinals,
+                Is.EquivalentTo(canonicalOnly.AcceptedSourceOrdinals));
+            Assert.That(sampled.SampledAtlasLayout.AdmittedProbeCount, Is.Zero);
+            Assert.That(sampled.AcceptedMemoryPlan.SampledAtlasImageBytes, Is.Zero);
         });
     }
 
@@ -636,7 +660,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
     }
 
     [Test]
-    public void Compile_ReservesTheOptionalSampledAtlasBeforeAdmission()
+    public void Compile_AdmitsCanonicalVolumesBeforeOptionalSampledAtlas()
     {
         const int probes = 100;
         ulong canonicalBudget = SimpleDdgiLayoutCompiler.EstimatePersistentBytes(probes, sampledAtlasRequested: false);
@@ -652,8 +676,11 @@ public sealed class SimpleDdgiLayoutCompilerTests
         Assert.Multiple(() =>
         {
             Assert.That(canonical.AcceptedProbeCount, Is.EqualTo(probes));
-            Assert.That(mirrored.AcceptedProbeCount, Is.Zero);
-            Assert.That(mirrored.Volumes[0].Reason, Is.EqualTo("persistent-memory-budget"));
+            Assert.That(mirrored.AcceptedProbeCount, Is.EqualTo(probes));
+            Assert.That(mirrored.AcceptedSourceOrdinals,
+                Is.EquivalentTo(canonical.AcceptedSourceOrdinals));
+            Assert.That(mirrored.SampledAtlasLayout.AdmittedProbeCount, Is.Zero);
+            Assert.That(mirrored.AcceptedMemoryPlan.SampledAtlasImageBytes, Is.Zero);
             Assert.That(mirrored.RequestedPersistentBytes, Is.GreaterThan(canonical.RequestedPersistentBytes));
         });
     }

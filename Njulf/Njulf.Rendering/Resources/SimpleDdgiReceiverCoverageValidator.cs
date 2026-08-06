@@ -375,7 +375,18 @@ namespace Njulf.Rendering.Resources
                     volume.Purpose,
                     volume.Priority,
                     volume.Spacing,
-                    volume.ProbeCount);
+                    volume.ProbeCount)
+                {
+                    GridCountX = ResolveCoverageGridCount(
+                        volume.LatticeSize.X,
+                        volume.Spacing),
+                    GridCountY = ResolveCoverageGridCount(
+                        volume.LatticeSize.Y,
+                        volume.Spacing),
+                    GridCountZ = ResolveCoverageGridCount(
+                        volume.LatticeSize.Z,
+                        volume.Spacing)
+                };
             }
 
             return SimpleDdgiLayoutCompiler.Compile(
@@ -384,6 +395,15 @@ namespace Njulf.Rendering.Resources
                 settings.SimpleDdgiSampledAtlasEnabled,
                 settings.SimpleDdgiLayoutAdmissionMode);
         }
+
+        private static int ResolveCoverageGridCount(
+            float latticeExtent,
+            float spacing) =>
+            Math.Max(
+                1,
+                checked((int)MathF.Round(
+                    Math.Max(latticeExtent, 0.0f) /
+                    Math.Max(spacing, 0.001f))) + 1);
 
         private static Vector3 ResolveRingPlacementCamera(GlobalIlluminationSettings settings, Vector3 cameraPosition)
         {

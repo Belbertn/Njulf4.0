@@ -594,6 +594,49 @@ public sealed class SimpleDdgiTransportTailTests
     }
 
     [Test]
+    public void Controller_PreservesExplicitAuditFailureReason()
+    {
+        var controller = new SimpleDdgiTransportSolveController();
+        Assert.That(controller.BeginSolveEpoch(Generations, 1), Is.True);
+        SimpleDdgiTransportGenerations solve = controller.FrozenGenerations;
+        Assert.That(controller.MarkParticipantVisited(0, solve), Is.True);
+        Assert.That(controller.TryBeginAudit(solve), Is.True);
+
+        SimpleDdgiTransportTailSummary rejected = new()
+        {
+            AuditEpoch = controller.AuditEpoch,
+            Generations = controller.FrozenGenerations,
+            ExpectedParticipantCount = 1u,
+            AuditedParticipantCount = 1u,
+            ExpectedTexelCount = 64u,
+            AuditedTexelCount = 64u,
+            FixedPointDefect = 0.001f,
+            FieldMagnitude = 1.0f,
+            ConfiguredContractionBound = 0.9f,
+            ObservedContractionBound = 0.5f,
+            CertifiedContractionBound = 0.5f,
+            AbsoluteTailBound = 0.002f,
+            RelativeTailBound = 0.002f,
+            Tolerance = 0.025f,
+            CanonicalQuantizationFloor = 0.001f,
+            IsComplete = true,
+            Reason = SimpleDdgiTransportCertificationReason.ParticipantCoverageIncomplete
+        };
+
+        Assert.That(
+            controller.TryAcceptAudit(rejected, controller.FrozenGenerations),
+            Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(controller.LastReason, Is.EqualTo(
+                SimpleDdgiTransportCertificationReason.ParticipantCoverageIncomplete));
+            Assert.That(controller.LastSummary, Is.EqualTo(rejected));
+            Assert.That(controller.Phase, Is.EqualTo(
+                SimpleDdgiTransportPhase.AcceleratedSolve));
+        });
+    }
+
+    [Test]
     public void Controller_AllowsExplicitEmptyFieldCertificate()
     {
         var controller = new SimpleDdgiTransportSolveController();

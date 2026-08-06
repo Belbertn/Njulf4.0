@@ -350,15 +350,10 @@ void main()
                                 inputIndex * SIMPLE_DDGI_SCHEDULER_CANDIDATE_WORDS;
                             uint probeIndex;
                             uint candidateVolumeIndex;
-                            uint expectedGeneration;
-                            uint sequenceOrdinal;
                             uint workClassAndTransport;
                             uint rayTierAndReason;
-                            uint activeRayCount;
-                            uint sourceRayCount;
                             SchedulerReadCandidate(candidateBase, probeIndex, candidateVolumeIndex,
-                                expectedGeneration, sequenceOrdinal, workClassAndTransport,
-                                rayTierAndReason, activeRayCount, sourceRayCount);
+                                workClassAndTransport, rayTierAndReason);
                             if (probeIndex == SIMPLE_DDGI_SCHEDULER_INVALID_PROBE)
                                 continue;
 
@@ -374,6 +369,22 @@ void main()
                                 candidateRayTier != rayTier ||
                                 candidateVolumeIndex != volumeIndex)
                                 continue;
+                            uint sequenceOrdinal = inputIndex;
+                            uint expectedGeneration =
+                                (ReadStorageWordUniform(
+                                    pc.ProbeStateBufferIndex,
+                                    probeIndex * SIMPLE_DDGI_PROBE_STATE_WORDS + 4u) &
+                                    SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK) >>
+                                    SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT;
+                            if (expectedGeneration == 0u)
+                            {
+                                SchedulerWriteInvalidCandidate(candidateBase);
+                                SchedulerArenaAtomicAdd(
+                                    pc.CountersOffsetWords +
+                                        SIMPLE_DDGI_SCHEDULER_COUNTER_INVALID_GENERATION,
+                                    1u);
+                                continue;
+                            }
                             uint tailSourceReasonMask =
                                 SIMPLE_DDGI_SCHEDULER_REASON_FRESH |
                                 SIMPLE_DDGI_SCHEDULER_REASON_SCROLL |
@@ -401,13 +412,20 @@ void main()
                                 SchedulerVolumeFullRays(volumeIndex),
                                 1u,
                                 SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
+                            uint activeRayCount = candidateRayTier ==
+                                    SIMPLE_DDGI_SCHEDULER_RAY_FULL
+                                ? requiredSourceRayCount
+                                : clamp(
+                                    SchedulerVolumeMaintenanceRays(volumeIndex),
+                                    1u,
+                                    SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
                             // A V2 cached update must evaluate the same complete
                             // directional sequence that the certificate audits.
                             // SourceRayCount describes the immutable cache
                             // cardinality and activeRayCount describes cached
                             // transport work. Cached work never consumes the
                             // primary/source-ray budgets below.
-                            sourceRayCount = SchedulerTransportV2()
+                            uint sourceRayCount = SchedulerTransportV2()
                                 ? requiredSourceRayCount
                                 : (sourceWork ? requiredSourceRayCount : 0u);
                             // A source refresh is an atomic replacement of the

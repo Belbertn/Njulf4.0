@@ -14,6 +14,17 @@ namespace Njulf.Rendering.Pipeline
 {
     public sealed unsafe class SimpleDdgiTracePass : SimpleDdgiComputePass
     {
+        private readonly RenderSettings _traceSettings;
+        private const string LegacySourceTraceShader = "ddgi_simple_trace_legacy_source.comp.spv";
+        private const string LegacyReuseTraceShader = "ddgi_simple_trace_legacy_reuse.comp.spv";
+        private const string LegacyFinalTraceShader = "ddgi_simple_trace_legacy_final.comp.spv";
+        private const string ValidateSourceTraceShader = "ddgi_simple_trace_validate_source.comp.spv";
+        private const string ValidateReuseTraceShader = "ddgi_simple_trace_validate_reuse.comp.spv";
+        private const string ValidateFinalTraceShader = "ddgi_simple_trace_validate_final.comp.spv";
+        private const string PackedSourceTraceShader = "ddgi_simple_trace_packed_source.comp.spv";
+        private const string PackedReuseTraceShader = "ddgi_simple_trace_packed_reuse.comp.spv";
+        private const string PackedFinalTraceShader = "ddgi_simple_trace_packed_final.comp.spv";
+
         public SimpleDdgiTracePass(
             VulkanContext context,
             SwapchainManager swapchain,
@@ -22,8 +33,39 @@ namespace Njulf.Rendering.Pipeline
             SimpleDdgiVolumeManager volumeManager,
             FarFieldClipmapManager farFieldClipmapManager,
             AccelerationStructureManager accelerationStructureManager)
-            : base("SimpleDdgiTracePass", "ddgi_simple_trace.comp.spv", context, swapchain, bindlessHeap, settings, volumeManager, farFieldClipmapManager, accelerationStructureManager, requiresRayQuery: true)
+            : base("SimpleDdgiTracePass", ValidateSourceTraceShader, context, swapchain, bindlessHeap, settings, volumeManager, farFieldClipmapManager, accelerationStructureManager, requiresRayQuery: true)
         {
+            _traceSettings = settings;
+        }
+
+        protected override int PipelineDispatchCount => 3;
+        protected override bool DeferPipelineCreationUntilExecution => true;
+
+        protected override string ResolveShaderName(int dispatchIndex)
+        {
+            if ((uint)dispatchIndex >= 3u)
+                throw new ArgumentOutOfRangeException(nameof(dispatchIndex));
+            bool reuse = dispatchIndex == 0;
+            bool final = dispatchIndex == 2;
+            return _traceSettings.GlobalIllumination
+                .SimpleDdgiStoragePackingMode.Sanitize() switch
+            {
+                SimpleDdgiStoragePackingMode.Legacy => reuse
+                    ? LegacyReuseTraceShader
+                    : final
+                        ? LegacyFinalTraceShader
+                        : LegacySourceTraceShader,
+                SimpleDdgiStoragePackingMode.Packed => reuse
+                    ? PackedReuseTraceShader
+                    : final
+                        ? PackedFinalTraceShader
+                        : PackedSourceTraceShader,
+                _ => reuse
+                    ? ValidateReuseTraceShader
+                    : final
+                        ? ValidateFinalTraceShader
+                        : ValidateSourceTraceShader
+            };
         }
 
         protected override uint CalculateGroupCount(SceneRenderingData sceneData)
@@ -186,6 +228,11 @@ namespace Njulf.Rendering.Pipeline
     /// </summary>
     public sealed unsafe class SimpleDdgiTransportPass : SimpleDdgiComputePass
     {
+        private const string LegacyShader = "ddgi_simple_transport_legacy.comp.spv";
+        private const string ValidateShader = "ddgi_simple_transport_validate.comp.spv";
+        private const string PackedShader = "ddgi_simple_transport_packed.comp.spv";
+        private readonly RenderSettings _transportSettings;
+
         public SimpleDdgiTransportPass(
             VulkanContext context,
             SwapchainManager swapchain,
@@ -195,6 +242,22 @@ namespace Njulf.Rendering.Pipeline
             FarFieldClipmapManager farFieldClipmapManager)
             : base("SimpleDdgiTransportPass", "ddgi_simple_transport.comp.spv", context, swapchain, bindlessHeap, settings, volumeManager, farFieldClipmapManager, null, requiresRayQuery: false)
         {
+            _transportSettings = settings;
+        }
+
+        protected override bool DeferPipelineCreationUntilExecution => true;
+
+        protected override string ResolveShaderName(int dispatchIndex)
+        {
+            if (dispatchIndex != 0)
+                throw new ArgumentOutOfRangeException(nameof(dispatchIndex));
+            return _transportSettings.GlobalIllumination
+                .SimpleDdgiStoragePackingMode.Sanitize() switch
+            {
+                SimpleDdgiStoragePackingMode.Legacy => LegacyShader,
+                SimpleDdgiStoragePackingMode.Packed => PackedShader,
+                _ => ValidateShader
+            };
         }
 
         protected override uint CalculateGroupCount(SceneRenderingData sceneData)
@@ -353,19 +416,37 @@ namespace Njulf.Rendering.Pipeline
 
     /// <summary>
     /// Audits a frozen canonical V2 field using cached source rays only. One
-    /// dispatch covers a bounded contiguous probe chunk; the compact reduction
-    /// remains in the resident scheduler arena until the final chunk is copied
-    /// to a delayed host-visible readback slot.
+    /// two-stage sequence covers a bounded contiguous probe chunk. A transfer
+    /// clear initializes fail-closed status words, one invocation per cached
+    /// ray validates identity and evaluates the frozen operator into bounded
+    /// scratch, and the final dispatch reduces those results against the
+    /// canonical field. The compact summary remains resident until the final
+    /// chunk is copied to a delayed readback slot.
     /// </summary>
     public sealed unsafe class SimpleDdgiTransportAuditPass : RenderPassBase
     {
+        private const string LegacyShader = "ddgi_simple_transport_audit_legacy.comp.spv";
+        private const string ValidateShader = "ddgi_simple_transport_audit_validate.comp.spv";
+        private const string PackedShader = "ddgi_simple_transport_audit_packed.comp.spv";
+        private const string LegacyReduceShader = "ddgi_simple_transport_audit_reduce_legacy.comp.spv";
+        private const string ValidateReduceShader = "ddgi_simple_transport_audit_reduce_validate.comp.spv";
+        private const string PackedReduceShader = "ddgi_simple_transport_audit_reduce_packed.comp.spv";
         private readonly RenderSettings _settings;
         private readonly SimpleDdgiVolumeManager _volumeManager;
         private readonly nint _entryPointName;
+        private readonly Dictionary<string, VkPipeline> _pipelines =
+            new(StringComparer.Ordinal);
         private DescriptorSetLayout[] _setLayouts = Array.Empty<DescriptorSetLayout>();
         private PipelineLayout _pipelineLayout;
         private PipelineCache _pipelineCache;
-        private VkPipeline _pipeline;
+        private VkPipeline _rayPipeline;
+        private VkPipeline _reducePipeline;
+
+        private enum AuditPipelineRole : byte
+        {
+            Rays,
+            Reduce
+        }
 
         public SimpleDdgiTransportAuditPass(
             VulkanContext context,
@@ -391,14 +472,12 @@ namespace Njulf.Rendering.Pipeline
         {
             CreatePipelineCache();
             CreatePipelineLayout();
-            _pipeline = CreatePipeline();
         }
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
-            if (_pipeline.Handle == 0 ||
-                !_volumeManager.TransportV2Active ||
+            if (!_volumeManager.TransportV2Active ||
                 !_volumeManager.TailCertificationEnabled ||
                 _volumeManager.SchedulerMode != SimpleDdgiSchedulerMode.GpuResident ||
                 !gi.EffectiveUseDdgi ||
@@ -417,7 +496,13 @@ namespace Njulf.Rendering.Pipeline
                 return false;
             }
 
-            return _volumeManager.TryGetTransportTailAuditChunk(out _);
+            if (!_volumeManager.TryGetTransportTailAuditChunk(out _))
+                return false;
+
+            _rayPipeline = GetOrCreatePipeline(AuditPipelineRole.Rays);
+            _reducePipeline = GetOrCreatePipeline(AuditPipelineRole.Reduce);
+            return _rayPipeline.Handle != 0 &&
+                   _reducePipeline.Handle != 0;
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
@@ -428,15 +513,27 @@ namespace Njulf.Rendering.Pipeline
                 return;
             }
 
+            _rayPipeline = GetOrCreatePipeline(AuditPipelineRole.Rays);
+            _reducePipeline = GetOrCreatePipeline(AuditPipelineRole.Reduce);
+
             SimpleDdgiGpuScheduler scheduler = _volumeManager.GpuScheduler;
             SimpleDdgiGpuSchedulerLayout layout = scheduler.Layout ??
                 throw new InvalidOperationException("Simple DDGI audit requires a resident scheduler layout.");
             if (dispatch.ChunkIndex == 0u && dispatch.ProbeOffset == 0)
                 scheduler.ResetTransportAuditSummary(cmd);
+            if (!scheduler.ResetTransportAuditWorkspace(cmd))
+            {
+                _volumeManager.CancelTransportTailAudit(
+                    SimpleDdgiTransportCertificationReason.GenerationsChanged);
+                return;
+            }
 
             GPUSimpleDdgiTransportAuditPushConstants pushConstants =
-                CreatePushConstants(sceneData, dispatch, layout);
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
+                CreatePushConstants(dispatch, layout);
+            _context.Api.CmdBindPipeline(
+                cmd,
+                PipelineBindPoint.Compute,
+                _rayPipeline);
             BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
             _context.Api.CmdPushConstants(
                 cmd,
@@ -445,6 +542,16 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 (uint)Marshal.SizeOf<GPUSimpleDdgiTransportAuditPushConstants>(),
                 &pushConstants);
+            int dispatchRayCount = checked(
+                dispatch.ProbeCount * _volumeManager.RaysPerProbe);
+            uint rayGroupCount = SimpleDdgiGpuSchedulerLayout.GroupsFor(
+                dispatchRayCount);
+            _context.Api.CmdDispatch(cmd, rayGroupCount, 1, 1);
+            InsertStorageBarrier(cmd);
+            _context.Api.CmdBindPipeline(
+                cmd,
+                PipelineBindPoint.Compute,
+                _reducePipeline);
             _context.Api.CmdDispatch(cmd, checked((uint)dispatch.ProbeCount), 1, 1);
             InsertStorageBarrier(cmd);
             sceneData.SimpleDdgiTransportAuditChunkCount = checked(
@@ -474,74 +581,42 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Cleanup()
         {
-            if (_pipeline.Handle != 0)
-                _context.Api.DestroyPipeline(_context.Device, _pipeline, null);
+            foreach (VkPipeline pipeline in _pipelines.Values)
+            {
+                if (pipeline.Handle != 0)
+                    _context.Api.DestroyPipeline(_context.Device, pipeline, null);
+            }
+            _pipelines.Clear();
             if (_pipelineLayout.Handle != 0)
                 _context.Api.DestroyPipelineLayout(_context.Device, _pipelineLayout, null);
             if (_pipelineCache.Handle != 0)
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
             if (_entryPointName != 0)
                 SilkMarshal.Free(_entryPointName);
-            _pipeline = default;
+            _rayPipeline = default;
+            _reducePipeline = default;
             _pipelineLayout = default;
             _pipelineCache = default;
         }
 
         private GPUSimpleDdgiTransportAuditPushConstants CreatePushConstants(
-            SceneRenderingData sceneData,
             SimpleDdgiTransportAuditChunkDispatch dispatch,
             SimpleDdgiGpuSchedulerLayout layout)
         {
-            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             SimpleDdgiTransportGenerations generations =
                 _volumeManager.GetFrozenTransportTailGenerations();
-            uint flags = 1u;
-            if (_volumeManager.GpuScheduler.IsReady)
-                flags |= 1u << 1;
 
             return new GPUSimpleDdgiTransportAuditPushConstants
             {
                 ParamsBufferIndex = BindlessIndex.SimpleDdgiParamsBuffer,
-                IrradianceAtlasBufferIndex = BindlessIndex.SimpleDdgiIrradianceAtlasBuffer,
-                VisibilityAtlasBufferIndex = BindlessIndex.SimpleDdgiVisibilityAtlasBuffer,
                 RayResultScratchBufferIndex = BindlessIndex.SimpleDdgiRayResultScratchBuffer,
-                CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                LightCount = checked((uint)Math.Max(0, sceneData.LightCount)),
-                DirectionalLightCount = checked((uint)Math.Max(0, sceneData.DirectionalLightCount)),
-                LocalLightCount = checked((uint)Math.Max(0, sceneData.LocalLightCount)),
-                MaxShadedLights = checked((uint)Math.Clamp(
-                    sceneData.DdgiEffectiveMaxShadedLights > 0
-                        ? sceneData.DdgiEffectiveMaxShadedLights
-                        : gi.DdgiMaxShadedLights,
-                    0,
-                    64)),
-                EmissiveSourceCount = checked((uint)Math.Max(0, sceneData.DdgiEmissiveSourceCount)),
-                FarFieldParamsBufferIndex = BindlessIndex.FarFieldClipmapParamsBuffer,
-                FarFieldVoxelBufferIndex = BindlessIndex.FarFieldClipmapVoxelBuffer,
-                FarFieldInstanceBufferIndex = BindlessIndex.FarFieldClipmapInstanceBuffer,
-                Flags = flags,
-                MaterialTextureMaxCascade = gi.DdgiMaterialTextureMaxCascade < 0
-                    ? GlobalIlluminationSettings.MaxSimpleDdgiMaterialTextureCascade
-                    : checked((uint)Math.Clamp(
-                        gi.DdgiMaterialTextureMaxCascade,
-                        0,
-                        GlobalIlluminationSettings.MaxSimpleDdgiMaterialTextureCascade - 1)),
                 ProbeStateBufferIndex = BindlessIndex.SimpleDdgiProbeStateBuffer,
-                ProbeUpdateQueueBufferIndex = BindlessIndex.SimpleDdgiProbeUpdateQueueBuffer,
-                RelocationClassificationBufferIndex = BindlessIndex.SimpleDdgiRelocationClassificationBuffer,
                 TransportSourceCacheBufferIndex = BindlessIndex.SimpleDdgiTransportSourceCacheBuffer,
                 TransportReadIrradianceAtlasBufferIndex = BindlessIndex.SimpleDdgiIrradianceAtlasBuffer,
-                TransportWriteIrradianceAtlasBufferIndex = BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer,
                 TransportGeneration = _volumeManager.TransportGeneration,
-                PrimaryDirectionalLightIndex = sceneData.DdgiPrimaryDirectionalLightIndex < 0
-                    ? uint.MaxValue
-                    : checked((uint)sceneData.DdgiPrimaryDirectionalLightIndex),
+                DispatchProbeCount = checked((uint)dispatch.ProbeCount),
+                DispatchRaysPerProbe = checked((uint)_volumeManager.RaysPerProbe),
                 SchedulerArenaBufferIndex = BindlessIndex.SimpleDdgiSchedulerArenaBuffer,
-                SchedulerRayBucketCommandsOffsetWords = layout.RayBucketCommands.OffsetWords,
-                SchedulerRayBucketMetadataOffsetWords = layout.RayBucketMetadata.OffsetWords,
-                SchedulerOutcomesOffsetWords = layout.Outcomes.OffsetWords,
-                SchedulerCountersOffsetWords = layout.Counters.OffsetWords,
-                SchedulerUpdateRecordsOffsetWords = layout.UpdateRecords.OffsetWords,
                 AuditSummaryBufferIndex = BindlessIndex.SimpleDdgiSchedulerArenaBuffer,
                 AuditSummaryBaseWord = layout.AuditSummary.OffsetWords,
                 AuditProbeOffset = checked((uint)dispatch.ProbeOffset),
@@ -549,7 +624,6 @@ namespace Njulf.Rendering.Pipeline
                 AuditExpectedParticipantCount = checked((uint)dispatch.ExpectedParticipantCount),
                 AuditExpectedTexelCount = checked((uint)dispatch.ExpectedTexelCount),
                 AuditChunkIndex = dispatch.ChunkIndex,
-                AuditFlags = dispatch.IsFinal ? 1u : 0u,
                 AuditSchedulerFrameOffsetWords = layout.Frame.OffsetWords,
                 AuditVolumeTableGeneration = generations.VolumeTable,
                 AuditPhysicalOwnershipGeneration = generations.PhysicalOwnership,
@@ -562,7 +636,12 @@ namespace Njulf.Rendering.Pipeline
                 AuditQueueGeneration = generations.Queue,
                 AuditSchedulerResourceGeneration = generations.SchedulerResources,
                 AuditSchedulerProbeStateOffsetWords = layout.ProbeState.OffsetWords,
-                AuditSolveEpoch = _volumeManager.TransportTailSolveEpoch
+                AuditSolveEpoch = _volumeManager.TransportTailSolveEpoch,
+                AuditWorkspaceBaseWord = layout.AuditWorkspace.OffsetWords,
+                AuditWitnessProbeIndex =
+                    _volumeManager.TransportAuditWitnessProbeIndex,
+                AuditWitnessTexelIndex =
+                    _volumeManager.TransportAuditWitnessTexelIndex
             };
         }
 
@@ -576,6 +655,7 @@ namespace Njulf.Rendering.Pipeline
                 DstStageMask = PipelineStageFlags2.ComputeShaderBit |
                                PipelineStageFlags2.TransferBit,
                 DstAccessMask = AccessFlags2.ShaderStorageReadBit |
+                                AccessFlags2.ShaderStorageWriteBit |
                                 AccessFlags2.TransferReadBit
             };
             var dependencyInfo = new DependencyInfo
@@ -632,14 +712,42 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
-        private VkPipeline CreatePipeline()
+        private VkPipeline GetOrCreatePipeline(AuditPipelineRole role)
+        {
+            string shaderName = _settings.GlobalIllumination
+                .SimpleDdgiStoragePackingMode.Sanitize() switch
+            {
+                SimpleDdgiStoragePackingMode.Legacy => role switch
+                {
+                    AuditPipelineRole.Reduce => LegacyReduceShader,
+                    _ => LegacyShader
+                },
+                SimpleDdgiStoragePackingMode.Packed => role switch
+                {
+                    AuditPipelineRole.Reduce => PackedReduceShader,
+                    _ => PackedShader
+                },
+                _ => role switch
+                {
+                    AuditPipelineRole.Reduce => ValidateReduceShader,
+                    _ => ValidateShader
+                }
+            };
+            if (_pipelines.TryGetValue(shaderName, out VkPipeline pipeline))
+                return pipeline;
+            pipeline = CreatePipeline(shaderName);
+            _pipelines.Add(shaderName, pipeline);
+            return pipeline;
+        }
+
+        private VkPipeline CreatePipeline(string shaderName)
         {
             ShaderModule shaderModule = default;
             try
             {
                 shaderModule = ShaderModuleLoader.Load(
                     _context,
-                    "ddgi_simple_transport_audit.comp.spv");
+                    shaderName);
                 var stage = new PipelineShaderStageCreateInfo
                 {
                     SType = StructureType.PipelineShaderStageCreateInfo,
@@ -662,7 +770,9 @@ namespace Njulf.Rendering.Pipeline
                     null,
                     out VkPipeline pipeline);
                 if (result != Result.Success)
-                    throw new VulkanException("Failed to create Simple DDGI transport audit pipeline", result);
+                    throw new VulkanException(
+                        $"Failed to create Simple DDGI transport audit pipeline from '{shaderName}'",
+                        result);
                 return pipeline;
             }
             finally
@@ -1129,6 +1239,8 @@ namespace Njulf.Rendering.Pipeline
         private readonly AccelerationStructureManager? _accelerationStructureManager;
         private readonly bool _requiresRayQuery;
         private readonly nint _entryPointName;
+        private readonly Dictionary<string, VkPipeline> _pipelines =
+            new(StringComparer.Ordinal);
         private DescriptorSetLayout _accelerationStructureSetLayout;
         private DescriptorPool _descriptorPool;
         private DescriptorSet _accelerationStructureSet;
@@ -1184,11 +1296,29 @@ namespace Njulf.Rendering.Pipeline
 
             CreatePipelineCache();
             CreatePipelineLayout();
-            _pipeline = CreatePipeline();
+            if (DeferPipelineCreationUntilExecution)
+                return;
+            for (int dispatchIndex = 0;
+                 dispatchIndex < PipelineDispatchCount;
+                 dispatchIndex++)
+            {
+                _pipeline = GetOrCreatePipeline(dispatchIndex);
+            }
+            _pipeline = GetOrCreatePipeline(0);
         }
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
+            if (_pipelineLayout.Handle != 0)
+            {
+                for (int dispatchIndex = 0;
+                     dispatchIndex < PipelineDispatchCount;
+                     dispatchIndex++)
+                {
+                    _pipeline = GetOrCreatePipeline(dispatchIndex);
+                }
+                _pipeline = GetOrCreatePipeline(0);
+            }
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             if (_pipeline.Handle == 0)
                 return false;
@@ -1212,18 +1342,38 @@ namespace Njulf.Rendering.Pipeline
             if (_requiresRayQuery)
                 UpdateAccelerationStructureDescriptor();
 
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
-            BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
-
-            if (_requiresRayQuery)
-            {
-                var asSet = _accelerationStructureSet;
-                _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, _pipelineLayout, 2, 1, &asSet, 0, null);
-            }
-
             GPUSimpleDdgiPushConstants pushConstants = CreatePushConstants(sceneData);
-            Dispatch(cmd, sceneData, pushConstants);
-            InsertWriteBarrier(cmd);
+            for (int dispatchIndex = 0;
+                 dispatchIndex < PipelineDispatchCount;
+                 dispatchIndex++)
+            {
+                _pipeline = GetOrCreatePipeline(dispatchIndex);
+                _context.Api.CmdBindPipeline(
+                    cmd,
+                    PipelineBindPoint.Compute,
+                    _pipeline);
+                BindBindlessStorageAndTextures(
+                    cmd,
+                    _pipelineLayout,
+                    PipelineBindPoint.Compute);
+
+                if (_requiresRayQuery)
+                {
+                    var asSet = _accelerationStructureSet;
+                    _context.Api.CmdBindDescriptorSets(
+                        cmd,
+                        PipelineBindPoint.Compute,
+                        _pipelineLayout,
+                        2,
+                        1,
+                        &asSet,
+                        0,
+                        null);
+                }
+
+                Dispatch(cmd, sceneData, pushConstants);
+                InsertWriteBarrier(cmd);
+            }
         }
 
         protected virtual void Dispatch(
@@ -1300,11 +1450,13 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Cleanup()
         {
-            if (_pipeline.Handle != 0)
+            foreach (VkPipeline pipeline in _pipelines.Values)
             {
-                _context.Api.DestroyPipeline(_context.Device, _pipeline, null);
-                _pipeline = default;
+                if (pipeline.Handle != 0)
+                    _context.Api.DestroyPipeline(_context.Device, pipeline, null);
             }
+            _pipelines.Clear();
+            _pipeline = default;
 
             if (_descriptorPool.Handle != 0)
             {
@@ -1337,6 +1489,16 @@ namespace Njulf.Rendering.Pipeline
         }
 
         protected abstract uint CalculateGroupCount(SceneRenderingData sceneData);
+
+        protected virtual int PipelineDispatchCount => 1;
+        protected virtual bool DeferPipelineCreationUntilExecution => false;
+
+        protected virtual string ResolveShaderName(int dispatchIndex)
+        {
+            if (dispatchIndex != 0)
+                throw new ArgumentOutOfRangeException(nameof(dispatchIndex));
+            return _shaderName;
+        }
 
         private GPUSimpleDdgiPushConstants CreatePushConstants(SceneRenderingData sceneData)
         {
@@ -1475,12 +1637,30 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
-        private VkPipeline CreatePipeline()
+        private VkPipeline GetOrCreatePipeline(int dispatchIndex)
+        {
+            string shaderName = ResolveShaderName(dispatchIndex);
+            if (string.IsNullOrWhiteSpace(shaderName) ||
+                !string.Equals(shaderName, System.IO.Path.GetFileName(shaderName),
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"{Name} resolved an invalid shader name '{shaderName}'.");
+            }
+            if (_pipelines.TryGetValue(shaderName, out VkPipeline pipeline))
+                return pipeline;
+
+            pipeline = CreatePipeline(shaderName);
+            _pipelines.Add(shaderName, pipeline);
+            return pipeline;
+        }
+
+        private VkPipeline CreatePipeline(string shaderName)
         {
             ShaderModule shaderModule = default;
             try
             {
-                shaderModule = ShaderModuleLoader.Load(_context, _shaderName);
+                shaderModule = ShaderModuleLoader.Load(_context, shaderName);
                 var stage = new PipelineShaderStageCreateInfo
                 {
                     SType = StructureType.PipelineShaderStageCreateInfo,
@@ -1499,7 +1679,9 @@ namespace Njulf.Rendering.Pipeline
 
                 Result result = _context.Api.CreateComputePipelines(_context.Device, _pipelineCache, 1, &pipelineInfo, null, out VkPipeline pipeline);
                 if (result != Result.Success)
-                    throw new VulkanException($"Failed to create {Name} compute pipeline", result);
+                    throw new VulkanException(
+                        $"Failed to create {Name} compute pipeline from '{shaderName}'",
+                        result);
                 return pipeline;
             }
             finally

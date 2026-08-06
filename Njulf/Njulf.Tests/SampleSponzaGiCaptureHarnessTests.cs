@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using Njulf.Rendering.Resources;
 using Njulf.Rendering.Data;
 using NjulfHelloGame;
@@ -251,6 +252,49 @@ public sealed class SampleSponzaGiCaptureHarnessTests
     }
 
     [Test]
+    public void CoverageOracleReport_SerializesDerivedTraceDistanceAsStrictJsonNull()
+    {
+        var settings = new RenderSettings();
+        SampleGlobalIlluminationValidation.ConfigureRenderSettings(
+            settings,
+            SamplePerformanceScenario.GiSponzaRightWallStationary);
+        SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
+        SimpleDdgiReceiverCoverageReport report = SimpleDdgiReceiverCoverageValidator.Validate(
+            settings.GlobalIllumination,
+            contract.SceneBounds,
+            contract.CreateCoverageRegions(),
+            contract.CreateCoverageCameraPath());
+        string directory = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            $"sponza-gi-coverage-{Guid.NewGuid():N}");
+
+        try
+        {
+            contract.WriteCoverageOracleReport(directory, report);
+            string json = File.ReadAllText(
+                Path.Combine(directory, "sponza-gi-coverage-oracle.json"));
+            using JsonDocument document = JsonDocument.Parse(json);
+            JsonElement maximumTraceDistance = document.RootElement
+                .GetProperty("layout")
+                .GetProperty("volumes")[0]
+                .GetProperty("request")
+                .GetProperty("maximumTraceDistance");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(maximumTraceDistance.ValueKind, Is.EqualTo(JsonValueKind.Null));
+                Assert.That(json, Does.Not.Contain("NaN"));
+                Assert.That(json, Does.Not.Contain("Infinity"));
+            });
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
     public void CanonicalLighting_SatisfiesCaptureLockAndRejectsOccludedSunProfilesAndShadowLeak()
     {
         SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
@@ -424,7 +468,10 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                 directory,
                 artifacts,
                 "completed",
-                captureMode: SampleSponzaGiCaptureMode.ProductionTiming);
+                captureMode: SampleSponzaGiCaptureMode.ProductionTiming,
+                storagePackingMode: SimpleDdgiStoragePackingMode.Packed,
+                sampledAtlasCoverageMode:
+                    SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant);
 
             string runJson = File.ReadAllText(Path.Combine(directory, "sponza-gi-capture-run.json"));
             Assert.Multiple(() =>
@@ -432,6 +479,8 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                 Assert.That(contract.GetCompletionBlockers(directory, artifacts), Is.Empty);
                 Assert.That(runJson, Does.Contain("\"status\": \"completed\""));
                 Assert.That(runJson, Does.Contain("\"captureMode\": \"ProductionTiming\""));
+                Assert.That(runJson, Does.Contain("\"simpleDdgiStoragePackingMode\": \"Packed\""));
+                Assert.That(runJson, Does.Contain("\"simpleDdgiSampledAtlasCoverageMode\": \"ReceiverRelevant\""));
                 Assert.That(runJson, Does.Contain("\"sha256\":"));
                 Assert.That(runJson, Does.Not.Contain("renderer-screenshot-request"));
             });
@@ -493,6 +542,8 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                 Assert.That(visualMetricJson, Does.Contain("not-evaluated-no-approved-baseline"));
                 Assert.That(runJson, Does.Contain(contract.Fingerprint));
                 Assert.That(runJson, Does.Contain("renderer-screenshot-request"));
+                Assert.That(runJson, Does.Contain("\"simpleDdgiStoragePackingMode\": \"Packed\""));
+                Assert.That(runJson, Does.Contain("\"simpleDdgiSampledAtlasCoverageMode\": \"ReceiverRelevant\""));
                 Assert.That(runJson, Does.Not.Contain(Path.GetFullPath(directory)));
             });
         }

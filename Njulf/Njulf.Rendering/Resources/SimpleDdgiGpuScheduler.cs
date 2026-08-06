@@ -647,6 +647,43 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
     }
 
     /// <summary>
+    /// Clears the bounded per-chunk audit status words before cached-ray
+    /// evaluation. A transfer-to-compute barrier makes the zeroed fail-closed
+    /// flags visible before ray invocations begin their atomic status updates.
+    /// </summary>
+    public bool ResetTransportAuditWorkspace(CommandBuffer commandBuffer)
+    {
+        if (commandBuffer.Handle == 0)
+            return false;
+
+        lock (_lock)
+        {
+            ThrowIfDisposed();
+            if (!_mode.IsGpuMode() || !_arenaBuffer.IsValid || _layout == null)
+                return false;
+
+            Silk.NET.Vulkan.Buffer arena = _bufferManager.GetBuffer(_arenaBuffer);
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                arena,
+                _layout.AuditWorkspace.Offset,
+                _layout.AuditWorkspace.ByteSize,
+                0u);
+            BufferMemoryBarrier2 barrier = BarrierBuilder.BufferBarrier(
+                arena,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit,
+                _layout.AuditWorkspace.Offset,
+                _layout.AuditWorkspace.ByteSize);
+            ExecuteBufferBarrier(commandBuffer, barrier);
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Copies only the compact audit header into a delayed host-visible slot.
     /// The full 1 KiB arena region remains GPU-resident and is not read back.
     /// </summary>

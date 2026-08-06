@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Diagnostics
 {
@@ -368,6 +369,9 @@ namespace Njulf.Rendering.Diagnostics
         public bool SimpleDdgiReceiverFullClear { get; init; }
         public uint SimpleDdgiReceiverResourceGeneration { get; init; }
         public int SimpleDdgiReceiverRecordsPublished { get; init; }
+        /// <summary>Exact canonical, cache, scratch, and optional mirror allocation contract.</summary>
+        public SimpleDdgiStorageDiagnostics SimpleDdgiStorage { get; init; } =
+            SimpleDdgiStorageDiagnostics.Unavailable;
     }
 
     public sealed class PerformanceSnapshotWriter
@@ -700,9 +704,12 @@ namespace Njulf.Rendering.Diagnostics
             double headroomFraction = budget > 0
                 ? headroom / (double)budget
                 : 0.0;
+            SimpleDdgiStorageDiagnostics storage = diagnostics.SimpleDdgiStorage;
             ulong transportBytes = SaturatingAdd(
                 diagnostics.SimpleDdgiTransportIrradianceAtlasBytes,
-                diagnostics.SimpleDdgiTransportSourceCacheBytes);
+                storage.IsAvailable
+                    ? storage.SourceCacheBytes
+                    : diagnostics.SimpleDdgiTransportSourceCacheBytes);
             ulong scratchAndQueueBytes = SaturatingAdd(
                 diagnostics.SimpleDdgiRayScratchBytes,
                 diagnostics.SimpleDdgiProbeStateBytes,
@@ -727,12 +734,18 @@ namespace Njulf.Rendering.Diagnostics
                 headroom,
                 headroomFraction,
                 budget > 0 && headroomFraction >= 0.20,
-                diagnostics.SimpleDdgiAtlasBytes >=
-                    diagnostics.SimpleDdgiSampledAtlasImageBytes
+                storage.IsAvailable
+                    ? checked(
+                        storage.CanonicalIrradianceBytes +
+                        storage.CanonicalVisibilityBytes)
+                    : diagnostics.SimpleDdgiAtlasBytes >=
+                      diagnostics.SimpleDdgiSampledAtlasImageBytes
                         ? diagnostics.SimpleDdgiAtlasBytes -
                           diagnostics.SimpleDdgiSampledAtlasImageBytes
                         : 0UL,
-                diagnostics.SimpleDdgiSampledAtlasImageBytes,
+                storage.IsAvailable
+                    ? storage.MirrorAllocatedBytes
+                    : diagnostics.SimpleDdgiSampledAtlasImageBytes,
                 transportBytes,
                 diagnostics.SimpleDdgiProbeStateReadbackBytes,
                 scratchAndQueueBytes,
@@ -1408,6 +1421,7 @@ namespace Njulf.Rendering.Diagnostics
                 SimpleDdgiReceiverFullClear = diagnostics.SimpleDdgiReceiverFullClear != 0,
                 SimpleDdgiReceiverResourceGeneration = diagnostics.SimpleDdgiReceiverResourceGeneration,
                 SimpleDdgiReceiverRecordsPublished = diagnostics.SimpleDdgiReceiverRecordsPublished,
+                SimpleDdgiStorage = diagnostics.SimpleDdgiStorage,
                 Requested = diagnostics.GlobalIlluminationRequested != 0,
                 RequestedMode = diagnostics.GlobalIlluminationRequestedMode,
                 RequestedDebugView = diagnostics.GlobalIlluminationRequestedDebugView,

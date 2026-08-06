@@ -17,6 +17,115 @@
     <ItemGroup>
       <ShaderSource Include="*.task;*.mesh;*.vert;*.frag;*.comp" />
       <ShaderInclude Include="*.glsl" />
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_legacy_source.comp">
+        <Source>ddgi_simple_trace.comp</Source>
+        <StorageMode>1</StorageMode>
+        <Role>1</Role>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_legacy_reuse.comp">
+        <Source>ddgi_simple_trace.comp</Source>
+        <StorageMode>1</StorageMode>
+        <Role>2</Role>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_legacy_final.comp">
+        <Source>ddgi_simple_trace.comp</Source>
+        <StorageMode>1</StorageMode>
+        <Role>3</Role>
+      </SimpleDdgiTraceShaderVariant>
+      <!-- Validate retains the Legacy36/32-byte rollback ABI. Specialize its
+           native-driver program to that single representation and opt only
+           the detailed-build direction shadow comparison back in. -->
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_validate_source.comp">
+        <Source>ddgi_simple_trace.comp</Source>
+        <StorageMode>1</StorageMode>
+        <Role>1</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTION_VALIDATION=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_validate_reuse.comp">
+        <Source>ddgi_simple_trace.comp</Source>
+        <StorageMode>1</StorageMode>
+        <Role>2</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTION_VALIDATION=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_validate_final.comp">
+        <Source>ddgi_simple_trace.comp</Source>
+        <StorageMode>1</StorageMode>
+        <Role>3</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTION_VALIDATION=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_source.comp">
+        <Source>ddgi_simple_trace.comp</Source>
+        <StorageMode>2</StorageMode>
+        <Role>1</Role>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_reuse.comp">
+        <Source>ddgi_simple_trace.comp</Source>
+        <StorageMode>2</StorageMode>
+        <Role>2</Role>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_final.comp">
+        <Source>ddgi_simple_trace.comp</Source>
+        <StorageMode>2</StorageMode>
+        <Role>3</Role>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTransportShaderVariant Include="ddgi_simple_transport_legacy.comp">
+        <Source>ddgi_simple_transport.comp</Source>
+        <StorageMode>1</StorageMode>
+      </SimpleDdgiTransportShaderVariant>
+      <SimpleDdgiTransportShaderVariant Include="ddgi_simple_transport_validate.comp">
+        <Source>ddgi_simple_transport.comp</Source>
+        <StorageMode>1</StorageMode>
+        <Defines>-DSIMPLE_DDGI_DIRECTION_VALIDATION=1</Defines>
+      </SimpleDdgiTransportShaderVariant>
+      <SimpleDdgiTransportShaderVariant Include="ddgi_simple_transport_packed.comp">
+        <Source>ddgi_simple_transport.comp</Source>
+        <StorageMode>2</StorageMode>
+      </SimpleDdgiTransportShaderVariant>
+      <SimpleDdgiTransportShaderVariant Include="ddgi_simple_transport_solve_legacy.comp">
+        <Source>ddgi_simple_transport.comp</Source>
+        <StorageMode>1</StorageMode>
+      </SimpleDdgiTransportShaderVariant>
+      <SimpleDdgiTransportShaderVariant Include="ddgi_simple_transport_solve_validate.comp">
+        <Source>ddgi_simple_transport.comp</Source>
+        <StorageMode>1</StorageMode>
+        <Defines>-DSIMPLE_DDGI_DIRECTION_VALIDATION=1</Defines>
+      </SimpleDdgiTransportShaderVariant>
+      <SimpleDdgiTransportShaderVariant Include="ddgi_simple_transport_solve_packed.comp">
+        <Source>ddgi_simple_transport.comp</Source>
+        <StorageMode>2</StorageMode>
+      </SimpleDdgiTransportShaderVariant>
+      <SimpleDdgiAuditShaderVariant Include="ddgi_simple_transport_audit_legacy.comp">
+        <Source>ddgi_simple_transport_audit.comp</Source>
+        <StorageMode>1</StorageMode>
+        <Role>2</Role>
+      </SimpleDdgiAuditShaderVariant>
+      <SimpleDdgiAuditShaderVariant Include="ddgi_simple_transport_audit_validate.comp">
+        <Source>ddgi_simple_transport_audit.comp</Source>
+        <StorageMode>1</StorageMode>
+        <Role>2</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTION_VALIDATION=1</Defines>
+      </SimpleDdgiAuditShaderVariant>
+      <SimpleDdgiAuditShaderVariant Include="ddgi_simple_transport_audit_packed.comp">
+        <Source>ddgi_simple_transport_audit.comp</Source>
+        <StorageMode>2</StorageMode>
+        <Role>2</Role>
+      </SimpleDdgiAuditShaderVariant>
+      <SimpleDdgiAuditShaderVariant Include="ddgi_simple_transport_audit_reduce_legacy.comp">
+        <Source>ddgi_simple_transport_audit.comp</Source>
+        <StorageMode>1</StorageMode>
+        <Role>3</Role>
+      </SimpleDdgiAuditShaderVariant>
+      <SimpleDdgiAuditShaderVariant Include="ddgi_simple_transport_audit_reduce_validate.comp">
+        <Source>ddgi_simple_transport_audit.comp</Source>
+        <StorageMode>1</StorageMode>
+        <Role>3</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTION_VALIDATION=1</Defines>
+      </SimpleDdgiAuditShaderVariant>
+      <SimpleDdgiAuditShaderVariant Include="ddgi_simple_transport_audit_reduce_packed.comp">
+        <Source>ddgi_simple_transport_audit.comp</Source>
+        <StorageMode>2</StorageMode>
+        <Role>3</Role>
+      </SimpleDdgiAuditShaderVariant>
       <GpuDiagnosticTaskShader Include="depth.task;forward.task;forward_compacted.task" />
       <ForwardSimpleFragmentShader Include="forward.frag" />
       <ForwardWeightedOitFragmentShader Include="forward.frag" />
@@ -71,6 +180,10 @@
         <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\forward_opaque_simple_provenance.frag.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\forward_opaque_simple_provenance.frag.spv" />
         <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\forward_opaque_simple_full_input.frag.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\forward_opaque_simple_full_input.frag.spv" />
         <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\forward_opaque_simple_full_input_provenance.frag.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\forward_opaque_simple_full_input_provenance.frag.spv" />
+        <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\ddgi_simple_trace_legacy.comp.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\ddgi_simple_trace_legacy.comp.spv" />
+        <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\ddgi_simple_trace_packed.comp.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\ddgi_simple_trace_packed.comp.spv" />
+        <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\ddgi_simple_transport_solve.comp.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\ddgi_simple_transport_solve.comp.spv" />
+        <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\ddgi_simple_transport_audit_prepare_*.comp.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\ddgi_simple_transport_audit_prepare_*.comp.spv" />
       </ItemGroup>
       <Delete Files="@(ObsoleteGiShaderArtifact)" />
     </Target>
@@ -78,7 +191,7 @@
     <Target Name="CompileNjulfShaders"
             BeforeTargets="AssignTargetPaths"
             Inputs="@(ShaderSource);@(ShaderInclude);$(MSBuildProjectFullPath)"
-            Outputs="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv');@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv');@(MaterialTransportProvenanceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');$(IntermediateOutputPath)Shaders\forward_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_simple_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_opaque_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv;$(IntermediateOutputPath)Shaders\foliage_forward_ddgi.frag.spv">
+            Outputs="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv');@(SimpleDdgiTraceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(SimpleDdgiTransportShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(SimpleDdgiAuditShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv');@(MaterialTransportProvenanceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');$(IntermediateOutputPath)Shaders\forward_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_simple_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_opaque_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv;$(IntermediateOutputPath)Shaders\foliage_forward_ddgi.frag.spv">
       <MakeDir Directories="$(IntermediateOutputPath)Shaders" />
       <MakeDir Directories="$(OutDir)Shaders" />
 
@@ -87,6 +200,18 @@
             StandardErrorImportance="High" />
 
       <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(ShaderSource.Filename)%(ShaderSource.Extension).spv&quot; &quot;%(ShaderSource.FullPath)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) %(SimpleDdgiTraceShaderVariant.Defines) -DSIMPLE_DDGI_STORAGE_SHADER_MODE=%(SimpleDdgiTraceShaderVariant.StorageMode) -DSIMPLE_DDGI_TRACE_SHADER_ROLE=%(SimpleDdgiTraceShaderVariant.Role) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(SimpleDdgiTraceShaderVariant.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(SimpleDdgiTraceShaderVariant.Source)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) %(SimpleDdgiTransportShaderVariant.Defines) -DSIMPLE_DDGI_STORAGE_SHADER_MODE=%(SimpleDdgiTransportShaderVariant.StorageMode) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(SimpleDdgiTransportShaderVariant.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(SimpleDdgiTransportShaderVariant.Source)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) %(SimpleDdgiAuditShaderVariant.Defines) -DSIMPLE_DDGI_STORAGE_SHADER_MODE=%(SimpleDdgiAuditShaderVariant.StorageMode) -DSIMPLE_DDGI_AUDIT_SHADER_ROLE=%(SimpleDdgiAuditShaderVariant.Role) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(SimpleDdgiAuditShaderVariant.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(SimpleDdgiAuditShaderVariant.Source)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
@@ -130,6 +255,18 @@
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
+      <Copy SourceFiles="@(SimpleDdgiTraceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
+      <Copy SourceFiles="@(SimpleDdgiTransportShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
+      <Copy SourceFiles="@(SimpleDdgiAuditShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
       <Copy SourceFiles="$(IntermediateOutputPath)Shaders\forward_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_simple_compacted.mesh.spv"
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
@@ -165,6 +302,15 @@
       <ItemGroup>
         <EmbeddedResource Include="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv')">
           <LogicalName>Njulf.Shaders.%(Filename)%(Extension)</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="@(SimpleDdgiTraceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')">
+          <LogicalName>Njulf.Shaders.%(Identity)</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="@(SimpleDdgiTransportShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')">
+          <LogicalName>Njulf.Shaders.%(Identity)</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="@(SimpleDdgiAuditShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')">
+          <LogicalName>Njulf.Shaders.%(Identity)</LogicalName>
         </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_compacted.mesh.spv">
           <LogicalName>Njulf.Shaders.forward_compacted.mesh</LogicalName>

@@ -116,7 +116,7 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiParams>(), Is.EqualTo(240));
-                Assert.That(Marshal.SizeOf<GPUSimpleDdgiVolume>(), Is.EqualTo(96));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiVolume>(), Is.EqualTo(112));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiVolumePaging>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiResidencyHeader>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiPageTableEntry>(), Is.EqualTo(16));
@@ -155,8 +155,11 @@ namespace Njulf.Tests
                     Is.EqualTo(352));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiPageDemandPushConstants>(), Is.EqualTo(112));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiPageResidencyPushConstants>(), Is.EqualTo(72));
-                Assert.That(Marshal.SizeOf<GPUSimpleDdgiRayResult>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiRayResult>(), Is.EqualTo(20));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiLegacyRayResult>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportRayCache>(), Is.EqualTo(36));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportRayCacheCompact28>(), Is.EqualTo(28));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportRayCacheCompact24>(), Is.EqualTo(24));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiProbeState>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiProbeUpdate>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiRelocationClassification>(), Is.EqualTo(48));

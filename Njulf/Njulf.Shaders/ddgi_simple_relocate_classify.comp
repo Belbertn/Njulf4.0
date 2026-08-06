@@ -50,18 +50,6 @@ const float SIMPLE_DDGI_RELOCATION_MAX_DISTANCE =
     SIMPLE_DDGI_RELOCATION_UPDATE_MAX_SPACINGS;
 const float SIMPLE_DDGI_RELOCATION_MIN_BACKFACE_RATIO = 0.10;
 
-vec4 ReadSimpleRayDirectionHit(uint rayResultIndex)
-{
-    return ReadStorageAlignedVec4Uniform(pc.RayResultScratchBufferIndex, rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 4u);
-}
-
-uint ReadSimpleRayVisibilityHit(uint rayResultIndex)
-{
-    return ReadStorageWordUniform(
-        pc.RayResultScratchBufferIndex,
-        rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 7u);
-}
-
 void WriteRelocationClassification(
     uint probeIndex,
     vec3 relocation,
@@ -149,6 +137,7 @@ void main()
     uint backfaceCount = 0u;
     uint closeCount = 0u;
     uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
+    uint sourceRayCount = SimpleDdgiUpdateSourceRayCount(update, params);
     float nearestHitDistance = 3.402823466e+38;
     float nearestBackfaceDistance = 3.402823466e+38;
     vec3 nearestBackfaceDirection = vec3(0.0);
@@ -157,15 +146,41 @@ void main()
     for (uint ray = 0u; ray < activeRayCount; ray++)
     {
         uint rayResultIndex = queueOffset * params.raysPerProbe + ray;
-        vec4 directionHit = ReadSimpleRayDirectionHit(rayResultIndex);
-        vec2 visibilityHit = UnpackSimpleDdgiRayVisibilityHit(
-            ReadSimpleRayVisibilityHit(rayResultIndex));
+        uint directionRayIndex = SimpleDdgiUpdateDirectionRayIndex(
+            ray,
+            activeRayCount,
+            sourceRayCount,
+            params);
+        vec4 radianceDistance;
+        vec3 direction;
+        vec2 visibilityHit;
+        uint directionEpoch;
+        if (!ReadSimpleDdgiRayResultStorage(
+                pc.RayResultScratchBufferIndex,
+                rayResultIndex,
+                volume,
+                params,
+                probeIndex,
+                directionRayIndex,
+                update.sourceEpoch,
+                radianceDistance,
+                direction,
+                visibilityHit,
+                directionEpoch))
+        {
+            SimpleDdgiSchedulerFailOutcome(
+                pc.SchedulerArenaBufferIndex,
+                pc.SchedulerOutcomesOffsetWords,
+                update.outcomeIndex,
+                1u << 1u);
+            return;
+        }
         float hitKind = visibilityHit.y;
         // Use the same nearest two-sided distance that receiver visibility saw.
         // Source radiance remains frontface-only, but a close covered backface
         // is valid geometric evidence that this probe needs relocation.
         float distance = max(visibilityHit.x, 0.0);
-        vec3 direction = normalize(directionHit.xyz);
+        direction = normalize(direction);
 
         if (hitKind < 0.5)
         {
@@ -320,6 +335,10 @@ void main()
         state.flags |= SIMPLE_DDGI_PROBE_FLAG_INACTIVE;
     else
         state.flags &= ~SIMPLE_DDGI_PROBE_FLAG_INACTIVE;
+    // Relocation changes the world-space meaning of every visibility moment,
+    // and inactive probes must never retain receiver-valid payload authority.
+    if (relocationChanged || relocationWasPending || inactiveProbe)
+        state.flags &= ~SIMPLE_DDGI_PROBE_FLAG_VISIBILITY_VALID;
     state.age = 0u;
     state.classification = inactiveProbe ? SIMPLE_DDGI_CLASSIFICATION_INACTIVE : SIMPLE_DDGI_CLASSIFICATION_ACTIVE;
     state.luminanceChangeEma = previous.luminanceChangeEma;

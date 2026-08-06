@@ -27,6 +27,7 @@ const float SIMPLE_DDGI_TRANSPORT_RESIDUAL_ENVELOPE_DECAY = 0.25;
 shared vec4 SharedSimpleRayRadianceDistance[256];
 shared vec4 SharedSimpleRayDirectionHit[256];
 shared uint SharedSimpleRayVisibilityHit[256];
+shared uint SharedSimpleRayInvalid;
 shared float SharedSimpleIrradianceDelta[64];
 // The reduced path projects only low-frequency irradiance. Visibility remains
 // the exact directional ray-by-texel estimator because sparse octahedral splats
@@ -74,24 +75,6 @@ layout(push_constant) uniform SimpleDdgiPushBlock
 // Atlas diagnostics can execute once per texel.  Preserve them for explicit
 // investigations, but eliminate the atomic traffic from normal production work.
 #define AddRendererDiagnostic(frameIndex, counterIndex, value) AddSimpleDdgiDiagnostic(params, frameIndex, counterIndex, value)
-
-vec4 ReadSimpleRayRadianceDistance(uint rayResultIndex)
-{
-    return ReadStorageAlignedVec4Uniform(pc.RayResultScratchBufferIndex, rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 0u);
-}
-
-vec4 ReadSimpleRayDirectionHit(uint rayResultIndex)
-{
-    return ReadStorageAlignedVec4Uniform(pc.RayResultScratchBufferIndex, rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 4u);
-}
-
-vec2 ReadSimpleRayVisibilityHit(uint rayResultIndex)
-{
-    return UnpackSimpleDdgiRayVisibilityHit(
-        ReadStorageWordUniform(
-            pc.RayResultScratchBufferIndex,
-            rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 7u));
-}
 
 float SimpleDdgiLuminance(vec3 value)
 {
@@ -149,11 +132,11 @@ float SimpleDdgiAdaptiveIrradianceHysteresis(SimpleDdgiParams params, vec4 previ
     return mix(probeHysteresis, mix(softHysteresis, stepHysteresis, changeT), smoothstep(params.hysteresisChangeThreshold * 0.75, params.hysteresisChangeThreshold, relativeDelta));
 }
 
-float SimpleDdgiAdaptiveVisibilityHysteresis(SimpleDdgiParams params, vec4 previous, vec2 moments, float probeHysteresis, bool maintenanceUpdate, float spacing)
+float SimpleDdgiAdaptiveVisibilityHysteresis(SimpleDdgiParams params, vec2 previous, vec2 moments, float probeHysteresis, bool maintenanceUpdate, bool historyValid, float spacing)
 {
     if ((params.flags & (SIMPLE_DDGI_FLAG_ADAPTIVE_HYSTERESIS | SIMPLE_DDGI_FLAG_LIGHTING_CHANGE_ACTIVE)) !=
             (SIMPLE_DDGI_FLAG_ADAPTIVE_HYSTERESIS | SIMPLE_DDGI_FLAG_LIGHTING_CHANGE_ACTIVE) ||
-        probeHysteresis <= 0.0001 || previous.z <= 0.5)
+        probeHysteresis <= 0.0001 || !historyValid)
         return probeHysteresis;
     if (maintenanceUpdate)
         return probeHysteresis;
@@ -205,18 +188,56 @@ uint SimpleDdgiIrradianceWriteBuffer(SimpleDdgiParams params)
         : pc.IrradianceAtlasBufferIndex;
 }
 
-void LoadSimpleRayCache(SimpleDdgiParams params, uint localProbeOffset, uint activeRayCount)
+void LoadSimpleRayCache(
+    SimpleDdgiParams params,
+    SimpleDdgiVolume volume,
+    SimpleDdgiProbeUpdate update,
+    uint probeIndex,
+    uint localProbeOffset,
+    uint activeRayCount)
 {
     uint local = gl_LocalInvocationID.x;
+    if (local == 0u)
+        SharedSimpleRayInvalid = 0u;
+    barrier();
     uint rayCount = min(activeRayCount, SIMPLE_DDGI_MAX_RAYS_PER_PROBE);
     for (uint ray = local; ray < rayCount; ray += gl_WorkGroupSize.x)
     {
         uint rayResultIndex = localProbeOffset * params.raysPerProbe + ray;
-        SharedSimpleRayDirectionHit[ray] = ReadSimpleRayDirectionHit(rayResultIndex);
-        SharedSimpleRayVisibilityHit[ray] = ReadStorageWordUniform(
+        uint directionRayIndex = SimpleDdgiUpdateDirectionRayIndex(
+            ray,
+            activeRayCount,
+            SimpleDdgiUpdateSourceRayCount(update, params),
+            params);
+        vec4 radianceDistance;
+        vec3 direction;
+        vec2 visibilityHit;
+        uint directionEpoch;
+        bool valid = ReadSimpleDdgiRayResultStorage(
             pc.RayResultScratchBufferIndex,
-            rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 7u);
-        SharedSimpleRayRadianceDistance[ray] = ReadSimpleRayRadianceDistance(rayResultIndex);
+            rayResultIndex,
+            volume,
+            params,
+            probeIndex,
+            directionRayIndex,
+            update.sourceEpoch,
+            radianceDistance,
+            direction,
+            visibilityHit,
+            directionEpoch);
+        SharedSimpleRayDirectionHit[ray] = vec4(
+            valid ? direction : vec3(0.0, 1.0, 0.0),
+            valid ? visibilityHit.y :
+                SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE);
+        SharedSimpleRayVisibilityHit[ray] = PackSimpleDdgiRayVisibilityHit(
+            valid ? visibilityHit.x : 0.0,
+            valid ? visibilityHit.y :
+                SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE);
+        SharedSimpleRayRadianceDistance[ray] = valid
+            ? radianceDistance
+            : vec4(0.0);
+        if (!valid)
+            atomicOr(SharedSimpleRayInvalid, 1u);
     }
 
     barrier();
@@ -224,30 +245,18 @@ void LoadSimpleRayCache(SimpleDdgiParams params, uint localProbeOffset, uint act
 
 vec4 ReadCachedSimpleRayRadianceDistance(SimpleDdgiParams params, uint localProbeOffset, uint ray, bool sharedRayCacheEnabled)
 {
-    if (sharedRayCacheEnabled)
-        return SharedSimpleRayRadianceDistance[ray];
-
-    uint rayResultIndex = localProbeOffset * params.raysPerProbe + ray;
-    return ReadSimpleRayRadianceDistance(rayResultIndex);
+    return SharedSimpleRayRadianceDistance[ray];
 }
 
 vec4 ReadCachedSimpleRayDirectionHit(SimpleDdgiParams params, uint localProbeOffset, uint ray, bool sharedRayCacheEnabled)
 {
-    if (sharedRayCacheEnabled)
-        return SharedSimpleRayDirectionHit[ray];
-
-    uint rayResultIndex = localProbeOffset * params.raysPerProbe + ray;
-    return ReadSimpleRayDirectionHit(rayResultIndex);
+    return SharedSimpleRayDirectionHit[ray];
 }
 
 vec2 ReadCachedSimpleRayVisibilityHit(SimpleDdgiParams params, uint localProbeOffset, uint ray, bool sharedRayCacheEnabled)
 {
-    if (sharedRayCacheEnabled)
-        return UnpackSimpleDdgiRayVisibilityHit(
-            SharedSimpleRayVisibilityHit[ray]);
-
-    uint rayResultIndex = localProbeOffset * params.raysPerProbe + ray;
-    return ReadSimpleRayVisibilityHit(rayResultIndex);
+    return UnpackSimpleDdgiRayVisibilityHit(
+        SharedSimpleRayVisibilityHit[ray]);
 }
 
 float BlendIrradianceTexel(SimpleDdgiParams params, uint volumeIndex, uint virtualProbeIndex, uint physicalProbeIndex, uint localProbeOffset, uint texel, float probeHysteresis, bool sharedRayCacheEnabled, uint activeRayCount, bool maintenanceUpdate, bool freshUpdate)
@@ -280,21 +289,24 @@ float BlendIrradianceTexel(SimpleDdgiParams params, uint volumeIndex, uint virtu
 
     uint irradianceReadBuffer = SimpleDdgiIrradianceReadBuffer(params);
     uint irradianceWriteBuffer = SimpleDdgiIrradianceWriteBuffer(params);
-    vec4 previous = ReadSimpleDdgiAtlasTexel(irradianceReadBuffer, physicalProbeIndex, texel, params.irradianceTexels);
+    vec4 previous = ReadSimpleDdgiIrradianceTexel(irradianceReadBuffer, physicalProbeIndex, texel, params.irradianceTexels);
     if (weightSum <= 0.000001)
     {
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_ZERO_RAY_WEIGHT_PROBE_COUNTER, 1u);
-        if (previous.w > 0.0001 && !freshUpdate)
+        bool certifiedTransport =
+            (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u;
+        if (previous.w > 0.0001 && !freshUpdate && !certifiedTransport)
         {
-            // A V2 target is private and may not contain the canonical texel yet.
-            // Preserve the published value explicitly instead of leaving a hole
-            // that would be copied into the next receiver-visible generation.
-            WriteSimpleDdgiAtlasTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, previous);
+            // V1 retains its temporal-history fallback for undersampled texels.
+            // Certified V2 must instead publish the positive operator's zero
+            // result below: preserving an arbitrary prior value is an identity
+            // branch that is neither contractive nor equal to the frozen audit.
+            WriteSimpleDdgiIrradianceTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, previous);
             return 0.0;
         }
         if (freshUpdate)
         {
-            WriteSimpleDdgiAtlasTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, vec4(0.0));
+            WriteSimpleDdgiIrradianceTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, vec4(0.0));
             return 1.0;
         }
     }
@@ -317,7 +329,7 @@ float BlendIrradianceTexel(SimpleDdgiParams params, uint volumeIndex, uint virtu
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_NONZERO_IRRADIANCE_PROBE_COUNTER, 1u);
     if (probeHysteresis > 0.0001 && previous.w > 0.0001)
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_PREVIOUS_ATLAS_USED_COUNTER, 1u);
-    WriteSimpleDdgiAtlasTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, blended);
+    WriteSimpleDdgiIrradianceTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, blended);
     if (previous.w <= 0.0001)
         return 1.0;
     return (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u
@@ -328,7 +340,7 @@ float BlendIrradianceTexel(SimpleDdgiParams params, uint volumeIndex, uint virtu
             0.02);
 }
 
-void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint physicalProbeIndex, uint localProbeOffset, uint texel, float probeHysteresis, bool sharedRayCacheEnabled, uint activeRayCount, bool maintenanceUpdate, bool freshUpdate)
+void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint physicalProbeIndex, uint localProbeOffset, uint texel, float probeHysteresis, bool sharedRayCacheEnabled, uint activeRayCount, bool maintenanceUpdate, bool freshUpdate, bool visibilityHistoryValid)
 {
     uint x = texel % params.visibilityTexels;
     uint y = texel / params.visibilityTexels;
@@ -375,7 +387,7 @@ void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint
         narrowWeightSum += narrowWeight;
     }
 
-    vec4 previous = ReadSimpleDdgiAtlasTexel(pc.VisibilityAtlasBufferIndex, physicalProbeIndex, texel, params.visibilityTexels);
+    vec2 previous = ReadSimpleDdgiVisibilityMoments(pc.VisibilityAtlasBufferIndex, physicalProbeIndex, texel, params.visibilityTexels);
     vec2 moments;
     if (broadHitWeightSum > 0.000001 || broadMissWeightSum > 0.000001)
     {
@@ -400,14 +412,14 @@ void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint
         else
             moments = hasHitMoments ? hitMoments : missMoments;
     }
-    else if (previous.z > 0.5 && !freshUpdate)
+    else if (visibilityHistoryValid && !freshUpdate)
     {
         // Resident publication copies the complete private visibility target
         // at commit. Preserve an unchanged texel there as well; returning
         // without a write would allow an aborted transaction's stale private
         // value to leak into the next successful publication.
         if (SimpleDdgiGpuSchedulerActive(pc.SchedulerArenaBufferIndex))
-            WriteSimpleDdgiAtlasTexelAtOffset(
+            WriteSimpleDdgiVisibilityMomentsAtOffset(
                 pc.TransportWriteIrradianceAtlasBufferIndex,
                 pc.PrivateVisibilityAtlasOffsetWords,
                 physicalProbeIndex,
@@ -422,12 +434,12 @@ void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint
         float standardDeviation = volume.spacing * SIMPLE_DDGI_BOOTSTRAP_VISIBILITY_STDDEV_SPACING;
         moments = vec2(mean, mean * mean + standardDeviation * standardDeviation);
     }
-    float texelHysteresis = SimpleDdgiAdaptiveVisibilityHysteresis(params, previous, moments, probeHysteresis, maintenanceUpdate, volume.spacing);
-    vec4 blended = mix(vec4(moments, 1.0, 1.0), previous, texelHysteresis);
+    float texelHysteresis = SimpleDdgiAdaptiveVisibilityHysteresis(params, previous, moments, probeHysteresis, maintenanceUpdate, visibilityHistoryValid, volume.spacing);
+    vec2 blended = mix(moments, previous, texelHysteresis);
     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_ATLAS_WRITE_TEXEL_COUNTER, 1u);
     if (SimpleDdgiGpuSchedulerActive(pc.SchedulerArenaBufferIndex))
     {
-        WriteSimpleDdgiAtlasTexelAtOffset(
+        WriteSimpleDdgiVisibilityMomentsAtOffset(
             pc.TransportWriteIrradianceAtlasBufferIndex,
             pc.PrivateVisibilityAtlasOffsetWords,
             physicalProbeIndex,
@@ -436,7 +448,7 @@ void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint
             blended);
     }
     else
-        WriteSimpleDdgiAtlasTexel(
+        WriteSimpleDdgiVisibilityMoments(
             pc.VisibilityAtlasBufferIndex,
             physicalProbeIndex,
             texel,
@@ -543,10 +555,10 @@ float BlendReducedIrradianceTexel(SimpleDdgiParams params, uint volumeIndex, uin
         1.0);
     uint irradianceReadBuffer = SimpleDdgiIrradianceReadBuffer(params);
     uint irradianceWriteBuffer = SimpleDdgiIrradianceWriteBuffer(params);
-    vec4 previous = ReadSimpleDdgiAtlasTexel(irradianceReadBuffer, physicalProbeIndex, texel, params.irradianceTexels);
+    vec4 previous = ReadSimpleDdgiIrradianceTexel(irradianceReadBuffer, physicalProbeIndex, texel, params.irradianceTexels);
     if (freshUpdate && SimpleDdgiLuminance(irradiance) <= 0.000001)
     {
-        WriteSimpleDdgiAtlasTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, vec4(0.0));
+        WriteSimpleDdgiIrradianceTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, vec4(0.0));
         return 1.0;
     }
     float texelHysteresis = SimpleDdgiAdaptiveIrradianceHysteresis(params, previous, irradiance, probeHysteresis, maintenanceUpdate);
@@ -556,7 +568,7 @@ float BlendReducedIrradianceTexel(SimpleDdgiParams params, uint volumeIndex, uin
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_NONZERO_IRRADIANCE_PROBE_COUNTER, 1u);
     if (probeHysteresis > 0.0001 && previous.w > 0.0001)
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_PREVIOUS_ATLAS_USED_COUNTER, 1u);
-    WriteSimpleDdgiAtlasTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, blended);
+    WriteSimpleDdgiIrradianceTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, blended);
     if (previous.w <= 0.0001)
         return 1.0;
     return (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u
@@ -659,7 +671,7 @@ void main()
         uint irradianceTexelCount = params.irradianceTexels * params.irradianceTexels;
         for (uint texel = local; texel < irradianceTexelCount; texel += gl_WorkGroupSize.x)
         {
-            WriteSimpleDdgiAtlasTexel(
+            WriteSimpleDdgiIrradianceTexel(
                 irradianceWriteBuffer,
                 physicalProbeIndex,
                 texel,
@@ -670,20 +682,20 @@ void main()
         for (uint texel = local; texel < visibilityTexelCount; texel += gl_WorkGroupSize.x)
         {
             if (gpuScheduler)
-                WriteSimpleDdgiAtlasTexelAtOffset(
+                WriteSimpleDdgiVisibilityMomentsAtOffset(
                     pc.TransportWriteIrradianceAtlasBufferIndex,
                     pc.PrivateVisibilityAtlasOffsetWords,
                     physicalProbeIndex,
                     texel,
                     params.visibilityTexels,
-                    vec4(0.0));
+                    vec2(0.0));
             else
-                WriteSimpleDdgiAtlasTexel(
+                WriteSimpleDdgiVisibilityMoments(
                     pc.VisibilityAtlasBufferIndex,
                     physicalProbeIndex,
                     texel,
                     params.visibilityTexels,
-                    vec4(0.0));
+                    vec2(0.0));
         }
         barrier();
         memoryBarrierBuffer();
@@ -717,18 +729,18 @@ void main()
             uint texelCount = params.irradianceTexels * params.irradianceTexels;
             for (uint texel = local; texel < texelCount; texel += gl_WorkGroupSize.x)
             {
-                vec4 canonical = ReadSimpleDdgiAtlasTexel(readBuffer, physicalProbeIndex, texel, params.irradianceTexels);
-                WriteSimpleDdgiAtlasTexel(writeBuffer, physicalProbeIndex, texel, params.irradianceTexels, canonical);
+                vec4 canonical = ReadSimpleDdgiIrradianceTexel(readBuffer, physicalProbeIndex, texel, params.irradianceTexels);
+                WriteSimpleDdgiIrradianceTexel(writeBuffer, physicalProbeIndex, texel, params.irradianceTexels, canonical);
             }
             uint visibilityTexelCount = params.visibilityTexels * params.visibilityTexels;
             for (uint texel = local; texel < visibilityTexelCount; texel += gl_WorkGroupSize.x)
             {
-                vec4 canonical = ReadSimpleDdgiAtlasTexel(
+                vec2 canonical = ReadSimpleDdgiVisibilityMoments(
                     pc.VisibilityAtlasBufferIndex,
                     physicalProbeIndex,
                     texel,
                     params.visibilityTexels);
-                WriteSimpleDdgiAtlasTexelAtOffset(
+                WriteSimpleDdgiVisibilityMomentsAtOffset(
                     writeBuffer,
                     pc.PrivateVisibilityAtlasOffsetWords,
                     physicalProbeIndex,
@@ -764,7 +776,9 @@ void main()
     bool reducedComplexityEnabled =
         (pc.Flags & SIMPLE_DDGI_BLEND_FLAG_REDUCED_COMPLEXITY) != 0u &&
         (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) == 0u;
-    bool sharedRayCacheEnabled = (pc.Flags & SIMPLE_DDGI_BLEND_FLAG_SHARED_RAY_CACHE) != 0u || reducedComplexityEnabled;
+    // Packed scratch no longer stores direction. Reconstruct each ray exactly
+    // once into workgroup shared memory for both atlas estimators.
+    bool sharedRayCacheEnabled = true;
     // V2 solver-only updates reuse the same geometric source rays. Preserve
     // their published visibility moments; rebuilding them from cached
     // frontface distances would erase the two-sided shell occlusion recorded
@@ -776,6 +790,9 @@ void main()
         (firstSweepFirstColor &&
             (SimpleDdgiUpdateRequiresSourceRefresh(update) ||
              freshUpdate));
+    bool visibilityHistoryValid =
+        (initialState.flags & SIMPLE_DDGI_PROBE_FLAG_VISIBILITY_VALID) != 0u &&
+        !freshUpdate;
     if (!solveColorMatches && !refreshVisibility)
     {
         // Scheduler lifecycle completion is a sweep-zero/color-zero event for
@@ -792,8 +809,55 @@ void main()
         return;
     }
 
-    if (sharedRayCacheEnabled)
-        LoadSimpleRayCache(params, localProbeOffset, activeRayCount);
+    LoadSimpleRayCache(
+        params,
+        volume,
+        update,
+        probeIndex,
+        localProbeOffset,
+        activeRayCount);
+
+    if (SharedSimpleRayInvalid != 0u)
+    {
+        if (local == 0u)
+        {
+            if (gpuScheduler)
+            {
+                SimpleDdgiSchedulerFailOutcome(
+                    pc.SchedulerArenaBufferIndex,
+                    pc.SchedulerOutcomesOffsetWords,
+                    update.outcomeIndex,
+                    1u << 1u);
+            }
+            else
+            {
+                // CPU scheduling has no private commit gate. Keep this probe
+                // ungatherable and fresh so malformed scratch can never be
+                // published as a valid zero-light update.
+                SimpleDdgiProbeState state = ReadSimpleDdgiProbeState(
+                    pc.ProbeStateBufferIndex,
+                    probeIndex);
+                if (SimpleDdgiUpdateMatchesProbeGenerationAndRecord(
+                        params,
+                        update,
+                        state))
+                {
+                    state.flags |= SIMPLE_DDGI_PROBE_FLAG_FRESH;
+                    state.flags &= ~SIMPLE_DDGI_PROBE_FLAG_VISIBILITY_VALID;
+                    if (transportV2Active)
+                    {
+                        state.flags |=
+                            SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID;
+                    }
+                    WriteSimpleDdgiProbeState(
+                        pc.ProbeStateBufferIndex,
+                        probeIndex,
+                        state);
+                }
+            }
+        }
+        return;
+    }
 
     if (local == 0u && (!transportV2Active || firstSweepFirstColor))
     {
@@ -831,7 +895,8 @@ void main()
                     true,
                     activeRayCount,
                     maintenanceUpdate,
-                    freshUpdate);
+                    freshUpdate,
+                    visibilityHistoryValid);
         }
     }
     else
@@ -848,7 +913,7 @@ void main()
         if (refreshVisibility)
         {
             for (uint texel = local; texel < params.visibilityTexels * params.visibilityTexels; texel += gl_WorkGroupSize.x)
-                BlendVisibilityTexel(params, volume, physicalProbeIndex, localProbeOffset, texel, probeHysteresis, sharedRayCacheEnabled, activeRayCount, maintenanceUpdate, freshUpdate);
+                BlendVisibilityTexel(params, volume, physicalProbeIndex, localProbeOffset, texel, probeHysteresis, sharedRayCacheEnabled, activeRayCount, maintenanceUpdate, freshUpdate, visibilityHistoryValid);
         }
     }
 
@@ -882,6 +947,8 @@ void main()
                 }
                 else if (!gpuScheduler && freshUpdate)
                 {
+                    if (refreshVisibility)
+                        state.flags |= SIMPLE_DDGI_PROBE_FLAG_VISIBILITY_VALID;
                     state.flags &= ~SIMPLE_DDGI_PROBE_FLAG_FRESH;
                     WriteSimpleDdgiProbeState(
                         pc.ProbeStateBufferIndex,
@@ -965,6 +1032,8 @@ void main()
             }
             else
             {
+                if (refreshVisibility)
+                    state.flags |= SIMPLE_DDGI_PROBE_FLAG_VISIBILITY_VALID;
                 if (freshUpdate)
                     state.flags &= ~SIMPLE_DDGI_PROBE_FLAG_FRESH;
                 WriteSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex, state);

@@ -31,7 +31,16 @@ namespace Njulf.Rendering.Resources
         // Avoid reallocating and idling the device for every small topology
         // adjustment while keeping the reserve below one MiB of atlas data.
         private const int CapacityGrowthQuantum = 256;
-        private const ulong AtlasTexelStride = 8;
+        private const ulong IrradianceTexelStride = 8;
+        private const ulong VisibilityTexelStride = 4;
+        internal const ulong IrradianceBytesPerProbe =
+            (ulong)SimpleDdgiVolumeManager.IrradianceTexelsPerProbe *
+            SimpleDdgiVolumeManager.IrradianceTexelsPerProbe *
+            IrradianceTexelStride;
+        internal const ulong VisibilityBytesPerProbe =
+            (ulong)SimpleDdgiVolumeManager.VisibilityTexelsPerProbe *
+            SimpleDdgiVolumeManager.VisibilityTexelsPerProbe *
+            VisibilityTexelStride;
         private const int MaxRetiredAllocationGenerations = 16;
 
         private readonly VulkanContext _context;
@@ -45,6 +54,8 @@ namespace Njulf.Rendering.Resources
         private BindlessHeap? _publishedHeap;
         private ulong _publishedGeneration;
         private bool _requiresFullSync;
+        private bool _releasePending;
+        private ulong _pendingReleaseFenceValue;
         private bool _disposed;
 
         public SimpleDdgiSampledAtlas(
@@ -70,7 +81,19 @@ namespace Njulf.Rendering.Resources
         public bool RequiresFullSync => _requiresFullSync;
         public string LastFailureReason { get; private set; } = string.Empty;
         public ulong EstimatedImageBytes { get; private set; }
+        /// <summary>Exact VMA allocation sizes, including device alignment/padding.</summary>
+        public ulong AllocatedImageBytes { get; private set; }
         public ulong RetiredImageBytes { get; private set; }
+        public int RetiredImageCount
+        {
+            get
+            {
+                int count = 0;
+                foreach (RetiredAtlasAllocation retired in _retiredAllocations)
+                    count = checked(count + retired.Groups.Length * 2);
+                return count;
+            }
+        }
         public ulong AllocationGeneration => _allocationGeneration;
 
         public bool EnsureCapacity(int requiredProbeCount)
@@ -92,7 +115,8 @@ namespace Njulf.Rendering.Resources
             int requiredProbeCount,
             ulong lastUseFrameFenceValue,
             ulong completedFrameFenceValue,
-            bool priorGenerationComplete)
+            bool priorGenerationComplete,
+            bool forceRecreate = false)
         {
             ThrowIfDisposed();
             if (requiredProbeCount <= 0)
@@ -129,12 +153,15 @@ namespace Njulf.Rendering.Resources
             }
 
             if (IsReady &&
+                !forceRecreate &&
                 !RequiresStableCapacityReallocation(
                     _probeCapacity,
                     provisionedProbeCount,
                     _layersPerTexture,
                     layersPerTexture))
             {
+                _releasePending = false;
+                _pendingReleaseFenceValue = 0UL;
                 return true;
             }
 
@@ -194,8 +221,11 @@ namespace Njulf.Rendering.Resources
             _probeCapacity = provisionedProbeCount;
             _layersPerTexture = layersPerTexture;
             _requiresFullSync = true;
+            _releasePending = false;
+            _pendingReleaseFenceValue = 0UL;
             LastFailureReason = string.Empty;
             EstimatedImageBytes = CalculateEstimatedImageBytes(groups);
+            AllocatedImageBytes = CalculateAllocatedImageBytes(groups);
             _allocationGeneration++;
             if (_allocationGeneration == 0)
                 _allocationGeneration = 1;
@@ -243,9 +273,18 @@ namespace Njulf.Rendering.Resources
                 _publishedGeneration == _allocationGeneration)
                 return;
 
-            for (int groupIndex = 0; groupIndex < _groups.Length; groupIndex++)
+            // The sampled publication shader is capped at sixteen groups. Fill
+            // the entire reachable bindless range and alias unused slots to
+            // group zero so shrinking an atlas generation never leaves a slot
+            // pointing at a retired image view.
+            AtlasGroup fallback = _groups[0];
+            for (int groupIndex = 0;
+                 groupIndex < MaxGpuPublishTextureGroups;
+                 groupIndex++)
             {
-                AtlasGroup group = _groups[groupIndex];
+                AtlasGroup group = groupIndex < _groups.Length
+                    ? _groups[groupIndex]
+                    : fallback;
                 bindlessHeap.RegisterTexture(
                     BindlessIndex.SimpleDdgiSampledIrradianceTextureBase + groupIndex,
                     group.IrradianceView,
@@ -337,29 +376,22 @@ namespace Njulf.Rendering.Resources
             _requiresFullSync = false;
         }
 
-        public void CopyAll(
+        public void CopyRanges(
             CommandBuffer commandBuffer,
             VkBuffer irradianceBuffer,
             ulong irradianceBufferBytes,
             VkBuffer visibilityBuffer,
             ulong visibilityBufferBytes,
-            int probeCount)
+            SimpleDdgiSampledAtlasLayout layout)
         {
-            if (!IsReady || probeCount <= 0)
+            ArgumentNullException.ThrowIfNull(layout);
+            if (!IsReady || layout.AdmittedProbeCount <= 0)
                 return;
 
-            // Image allocation rounds up to a descriptor-stable layer quantum,
-            // while the canonical SSBOs contain only real physical payload
-            // probes. Clamp against both source byte ranges so the final image
-            // group can never read sampled-atlas padding from beyond either
-            // buffer, even if a caller accidentally supplies a virtual count.
-            int boundedProbeCount = CalculateSafeCopyProbeCount(
-                probeCount,
-                _probeCapacity,
+            ValidateCopyLayout(
+                layout,
                 irradianceBufferBytes,
                 visibilityBufferBytes);
-            if (boundedProbeCount <= 0)
-                return;
             TransitionSourceBuffers(
                 commandBuffer,
                 irradianceBuffer,
@@ -370,28 +402,18 @@ namespace Njulf.Rendering.Resources
                 AccessFlags2.MemoryWriteBit);
             TransitionImagesToTransferDestination(commandBuffer);
 
-            for (int groupIndex = 0; groupIndex < _groups.Length; groupIndex++)
+            foreach (SimpleDdgiSampledAtlasRange range in layout.Ranges)
             {
-                int firstProbe = checked(groupIndex * _layersPerTexture);
-                int layerCount = Math.Min(_groups[groupIndex].LayerCount, boundedProbeCount - firstProbe);
-                if (layerCount <= 0)
-                    break;
-
-                AtlasGroup group = _groups[groupIndex];
-                CopyContiguousGroup(
+                CopyContiguousRange(
                     commandBuffer,
                     irradianceBuffer,
-                    group.IrradianceImage,
-                    firstProbe,
-                    layerCount,
-                    SimpleDdgiVolumeManager.IrradianceTexelsPerProbe);
-                CopyContiguousGroup(
+                    range,
+                    irradiance: true);
+                CopyContiguousRange(
                     commandBuffer,
                     visibilityBuffer,
-                    group.VisibilityImage,
-                    firstProbe,
-                    layerCount,
-                    SimpleDdgiVolumeManager.VisibilityTexelsPerProbe);
+                    range,
+                    irradiance: false);
             }
 
             TransitionImagesToShaderRead(commandBuffer);
@@ -418,13 +440,29 @@ namespace Njulf.Rendering.Resources
             ulong completedFrameFenceValue)
         {
             if (!IsReady)
+            {
+                _releasePending = false;
+                _pendingReleaseFenceValue = 0UL;
                 return true;
+            }
 
             bool released = RetireCurrentAllocation(
                 lastUseFrameFenceValue,
                 completedFrameFenceValue);
             if (released)
+            {
                 LastFailureReason = string.Empty;
+                _releasePending = false;
+                _pendingReleaseFenceValue = 0UL;
+            }
+            else
+            {
+                // Retirement capacity is transient. Keep the exact completion
+                // token and finish the requested release as soon as an older
+                // generation drains, even if no new capacity transition occurs.
+                _releasePending = true;
+                _pendingReleaseFenceValue = lastUseFrameFenceValue;
+            }
             return released;
         }
 
@@ -436,6 +474,8 @@ namespace Njulf.Rendering.Resources
         {
             DestroyImageResources();
             DestroyRetiredAllocationsAfterDeviceIdle();
+            _releasePending = false;
+            _pendingReleaseFenceValue = 0UL;
             LastFailureReason = string.Empty;
         }
 
@@ -452,6 +492,15 @@ namespace Njulf.Rendering.Resources
                     ? 0UL
                     : RetiredImageBytes - retired.Bytes;
                 _retiredAllocations.RemoveAt(index);
+            }
+
+            if (_releasePending && IsReady &&
+                RetireCurrentAllocation(
+                    _pendingReleaseFenceValue,
+                    completedFrameFenceValue))
+            {
+                _releasePending = false;
+                _pendingReleaseFenceValue = 0UL;
             }
         }
 
@@ -473,12 +522,13 @@ namespace Njulf.Rendering.Resources
                 return false;
 
             AtlasGroup[] groups = _groups;
-            ulong bytes = EstimatedImageBytes;
+            ulong bytes = AllocatedImageBytes;
             _groups = Array.Empty<AtlasGroup>();
             _probeCapacity = 0;
             _layersPerTexture = 0;
             _requiresFullSync = false;
             EstimatedImageBytes = 0UL;
+            AllocatedImageBytes = 0UL;
             _retiredAllocations.Add(new RetiredAtlasAllocation(
                 groups,
                 bytes,
@@ -501,10 +551,12 @@ namespace Njulf.Rendering.Resources
             if (!TryCreateImage(
                     SimpleDdgiVolumeManager.IrradianceTexelsPerProbe,
                     layerCount,
+                    Format.R16G16B16A16Sfloat,
                     "Simple DDGI Sampled Irradiance",
                     out group.IrradianceImage,
                     out group.IrradianceAllocation,
-                    out group.IrradianceView))
+                    out group.IrradianceView,
+                    out group.IrradianceAllocationBytes))
             {
                 DestroyGroup(group);
                 return false;
@@ -513,10 +565,12 @@ namespace Njulf.Rendering.Resources
             if (!TryCreateImage(
                     SimpleDdgiVolumeManager.VisibilityTexelsPerProbe,
                     layerCount,
+                    Format.R16G16Sfloat,
                     "Simple DDGI Sampled Visibility",
                     out group.VisibilityImage,
                     out group.VisibilityAllocation,
-                    out group.VisibilityView))
+                    out group.VisibilityView,
+                    out group.VisibilityAllocationBytes))
             {
                 DestroyGroup(group);
                 return false;
@@ -528,19 +582,22 @@ namespace Njulf.Rendering.Resources
         private bool TryCreateImage(
             int texelsPerProbe,
             int layerCount,
+            Format format,
             string debugName,
             out Image image,
             out GpuAllocator.Allocation* allocation,
-            out ImageView view)
+            out ImageView view,
+            out ulong allocationBytes)
         {
             image = default;
             allocation = null;
             view = default;
+            allocationBytes = 0UL;
             var imageInfo = new ImageCreateInfo
             {
                 SType = StructureType.ImageCreateInfo,
                 ImageType = ImageType.Type2D,
-                Format = Format.R16G16B16A16Sfloat,
+                Format = format,
                 Extent = new Extent3D
                 {
                     Width = checked((uint)texelsPerProbe),
@@ -596,6 +653,7 @@ namespace Njulf.Rendering.Resources
 
             image = createdImage;
             allocation = createdAllocation;
+            allocationBytes = checked((ulong)createdAllocationInfo.Size);
 
             try
             {
@@ -605,7 +663,7 @@ namespace Njulf.Rendering.Resources
                     SType = StructureType.ImageViewCreateInfo,
                     Image = image,
                     ViewType = ImageViewType.Type2DArray,
-                    Format = Format.R16G16B16A16Sfloat,
+                    Format = format,
                     SubresourceRange = new ImageSubresourceRange
                     {
                         AspectMask = ImageAspectFlags.ColorBit,
@@ -629,46 +687,105 @@ namespace Njulf.Rendering.Resources
                 GpuAllocator.Apis.DestroyImage(_context.Allocator, image, allocation);
                 image = default;
                 allocation = null;
+                allocationBytes = 0UL;
                 throw;
             }
         }
 
-        private void CopyContiguousGroup(
+        private void CopyContiguousRange(
             CommandBuffer commandBuffer,
             VkBuffer source,
-            Image destination,
-            int firstProbe,
-            int layerCount,
-            int texelsPerProbe)
+            in SimpleDdgiSampledAtlasRange range,
+            bool irradiance)
         {
-            ulong bytesPerProbe = BytesPerProbe(texelsPerProbe);
-            var region = new BufferImageCopy
+            int texelsPerProbe = irradiance
+                ? SimpleDdgiVolumeManager.IrradianceTexelsPerProbe
+                : SimpleDdgiVolumeManager.VisibilityTexelsPerProbe;
+            ulong bytesPerProbe = irradiance
+                ? IrradianceBytesPerProbe
+                : VisibilityBytesPerProbe;
+            int sourceProbe = range.CanonicalFirstProbe;
+            int compactLayer = range.CompactFirstLayer;
+            int remaining = range.ProbeCount;
+            while (remaining > 0)
             {
-                BufferOffset = checked((ulong)firstProbe * bytesPerProbe),
-                BufferRowLength = 0,
-                BufferImageHeight = 0,
-                ImageSubresource = new ImageSubresourceLayers
+                int groupIndex = compactLayer / _layersPerTexture;
+                int groupLayer = compactLayer - groupIndex * _layersPerTexture;
+                AtlasGroup group = _groups[groupIndex];
+                int layerCount = Math.Min(remaining, group.LayerCount - groupLayer);
+                var copy = new BufferImageCopy
                 {
-                    AspectMask = ImageAspectFlags.ColorBit,
-                    MipLevel = 0,
-                    BaseArrayLayer = 0,
-                    LayerCount = checked((uint)layerCount)
-                },
-                ImageOffset = new Offset3D { X = 0, Y = 0, Z = 0 },
-                ImageExtent = new Extent3D
+                    BufferOffset = checked((ulong)sourceProbe * bytesPerProbe),
+                    BufferRowLength = 0,
+                    BufferImageHeight = 0,
+                    ImageSubresource = new ImageSubresourceLayers
+                    {
+                        AspectMask = ImageAspectFlags.ColorBit,
+                        MipLevel = 0,
+                        BaseArrayLayer = checked((uint)groupLayer),
+                        LayerCount = checked((uint)layerCount)
+                    },
+                    ImageOffset = new Offset3D { X = 0, Y = 0, Z = 0 },
+                    ImageExtent = new Extent3D
+                    {
+                        Width = checked((uint)texelsPerProbe),
+                        Height = checked((uint)texelsPerProbe),
+                        Depth = 1
+                    }
+                };
+                _context.Api.CmdCopyBufferToImage(
+                    commandBuffer,
+                    source,
+                    irradiance ? group.IrradianceImage : group.VisibilityImage,
+                    ImageLayout.TransferDstOptimal,
+                    1,
+                    &copy);
+                sourceProbe = checked(sourceProbe + layerCount);
+                compactLayer = checked(compactLayer + layerCount);
+                remaining -= layerCount;
+            }
+        }
+
+        private void ValidateCopyLayout(
+            SimpleDdgiSampledAtlasLayout layout,
+            ulong irradianceBufferBytes,
+            ulong visibilityBufferBytes)
+        {
+            if (layout.AdmittedProbeCount > _probeCapacity ||
+                layout.ProvisionedProbeCount > _probeCapacity)
+            {
+                throw new InvalidOperationException(
+                    $"Sampled-atlas layout requires {layout.ProvisionedProbeCount} layers, but only {_probeCapacity} are provisioned.");
+            }
+
+            int expectedCompactLayer = 0;
+            foreach (SimpleDdgiSampledAtlasRange range in layout.Ranges)
+            {
+                if (range.CanonicalFirstProbe < 0 || range.ProbeCount < 0 ||
+                    range.CompactFirstLayer != expectedCompactLayer)
                 {
-                    Width = checked((uint)texelsPerProbe),
-                    Height = checked((uint)texelsPerProbe),
-                    Depth = 1
+                    throw new InvalidOperationException(
+                        "Sampled-atlas compact ranges must be non-negative, contiguous, and ordered.");
                 }
-            };
-            _context.Api.CmdCopyBufferToImage(
-                commandBuffer,
-                source,
-                destination,
-                ImageLayout.TransferDstOptimal,
-                1,
-                &region);
+
+                int canonicalEnd = checked(range.CanonicalFirstProbe + range.ProbeCount);
+                int compactEnd = checked(range.CompactFirstLayer + range.ProbeCount);
+                if (compactEnd > _probeCapacity ||
+                    checked((ulong)canonicalEnd * IrradianceBytesPerProbe) > irradianceBufferBytes ||
+                    checked((ulong)canonicalEnd * VisibilityBytesPerProbe) > visibilityBufferBytes)
+                {
+                    throw new InvalidOperationException(
+                        $"Sampled-atlas range '{range.Identity}' exceeds its canonical source or compact destination allocation.");
+                }
+
+                expectedCompactLayer = compactEnd;
+            }
+
+            if (expectedCompactLayer != layout.AdmittedProbeCount)
+            {
+                throw new InvalidOperationException(
+                    $"Sampled-atlas ranges cover {expectedCompactLayer} layers, but the layout declares {layout.AdmittedProbeCount}.");
+            }
         }
 
         private void TransitionSourceBuffers(
@@ -868,20 +985,12 @@ namespace Njulf.Rendering.Resources
 
         private void ValidateFormatSupport()
         {
-            FormatProperties properties = default;
-            _context.Api.GetPhysicalDeviceFormatProperties(
-                _context.PhysicalDevice,
+            ValidateFormatSupport(
                 Format.R16G16B16A16Sfloat,
-                &properties);
-            const FormatFeatureFlags required =
-                FormatFeatureFlags.SampledImageBit |
-                FormatFeatureFlags.SampledImageFilterLinearBit |
-                FormatFeatureFlags.StorageImageBit;
-            if ((properties.OptimalTilingFeatures & required) != required)
-            {
-                throw new VulkanException(
-                    "R16G16B16A16 sampled DDGI atlases require optimal-tiling linear filtered sampling and storage-image support.");
-            }
+                "R16G16B16A16 sampled DDGI irradiance atlas");
+            ValidateFormatSupport(
+                Format.R16G16Sfloat,
+                "R16G16 sampled DDGI visibility atlas");
 
             PhysicalDeviceProperties deviceProperties = default;
             _context.Api.GetPhysicalDeviceProperties(_context.PhysicalDevice, &deviceProperties);
@@ -890,6 +999,25 @@ namespace Njulf.Rendering.Resources
             {
                 throw new VulkanException(
                     $"Simple DDGI GPU publication requires {requiredStorageImages} per-stage storage-image descriptors.");
+            }
+        }
+
+        private void ValidateFormatSupport(Format format, string label)
+        {
+            FormatProperties properties = default;
+            _context.Api.GetPhysicalDeviceFormatProperties(
+                _context.PhysicalDevice,
+                format,
+                &properties);
+            const FormatFeatureFlags required =
+                FormatFeatureFlags.SampledImageBit |
+                FormatFeatureFlags.SampledImageFilterLinearBit |
+                FormatFeatureFlags.StorageImageBit |
+                FormatFeatureFlags.TransferDstBit;
+            if ((properties.OptimalTilingFeatures & required) != required)
+            {
+                throw new VulkanException(
+                    $"{label} requires optimal-tiling linear filtered sampling and storage-image support.");
             }
         }
 
@@ -923,6 +1051,7 @@ namespace Njulf.Rendering.Resources
             _layersPerTexture = 0;
             _requiresFullSync = false;
             EstimatedImageBytes = 0;
+            AllocatedImageBytes = 0;
         }
 
         private void DestroyGroups(AtlasGroup[] groups)
@@ -960,15 +1089,25 @@ namespace Njulf.Rendering.Resources
             {
                 if (group == null)
                     continue;
-                bytes = checked(bytes + (ulong)group.LayerCount * BytesPerProbe(SimpleDdgiVolumeManager.IrradianceTexelsPerProbe));
-                bytes = checked(bytes + (ulong)group.LayerCount * BytesPerProbe(SimpleDdgiVolumeManager.VisibilityTexelsPerProbe));
+                bytes = checked(bytes + (ulong)group.LayerCount * IrradianceBytesPerProbe);
+                bytes = checked(bytes + (ulong)group.LayerCount * VisibilityBytesPerProbe);
             }
 
             return bytes;
         }
 
-        private static ulong BytesPerProbe(int texelsPerProbe) =>
-            checked((ulong)texelsPerProbe * (ulong)texelsPerProbe * AtlasTexelStride);
+        private static ulong CalculateAllocatedImageBytes(AtlasGroup[] groups)
+        {
+            ulong bytes = 0UL;
+            foreach (AtlasGroup group in groups)
+            {
+                if (group == null)
+                    continue;
+                bytes = checked(bytes + group.IrradianceAllocationBytes);
+                bytes = checked(bytes + group.VisibilityAllocationBytes);
+            }
+            return bytes;
+        }
 
         private static int DivideRoundUp(int numerator, int denominator) =>
             checked((numerator + denominator - 1) / denominator);
@@ -997,7 +1136,8 @@ namespace Njulf.Rendering.Resources
         }
 
         /// <summary>
-        /// Returns the payload bytes for both RGBA16F image atlases at a fixed
+        /// Returns the payload bytes for the RGBA16F irradiance and RG16F
+        /// visibility image atlases at a fixed
         /// probe capacity. Allocation overhead is still enforced by VMA's
         /// WithinBudget admission at creation time.
         /// </summary>
@@ -1007,8 +1147,7 @@ namespace Njulf.Rendering.Resources
                 return 0;
 
             return checked((ulong)probeCapacity *
-                (BytesPerProbe(SimpleDdgiVolumeManager.IrradianceTexelsPerProbe) +
-                 BytesPerProbe(SimpleDdgiVolumeManager.VisibilityTexelsPerProbe)));
+                (IrradianceBytesPerProbe + VisibilityBytesPerProbe));
         }
 
         internal static int CalculateSafeCopyProbeCount(
@@ -1021,9 +1160,9 @@ namespace Njulf.Rendering.Resources
                 return 0;
 
             ulong irradianceCapacity = irradianceBufferBytes /
-                BytesPerProbe(SimpleDdgiVolumeManager.IrradianceTexelsPerProbe);
+                IrradianceBytesPerProbe;
             ulong visibilityCapacity = visibilityBufferBytes /
-                BytesPerProbe(SimpleDdgiVolumeManager.VisibilityTexelsPerProbe);
+                VisibilityBytesPerProbe;
             ulong sourceCapacity = Math.Min(
                 irradianceCapacity,
                 visibilityCapacity);
@@ -1099,6 +1238,8 @@ namespace Njulf.Rendering.Resources
             public ImageView VisibilityView;
             public ImageLayout IrradianceLayout;
             public ImageLayout VisibilityLayout;
+            public ulong IrradianceAllocationBytes;
+            public ulong VisibilityAllocationBytes;
         }
     }
 }

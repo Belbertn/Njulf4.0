@@ -518,6 +518,30 @@ public sealed class SimpleDdgiProbePagingShaderContractTests
         });
     }
 
+    [Test]
+    public void PageInitialization_UsesTheCompiledPerVolumeCacheRegion()
+    {
+        string initialize = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_page_initialize.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(initialize, Does.Contain(
+                "uint cacheBase = volume.cacheBaseWord +"));
+            Assert.That(initialize, Does.Contain(
+                "volume.cacheStrideWords;"));
+            Assert.That(initialize, Does.Not.Contain(
+                "SIMPLE_DDGI_TRANSPORT_RAY_CACHE_STRIDE_WORDS"));
+            Assert.That(initialize, Does.Contain(
+                "cacheBase + volume.cacheStrideWords - 1u"));
+            Assert.That(initialize, Does.Contain(
+                "CPU layout compilation has already checked the complete region"));
+            Assert.That(initialize, Does.Contain(
+                "// VALID is the final store."));
+        });
+    }
+
     [TestCase(SimpleDdgiProbeResidencyMode.Dense, true, false)]
     [TestCase(SimpleDdgiProbeResidencyMode.Shadow, true, true)]
     [TestCase(SimpleDdgiProbeResidencyMode.SparseNearRing, true, true)]

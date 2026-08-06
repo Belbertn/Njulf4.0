@@ -343,6 +343,10 @@ internal sealed class SampleInputController
     private readonly List<SampleSponzaGiCapturedArtifact> _sponzaGiCaptureArtifacts = [];
     private readonly List<SponzaGiPendingRendererScreenshot> _sponzaGiPendingRendererScreenshots = [];
     private SampleSponzaGiCaptureMode _sponzaGiCaptureMode;
+    private SimpleDdgiStoragePackingMode _sponzaGiCaptureStoragePackingMode =
+        SimpleDdgiStoragePackingMode.Packed;
+    private SimpleDdgiSampledAtlasCoverageMode _sponzaGiCaptureSampledAtlasCoverageMode =
+        SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant;
     private int _sponzaGiScreenshotVerificationFrames;
 
     public SampleInputController(
@@ -1242,7 +1246,9 @@ internal sealed class SampleInputController
     public void StartSponzaGiCapture(
         string outputDirectory,
         bool exitWhenComplete,
-        SampleSponzaGiCaptureMode captureMode)
+        SampleSponzaGiCaptureMode captureMode,
+        SimpleDdgiStoragePackingMode? storagePackingModeOverride = null,
+        SimpleDdgiSampledAtlasCoverageMode? sampledAtlasCoverageModeOverride = null)
     {
         if (_renderer == null)
             throw new InvalidOperationException("A renderer is required to start a Sponza GI capture.");
@@ -1254,6 +1260,16 @@ internal sealed class SampleInputController
             throw new InvalidOperationException("A Sponza GI capture is already running.");
         if (!Enum.IsDefined(captureMode))
             throw new ArgumentOutOfRangeException(nameof(captureMode));
+        if (storagePackingModeOverride.HasValue &&
+            !Enum.IsDefined(storagePackingModeOverride.Value))
+        {
+            throw new ArgumentOutOfRangeException(nameof(storagePackingModeOverride));
+        }
+        if (sampledAtlasCoverageModeOverride.HasValue &&
+            !Enum.IsDefined(sampledAtlasCoverageModeOverride.Value))
+        {
+            throw new ArgumentOutOfRangeException(nameof(sampledAtlasCoverageModeOverride));
+        }
 
         SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
         if (_runtimeBenchmarkCapture != null)
@@ -1276,6 +1292,17 @@ internal sealed class SampleInputController
         SampleEnvironment.Configure(_renderer, SampleEnvironmentMode.ProceduralOutdoor);
         ApplyPerformanceScenario(contract.Scenario);
         SampleGlobalIlluminationValidation.ConfigureRenderSettings(_renderer.Settings, contract.Scenario);
+        GlobalIlluminationSettings captureGi = _renderer.Settings.GlobalIllumination;
+        if (storagePackingModeOverride.HasValue)
+            captureGi.SimpleDdgiStoragePackingMode = storagePackingModeOverride.Value;
+        if (sampledAtlasCoverageModeOverride.HasValue)
+        {
+            captureGi.SimpleDdgiSampledAtlasCoverageMode =
+                sampledAtlasCoverageModeOverride.Value;
+            captureGi.SimpleDdgiSampledAtlasEnabled =
+                sampledAtlasCoverageModeOverride.Value !=
+                    SimpleDdgiSampledAtlasCoverageMode.Disabled;
+        }
 
         _sponzaGiCaptureRestoreState = new SponzaGiCaptureRestoreState(
             _renderer.Settings.GlobalIllumination.Enabled,
@@ -1336,6 +1363,9 @@ internal sealed class SampleInputController
         _sponzaGiCaptureDirectory = Path.GetFullPath(outputDirectory);
         _sponzaGiCaptureExitWhenComplete = exitWhenComplete;
         _sponzaGiCaptureMode = captureMode;
+        _sponzaGiCaptureStoragePackingMode = captureGi.SimpleDdgiStoragePackingMode;
+        _sponzaGiCaptureSampledAtlasCoverageMode =
+            captureGi.SimpleDdgiSampledAtlasCoverageMode;
         _sponzaGiScreenshotVerificationFrames = 0;
         _sponzaGiCaptureArtifacts.Clear();
         _sponzaGiPendingRendererScreenshots.Clear();
@@ -1365,12 +1395,16 @@ internal sealed class SampleInputController
             _sponzaGiCaptureDirectory,
             _sponzaGiCaptureArtifacts,
             "running",
-            captureMode: _sponzaGiCaptureMode);
+            captureMode: _sponzaGiCaptureMode,
+            storagePackingMode: _sponzaGiCaptureStoragePackingMode,
+            sampledAtlasCoverageMode: _sponzaGiCaptureSampledAtlasCoverageMode);
         Console.WriteLine(
             $"Locked Sponza GI capture started: directory={_sponzaGiCaptureDirectory}, " +
             $"warmup={contract.WarmupFrames} frames, path={contract.VerticalPathDurationSeconds}s at " +
             $"{contract.FramesPerSecond}fps, outputs={contract.Outputs.Count} per bookmark, " +
-            $"mode={captureMode}, timing={GetSponzaGiTimingLabel(captureMode)}, fingerprint={contract.Fingerprint}.");
+            $"mode={captureMode}, storage={_sponzaGiCaptureStoragePackingMode}/" +
+            $"{_sponzaGiCaptureSampledAtlasCoverageMode}, " +
+            $"timing={GetSponzaGiTimingLabel(captureMode)}, fingerprint={contract.Fingerprint}.");
     }
 
     private void UpdateSponzaGiCapture(int viewportWidth, int viewportHeight)
@@ -1475,7 +1509,9 @@ internal sealed class SampleInputController
             _sponzaGiCaptureDirectory,
             _sponzaGiCaptureArtifacts,
             "running",
-            captureMode: _sponzaGiCaptureMode);
+            captureMode: _sponzaGiCaptureMode,
+            storagePackingMode: _sponzaGiCaptureStoragePackingMode,
+            sampledAtlasCoverageMode: _sponzaGiCaptureSampledAtlasCoverageMode);
     }
 
     private bool HasQueuedSponzaGiRendererScreenshot(
@@ -1622,7 +1658,9 @@ internal sealed class SampleInputController
             _sponzaGiCaptureDirectory,
             _sponzaGiCaptureArtifacts,
             "running",
-            captureMode: _sponzaGiCaptureMode);
+            captureMode: _sponzaGiCaptureMode,
+            storagePackingMode: _sponzaGiCaptureStoragePackingMode,
+            sampledAtlasCoverageMode: _sponzaGiCaptureSampledAtlasCoverageMode);
         return true;
     }
 
@@ -1780,7 +1818,9 @@ internal sealed class SampleInputController
                     _sponzaGiCaptureArtifacts,
                     "awaiting-renderer-screenshots",
                     DescribePendingSponzaGiRendererScreenshots(),
-                    _sponzaGiCaptureMode);
+                    _sponzaGiCaptureMode,
+                    _sponzaGiCaptureStoragePackingMode,
+                    _sponzaGiCaptureSampledAtlasCoverageMode);
             }
             return;
         }
@@ -1800,7 +1840,9 @@ internal sealed class SampleInputController
             _sponzaGiCaptureDirectory,
             _sponzaGiCaptureArtifacts,
             "completed",
-            captureMode: _sponzaGiCaptureMode);
+            captureMode: _sponzaGiCaptureMode,
+            storagePackingMode: _sponzaGiCaptureStoragePackingMode,
+            sampledAtlasCoverageMode: _sponzaGiCaptureSampledAtlasCoverageMode);
         Console.WriteLine(
             $"Locked Sponza GI capture completed: {_sponzaGiCaptureDirectory} " +
             $"mode={_sponzaGiCaptureMode}, timing={GetSponzaGiTimingLabel(_sponzaGiCaptureMode)}.");
@@ -1829,7 +1871,9 @@ internal sealed class SampleInputController
             _sponzaGiCaptureArtifacts,
             "failed",
             reason,
-            _sponzaGiCaptureMode);
+            _sponzaGiCaptureMode,
+            _sponzaGiCaptureStoragePackingMode,
+            _sponzaGiCaptureSampledAtlasCoverageMode);
         Console.WriteLine($"Locked Sponza GI capture aborted: {reason}");
         bool exitWhenComplete = _sponzaGiCaptureExitWhenComplete;
         RestoreSponzaGiCaptureState();
@@ -1866,6 +1910,9 @@ internal sealed class SampleInputController
         _sponzaGiPendingRendererScreenshots.Clear();
         _sponzaGiScreenshotVerificationFrames = 0;
         _sponzaGiCaptureMode = SampleSponzaGiCaptureMode.ProductionTiming;
+        _sponzaGiCaptureStoragePackingMode = SimpleDdgiStoragePackingMode.Packed;
+        _sponzaGiCaptureSampledAtlasCoverageMode =
+            SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant;
     }
 
     public void OnFrameRendered(int frameIndex, RendererDiagnostics diagnostics, RenderBudgetSnapshot budget)

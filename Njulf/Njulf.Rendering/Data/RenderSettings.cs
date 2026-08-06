@@ -2236,7 +2236,20 @@ namespace Njulf.Rendering.Data
         /// ultra tiers request this path, while the manager admits it only when
         /// the configured DDGI memory budget can safely accommodate it.
         /// </summary>
-        public bool SimpleDdgiSampledAtlasEnabled { get; set; }
+        public bool SimpleDdgiSampledAtlasEnabled { get; set; } = true;
+        /// <summary>
+        /// Selects whole-volume image coverage. ReceiverRelevant mirrors authored
+        /// receiver volumes plus near/mid rings and uses the canonical SSBO for
+        /// every excluded volume and octahedral seam.
+        /// </summary>
+        public SimpleDdgiSampledAtlasCoverageMode SimpleDdgiSampledAtlasCoverageMode { get; set; } =
+            SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant;
+        /// <summary>
+        /// Selects the versioned source-cache/ray-scratch storage contract. A
+        /// change is a cold resource-generation transition, never reinterpretation.
+        /// </summary>
+        public SimpleDdgiStoragePackingMode SimpleDdgiStoragePackingMode { get; set; } =
+            SimpleDdgiStoragePackingMode.Packed;
         /// <summary>
         /// Ownership at which an interior camera-relative ring can skip sampling a
         /// containing coarser ring. Lower values trade a small transition error for
@@ -2978,6 +2991,13 @@ namespace Njulf.Rendering.Data
             SimpleDdgiVerticalRecenterHysteresisFraction = 0.25f;
             SimpleDdgiReducedBlendEnabled = tier is DdgiQualityTier.DdgiLow or DdgiQualityTier.DdgiMedium;
             SimpleDdgiSampledAtlasEnabled = tier is DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra;
+            SimpleDdgiSampledAtlasCoverageMode = SimpleDdgiSampledAtlasEnabled
+                ? SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant
+                : SimpleDdgiSampledAtlasCoverageMode.Disabled;
+            // Packed storage is the production representation for every tier.
+            // Legacy/Validate and full-canonical mirroring remain explicit
+            // rollback and qualification overrides.
+            SimpleDdgiStoragePackingMode = SimpleDdgiStoragePackingMode.Packed;
             SimpleDdgiProbeResidencyMode = tier is
                 DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra
                     ? SimpleDdgiProbeResidencyMode.SparseNearRing
@@ -4513,7 +4533,12 @@ namespace Njulf.Rendering.Data
             public bool SimpleDdgiStructuredGatherEnabled { get; init; } = true;
             public SimpleDdgiLayoutAdmissionMode SimpleDdgiLayoutAdmissionMode { get; init; } = SimpleDdgiLayoutAdmissionMode.Degrade;
             public bool SimpleDdgiReducedBlendEnabled { get; init; }
-            public bool SimpleDdgiSampledAtlasEnabled { get; init; }
+            // Nullable representation controls preserve the selected quality
+            // tier's production defaults when loading files written before
+            // these fields existed. Explicit rollback choices still round-trip.
+            public bool? SimpleDdgiSampledAtlasEnabled { get; init; }
+            public SimpleDdgiSampledAtlasCoverageMode? SimpleDdgiSampledAtlasCoverageMode { get; init; }
+            public SimpleDdgiStoragePackingMode? SimpleDdgiStoragePackingMode { get; init; }
             public float SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold { get; init; } = 0.95f;
             public bool SimpleDdgiToroidalScrollingEnabled { get; init; } = true;
             public bool SimpleDdgiRegionalInvalidationEnabled { get; init; } = true;
@@ -4678,6 +4703,8 @@ namespace Njulf.Rendering.Data
                     SimpleDdgiLayoutAdmissionMode = settings.SimpleDdgiLayoutAdmissionMode,
                     SimpleDdgiReducedBlendEnabled = settings.SimpleDdgiReducedBlendEnabled,
                     SimpleDdgiSampledAtlasEnabled = settings.SimpleDdgiSampledAtlasEnabled,
+                    SimpleDdgiSampledAtlasCoverageMode = settings.SimpleDdgiSampledAtlasCoverageMode,
+                    SimpleDdgiStoragePackingMode = settings.SimpleDdgiStoragePackingMode,
                     SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold,
                     SimpleDdgiToroidalScrollingEnabled = settings.SimpleDdgiToroidalScrollingEnabled,
                     SimpleDdgiRegionalInvalidationEnabled = settings.SimpleDdgiRegionalInvalidationEnabled,
@@ -4860,7 +4887,21 @@ namespace Njulf.Rendering.Data
                 settings.SimpleDdgiStructuredGatherEnabled = SimpleDdgiStructuredGatherEnabled;
                 settings.SimpleDdgiLayoutAdmissionMode = SimpleDdgiLayoutAdmissionMode;
                 settings.SimpleDdgiReducedBlendEnabled = SimpleDdgiReducedBlendEnabled;
-                settings.SimpleDdgiSampledAtlasEnabled = SimpleDdgiSampledAtlasEnabled;
+                if (SimpleDdgiSampledAtlasEnabled.HasValue)
+                {
+                    settings.SimpleDdgiSampledAtlasEnabled =
+                        SimpleDdgiSampledAtlasEnabled.Value;
+                }
+                if (SimpleDdgiSampledAtlasCoverageMode.HasValue)
+                {
+                    settings.SimpleDdgiSampledAtlasCoverageMode =
+                        SimpleDdgiSampledAtlasCoverageMode.Value.Sanitize();
+                }
+                if (SimpleDdgiStoragePackingMode.HasValue)
+                {
+                    settings.SimpleDdgiStoragePackingMode =
+                        SimpleDdgiStoragePackingMode.Value.Sanitize();
+                }
                 settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold;
                 settings.SimpleDdgiToroidalScrollingEnabled = SimpleDdgiToroidalScrollingEnabled;
                 settings.SimpleDdgiRegionalInvalidationEnabled = SimpleDdgiRegionalInvalidationEnabled;

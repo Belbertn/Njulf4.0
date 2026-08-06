@@ -102,6 +102,28 @@ public readonly record struct SimpleDdgiTransportTailSummary
     public float RelativeTailBound { get; init; }
     public float Tolerance { get; init; }
     public float CanonicalQuantizationFloor { get; init; }
+    /// <summary>
+    /// Probe selected from the highest compact defect bucket. This locates a
+    /// representative maximum-defect site without weakening or replacing the
+    /// exact <see cref="FixedPointDefect"/> reduction.
+    /// </summary>
+    public uint MaximumDefectWitnessProbeIndex { get; init; }
+    public uint MaximumDefectWitnessTexelIndex { get; init; }
+    public bool DetailedWitnessValid { get; init; }
+    public uint DetailedWitnessProbeIndex { get; init; }
+    public uint DetailedWitnessTexelIndex { get; init; }
+    public float DetailedWitnessWeightSum { get; init; }
+    public float DetailedWitnessCandidateR { get; init; }
+    public float DetailedWitnessCandidateG { get; init; }
+    public float DetailedWitnessCandidateB { get; init; }
+    public float DetailedWitnessCanonicalR { get; init; }
+    public float DetailedWitnessCanonicalG { get; init; }
+    public float DetailedWitnessCanonicalB { get; init; }
+    public float DetailedWitnessProbeResidual { get; init; }
+    public uint DetailedWitnessSourceRayCount { get; init; }
+    public float DetailedWitnessPrivateR { get; init; }
+    public float DetailedWitnessPrivateG { get; init; }
+    public float DetailedWitnessPrivateB { get; init; }
     public ulong AuditMicroseconds { get; init; }
     public ulong FirstFrameSerial { get; init; }
     public ulong FinalFrameSerial { get; init; }

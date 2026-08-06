@@ -537,6 +537,18 @@ namespace Njulf.Rendering.Descriptors
         /// </summary>
         public const int SimpleDdgiResidencyArenaBuffer = SimpleDdgiReceiverProbeBuffer + 1;
 
+        /// <summary>
+        /// Detailed-only Simple-DDGI packed-storage qualification counters for
+        /// frame 0. A dedicated low-offset bank keeps validation atomics bounded
+        /// and independent from the general renderer diagnostics ABI.
+        /// </summary>
+        public const int SimpleDdgiStorageValidationBufferBase =
+            SimpleDdgiResidencyArenaBuffer + 1;
+
+        /// <summary>Detailed Simple-DDGI storage qualification counters for frame 1.</summary>
+        public const int SimpleDdgiStorageValidationBufferFrame1 =
+            SimpleDdgiStorageValidationBufferBase + 1;
+
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
         // ============================================
@@ -668,7 +680,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
 
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = SimpleDdgiResidencyArenaBuffer + 1;
+        public const int StaticBufferCount = SimpleDdgiStorageValidationBufferFrame1 + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -860,6 +872,8 @@ namespace Njulf.Rendering.Descriptors
                     SimpleDdgiSchedulerArenaBuffer => nameof(SimpleDdgiSchedulerArenaBuffer),
                     SimpleDdgiReceiverProbeBuffer => nameof(SimpleDdgiReceiverProbeBuffer),
                     SimpleDdgiResidencyArenaBuffer => nameof(SimpleDdgiResidencyArenaBuffer),
+                    SimpleDdgiStorageValidationBufferBase => nameof(SimpleDdgiStorageValidationBufferBase),
+                    SimpleDdgiStorageValidationBufferFrame1 => nameof(SimpleDdgiStorageValidationBufferFrame1),
                     _ => "Unknown"
                 };
             }

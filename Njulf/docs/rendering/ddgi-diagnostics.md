@@ -46,6 +46,25 @@ DDGI diagnostics distinguish geometric coverage from usable lighting support.
 
 `traceDispatchGroups`, `traceProbeCount`, `traceRayCount`, `blendProbeCount`, `relocateClassifyProbeCount`, and `publishProbeCount` report the actual DDGI update workload. In GPU scheduler mode these values come from completed scheduler readback and are reported as pending until readback is valid. For the trace shader, one dispatch group maps to one updated probe.
 
+## Packed Storage and Sampled Mirror
+
+`SimpleDdgiStorage` is the authoritative capture record for the active representation. It is copied from the same compiled layouts used for allocation and shader metadata; consumers must not derive canonical bytes by subtracting an optional mirror from an aggregate.
+
+- `PackingMode`, `AbiVersion`, `DirectionCodebookVersion`, `StorageLayoutFingerprint`, and `MirrorLayoutFingerprint` identify the byte/address contract. A change is a cold generation boundary.
+- `CanonicalIrradianceFormat/Bytes` report the two-word `RGBA16F` texel; `CanonicalVisibilityFormat/Bytes` report the one-word `RG16F` moment texel. Visibility validity is probe-state bit 5, not a duplicated texel channel.
+- `SourceCacheLegacyBytes`, `SourceCacheCompact28Bytes`, `SourceCacheCompact24Bytes`, their ray counts, and `SourceCacheAlignmentBytes` account for every mixed, 16-byte-aligned per-volume region.
+- `Fp16DistanceEligible*` and `Fp32Distance*` distinguish volumes whose range/ULP/thickness gates selected Compact-24 from those retaining Compact-28 FP32 distance.
+- `RayScratchStrideBytes` is 32 for `Legacy`/`Validate` and 20 for `Packed`; `RayScratchBytes` is the exact provisioned work allocation.
+- Mirror counts are separate: requested, policy-eligible, budget-admitted, and 256-layer-rounded provisioned probes. Irradiance, visibility, logical total, actual allocator bytes, excluded identities, coverage mode, allocation generation, and fallback reason are reported independently.
+
+Detailed validation builds additionally populate `ValidationCounters`. The logical counters are backed by a dedicated, double-buffered 256-byte validation bank, and each completed bank carries a transfer-written frame sentinel; a report is valid only when that sentinel and the completed-frame slot agree. This keeps validation atomics at low physical offsets without consuming production diagnostic-buffer space. Normal Release/ShippingPerformance shaders compile these atomics out. Ordinary pack, direction, and mirror-path observations use the same deterministic 1/64 sampling stride; non-finite, saturation, invalid-epoch, invalid-hit-kind, and invalid-map failures are counted exactly so a zero-error gate cannot miss an exception.
+
+- `MirrorInteriorOpportunityCount`, `MirrorImageHitCount`, `MirrorSeamFallbackCount`, `MirrorUnmirroredFallbackCount`, and `MirrorInvalidMapFallbackCount` classify every sampled-mirror opportunity. Seam and policy fallbacks are normal; invalid-map fallback must remain zero.
+- `CachePackAttemptCount`, non-finite/saturation counts, and maximum radiance/distance errors qualify FP16 writes. `InvalidSourceEpochCount` and `InvalidHitKindCount` prove that malformed scratch/cache metadata failed closed. All four failure/saturation counts must be zero for promotion.
+- Direction comparison samples, epoch mismatches, maximum angular error, histogram, and the conservative P99 bucket bound qualify the codebook while `Validate` retains the stored direction. Epoch mismatches must be zero.
+
+`MirrorAllocatedBytes` may exceed logical payload bytes only because of explicit allocator alignment. A zero allocated value with nonzero admitted bytes means image creation fell back; inspect `MirrorFallbackReason`. Budget evaluation uses these explicit resources and prefers actual mirror allocation bytes when available.
+
 ## Sparse Probe Residency
 
 `SimpleDdgiProbeResidency.Mode` distinguishes three contracts:
@@ -119,6 +138,10 @@ The views are observational. They do not pin or request pages. Development tools
 | `rawLum` high, `finalLum` low | Final composition or suppression mask |
 | `finalLum` visible, `rawLum` weak, `fallbackWeight` high | Environment fallback is masking weak DDGI bounce |
 | `ddgiActualRequests=pending` | First readback frames have not completed yet |
+| mirror opportunities high, image hits low | Coverage policy excludes an important volume class, budget admitted only a prefix, or seam traffic dominates |
+| `MirrorInvalidMapFallbackCount` nonzero | Mapping generation, descriptor group/layer bounds, or compact range publication mismatch |
+| packed cache repairs increase | Epoch/source-generation identity, mixed-region address, or FP16 input validation failure |
+| Compact-24 absent for a volume | Its maximum range, half ULP, hit offset, architectural thickness, or synthetic exponent-boundary gate rejected FP16 distance |
 
 ## Required Ownership Invariant
 

@@ -97,12 +97,12 @@ void main()
          texel < texelCount;
          texel += gl_WorkGroupSize.x)
     {
-        vec4 value = ReadSimpleDdgiAtlasTexel(
+        vec4 value = ReadSimpleDdgiIrradianceTexel(
             pc.TransportWriteIrradianceAtlasBufferIndex,
             update.physicalProbeIndex,
             texel,
             params.irradianceTexels);
-        WriteSimpleDdgiAtlasTexel(
+        WriteSimpleDdgiIrradianceTexel(
             pc.IrradianceAtlasBufferIndex,
             update.physicalProbeIndex,
             texel,

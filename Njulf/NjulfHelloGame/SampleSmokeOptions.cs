@@ -47,7 +47,9 @@ public sealed record SampleSmokeOptions(
     int? SimpleDdgiSparseRetentionFramesOverride = null,
     int? SimpleDdgiSparseMaximumAdmissionsOverride = null,
     int? SimpleDdgiSparseMaximumReceiverFeedbackOverride = null,
-    int? SimpleDdgiSparseInactiveRetryFramesOverride = null)
+    int? SimpleDdgiSparseInactiveRetryFramesOverride = null,
+    SimpleDdgiStoragePackingMode? SimpleDdgiStoragePackingModeOverride = null,
+    SimpleDdgiSampledAtlasCoverageMode? SimpleDdgiSampledAtlasCoverageModeOverride = null)
 {
     public SampleBenchmarkOptions Benchmark { get; init; } = Benchmark ?? SampleBenchmarkOptions.Disabled;
 
@@ -67,6 +69,8 @@ public sealed record SampleSmokeOptions(
         SimpleDdgiSparseMaximumAdmissionsOverride.HasValue ||
         SimpleDdgiSparseMaximumReceiverFeedbackOverride.HasValue ||
         SimpleDdgiSparseInactiveRetryFramesOverride.HasValue ||
+        SimpleDdgiStoragePackingModeOverride.HasValue ||
+        SimpleDdgiSampledAtlasCoverageModeOverride.HasValue ||
         QualityPresetOverride.HasValue ||
         EnableFarFieldClipmap ||
         EnableFarFieldForceAll ||

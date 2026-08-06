@@ -70,6 +70,8 @@ public static class SampleSmokeOptionsParser
         "--simple-ddgi-sparse-max-admissions",
         "--simple-ddgi-sparse-max-feedback",
         "--simple-ddgi-sparse-inactive-retry-frames",
+        "--simple-ddgi-storage-mode",
+        "--simple-ddgi-mirror-coverage",
         "--far-field-clipmap",
         "--far-field-force-all"
     };
@@ -199,6 +201,12 @@ public static class SampleSmokeOptionsParser
         int? simpleDdgiSparseInactiveRetryFramesOverride = ParseOptionalPositiveInt(
             Environment.GetEnvironmentVariable("NJULF_RENDERER_SIMPLE_DDGI_SPARSE_INACTIVE_RETRY_FRAMES"),
             "NJULF_RENDERER_SIMPLE_DDGI_SPARSE_INACTIVE_RETRY_FRAMES");
+        SimpleDdgiStoragePackingMode? simpleDdgiStoragePackingModeOverride =
+            ParseSimpleDdgiStoragePackingMode(Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_SIMPLE_DDGI_STORAGE_MODE"));
+        SimpleDdgiSampledAtlasCoverageMode? simpleDdgiSampledAtlasCoverageModeOverride =
+            ParseSimpleDdgiSampledAtlasCoverageMode(Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_SIMPLE_DDGI_MIRROR_COVERAGE"));
         if (asyncComputeModeOverride.HasValue)
             enableAsyncCompute =
                 asyncComputeModeOverride == AsyncComputeMode.ForceEnabledForValidation;
@@ -521,6 +529,18 @@ public static class SampleSmokeOptionsParser
                 case "--simple-ddgi-sparse-inactive-retry-frames":
                     simpleDdgiSparseInactiveRetryFramesOverride =
                         ParsePositiveInt(value, 1, optionName);
+                    break;
+                case "--simple-ddgi-storage-mode":
+                    simpleDdgiStoragePackingModeOverride =
+                        ParseSimpleDdgiStoragePackingMode(value) ??
+                        throw new ArgumentException(
+                            "--simple-ddgi-storage-mode requires legacy, validate, or packed.");
+                    break;
+                case "--simple-ddgi-mirror-coverage":
+                    simpleDdgiSampledAtlasCoverageModeOverride =
+                        ParseSimpleDdgiSampledAtlasCoverageMode(value) ??
+                        throw new ArgumentException(
+                            "--simple-ddgi-mirror-coverage requires disabled, full-canonical, or receiver-relevant.");
                     break;
                 case "--far-field-clipmap":
                     enableFarFieldClipmap = ParseBool(value, optionName);
@@ -1010,6 +1030,13 @@ public static class SampleSmokeOptionsParser
                 if (mode == SampleSmokeMode.None && simpleDdgiSchedulerModeOverride.HasValue && !smokeModeSpecified)
                     mode = SampleSmokeMode.Startup;
                 if (mode == SampleSmokeMode.None &&
+                    (simpleDdgiStoragePackingModeOverride.HasValue ||
+                     simpleDdgiSampledAtlasCoverageModeOverride.HasValue) &&
+                    !smokeModeSpecified)
+                {
+                    mode = SampleSmokeMode.Startup;
+                }
+                if (mode == SampleSmokeMode.None &&
                     (simpleDdgiProbeResidencyModeOverride.HasValue ||
                      simpleDdgiSparsePhysicalPageBudgetOverride.HasValue ||
                      simpleDdgiSparseMinimumPhysicalPageBudgetOverride.HasValue ||
@@ -1134,7 +1161,9 @@ public static class SampleSmokeOptionsParser
             simpleDdgiSparseRetentionFramesOverride,
             simpleDdgiSparseMaximumAdmissionsOverride,
             simpleDdgiSparseMaximumReceiverFeedbackOverride,
-            simpleDdgiSparseInactiveRetryFramesOverride);
+            simpleDdgiSparseInactiveRetryFramesOverride,
+            simpleDdgiStoragePackingModeOverride,
+            simpleDdgiSampledAtlasCoverageModeOverride);
     }
 
     private static AsyncComputePath? ParseAsyncComputePath(string? value)
@@ -1185,6 +1214,44 @@ public static class SampleSmokeOptionsParser
                 SimpleDdgiProbeResidencyMode.SparseNearRing,
             _ => throw new ArgumentException(
                 $"Invalid Simple DDGI residency mode '{value}'. Valid values: dense, shadow, sparse-near-ring.")
+        };
+    }
+
+    private static SimpleDdgiStoragePackingMode? ParseSimpleDdgiStoragePackingMode(
+        string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        return value.Trim().Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .ToLowerInvariant() switch
+        {
+            "legacy" => SimpleDdgiStoragePackingMode.Legacy,
+            "validate" or "validation" => SimpleDdgiStoragePackingMode.Validate,
+            "packed" => SimpleDdgiStoragePackingMode.Packed,
+            _ => throw new ArgumentException(
+                $"Invalid Simple DDGI storage mode '{value}'. Valid values: legacy, validate, packed.")
+        };
+    }
+
+    private static SimpleDdgiSampledAtlasCoverageMode?
+        ParseSimpleDdgiSampledAtlasCoverageMode(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        return value.Trim().Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .ToLowerInvariant() switch
+        {
+            "disabled" or "off" => SimpleDdgiSampledAtlasCoverageMode.Disabled,
+            "fullcanonical" or "full" =>
+                SimpleDdgiSampledAtlasCoverageMode.FullCanonical,
+            "receiverrelevant" or "partial" =>
+                SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant,
+            _ => throw new ArgumentException(
+                $"Invalid Simple DDGI mirror coverage '{value}'. Valid values: disabled, full-canonical, receiver-relevant.")
         };
     }
 

@@ -23,11 +23,23 @@ namespace Njulf.Rendering.Resources
         float Spacing,
         int ProbeCount)
     {
-        public int GridCountX { get; init; }
-        public int GridCountY { get; init; }
-        public int GridCountZ { get; init; }
+        // Preserve source compatibility for legacy callers that supplied only
+        // a flat probe count. Production volume construction overwrites all
+        // three axes explicitly; the fallback still exactly represents the
+        // declared population as ProbeCount x 1 x 1.
+        public int GridCountX { get; init; } = Math.Max(1, ProbeCount);
+        public int GridCountY { get; init; } = 1;
+        public int GridCountZ { get; init; } = 1;
         public bool SparseNearRingEligible { get; init; }
         public bool DenseCoarserRingEligible { get; init; }
+        public int RingIndex { get; init; } = -1;
+        public float ArchitecturalThickness { get; init; } = 0.08f;
+        /// <summary>
+        /// Exact trace limit consumed by this volume. A null value retains the
+        /// spacing-times-largest-axis derivation for source-compatible callers
+        /// and remains representable in strict JSON capture reports.
+        /// </summary>
+        public float? MaximumTraceDistance { get; init; }
 
         public int VirtualPageCount => SparseNearRingEligible &&
             GridCountX > 0 && GridCountY > 0 && GridCountZ > 0
@@ -132,17 +144,20 @@ namespace Njulf.Rendering.Resources
     {
         public const int SampledAtlasCapacityQuantum = 256;
         public const ulong ParamsHeaderBytes = 240;
-        public const ulong VolumeBytes = 96;
+        public const ulong VolumeBytes = 112;
         public const ulong VolumePagingBytes = 32;
         public const ulong IrradianceBytesPerProbe =
             (ulong)(SimpleDdgiVolumeManager.IrradianceTexelsPerProbe *
                 SimpleDdgiVolumeManager.IrradianceTexelsPerProbe) * 8UL;
         public const ulong VisibilityBytesPerProbe =
             (ulong)(SimpleDdgiVolumeManager.VisibilityTexelsPerProbe *
-                SimpleDdgiVolumeManager.VisibilityTexelsPerProbe) * 8UL;
-        public const ulong RayResultBytes = 32;
-        public const uint TransportRayCacheAbiVersion = 4;
+                SimpleDdgiVolumeManager.VisibilityTexelsPerProbe) * 4UL;
+        public const ulong LegacyRayResultBytes = 32;
+        public const ulong RayResultBytes = 20;
+        public const uint TransportRayCacheAbiVersion = 5;
         public const ulong TransportRayCacheBytes = 36;
+        public const ulong Compact28TransportRayCacheBytes = 28;
+        public const ulong Compact24TransportRayCacheBytes = 24;
         public const ulong GraphSafePlaceholderBytes = 16;
         public const ulong ProbeStateBytesPerProbe = 32;
         public const ulong ReceiverProbeBytesPerProbe = 16;
@@ -156,6 +171,26 @@ namespace Njulf.Rendering.Resources
         public const int ClassificationReadbackProbeCapacity = 4_096;
         public const ulong ProbeReadbackBytesPerProbe =
             ProbeStateBytesPerProbe + RelocationClassificationBytesPerProbe;
+
+        public SimpleDdgiStoragePackingMode StoragePackingMode { get; init; }
+        public SimpleDdgiStorageAbiVersion StorageAbiVersion { get; init; }
+        public uint DirectionCodebookVersion { get; init; }
+        public ulong StorageLayoutFingerprint { get; init; }
+        public ulong TransportSourceCacheLegacyBytes { get; init; }
+        public ulong TransportSourceCacheCompact28Bytes { get; init; }
+        public ulong TransportSourceCacheCompact24Bytes { get; init; }
+        public ulong TransportSourceCacheAlignmentBytes { get; init; }
+        public int TransportSourceCacheLegacyRayCount { get; init; }
+        public int TransportSourceCacheCompact28RayCount { get; init; }
+        public int TransportSourceCacheCompact24RayCount { get; init; }
+        public ulong RayResultStrideBytes { get; init; }
+        public SimpleDdgiSampledAtlasCoverageMode SampledAtlasCoverageMode { get; init; }
+        public int SampledAtlasRequestedProbeCount { get; init; }
+        public int SampledAtlasEligibleProbeCount { get; init; }
+        public int SampledAtlasAdmittedProbeCount { get; init; }
+        public ulong SampledAtlasIrradianceImageBytes { get; init; }
+        public ulong SampledAtlasVisibilityImageBytes { get; init; }
+        public ulong SampledAtlasLayoutFingerprint { get; init; }
 
         /// <summary>Compatibility alias for virtually indexed consumers.</summary>
         public int ProbeCount => VirtualProbeCount;
@@ -182,10 +217,14 @@ namespace Njulf.Rendering.Resources
                     SimpleDdgiProbePageLayout.ProbesPerPage -
                 SparseVirtualProbeCount));
 
-        /// <summary>Unused sampled-atlas layers caused by its 256-probe allocation quantum.</summary>
+        /// <summary>
+        /// Unused compact-mirror layers caused by its 256-probe allocation
+        /// quantum. Partial coverage must compare against admitted mirror
+        /// probes, not the (usually larger) canonical physical population.
+        /// </summary>
         public int SampledAtlasPaddingProbeCount => Math.Max(
             0,
-            SampledAtlasPhysicalProbeCapacity - PhysicalProbeCapacity);
+            SampledAtlasPhysicalProbeCapacity - SampledAtlasAdmittedProbeCount);
 
         public ulong SampledAtlasPaddingBytes => checked(
             (ulong)SampledAtlasPaddingProbeCount *
@@ -253,7 +292,13 @@ namespace Njulf.Rendering.Resources
             int sparseVirtualProbeCount = 0,
             int sparseVirtualPageCount = 0,
             int sparsePhysicalPageCapacity = 0,
-            int maximumPageAdmissionsPerFrame = 0)
+            int maximumPageAdmissionsPerFrame = 0,
+            SimpleDdgiStoragePackingMode storagePackingMode =
+                SimpleDdgiStoragePackingMode.Packed,
+            SimpleDdgiSampledAtlasCoverageMode sampledAtlasCoverageMode =
+                SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant,
+            SimpleDdgiStorageLayout? storageLayout = null,
+            SimpleDdgiSampledAtlasLayout? sampledAtlasLayout = null)
         {
             int probes = Math.Clamp(
                 probeCount,
@@ -324,8 +369,13 @@ namespace Njulf.Rendering.Resources
                     sparsePhysicalPages *
                     SimpleDdgiProbePageLayout.ProbesPerPage)
                 : probes;
+            SimpleDdgiStoragePackingMode resolvedPackingMode =
+                storagePackingMode.Sanitize();
+            SimpleDdgiSampledAtlasCoverageMode resolvedCoverageMode =
+                sampledAtlasCoverageMode.Sanitize();
             int sampledCapacity = sampledAtlasRequested
-                ? ResolveSampledAtlasProbeCapacity(physicalProbeCapacity)
+                ? sampledAtlasLayout?.ProvisionedProbeCount ??
+                    ResolveSampledAtlasProbeCapacity(physicalProbeCapacity)
                 : 0;
 
             ulong probeCount64 = checked((ulong)probes);
@@ -347,9 +397,12 @@ namespace Njulf.Rendering.Resources
                         ? physicalProbeCount64 * VisibilityBytesPerProbe
                         : 0UL)))
                 : AtLeastOneAllocation(0UL);
+            ulong defaultTransportStride = resolvedPackingMode.UsesPackedCache()
+                ? Compact28TransportRayCacheBytes
+                : TransportRayCacheBytes;
             ulong transportSourceCacheBytes = concreteTransportBuffers
-                ? AtLeastOneAllocation(checked(
-                    physicalProbeCount64 * rayCount64 * TransportRayCacheBytes))
+                ? storageLayout?.SourceCacheBytes ?? AtLeastOneAllocation(checked(
+                    physicalProbeCount64 * rayCount64 * defaultTransportStride))
                 : AtLeastOneAllocation(0UL);
             ulong stateBytes = AtLeastOneAllocation(
                 checked(probeCount64 * ProbeStateBytesPerProbe));
@@ -363,11 +416,21 @@ namespace Njulf.Rendering.Resources
                 ? 0UL
                 : checked((ulong)readbacks *
                     ResolveProbeStateReadbackBufferBytes(probes));
+            ulong rayResultStrideBytes = resolvedPackingMode.UsesDirectionFreeScratch()
+                ? RayResultBytes
+                : LegacyRayResultBytes;
             ulong rayScratchBytes = AtLeastOneAllocation(checked(
-                updateCount64 * rayCount64 * RayResultBytes));
+                updateCount64 * rayCount64 * rayResultStrideBytes));
+            ulong sampledIrradianceBytes = sampledAtlasRequested
+                ? sampledAtlasLayout?.IrradianceImageBytes ?? checked(
+                    (ulong)sampledCapacity * IrradianceBytesPerProbe)
+                : 0UL;
+            ulong sampledVisibilityBytes = sampledAtlasRequested
+                ? sampledAtlasLayout?.VisibilityImageBytes ?? checked(
+                    (ulong)sampledCapacity * VisibilityBytesPerProbe)
+                : 0UL;
             ulong sampledImageBytes = checked(
-                (ulong)sampledCapacity *
-                (IrradianceBytesPerProbe + VisibilityBytesPerProbe));
+                sampledIrradianceBytes + sampledVisibilityBytes);
             ulong residencyArenaBytes = 0UL;
             ulong residencyFeedbackReadbackBytes = 0UL;
             if (resolvedResidencyMode.CollectsDemand() && sparseVirtualPages > 0)
@@ -417,6 +480,29 @@ namespace Njulf.Rendering.Resources
                     : 0UL;
             }
 
+            SimpleDdgiStorageAbiVersion storageAbiVersion =
+                storageLayout?.AbiVersion ??
+                (resolvedPackingMode.UsesPackedCache()
+                    ? SimpleDdgiStorageAbiVersion.Packed
+                    : SimpleDdgiStorageAbiVersion.Legacy);
+            ulong legacyCacheBytes = concreteTransportBuffers
+                ? storageLayout?.LegacyBytes ??
+                    (!resolvedPackingMode.UsesPackedCache()
+                        ? transportSourceCacheBytes
+                        : 0UL)
+                : 0UL;
+            ulong compact28CacheBytes = concreteTransportBuffers
+                ? storageLayout?.Compact28Bytes ??
+                    (resolvedPackingMode.UsesPackedCache()
+                        ? transportSourceCacheBytes
+                        : 0UL)
+                : 0UL;
+            int totalCacheRayCount = concreteTransportBuffers
+                ? checked((int)Math.Min(
+                    physicalProbeCount64 * rayCount64,
+                    int.MaxValue))
+                : 0;
+
             return new SimpleDdgiMemoryPlan(
                 probes,
                 densePayloadProbes,
@@ -448,7 +534,53 @@ namespace Njulf.Rendering.Resources
                 schedulerArenaBytes,
                 schedulerFeedbackReadbackBytes,
                 schedulerAuditReadbackBytes,
-                schedulerValidationReadbackBytes);
+                schedulerValidationReadbackBytes)
+            {
+                StoragePackingMode = resolvedPackingMode,
+                StorageAbiVersion = storageAbiVersion,
+                DirectionCodebookVersion = storageLayout?.DirectionCodebookVersion ??
+                    SimpleDdgiStorageLayoutCompiler.DirectionCodebookVersion,
+                StorageLayoutFingerprint = storageLayout?.Fingerprint ?? 0UL,
+                TransportSourceCacheLegacyBytes = legacyCacheBytes,
+                TransportSourceCacheCompact28Bytes = compact28CacheBytes,
+                TransportSourceCacheCompact24Bytes = concreteTransportBuffers
+                    ? storageLayout?.Compact24Bytes ?? 0UL
+                    : 0UL,
+                TransportSourceCacheAlignmentBytes = concreteTransportBuffers
+                    ? storageLayout?.AlignmentPaddingBytes ?? 0UL
+                    // The immutable graph retains a descriptor-safe placeholder
+                    // when transport is inactive. Account it as non-payload so
+                    // the explicit format totals still equal the allocation.
+                    : transportSourceCacheBytes,
+                TransportSourceCacheLegacyRayCount = concreteTransportBuffers
+                    ? (storageLayout?.LegacyRayCount ??
+                        (!resolvedPackingMode.UsesPackedCache()
+                            ? totalCacheRayCount
+                            : 0))
+                    : 0,
+                TransportSourceCacheCompact28RayCount = concreteTransportBuffers
+                    ? (storageLayout?.Compact28RayCount ??
+                        (resolvedPackingMode.UsesPackedCache()
+                            ? totalCacheRayCount
+                            : 0))
+                    : 0,
+                TransportSourceCacheCompact24RayCount = concreteTransportBuffers
+                    ? storageLayout?.Compact24RayCount ?? 0
+                    : 0,
+                RayResultStrideBytes = rayResultStrideBytes,
+                SampledAtlasCoverageMode = sampledAtlasRequested
+                    ? resolvedCoverageMode
+                    : SimpleDdgiSampledAtlasCoverageMode.Disabled,
+                SampledAtlasRequestedProbeCount = sampledAtlasLayout?.RequestedProbeCount ??
+                    (sampledAtlasRequested ? physicalProbeCapacity : 0),
+                SampledAtlasEligibleProbeCount = sampledAtlasLayout?.EligibleProbeCount ??
+                    (sampledAtlasRequested ? physicalProbeCapacity : 0),
+                SampledAtlasAdmittedProbeCount = sampledAtlasLayout?.AdmittedProbeCount ??
+                    (sampledAtlasRequested ? physicalProbeCapacity : 0),
+                SampledAtlasIrradianceImageBytes = sampledIrradianceBytes,
+                SampledAtlasVisibilityImageBytes = sampledVisibilityBytes,
+                SampledAtlasLayoutFingerprint = sampledAtlasLayout?.Fingerprint ?? 0UL
+            };
         }
 
         /// <summary>
@@ -522,6 +654,10 @@ namespace Njulf.Rendering.Resources
         public SimpleDdgiMemoryPlan RequestedMemoryPlan { get; init; }
         public SimpleDdgiMemoryPlan AcceptedMemoryPlan { get; init; }
         public SimpleDdgiMemoryPlan DenseEquivalentMemoryPlan { get; init; }
+        public SimpleDdgiStorageLayout StorageLayout { get; init; } =
+            SimpleDdgiStorageLayout.Empty();
+        public SimpleDdgiSampledAtlasLayout SampledAtlasLayout { get; init; } =
+            SimpleDdgiSampledAtlasLayout.Disabled();
         public bool PhysicalPageBudgetWasReduced { get; init; }
         public string PhysicalPageBudgetDecision { get; init; } = string.Empty;
         public string ResidencyFallbackReason { get; init; } = string.Empty;
@@ -653,13 +789,21 @@ namespace Njulf.Rendering.Resources
                 SimpleDdgiProbeResidencyMode.Dense,
             int sparsePhysicalPageBudget = 0,
             int sparseMinimumPhysicalPageBudget = 0,
-            int maximumPageAdmissionsPerFrame = 0)
+            int maximumPageAdmissionsPerFrame = 0,
+            SimpleDdgiStoragePackingMode storagePackingMode =
+                SimpleDdgiStoragePackingMode.Packed,
+            SimpleDdgiSampledAtlasCoverageMode sampledAtlasCoverageMode =
+                SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant)
         {
             if (requests == null)
                 throw new ArgumentNullException(nameof(requests));
 
             SimpleDdgiProbeResidencyMode requestedResidencyMode =
                 residencyMode.Sanitize();
+            SimpleDdgiStoragePackingMode resolvedStoragePackingMode =
+                storagePackingMode.Sanitize();
+            SimpleDdgiSampledAtlasCoverageMode resolvedSampledCoverageMode =
+                sampledAtlasCoverageMode.Sanitize();
             SimpleDdgiProbeResidencyMode resolvedResidencyMode =
                 requestedResidencyMode;
             string residencyFallbackReason = string.Empty;
@@ -698,13 +842,20 @@ namespace Njulf.Rendering.Resources
                     throw new ArgumentException("A simple-DDGI layout request cannot be null.", nameof(requests));
                 int probes = Math.Max(request.ProbeCount, 0);
                 requestedProbes = checked(requestedProbes + probes);
+                // Requested-byte telemetry describes the complete requested
+                // representation, including an unconstrained optional mirror.
+                // Admission below deliberately uses the canonical-only plan so
+                // image acceleration can never evict a canonical volume.
                 SimpleDdgiMemoryPlan nextRequestedPlan =
-                    CreateMemoryPlan(
+                    CreateCompiledMemoryPlan(
                         requestedProbes,
                         index + 1,
                         requestedPrefixCount: index + 1,
                         candidateIndex: -1,
-                        requestedSelection: true);
+                        requestedSelection: true,
+                        physicalPageCapacityOverride: null,
+                        includeMirror: sampledAtlasRequested,
+                        mirrorBudgetBytes: ulong.MaxValue).Plan;
                 ulong requestedIncrementalBytes = nextRequestedPlan.LiveBytes >=
                     previousRequestedLiveBytes
                         ? nextRequestedPlan.LiveBytes - previousRequestedLiveBytes
@@ -868,9 +1019,11 @@ namespace Njulf.Rendering.Resources
                         schedulerMode,
                         schedulerValidationEnabled,
                         SimpleDdgiProbeResidencyMode.Dense,
-                        sparsePhysicalPageBudget,
-                        sparseMinimumPhysicalPageBudget,
-                        maximumPageAdmissionsPerFrame);
+                         sparsePhysicalPageBudget,
+                         sparseMinimumPhysicalPageBudget,
+                         maximumPageAdmissionsPerFrame,
+                         resolvedStoragePackingMode,
+                         resolvedSampledCoverageMode);
                     return denseFallback with
                     {
                         ResidencyFallbackReason = fallbackReason
@@ -878,23 +1031,48 @@ namespace Njulf.Rendering.Resources
                 }
             }
 
-            int denseUpdateCapacity =
-                SimpleDdgiMemoryPlan.ResolveUpdateRequestCapacity(
-                    acceptedProbes,
-                    configuredProbeUpdatesPerFrame,
-                    lightingDirtyBoostEnabled);
-            SimpleDdgiMemoryPlan denseEquivalentPlan = SimpleDdgiMemoryPlan.Create(
+            // Optional images are admitted only after the complete canonical
+            // layout is fixed. This is the central two-stage admission rule:
+            // changing coverage or exhausting image budget cannot alter the
+            // accepted source-ordinal set above.
+            ulong acceptedMirrorBudget = budget.PersistentMemoryBudgetBytes >
+                acceptedPlan.LiveBytes
+                    ? budget.PersistentMemoryBudgetBytes - acceptedPlan.LiveBytes
+                    : 0UL;
+            var acceptedCompiled = CreateCompiledMemoryPlan(
                 acceptedProbes,
-                denseUpdateCapacity,
-                transportRayCapacity,
-                sampledAtlasRequested,
-                transportV2Enabled,
-                readbackBufferCount,
-                residentPrivateTargets,
-                schedulerMode,
                 acceptedVolumes,
-                schedulerValidationEnabled,
-                SimpleDdgiProbeResidencyMode.Dense);
+                requestedPrefixCount: 0,
+                candidateIndex: -1,
+                requestedSelection: false,
+                physicalPageCapacityOverride:
+                    acceptedPlan.SparsePhysicalPageCapacity,
+                includeMirror: sampledAtlasRequested,
+                mirrorBudgetBytes: acceptedMirrorBudget);
+            acceptedPlan = acceptedCompiled.Plan;
+
+            var requestedCompiled = CreateCompiledMemoryPlan(
+                requestedProbes,
+                requests.Count,
+                requestedPrefixCount: requests.Count,
+                candidateIndex: -1,
+                requestedSelection: true,
+                physicalPageCapacityOverride: null,
+                includeMirror: sampledAtlasRequested,
+                mirrorBudgetBytes: ulong.MaxValue);
+            requestedPlan = requestedCompiled.Plan;
+
+            var denseCompiled = CreateCompiledMemoryPlan(
+                acceptedProbes,
+                acceptedVolumes,
+                requestedPrefixCount: 0,
+                candidateIndex: -1,
+                requestedSelection: false,
+                physicalPageCapacityOverride: 0,
+                includeMirror: sampledAtlasRequested,
+                mirrorBudgetBytes: budget.PersistentMemoryBudgetBytes,
+                residencyOverride: SimpleDdgiProbeResidencyMode.Dense);
+            SimpleDdgiMemoryPlan denseEquivalentPlan = denseCompiled.Plan;
 
             return new SimpleDdgiLayoutReport(
                 budget,
@@ -908,6 +1086,8 @@ namespace Njulf.Rendering.Resources
                 RequestedMemoryPlan = requestedPlan,
                 AcceptedMemoryPlan = acceptedPlan,
                 DenseEquivalentMemoryPlan = denseEquivalentPlan,
+                StorageLayout = acceptedCompiled.StorageLayout,
+                SampledAtlasLayout = acceptedCompiled.SampledAtlasLayout,
                 PhysicalPageBudgetWasReduced = physicalPageBudgetWasReduced,
                 PhysicalPageBudgetDecision = physicalPageBudgetDecision,
                 ResidencyFallbackReason = residencyFallbackReason
@@ -921,6 +1101,34 @@ namespace Njulf.Rendering.Resources
                 bool requestedSelection,
                 int? physicalPageCapacityOverride = null)
             {
+                return CreateCompiledMemoryPlan(
+                    totalProbeCount,
+                    activeVolumeCount,
+                    requestedPrefixCount,
+                    candidateIndex,
+                    requestedSelection,
+                    physicalPageCapacityOverride,
+                    includeMirror: false,
+                    mirrorBudgetBytes: 0UL).Plan;
+            }
+
+            (SimpleDdgiMemoryPlan Plan,
+                SimpleDdgiStorageLayout StorageLayout,
+                SimpleDdgiSampledAtlasLayout SampledAtlasLayout)
+                CreateCompiledMemoryPlan(
+                    int totalProbeCount,
+                    int activeVolumeCount,
+                    int requestedPrefixCount,
+                    int candidateIndex,
+                    bool requestedSelection,
+                    int? physicalPageCapacityOverride,
+                    bool includeMirror,
+                    ulong mirrorBudgetBytes,
+                    SimpleDdgiProbeResidencyMode? residencyOverride = null)
+            {
+                SimpleDdgiProbeResidencyMode planResidencyMode =
+                    (residencyOverride ?? resolvedResidencyMode).Sanitize();
+                var selectedIndices = new List<int>(activeVolumeCount);
                 int sparseVirtualProbes = 0;
                 int sparseVirtualPages = 0;
                 for (int requestIndex = 0;
@@ -932,9 +1140,10 @@ namespace Njulf.Rendering.Resources
                         : acceptedFlags[requestIndex] || requestIndex == candidateIndex;
                     if (!include)
                         continue;
+                    selectedIndices.Add(requestIndex);
                     SimpleDdgiLayoutVolumeRequest request = requests[requestIndex];
                     if (!request.SparseNearRingEligible ||
-                        resolvedResidencyMode == SimpleDdgiProbeResidencyMode.Dense)
+                        planResidencyMode == SimpleDdgiProbeResidencyMode.Dense)
                     {
                         continue;
                     }
@@ -949,28 +1158,140 @@ namespace Njulf.Rendering.Resources
                     Math.Min(
                         Math.Max(0, sparsePhysicalPageBudget),
                         sparseVirtualPages);
+                if (planResidencyMode == SimpleDdgiProbeResidencyMode.Dense)
+                    configuredPhysicalPages = 0;
                 int updateCapacity =
                     SimpleDdgiMemoryPlan.ResolveUpdateRequestCapacity(
                         totalProbeCount,
                         configuredProbeUpdatesPerFrame,
                         lightingDirtyBoostEnabled);
-                return SimpleDdgiMemoryPlan.Create(
-                    totalProbeCount,
-                    updateCapacity,
+                int rayCapacity = Math.Clamp(
                     transportRayCapacity,
-                    sampledAtlasRequested,
-                    transportV2Enabled,
-                    readbackBufferCount,
-                    residentPrivateTargets,
-                    schedulerMode,
-                    activeVolumeCount,
-                    schedulerValidationEnabled,
-                    resolvedResidencyMode,
-                    densePayloadProbes,
-                    sparseVirtualProbes,
-                    sparseVirtualPages,
-                    configuredPhysicalPages,
-                    maximumPageAdmissionsPerFrame);
+                    1,
+                    GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe);
+                int sparsePhysicalProbeCount = checked(
+                    configuredPhysicalPages *
+                    SimpleDdgiProbePageLayout.ProbesPerPage);
+                int densePhysicalCursor = 0;
+                int sparseRegionCount = 0;
+                var storageRequests =
+                    new List<SimpleDdgiTransportCacheRegionRequest>(selectedIndices.Count);
+                var mirrorRequests =
+                    new List<SimpleDdgiSampledAtlasRangeRequest>(selectedIndices.Count);
+                for (int selectedOrder = 0;
+                     selectedOrder < selectedIndices.Count;
+                     selectedOrder++)
+                {
+                    int requestIndex = selectedIndices[selectedOrder];
+                    SimpleDdgiLayoutVolumeRequest request = requests[requestIndex];
+                    bool sparse = planResidencyMode.UsesSparsePayloads() &&
+                        request.SparseNearRingEligible;
+                    int physicalFirst;
+                    int physicalCount;
+                    if (sparse)
+                    {
+                        sparseRegionCount++;
+                        if (sparseRegionCount > 1)
+                        {
+                            throw new InvalidOperationException(
+                                "The current Simple-DDGI paging ABI supports one sparse near-ring cache region.");
+                        }
+                        physicalFirst = densePayloadProbes;
+                        physicalCount = sparsePhysicalProbeCount;
+                    }
+                    else
+                    {
+                        physicalFirst = densePhysicalCursor;
+                        physicalCount = Math.Max(0, request.ProbeCount);
+                        densePhysicalCursor = checked(
+                            densePhysicalCursor + physicalCount);
+                    }
+
+                    storageRequests.Add(new SimpleDdgiTransportCacheRegionRequest(
+                        selectedOrder,
+                        request.Id,
+                        request.SourceOrdinal,
+                        physicalFirst,
+                        physicalCount,
+                        rayCapacity,
+                        request.GridCountX,
+                        request.GridCountY,
+                        request.GridCountZ,
+                        request.Spacing,
+                        request.ArchitecturalThickness,
+                        resolvedStoragePackingMode)
+                    {
+                        MaximumTraceDistance = request.MaximumTraceDistance
+                    });
+                    mirrorRequests.Add(new SimpleDdgiSampledAtlasRangeRequest(
+                        selectedOrder,
+                        request.Id,
+                        request.SourceOrdinal,
+                        physicalFirst,
+                        physicalCount,
+                        request.IsAuthored,
+                        request.Purpose,
+                        request.RingIndex,
+                        selectedOrder));
+                }
+
+                if (densePhysicalCursor != densePayloadProbes)
+                {
+                    throw new InvalidOperationException(
+                        $"Compiled dense physical span {densePhysicalCursor} does not match {densePayloadProbes} admitted probes.");
+                }
+
+                SimpleDdgiStorageLayout storageLayout = storageRequests.Count == 0
+                    ? SimpleDdgiStorageLayout.Empty(resolvedStoragePackingMode)
+                    : SimpleDdgiStorageLayoutCompiler.Compile(storageRequests);
+                SimpleDdgiMemoryPlan canonicalPlan = CreatePlan(
+                    sampled: false,
+                    sampledLayout: null,
+                    storageLayout);
+                SimpleDdgiSampledAtlasLayout mirrorLayout = includeMirror
+                    ? SimpleDdgiSampledAtlasLayoutCompiler.Compile(
+                        mirrorRequests,
+                        resolvedSampledCoverageMode,
+                        mirrorBudgetBytes,
+                        sampledAtlasRequested)
+                    : SimpleDdgiSampledAtlasLayout.Disabled(
+                        resolvedSampledCoverageMode,
+                        "canonical-admission-stage");
+                bool mirrorAdmitted = includeMirror &&
+                    mirrorLayout.AdmittedProbeCount > 0;
+                SimpleDdgiMemoryPlan plan = mirrorAdmitted
+                    ? CreatePlan(
+                        sampled: true,
+                        sampledLayout: mirrorLayout,
+                        storageLayout)
+                    : canonicalPlan;
+                return (plan, storageLayout, mirrorLayout);
+
+                SimpleDdgiMemoryPlan CreatePlan(
+                    bool sampled,
+                    SimpleDdgiSampledAtlasLayout? sampledLayout,
+                    SimpleDdgiStorageLayout compiledStorage) =>
+                    SimpleDdgiMemoryPlan.Create(
+                        totalProbeCount,
+                        updateCapacity,
+                        rayCapacity,
+                        sampled,
+                        transportV2Enabled,
+                        readbackBufferCount,
+                        residentPrivateTargets,
+                        schedulerMode,
+                        activeVolumeCount,
+                        schedulerValidationEnabled,
+                        planResidencyMode,
+                        densePayloadProbes,
+                        sparseVirtualProbes,
+                        sparseVirtualPages,
+                        configuredPhysicalPages,
+                        maximumPageAdmissionsPerFrame,
+                        resolvedStoragePackingMode,
+                        resolvedSampledCoverageMode,
+                        compiledStorage,
+                        sampledLayout);
             }
         }
     }

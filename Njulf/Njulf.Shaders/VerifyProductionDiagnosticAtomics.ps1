@@ -68,7 +68,11 @@ $algorithmicAtomicCounts = @{
 
     # Sparse page classification, reconciliation, fixed feedback reduction,
     # and generation-safe update lifecycle attribution.
-    'ddgi_simple_blend.comp.spv' = 8
+    # The ninth add is the scheduler outcome failure latch used when any lane
+    # observes malformed direction-free ray scratch. It prevents the private
+    # blend target from reaching CommitLocal; the CPU scheduler takes the
+    # equivalent fail-closed probe-state path without this global atomic.
+    'ddgi_simple_blend.comp.spv' = 9
     'ddgi_simple_page_classify.comp.spv' = 8
     # Workgroup-parallel virtual/reverse-map summary reductions use 23
     # additional functional shared-memory atomics. Pin the exact count so a
@@ -79,11 +83,31 @@ $algorithmicAtomicCounts = @{
     'ddgi_simple_publish_sampled.comp.spv' = 5
     'ddgi_simple_relocate_classify.comp.spv' = 5
     'ddgi_simple_trace.comp.spv' = 7
+    'ddgi_simple_trace_legacy_source.comp.spv' = 5
+    'ddgi_simple_trace_legacy_reuse.comp.spv' = 6
+    'ddgi_simple_trace_legacy_final.comp.spv' = 6
+    'ddgi_simple_trace_validate_source.comp.spv' = 5
+    'ddgi_simple_trace_validate_reuse.comp.spv' = 6
+    'ddgi_simple_trace_validate_final.comp.spv' = 6
+    'ddgi_simple_trace_packed_source.comp.spv' = 5
+    'ddgi_simple_trace_packed_reuse.comp.spv' = 6
+    'ddgi_simple_trace_packed_final.comp.spv' = 6
     'ddgi_simple_transport.comp.spv' = 7
-    # Fifteen certificate reductions plus ten bounded cache-rejection
-    # attribution paths (five metadata checks and five per-entry checks), plus
-    # the sparse residency attribution helper.
-    'ddgi_simple_transport_audit.comp.spv' = 26
+    'ddgi_simple_transport_legacy.comp.spv' = 7
+    'ddgi_simple_transport_validate.comp.spv' = 7
+    'ddgi_simple_transport_packed.comp.spv' = 7
+    'ddgi_simple_transport_solve_legacy.comp.spv' = 7
+    'ddgi_simple_transport_solve_validate.comp.spv' = 7
+    'ddgi_simple_transport_solve_packed.comp.spv' = 7
+    # Transfer initialization and the one-invocation-per-ray operator phase use
+    # no additive atomics (the ray phase has only status OR and contraction
+    # max). All additive certificate/cache-rejection reductions are isolated in
+    # the small second shader so native drivers never lower the recursive
+    # operator, workgroup coordination, and certificate reduction together.
+    'ddgi_simple_transport_audit.comp.spv' = 27
+    'ddgi_simple_transport_audit_reduce_legacy.comp.spv' = 27
+    'ddgi_simple_transport_audit_reduce_validate.comp.spv' = 27
+    'ddgi_simple_transport_audit_reduce_packed.comp.spv' = 27
     'ddgi_simple_transport_intermediate_publish.comp.spv' = 5
 }
 $missingAlgorithmicModules = @($algorithmicAtomicCounts.Keys | Where-Object {

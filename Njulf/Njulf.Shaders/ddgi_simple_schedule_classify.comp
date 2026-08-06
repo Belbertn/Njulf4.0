@@ -28,8 +28,7 @@ void main()
     uint localOrdinal;
     if (!SchedulerFindSequenceVolume(sequenceOrdinal, volumeIndex, localOrdinal))
     {
-        SchedulerWriteCandidate(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
-            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE, 0u, sequenceOrdinal, 0u, 0u, 0u, 0u);
+        SchedulerWriteInvalidCandidate(candidateBase);
         atomicAdd(BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[
             pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_INVALID_GENERATION], 1u);
         return;
@@ -46,16 +45,7 @@ void main()
     {
         // Nonresident sparse probes are not convergence or maintenance
         // participants. Page admission has a separate authority and wake path.
-        SchedulerWriteCandidate(
-            candidateBase,
-            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
-            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
-            0u,
-            sequenceOrdinal,
-            0u,
-            0u,
-            0u,
-            0u);
+        SchedulerWriteInvalidCandidate(candidateBase);
         return;
     }
     uint stateBase = probeIndex * SIMPLE_DDGI_PROBE_STATE_WORDS;
@@ -65,8 +55,7 @@ void main()
         SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT;
     if (expectedGeneration == 0u)
     {
-        SchedulerWriteCandidate(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
-            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE, 0u, sequenceOrdinal, 0u, 0u, 0u, 0u);
+        SchedulerWriteInvalidCandidate(candidateBase);
         atomicAdd(BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[
             pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_INVALID_GENERATION], 1u);
         return;
@@ -261,16 +250,7 @@ void main()
         // epoch. Feedback still reports the pending source participant, which
         // makes the CPU controller abandon this epoch and return to source
         // repair before any replacement cache write is admitted.
-        SchedulerWriteCandidate(
-            candidateBase,
-            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
-            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
-            0u,
-            sequenceOrdinal,
-            0u,
-            0u,
-            0u,
-            0u);
+        SchedulerWriteInvalidCandidate(candidateBase);
         return;
     }
     bool zeroSupport = fresh || relocationRetry || activeWeight <= 0.0001 ||
@@ -293,8 +273,7 @@ void main()
     if (solverConverged && !globalDirty && !regionalDirty && !fresh &&
         !scrollExposed && !sourceInvalid && !relocationRetry && !inactiveRetry)
     {
-        SchedulerWriteCandidate(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
-            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE, 0u, sequenceOrdinal, 0u, 0u, 0u, 0u);
+        SchedulerWriteInvalidCandidate(candidateBase);
         return;
     }
     if (visible)
@@ -336,8 +315,7 @@ void main()
     }
     else if (inactive && !inactiveRetry)
     {
-        SchedulerWriteCandidate(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
-            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE, 0u, sequenceOrdinal, 0u, 0u, 0u, 0u);
+        SchedulerWriteInvalidCandidate(candidateBase);
         return;
     }
     else if (relocationRetry || inactiveRetry)
@@ -372,15 +350,7 @@ void main()
             SchedulerSolveEpoch() == 0u &&
             !routineDue)
         {
-            SchedulerWriteCandidate(candidateBase,
-                SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
-                SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
-                0u,
-                sequenceOrdinal,
-                0u,
-                0u,
-                0u,
-                0u);
+            SchedulerWriteInvalidCandidate(candidateBase);
             return;
         }
         workClass = SIMPLE_DDGI_SCHEDULER_WORK_NEAR_MAINTENANCE + ring;
@@ -400,27 +370,19 @@ void main()
         }
     }
 
-    uint fullRays = clamp(SchedulerVolumeFullRays(volumeIndex), 1u, SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
-    uint maintenanceRays = clamp(SchedulerVolumeMaintenanceRays(volumeIndex), 1u, SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
-    uint activeRayCount = rayTier == SIMPLE_DDGI_SCHEDULER_RAY_FULL ? fullRays : maintenanceRays;
-    bool sourceWork = transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE ||
-        transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
-    // V2 cached transport indexes the complete immutable source sequence.
-    // Carry that sequence cardinality through classification; admission then
-    // expands cached solver work to this exact cardinality so solving and
-    // certification evaluate the same operator.
-    uint sourceRayCount = SchedulerTransportV2() || sourceWork ? fullRays : 0u;
+    // Cardinalities are deterministic policy values for this volume, transport
+    // category, and ray tier. Admission derives them after selecting a
+    // candidate, so the large classification pool stores no redundant counts.
     uint lane = SchedulerLaneIndex(volumeIndex, workClass, transport, rayTier);
     if (lane >= SIMPLE_DDGI_SCHEDULER_MAX_LANES)
     {
-        SchedulerWriteCandidate(candidateBase, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE,
-            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE, 0u, sequenceOrdinal, 0u, 0u, 0u, 0u);
+        SchedulerWriteInvalidCandidate(candidateBase);
         return;
     }
 
-    SchedulerWriteCandidate(candidateBase, probeIndex, volumeIndex, expectedGeneration,
-        sequenceOrdinal, workClass | (transport << 3u),
-        rayTier | ((reasons & 0xffffu) << 8u), activeRayCount, sourceRayCount);
+    SchedulerWriteCandidate(candidateBase, probeIndex, volumeIndex,
+        workClass | (transport << 3u),
+        rayTier | ((reasons & 0xffffu) << 8u));
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[
         pc.LaneCandidateCountsOffsetWords + lane], 1u);
     SchedulerAtomicIncrementGroupLaneCount(

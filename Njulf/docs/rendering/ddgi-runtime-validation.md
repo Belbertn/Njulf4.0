@@ -36,7 +36,35 @@ Useful command-line overrides are:
 --simple-ddgi-sparse-max-admissions=<pages>
 --simple-ddgi-sparse-max-feedback=<requests>
 --simple-ddgi-sparse-inactive-retry-frames=<frames>
+--simple-ddgi-storage-mode=legacy|validate|packed
+--simple-ddgi-mirror-coverage=disabled|full-canonical|receiver-relevant
 ```
+
+The equivalent environment variables are
+`NJULF_RENDERER_SIMPLE_DDGI_STORAGE_MODE` and
+`NJULF_RENDERER_SIMPLE_DDGI_MIRROR_COVERAGE`. A non-disabled mirror override
+also enables the sampled-atlas feature switch. Every quality preset uses
+`Packed` storage by default. High and Ultra enable the sampled atlas with
+`ReceiverRelevant` coverage; Low and Medium keep it disabled. Use these
+overrides for controlled `Legacy`, `Validate`, `FullCanonical`, or disabled
+rollback/A-B captures.
+
+## Locked Storage Matrix
+
+Keep the accepted canonical volume table, source ordinals, ray schedule, random
+seed, camera, lights, materials, warmup, and capture frames identical. Run the
+following phases independently, with two baseline repeats and at least three
+timing repetitions for a candidate:
+
+1. `legacy` + `full-canonical`: FP32 source cache, stored direction, 32-byte scratch.
+2. `validate` + `full-canonical`: the same byte sizes, fixed 32-epoch codebook, and stored-direction shadow comparison.
+3. `packed` + `full-canonical`: mixed Compact-28/24 cache regions and 20-byte direction-free scratch.
+4. `packed` + `receiver-relevant`: compact complete-volume mirror ranges.
+5. `packed` + `disabled`: canonical-only receiver reference and image-path fallback check.
+
+Every switch must advance the storage/allocation generation, recreate
+incompatible resources, clear source/atlas validity, and perform a cold coherent
+rebuild. It must not reinterpret live bytes or issue `vkDeviceWaitIdle`.
 
 ## Debug Buffers
 
@@ -57,6 +85,10 @@ Probe overlays must retain the regular virtual lattice. Confirm that nonresident
 - Allocation-to-first-schedule and allocation-to-first-publication P50/P95/max.
 - Page/reverse disagreement, duplicate owners, stale virtual/mapping/resource requests, out-of-range requests, nonresident rejections, and coarser fallbacks.
 - In Shadow, predictor false negatives/positives, false-negative rate, inflation ratio, and the exported working-set/capacity simulation report.
+- Storage ABI/mode, canonical visibility bytes, cache bytes and rays by format, cache padding, scratch stride/bytes, and FP16-distance eligibility/rejection by volume.
+- Mirror requested/eligible/admitted/provisioned probes, typed logical bytes, actual allocator bytes, excluded volume identities, mapping/allocation generations, and fallback reason.
+- Image hits, interior opportunities, seam/unmirrored/invalid-map fallbacks, cache non-finite/saturation/error maxima, and direction epoch/angular-error evidence from a detailed build.
+- Detailed validation-bank readback validity. Direction histogram cardinality must equal its sample count, and the reported P99 bound must remain finite even when samples reach the overflow bucket.
 
 ## Acceptance Checks
 
@@ -77,6 +109,13 @@ Probe overlays must retain the regular virtual lattice. Confirm that nonresident
 - Total tracked GPU memory is at most 80% of the target 2 GiB profile, and stable frames create/destroy/rebind no residency or payload resources.
 - Added sparse forward-gather P95 is at most 0.15 ms and 5%; page-management GPU P95 is at most 0.25 ms; added CPU P95 is at most 0.10 ms with no stable-frame per-page enumeration.
 - Dense/Sparse HDR comparisons meet the frozen error gates and human review finds no black flash, stale-cell flash, page seam, ring seam, new leak, or transparent/fog/foliage pumping.
+- RG16F canonical and mirrored visibility bytes are exactly 1,024 bytes per provisioned probe; moment `.xy` payload bits match the legacy writer input and invalid/fresh probes remain fail-closed through probe state.
+- Legacy cache radiance/distance remain FP32 bit-exact. Compact-28 is exactly 28 bytes/ray with FP32 distance; Compact-24 is exactly 24 bytes/ray and is used only after its static range/ULP/thickness gates. Packed scratch is exactly 20 bytes/result.
+- Packed writes report zero non-finite values and zero radiance saturation. Direction epoch mismatches and invalid-map fallbacks are zero; stored-versus-reconstructed direction maximum/P99 remain inside the established octahedral SNORM16 bound.
+- Final-indirect relative RMSE is at most 1%, beauty HDR-FLIP P95 at most 0.02, named ROI mean-luminance shift at most 2%, and named ROI P95 shift at most 3%, unless an existing approved-reference gate is stricter.
+- Thin-wall/corridor/curtain/ring dark-to-lit leak ratio does not rise by more than 0.5 percentage points absolute or 5% relative, whichever is stricter; no new connected bright region, stale mirror flash, or ring-transition step appears.
+- Receiver-relevant image hits cover at least 95% of measured forward interior opportunities before it is considered for a preset. It reduces mirror bytes versus full-canonical and neither forward nor total-GI P95 regresses outside repeatability noise.
+- Compiler logical bytes, Vulkan allocation diagnostics, and performance-snapshot totals agree. Optional mirror admission never changes the accepted canonical source-ordinal set.
 
 ## Transition and Failure Exercises
 

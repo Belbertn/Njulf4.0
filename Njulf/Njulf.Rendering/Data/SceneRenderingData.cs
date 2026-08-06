@@ -919,6 +919,10 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiSampledAtlasLayersPerTexture { get; set; }
         public ulong SimpleDdgiSampledAtlasImageBytes { get; set; }
         public string SimpleDdgiSampledAtlasFallbackReason { get; set; } = string.Empty;
+        public SimpleDdgiStorageDiagnostics SimpleDdgiStorage { get; set; } =
+            SimpleDdgiStorageDiagnostics.Unavailable;
+        public SimpleDdgiStorageValidationCounters SimpleDdgiStorageValidation { get; set; } =
+            SimpleDdgiStorageValidationCounters.Empty;
         public int FarFieldPagedMode { get; set; }
         public int FarFieldPagePoolCapacity { get; set; }
         public int FarFieldResidentPageCount { get; set; }
@@ -2113,6 +2117,8 @@ namespace Njulf.Rendering.Data
             SimpleDdgiSampledAtlasLayersPerTexture = 0;
             SimpleDdgiSampledAtlasImageBytes = 0;
             SimpleDdgiSampledAtlasFallbackReason = string.Empty;
+            SimpleDdgiStorage = SimpleDdgiStorageDiagnostics.Unavailable;
+            SimpleDdgiStorageValidation = SimpleDdgiStorageValidationCounters.Empty;
             FarFieldPagedMode = 0;
             FarFieldPagePoolCapacity = 0;
             FarFieldResidentPageCount = 0;

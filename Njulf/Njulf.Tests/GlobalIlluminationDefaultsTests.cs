@@ -48,9 +48,39 @@ public sealed class GlobalIlluminationDefaultsTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(settings.SimpleDdgiStoragePackingMode,
+                Is.EqualTo(SimpleDdgiStoragePackingMode.Packed));
+            Assert.That(settings.SimpleDdgiSampledAtlasEnabled, Is.True);
+            Assert.That(settings.SimpleDdgiSampledAtlasCoverageMode,
+                Is.EqualTo(SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant));
             Assert.That(settings.SimpleDdgiTransportTailRelativeTolerance, Is.EqualTo(0.025f));
             Assert.That(settings.SimpleDdgiTransportMaximumSolverGenerations, Is.EqualTo(8));
             Assert.That(settings.SimpleDdgiTransportSourceRefreshFrames, Is.EqualTo(2_048));
+        });
+    }
+
+    [TestCase(RenderQualityPreset.Low, false, SimpleDdgiSampledAtlasCoverageMode.Disabled)]
+    [TestCase(RenderQualityPreset.Medium, false, SimpleDdgiSampledAtlasCoverageMode.Disabled)]
+    [TestCase(RenderQualityPreset.High, true, SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant)]
+    [TestCase(RenderQualityPreset.Ultra, true, SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant)]
+    [TestCase(RenderQualityPreset.DdgiHigh, true, SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant)]
+    public void QualityPreset_UsesPromotedSimpleDdgiStorageDefaults(
+        RenderQualityPreset preset,
+        bool expectedSampledAtlasEnabled,
+        SimpleDdgiSampledAtlasCoverageMode expectedCoverageMode)
+    {
+        var settings = new RenderSettings();
+
+        settings.ApplyQualityPreset(preset);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.GlobalIllumination.SimpleDdgiStoragePackingMode,
+                Is.EqualTo(SimpleDdgiStoragePackingMode.Packed));
+            Assert.That(settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled,
+                Is.EqualTo(expectedSampledAtlasEnabled));
+            Assert.That(settings.GlobalIllumination.SimpleDdgiSampledAtlasCoverageMode,
+                Is.EqualTo(expectedCoverageMode));
         });
     }
 
@@ -193,6 +223,61 @@ public sealed class GlobalIlluminationDefaultsTests
                 Assert.That(
                     settings.GlobalIllumination.SimpleDdgiSchedulerMode,
                     Is.EqualTo(SimpleDdgiSchedulerMode.GpuResident));
+                Assert.That(
+                    settings.GlobalIllumination.SimpleDdgiStoragePackingMode,
+                    Is.EqualTo(SimpleDdgiStoragePackingMode.Packed));
+                Assert.That(
+                    settings.GlobalIllumination.SimpleDdgiSampledAtlasCoverageMode,
+                    Is.EqualTo(SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant));
+                Assert.That(
+                    settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled,
+                    Is.True);
+            });
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [TestCase(RenderQualityPreset.Low, false, SimpleDdgiSampledAtlasCoverageMode.Disabled)]
+    [TestCase(RenderQualityPreset.Medium, false, SimpleDdgiSampledAtlasCoverageMode.Disabled)]
+    [TestCase(RenderQualityPreset.High, true, SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant)]
+    [TestCase(RenderQualityPreset.Ultra, true, SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant)]
+    [TestCase(RenderQualityPreset.DdgiHigh, true, SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant)]
+    public void SettingsFileWithoutRepresentationOverrides_InheritsPromotedTierDefaults(
+        RenderQualityPreset preset,
+        bool expectedSampledAtlasEnabled,
+        SimpleDdgiSampledAtlasCoverageMode expectedCoverageMode)
+    {
+        string path = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            $"render-settings-promoted-ddgi-default-{Guid.NewGuid():N}.json");
+
+        try
+        {
+            File.WriteAllText(path, $$"""
+                {
+                  "QualityPreset": "{{preset}}",
+                  "GlobalIllumination": {
+                    "Enabled": true,
+                    "Mode": "Ddgi",
+                    "UseDdgi": true
+                  }
+                }
+                """);
+
+            GlobalIlluminationSettings gi = RenderSettings.Load(path).GlobalIllumination;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(gi.SimpleDdgiStoragePackingMode,
+                    Is.EqualTo(SimpleDdgiStoragePackingMode.Packed));
+                Assert.That(gi.SimpleDdgiSampledAtlasEnabled,
+                    Is.EqualTo(expectedSampledAtlasEnabled));
+                Assert.That(gi.SimpleDdgiSampledAtlasCoverageMode,
+                    Is.EqualTo(expectedCoverageMode));
             });
         }
         finally

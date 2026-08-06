@@ -66,22 +66,26 @@ void main()
     {
         uint raysPerProbe = max(params.raysPerProbe, 1u);
         uint cacheEntryCount = SIMPLE_DDGI_PROBES_PER_PAGE * raysPerProbe;
-        uint firstPhysicalProbe = paging.sparsePoolFirstProbe +
-            physicalPage * SIMPLE_DDGI_PROBES_PER_PAGE;
         for (uint cacheEntry = localInvocation;
              cacheEntry < cacheEntryCount;
              cacheEntry += gl_WorkGroupSize.x)
         {
+            // CPU layout compilation has already checked the complete region,
+            // physical page capacity, ray count, stride, and final uint word.
+            // Keep this barrier-heavy producer branch-free for native drivers
+            // while still consuming the authoritative per-volume base/stride.
             uint pageProbe = cacheEntry / raysPerProbe;
             uint ray = cacheEntry - pageProbe * raysPerProbe;
-            uint cacheBase = ((firstPhysicalProbe + pageProbe) *
-                raysPerProbe + ray) *
-                SIMPLE_DDGI_TRANSPORT_RAY_CACHE_STRIDE_WORDS;
+            uint localPhysicalProbe =
+                physicalPage * SIMPLE_DDGI_PROBES_PER_PAGE + pageProbe;
+            uint cacheBase = volume.cacheBaseWord +
+                (localPhysicalProbe * raysPerProbe + ray) *
+                    volume.cacheStrideWords;
             // The validity/generation word is the sole publication gate for a
             // cache entry. Remaining payload may retain undefined old bits.
             WriteStorageWordUniform(
                 pc.TransportSourceCacheBufferIndex,
-                cacheBase + 6u,
+                cacheBase + volume.cacheStrideWords - 1u,
                 0u);
         }
 

@@ -4,13 +4,11 @@
 
 #include "common.glsl"
 #include "gi_material_transport.glsl"
+#define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
 #define SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE 1
-// Transport reads the canonical field published by the preceding completed
-// update. The sampled atlas is an incrementally synchronized mirror of that
-// exact field and remains in shader-read layout between publications, including
-// on a distinct compute queue. Use hardware bilinear filtering for interior
-// octahedral samples; ddgi_simple_shared.glsl retains the canonical SSBO path at
-// seams and whenever the optional mirror is unavailable.
+// Recursive transport reads the canonical field published by the preceding
+// completed update. The sampled atlas is a receiver-only accelerator and is
+// intentionally not synchronized between the inner red/black solve colors.
 #include "ddgi_simple_shared.glsl"
 #include "ddgi_simple_transport_operator.glsl"
 
@@ -56,21 +54,30 @@ layout(push_constant) uniform SimpleDdgiPushBlock
 
 void WriteSimpleTransportRayResult(
     uint rayResultIndex,
+    SimpleDdgiParams params,
+    SimpleDdgiVolume volume,
+    uint probeIndex,
+    uint directionRayIndex,
+    uint sourceEpoch,
     vec3 radiance,
     float surfaceDistance,
     float visibilityDistance,
     vec3 direction,
     float hitKind)
 {
-    uint baseWord = rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS;
-    WriteStorageVec4Uniform(pc.RayResultScratchBufferIndex, baseWord, vec4(clamp(radiance, vec3(0.0), vec3(65504.0)), max(surfaceDistance, 0.0)));
-    WriteStorageFloatUniform(pc.RayResultScratchBufferIndex, baseWord + 4u, direction.x);
-    WriteStorageFloatUniform(pc.RayResultScratchBufferIndex, baseWord + 5u, direction.y);
-    WriteStorageFloatUniform(pc.RayResultScratchBufferIndex, baseWord + 6u, direction.z);
-    WriteStorageWordUniform(
+    WriteSimpleDdgiRayResultStorage(
         pc.RayResultScratchBufferIndex,
-        baseWord + 7u,
-        PackSimpleDdgiRayVisibilityHit(visibilityDistance, hitKind));
+        rayResultIndex,
+        volume,
+        params,
+        probeIndex,
+        directionRayIndex,
+        sourceEpoch,
+        radiance,
+        surfaceDistance,
+        visibilityDistance,
+        direction,
+        hitKind);
 }
 
 void main()
@@ -177,10 +184,11 @@ void main()
         return;
 
     uint sourceRayCount = SimpleDdgiUpdateSourceRayCount(update, params);
-    uint sourceRayOrdinal = min(
-        rayIndex * sourceRayCount / max(activeRayCount, 1u),
-        sourceRayCount - 1u);
-    uint directionRayIndex = sourceRayOrdinal * params.raysPerProbe / sourceRayCount;
+    uint directionRayIndex = SimpleDdgiUpdateDirectionRayIndex(
+        rayIndex,
+        activeRayCount,
+        sourceRayCount,
+        params);
     uint sourceCacheProbeGeneration = SimpleDdgiProbeGeneration(probeState);
     if (SimpleDdgiUpdateRequiresSourceRefresh(update) &&
         (update.flags & SIMPLE_DDGI_UPDATE_INVALIDATE) != 0u)
@@ -192,17 +200,48 @@ void main()
             NextSimpleDdgiPhysicalGeneration(sourceCacheProbeGeneration);
     }
     SimpleDdgiTransportRayCache source;
-    bool sourceCacheValid = ReadSimpleDdgiTransportRayCache(
+#if SIMPLE_DDGI_STORAGE_SHADER_MODE == SIMPLE_DDGI_STORAGE_SHADER_MODE_PACKED
+    bool sourceCacheValid = ReadSimpleDdgiPackedTransportRayCacheForSolve(
             pc.TransportSourceCacheBufferIndex,
-            update.physicalProbeIndex,
+            update.cacheProbeBaseWordPlusOne & 0x7fffffffu,
+            update.probeIndex,
             directionRayIndex,
+            volume,
             params,
             sourceCacheProbeGeneration,
+            update.sourceLightingGeneration,
+            update.sourceEpoch,
+            sourceRayCount,
             source);
-    sourceCacheValid = sourceCacheValid &&
-        source.sourceRayCount == sourceRayCount &&
-        source.sourceLightingGeneration == update.sourceLightingGeneration &&
-        source.sourceEpoch == update.sourceEpoch;
+#elif SIMPLE_DDGI_STORAGE_SHADER_MODE == SIMPLE_DDGI_STORAGE_SHADER_MODE_LEGACY
+    bool sourceCacheValid = ReadSimpleDdgiLegacyTransportRayCacheForSolve(
+            pc.TransportSourceCacheBufferIndex,
+            update.cacheProbeBaseWordPlusOne & 0x7fffffffu,
+            update.probeIndex,
+            directionRayIndex,
+            volume,
+            params,
+            sourceCacheProbeGeneration,
+            update.sourceLightingGeneration,
+            update.sourceEpoch,
+            sourceRayCount,
+            source);
+#else
+    bool sourceCacheValid = ReadSimpleDdgiTransportRayCache(
+            pc.ParamsBufferIndex,
+            pc.TransportSourceCacheBufferIndex,
+            update.volumeIndex,
+            update.physicalProbeIndex,
+            update.probeIndex,
+            directionRayIndex,
+            params,
+            pc.CurrentFrameIndex,
+            sourceCacheProbeGeneration,
+            update.sourceLightingGeneration,
+            update.sourceEpoch,
+            sourceRayCount,
+            source);
+#endif
     if (!sourceCacheValid)
     {
         // A stale/corrupt cache cannot inject old energy. Preserve the source
@@ -218,14 +257,32 @@ void main()
         }
         else
             MarkSimpleDdgiProbeSourceCacheInvalid(pc.ProbeStateBufferIndex, update.probeIndex);
-        uint scratchBase = globalRay * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS;
-        vec4 sourceRadianceDistance = ReadStorageAlignedVec4Uniform(pc.RayResultScratchBufferIndex, scratchBase);
-        vec4 sourceDirectionHit = ReadStorageAlignedVec4Uniform(pc.RayResultScratchBufferIndex, scratchBase + 4u);
-        vec2 sourceVisibilityHit =
-            UnpackSimpleDdgiRayVisibilityHit(
-                ReadStorageWordUniform(
-                    pc.RayResultScratchBufferIndex,
-                    scratchBase + 7u));
+        vec4 sourceRadianceDistance;
+        vec3 sourceDirection;
+        vec2 sourceVisibilityHit;
+        uint scratchDirectionEpoch;
+        bool scratchValid = ReadSimpleDdgiRayResultStorage(
+            pc.RayResultScratchBufferIndex,
+            globalRay,
+            volume,
+            params,
+            update.probeIndex,
+            directionRayIndex,
+            update.sourceEpoch,
+            sourceRadianceDistance,
+            sourceDirection,
+            sourceVisibilityHit,
+            scratchDirectionEpoch);
+        if (!scratchValid)
+        {
+            sourceRadianceDistance = vec4(0.0);
+            sourceDirection = SimpleDdgiReconstructRayDirection(
+                update.probeIndex,
+                directionRayIndex,
+                update.sourceEpoch,
+                params);
+            sourceVisibilityHit = vec2(0.0);
+        }
         RecordSimpleDdgiTransportEnergyDiagnostics(
             params,
             pc.CurrentFrameIndex,
@@ -241,10 +298,15 @@ void main()
             0.0);
         WriteSimpleTransportRayResult(
             globalRay,
+            params,
+            volume,
+            update.probeIndex,
+            directionRayIndex,
+            update.sourceEpoch,
             sourceRadianceDistance.rgb,
             sourceRadianceDistance.w,
             sourceVisibilityHit.x,
-            sourceDirectionHit.xyz,
+            sourceDirection,
             sourceVisibilityHit.y);
         if (SimpleDdgiSolveIsFinalSweep(
                 pc.Flags,
@@ -257,6 +319,25 @@ void main()
                 1u << 2u);
         return;
     }
+
+#if SIMPLE_DDGI_DIRECTION_VALIDATION
+    // Validate owns a Legacy36 cache and compares its stored direction at the
+    // successful consumer boundary. Keeping diagnostic atomics out of the
+    // defensive decoder gives native drivers the same bounded cache-read
+    // control flow as Legacy while placing telemetry beside the already-proven
+    // transport energy counters.
+    RecordSimpleDdgiDirectionComparison(
+        params,
+        pc.CurrentFrameIndex,
+        update.probeIndex,
+        directionRayIndex,
+        source.direction,
+        SimpleDdgiReconstructRayDirection(
+            update.probeIndex,
+            directionRayIndex,
+            source.sourceEpoch,
+            params));
+#endif
 
     vec3 reflectedBounceRadiance;
     vec3 transmittedBounceRadiance;
@@ -337,12 +418,31 @@ void main()
         solverOwnershipSum,
         solverFallbackWeightSum);
 
-    vec2 visibilityHit = UnpackSimpleDdgiRayVisibilityHit(
-        ReadStorageWordUniform(
-            pc.RayResultScratchBufferIndex,
-            globalRay * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 7u));
+    vec4 priorRadianceDistance;
+    vec3 priorDirection;
+    vec2 visibilityHit;
+    uint priorDirectionEpoch;
+    bool priorScratchValid = ReadSimpleDdgiRayResultStorage(
+        pc.RayResultScratchBufferIndex,
+        globalRay,
+        volume,
+        params,
+        update.probeIndex,
+        directionRayIndex,
+        update.sourceEpoch,
+        priorRadianceDistance,
+        priorDirection,
+        visibilityHit,
+        priorDirectionEpoch);
+    if (!priorScratchValid)
+        visibilityHit = vec2(0.0);
     WriteSimpleTransportRayResult(
         globalRay,
+        params,
+        volume,
+        update.probeIndex,
+        directionRayIndex,
+        update.sourceEpoch,
         totalRadiance,
         source.distance,
         visibilityHit.x,

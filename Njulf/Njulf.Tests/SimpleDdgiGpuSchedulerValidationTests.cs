@@ -371,6 +371,7 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
             CommittedSourceLightingGeneration = 7u,
             SourceEpoch = 11u,
             OwningVolumeTableGeneration = 13u,
+            CacheProbeBaseWordPlusOne = 1u,
             PackedTransportAndLifecycle =
                 SimpleDdgiSchedulerAbi.PackSchedulerProbeLifecycle(
                     64u,
@@ -401,6 +402,8 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
                 1u);
         GPUSimpleDdgiProbeState zeroGeneration = state;
         zeroGeneration.Flags = 0u;
+        GPUSimpleDdgiSchedulerProbeState zeroCacheBase = scheduler;
+        zeroCacheBase.CacheProbeBaseWordPlusOne = 0u;
 
         Assert.Multiple(() =>
         {
@@ -426,6 +429,12 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
                 SimpleDdgiVolumeManager.IsValidGpuSchedulerFallbackRecord(
                     scheduler,
                     zeroGeneration,
+                    13u),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager.IsValidGpuSchedulerFallbackRecord(
+                    zeroCacheBase,
+                    state,
                     13u),
                 Is.False);
         });

@@ -493,6 +493,26 @@ internal sealed class SampleDiagnosticsReporter
             $"{diagnostics.SimpleDdgiReceiverResourceGeneration}/{diagnostics.SimpleDdgiReceiverRecordsPublished}/" +
             $"{diagnostics.SimpleDdgiReceiverInvalidationBytes}/{diagnostics.SimpleDdgiReceiverInvalidationRangeCount}/" +
             $"{diagnostics.SimpleDdgiReceiverFullClear}.");
+        SimpleDdgiStorageDiagnostics storage = diagnostics.SimpleDdgiStorage;
+        if (storage.IsAvailable)
+        {
+            SimpleDdgiStorageValidationCounters validation =
+                storage.ValidationCounters;
+            Console.WriteLine(
+                $"Frame diagnostics Simple DDGI storage: mode/abi/codebook={storage.PackingMode}/{(uint)storage.AbiVersion}/{storage.DirectionCodebookVersion}, " +
+                $"canonical={storage.CanonicalIrradianceFormat}:{storage.CanonicalIrradianceBytes}/{storage.CanonicalVisibilityFormat}:{storage.CanonicalVisibilityBytes}, " +
+                $"cache total/legacy/c28/c24/pad={storage.SourceCacheBytes}/{storage.SourceCacheLegacyBytes}/{storage.SourceCacheCompact28Bytes}/{storage.SourceCacheCompact24Bytes}/{storage.SourceCacheAlignmentBytes}, " +
+                $"cacheRays legacy/c28/c24={storage.SourceCacheLegacyRayCount}/{storage.SourceCacheCompact28RayCount}/{storage.SourceCacheCompact24RayCount}, " +
+                $"distance16 volumes/probes={storage.Fp16DistanceEligibleVolumeCount}/{storage.Fp16DistanceEligibleProbeCount}, " +
+                $"scratch stride/bytes={storage.RayScratchStrideBytes}/{storage.RayScratchBytes}, " +
+                $"mirror mode requested/eligible/admitted/provisioned={storage.MirrorCoverageMode}/{storage.MirrorRequestedProbeCount}/{storage.MirrorEligibleProbeCount}/{storage.MirrorAdmittedProbeCount}/{storage.MirrorProvisionedProbeCount}, " +
+                $"mirror logical/allocated={storage.MirrorTotalBytes}/{storage.MirrorAllocatedBytes}, " +
+                $"mirrorSamples valid/opportunity/hit/seam/unmirrored/invalidMap={validation.ReadbackValid}/{validation.MirrorInteriorOpportunityCount}/{validation.MirrorImageHitCount}/{validation.MirrorSeamFallbackCount}/{validation.MirrorUnmirroredFallbackCount}/{validation.MirrorInvalidMapFallbackCount}, " +
+                $"pack attempts/nonfinite/saturated/maxRadianceError/maxDistanceError={validation.CachePackAttemptCount}/{validation.CachePackNonFiniteCount}/{validation.CachePackRadianceSaturationCount}/{validation.CachePackMaximumRadianceError:G6}/{validation.CachePackMaximumDistanceError:G6}, " +
+                $"direction samples/epochMismatch/invalidEpoch/invalidHitKind/max/p99={validation.DirectionComparisonSampleCount}/{validation.DirectionEpochMismatchCount}/{validation.InvalidSourceEpochCount}/{validation.InvalidHitKindCount}/{validation.DirectionMaximumAngularErrorRadians:G6}/{validation.DirectionAngularErrorP99UpperBoundRadians:G6}, " +
+                $"generation storage/mirror/allocation={storage.StorageLayoutFingerprint}/{storage.MirrorLayoutFingerprint}/{storage.MirrorAllocationGeneration}, " +
+                $"fallback='{storage.MirrorFallbackReason}'.");
+        }
     }
 
 

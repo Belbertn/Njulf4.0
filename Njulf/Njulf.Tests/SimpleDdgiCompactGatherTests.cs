@@ -57,8 +57,11 @@ public sealed class SimpleDdgiCompactGatherTests
         int addressBuild = gather.IndexOf(
             "TryBuildSimpleDdgiAtlasAddress(",
             StringComparison.Ordinal);
-        int atlasRead = gather.IndexOf(
-            "SampleSimpleDdgiAtlasBilinearAtAddress(",
+        int irradianceRead = gather.IndexOf(
+            "SampleSimpleDdgiIrradianceBilinearAtAddress(",
+            StringComparison.Ordinal);
+        int visibilityRead = gather.IndexOf(
+            "SampleSimpleDdgiVisibilityBilinearAtAddress(",
             StringComparison.Ordinal);
 
         Assert.Multiple(() =>
@@ -67,10 +70,11 @@ public sealed class SimpleDdgiCompactGatherTests
             Assert.That(stateReject, Is.GreaterThan(compactRead));
             Assert.That(earlyContinue, Is.GreaterThan(stateReject));
             Assert.That(addressBuild, Is.GreaterThan(earlyContinue));
-            Assert.That(atlasRead, Is.GreaterThan(addressBuild));
+            Assert.That(irradianceRead, Is.GreaterThan(addressBuild));
+            Assert.That(visibilityRead, Is.GreaterThan(irradianceRead));
             Assert.That(Count(gather, "ReadSimpleDdgiReceiverProbe("), Is.EqualTo(1));
-            Assert.That(gather, Does.Contain("atlasAddress.irradianceBaseWord"));
-            Assert.That(gather, Does.Contain("atlasAddress.visibilityBaseWord"));
+            Assert.That(shared, Does.Contain("address.irradianceBaseWord"));
+            Assert.That(shared, Does.Contain("address.visibilityBaseWord"));
         });
     }
 

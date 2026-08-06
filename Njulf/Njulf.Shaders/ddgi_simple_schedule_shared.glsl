@@ -2,6 +2,7 @@
 #define NJULF_DDGI_SIMPLE_SCHEDULE_SHARED_GLSL
 
 #include "common.glsl"
+#include "ddgi_simple_storage_abi.glsl"
 #include "ddgi_simple_receiver_abi.glsl"
 #include "ddgi_simple_scheduler_metadata_abi.glsl"
 
@@ -18,23 +19,24 @@ const uint SIMPLE_DDGI_SCHEDULER_INVALID_PROBE = 0xffffffffu;
 const uint SIMPLE_DDGI_SCHEDULER_WORKGROUP_SIZE = 64u;
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_WORDS = 1024u;
 const uint SIMPLE_DDGI_SCHEDULER_VOLUME_POLICY_WORDS = 44u;
-// The public candidate record is eight words.  The source-ray count is
-// derivable from its volume/transport tuple, so the resident input pool stores
-// only the first seven words to keep the maximum arena within the memory plan.
-const uint SIMPLE_DDGI_SCHEDULER_CANDIDATE_WORDS = 7u;
+// The public candidate record is eight words. Resident classification stores
+// only probe, volume, class/transport, and tier/reasons. Admission re-reads the
+// immutable generation, uses the input index as sequence ordinal, and derives
+// ray counts from policy, keeping the large pool at a 16-byte stride.
+const uint SIMPLE_DDGI_SCHEDULER_CANDIDATE_WORDS = 4u;
 const uint SIMPLE_DDGI_SCHEDULER_COMPACT_OUTPUT_WORDS = 1u;
 const uint SIMPLE_DDGI_SCHEDULER_GROUP_LANE_VALUES_PER_WORD = 2u;
 // Public probe state and private scheduler state are different ABIs. Keep the
 // public stride here because several scheduler shaders read the public buffer,
-// and use the ten-word private stride for the resident arena mirror.
+// and use the eleven-word private stride for the resident arena mirror.
 const uint SIMPLE_DDGI_PROBE_STATE_WORDS = 8u;
-const uint SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS = 10u;
+const uint SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS = 11u;
 // The public queue is twelve words so the predecessor's exact outcome/source
 // epoch fields and sparse physical identity coexist while every record remains
 // 16-byte aligned. The internal proposal appends physical index and mapping
 // generation to its original seven words.
 const uint SIMPLE_DDGI_PROBE_UPDATE_STRIDE_WORDS = 12u;
-const uint SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS = 9u;
+const uint SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS = 10u;
 const uint SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS = 15u;
 // The transaction-private relocation proposal reuses the existing 48-byte
 // relocation/classification storage ABI. Commit is a scheduler-only shader,
@@ -42,7 +44,9 @@ const uint SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS = 15u;
 const uint SIMPLE_DDGI_RELOCATION_CLASSIFICATION_STRIDE_WORDS = 12u;
 const uint SIMPLE_DDGI_SCHEDULER_INDIRECT_WORDS = 4u;
 const uint SIMPLE_DDGI_SCHEDULER_IRRADIANCE_WORDS_PER_PROBE = 128u;
-const uint SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE = 512u;
+// Canonical visibility is one RG16F moment pair (one uint word) per 16x16
+// texel. Keep this independent from the RGBA16F irradiance stride.
+const uint SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE = 256u;
 // Ray-bucket commands and queue metadata are separate regions. The command
 // region is passed directly to vkCmdDispatchIndirect; metadata is never part
 // of a VkDispatchIndirectCommand.
@@ -109,7 +113,8 @@ const uint SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED = 1u << 1u;
 const uint SIMPLE_DDGI_PROBE_FLAG_INACTIVE = 1u << 2u;
 const uint SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING = 1u << 3u;
 const uint SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID = 1u << 4u;
-const uint SIMPLE_DDGI_PROBE_FLAG_NON_RESIDENT = 1u << 5u;
+const uint SIMPLE_DDGI_PROBE_FLAG_VISIBILITY_VALID = 1u << 5u;
+const uint SIMPLE_DDGI_PROBE_FLAG_NON_RESIDENT = 1u << 6u;
 const uint SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT = 8u;
 const uint SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK = 0xffffff00u;
 const uint SIMPLE_DDGI_SCHEDULER_PROBE_RELOCATION = 1u << 3u;
@@ -325,43 +330,32 @@ void SchedulerWriteCandidate(
     uint base,
     uint probeIndex,
     uint volumeIndex,
-    uint expectedGeneration,
-    uint sequenceOrdinal,
     uint workClassAndTransport,
-    uint rayTierAndReason,
-    uint activeRayCount,
-    uint sourceRayCount)
+    uint rayTierAndReason)
 {
     SchedulerArenaWrite(base + 0u, probeIndex);
     SchedulerArenaWrite(base + 1u, volumeIndex);
-    SchedulerArenaWrite(base + 2u, expectedGeneration);
-    SchedulerArenaWrite(base + 3u, sequenceOrdinal);
-    SchedulerArenaWrite(base + 4u, workClassAndTransport);
-    SchedulerArenaWrite(base + 5u, rayTierAndReason);
-    SchedulerArenaWrite(base + 6u, activeRayCount);
-    // sourceRayCount is intentionally not stored; admission derives it from
-    // the selected volume's full-ray policy for source categories.
+    SchedulerArenaWrite(base + 2u, workClassAndTransport);
+    SchedulerArenaWrite(base + 3u, rayTierAndReason);
+}
+
+void SchedulerWriteInvalidCandidate(uint base)
+{
+    // Compact and admission gate on word zero, so invalidation is one store.
+    SchedulerArenaWrite(base, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE);
 }
 
 void SchedulerReadCandidate(
     uint base,
     out uint probeIndex,
     out uint volumeIndex,
-    out uint expectedGeneration,
-    out uint sequenceOrdinal,
     out uint workClassAndTransport,
-    out uint rayTierAndReason,
-    out uint activeRayCount,
-    out uint sourceRayCount)
+    out uint rayTierAndReason)
 {
     probeIndex = SchedulerCandidateWord(base, 0u);
     volumeIndex = SchedulerCandidateWord(base, 1u);
-    expectedGeneration = SchedulerCandidateWord(base, 2u);
-    sequenceOrdinal = SchedulerCandidateWord(base, 3u);
-    workClassAndTransport = SchedulerCandidateWord(base, 4u);
-    rayTierAndReason = SchedulerCandidateWord(base, 5u);
-    activeRayCount = SchedulerCandidateWord(base, 6u);
-    sourceRayCount = 0u;
+    workClassAndTransport = SchedulerCandidateWord(base, 2u);
+    rayTierAndReason = SchedulerCandidateWord(base, 3u);
 }
 
 uint SchedulerVolumeWord(uint volumeIndex, uint word)
@@ -388,11 +382,16 @@ uint SchedulerVolumePhysicalOffsetY(uint volumeIndex) { return SchedulerVolumeWo
 uint SchedulerVolumePhysicalOffsetZ(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 24u); }
 uint SchedulerVolumeLayoutFlags(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 25u); }
 uint SchedulerVolumeSequenceStride(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 34u); }
+uint SchedulerVolumeCacheBaseWord(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 35u); }
 uint SchedulerVolumeDirtyGeneration(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 39u); }
 float SchedulerVolumeProximityRadiusPadding(uint volumeIndex)
 {
     return uintBitsToFloat(SchedulerVolumeWord(volumeIndex, 40u));
 }
+uint SchedulerVolumeCacheWordsPerProbe(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 41u); }
+uint SchedulerVolumeCachePhysicalFirstProbe(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 42u) & 0xffffu; }
+uint SchedulerVolumeCachePhysicalProbeCount(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 42u) >> 16u; }
+uint SchedulerVolumeCacheLayoutFlags(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 43u); }
 
 vec3 SchedulerVolumeOrigin(uint volumeIndex)
 {
@@ -600,7 +599,7 @@ bool SchedulerResolvePayloadAddress(
     out uint pageMappingGeneration)
 {
     const uint paramsHeaderWords = 60u;
-    const uint volumeStrideWords = 24u;
+    const uint volumeStrideWords = 28u;
     const uint maxVolumes = 16u;
     const uint pagingStrideWords = 8u;
     const uint pagingBaseWords =
@@ -764,7 +763,7 @@ bool SchedulerResolveSparsePageMetadata(
     out uint validProbeMask)
 {
     const uint paramsHeaderWords = 60u;
-    const uint volumeStrideWords = 24u;
+    const uint volumeStrideWords = 28u;
     const uint maxVolumes = 16u;
     const uint pagingStrideWords = 8u;
     const uint pagingBaseWords = paramsHeaderWords +
@@ -884,7 +883,7 @@ bool SchedulerRetainSparsePage(
     uint pageMappingGeneration)
 {
     const uint sparseMode = 2u;
-    const uint pagingBaseWords = 60u + 16u * 24u;
+    const uint pagingBaseWords = 60u + 16u * 28u;
     uint mode = ReadStorageWordUniform(
         pc.ParamsBufferIndex,
         pagingBaseWords + volumeIndex * 8u + 3u);
@@ -1073,6 +1072,20 @@ void SchedulerWriteUpdate(
     SchedulerArenaWrite(
         base + 8u,
         addressValid ? pageMappingGeneration : 0u);
+    uint cacheProbeBaseWordPlusOne = 0u;
+    if (addressValid)
+    {
+        addressValid = TryResolveSimpleDdgiTransportCacheProbeBase(
+            SchedulerVolumeCacheBaseWord(volumeIndex),
+            SchedulerVolumeCacheWordsPerProbe(volumeIndex),
+            SchedulerVolumeCachePhysicalFirstProbe(volumeIndex),
+            SchedulerVolumeCachePhysicalProbeCount(volumeIndex),
+            physicalProbeIndex,
+            cacheProbeBaseWordPlusOne);
+    }
+    SchedulerArenaWrite(
+        base + 9u,
+        addressValid ? cacheProbeBaseWordPlusOne : 0u);
     // Candidate reasons are a transaction-private proposal. CommitLocal uses
     // these high bits to apply visibility and invalidation metadata only after
     // every producer has completed successfully. Emit strips them before the
@@ -1138,7 +1151,7 @@ void SchedulerCopyUpdateToQueue(uint updateIndex, uint queueIndex)
     WriteStorageWordUniform(
         pc.UpdateQueueBufferIndex,
         destinationBase + 11u,
-        0u);
+        SchedulerArenaRead(sourceBase + 9u));
 }
 
 void SchedulerReadUpdate(

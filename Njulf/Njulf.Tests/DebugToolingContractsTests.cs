@@ -38,6 +38,7 @@ namespace Njulf.Tests
         {
             string commonShader = ReadRepoText("Njulf.Shaders", "common.glsl");
             string simpleSharedShader = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
+            string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
             var families = new (string Name, int Start, int Count)[]
             {
                 ("meshlet", 0, RendererDiagnosticsBuffer.MeshletCounterCount),
@@ -61,7 +62,8 @@ namespace Njulf.Tests
                 ("simple DDGI per-volume energy", RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterBase, RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterCount),
                 ("DDGI effective albedo", RendererDiagnosticsBuffer.DdgiAlbedoCounterBase, RendererDiagnosticsBuffer.DdgiAlbedoCounterCount),
                 ("simple DDGI gather multiplicity", RendererDiagnosticsBuffer.SimpleDdgiGatherMultiplicityCounterBase, RendererDiagnosticsBuffer.SimpleDdgiGatherMultiplicityCounterCount),
-                ("decal fragment attribution", RendererDiagnosticsBuffer.DecalFragmentAttributionCounterBase, RendererDiagnosticsBuffer.DecalFragmentAttributionCounterCount)
+                ("decal fragment attribution", RendererDiagnosticsBuffer.DecalFragmentAttributionCounterBase, RendererDiagnosticsBuffer.DecalFragmentAttributionCounterCount),
+                ("simple DDGI storage validation", RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterBase, RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -100,6 +102,10 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.DdgiAlbedoCounterCount, Is.EqualTo(12));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiGatherMultiplicityCounterCount, Is.EqualTo(9));
                 Assert.That(RendererDiagnosticsBuffer.DecalFragmentAttributionCounterCount, Is.EqualTo(6));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount, Is.EqualTo(23));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize,
+                    Is.GreaterThanOrEqualTo((ulong)RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount * sizeof(uint)));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize % 256ul, Is.Zero);
                 Assert.That(simpleSharedShader, Does.Contain(
                     $"SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_BASE = {RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterBase}u"));
                 Assert.That(simpleSharedShader, Does.Contain(
@@ -110,6 +116,16 @@ namespace Njulf.Tests
                     $"DDGI_ALBEDO_COUNTER_BASE = {RendererDiagnosticsBuffer.DdgiAlbedoCounterBase}u"));
                 Assert.That(commonShader, Does.Contain(
                     "DECAL_FRAGMENT_ATTRIBUTION_COUNTER_BASE = SIMPLE_DDGI_GATHER_MULTIPLICITY_COUNTER_BASE + 9u"));
+                Assert.That(commonShader, Does.Contain(
+                    "SIMPLE_DDGI_INVALID_SOURCE_EPOCH_COUNTER ="));
+                Assert.That(commonShader, Does.Contain(
+                    "SIMPLE_DDGI_INVALID_HIT_KIND_COUNTER ="));
+                Assert.That(commonShader, Does.Contain(
+                    "void AddSimpleDdgiStorageValidationDiagnostic("));
+                Assert.That(simpleSharedShader, Does.Contain(
+                    "AddSimpleDdgiStorageValidationDiagnostic("));
+                Assert.That(renderer, Does.Contain(
+                    "ValidationCounters = counters.StorageValidation"));
                 Assert.That(commonShader, Does.Contain("DDGI_THIN_INVALID_TRANSMISSION_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 17u"));
                 Assert.That(RendererDiagnosticsBuffer.DdgiShadowHitDistanceScale, Is.EqualTo(256.0f));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(nextExpectedStart));

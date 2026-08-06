@@ -219,7 +219,8 @@ const int ENVIRONMENT_GI_DATA_BUFFER_INDEX = 172;
 const int SIMPLE_DDGI_SCHEDULER_ARENA_BUFFER_INDEX = 173;
 const int SIMPLE_DDGI_RECEIVER_PROBE_BUFFER_INDEX = 174;
 const int SIMPLE_DDGI_RESIDENCY_ARENA_BUFFER_INDEX = 175;
-const int STATIC_BUFFER_COUNT = 176;
+const int SIMPLE_DDGI_STORAGE_VALIDATION_BUFFER_BASE_INDEX = 176;
+const int STATIC_BUFFER_COUNT = 178;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -1865,6 +1866,44 @@ const uint DECAL_ESTIMATED_COVERAGE_KILLED_COUNTER = DECAL_FRAGMENT_ATTRIBUTION_
 const uint DECAL_ESTIMATED_SURVIVING_COUNTER = DECAL_FRAGMENT_ATTRIBUTION_COUNTER_BASE + 3u;
 const uint DECAL_ESTIMATED_DDGI_GATHER_COUNTER = DECAL_FRAGMENT_ATTRIBUTION_COUNTER_BASE + 4u;
 const uint DECAL_ESTIMATED_SHADOW_EVALUATION_COUNTER = DECAL_FRAGMENT_ATTRIBUTION_COUNTER_BASE + 5u;
+// Detailed-only packed-storage and compact-mirror qualification counters.
+// Keep synchronized with RendererDiagnosticsBuffer. Existing offsets remain
+// stable because this family is appended after decal attribution.
+const uint SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE =
+    DECAL_FRAGMENT_ATTRIBUTION_COUNTER_BASE + 6u;
+const uint SIMPLE_DDGI_MIRROR_INTERIOR_OPPORTUNITY_COUNTER =
+    SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 0u;
+const uint SIMPLE_DDGI_MIRROR_IMAGE_HIT_COUNTER =
+    SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 1u;
+const uint SIMPLE_DDGI_MIRROR_SEAM_FALLBACK_COUNTER =
+    SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 2u;
+const uint SIMPLE_DDGI_MIRROR_UNMIRRORED_FALLBACK_COUNTER =
+    SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 3u;
+const uint SIMPLE_DDGI_MIRROR_INVALID_MAP_FALLBACK_COUNTER =
+    SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 4u;
+const uint SIMPLE_DDGI_CACHE_PACK_ATTEMPT_COUNTER =
+    SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 5u;
+const uint SIMPLE_DDGI_CACHE_PACK_NONFINITE_COUNTER =
+    SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 6u;
+const uint SIMPLE_DDGI_CACHE_PACK_RADIANCE_SATURATION_COUNTER =
+    SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 7u;
+const uint SIMPLE_DDGI_CACHE_PACK_MAX_RADIANCE_ERROR_COUNTER =
+    SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 8u;
+const uint SIMPLE_DDGI_CACHE_PACK_MAX_DISTANCE_ERROR_COUNTER =
+    SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 9u;
+const uint SIMPLE_DDGI_DIRECTION_COMPARE_SAMPLE_COUNTER =
+    SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 10u;
+const uint SIMPLE_DDGI_DIRECTION_EPOCH_MISMATCH_COUNTER =
+    SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 11u;
+const uint SIMPLE_DDGI_DIRECTION_MAX_ANGULAR_ERROR_COUNTER =
+    SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 12u;
+const uint SIMPLE_DDGI_DIRECTION_ANGULAR_HISTOGRAM_BASE =
+    SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 13u;
+const uint SIMPLE_DDGI_DIRECTION_ANGULAR_HISTOGRAM_COUNT = 8u;
+const uint SIMPLE_DDGI_INVALID_SOURCE_EPOCH_COUNTER =
+    SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 21u;
+const uint SIMPLE_DDGI_INVALID_HIT_KIND_COUNTER =
+    SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 22u;
 const float DDGI_THIN_LUMINANCE_SCALE = 4096.0;
 const float DDGI_SHADOW_VISIBILITY_HIT_DISTANCE_SCALE = 256.0;
 const float DIRECTIONAL_SHADOW_RECEIVER_DEPTH_QUANTIZATION_SCALE = 65535.0;
@@ -2385,6 +2424,42 @@ void MaxRendererDiagnostic(uint frameIndex, uint counterIndex, uint value)
 {
     uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) + frameIndex;
     atomicMax(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[counterIndex], value);
+}
+
+// Storage qualification retains its appended logical counter IDs for report
+// compatibility, while the physical detailed-only bank starts at word zero.
+// Low, bounded offsets avoid coupling native-driver code generation for this
+// optional telemetry to the size and churn of the general diagnostics SSBO.
+void AddSimpleDdgiStorageValidationDiagnostic(
+    uint frameIndex,
+    uint logicalCounterIndex,
+    uint value)
+{
+#if NJULF_DDGI_DETAILED_COUNTERS
+    uint bufferIndex = uint(SIMPLE_DDGI_STORAGE_VALIDATION_BUFFER_BASE_INDEX) +
+        frameIndex % uint(FRAMES_IN_FLIGHT);
+    uint physicalCounterIndex = logicalCounterIndex -
+        SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE;
+    atomicAdd(
+        BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[physicalCounterIndex],
+        value);
+#endif
+}
+
+void MaxSimpleDdgiStorageValidationDiagnostic(
+    uint frameIndex,
+    uint logicalCounterIndex,
+    uint value)
+{
+#if NJULF_DDGI_DETAILED_COUNTERS
+    uint bufferIndex = uint(SIMPLE_DDGI_STORAGE_VALIDATION_BUFFER_BASE_INDEX) +
+        frameIndex % uint(FRAMES_IN_FLIGHT);
+    uint physicalCounterIndex = logicalCounterIndex -
+        SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE;
+    atomicMax(
+        BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[physicalCounterIndex],
+        value);
+#endif
 }
 
 // A negative-determinant instance reverses projected triangle winding. Mesh

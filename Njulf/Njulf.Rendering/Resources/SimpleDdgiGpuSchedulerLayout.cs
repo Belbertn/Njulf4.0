@@ -62,24 +62,26 @@ public sealed class SimpleDdgiGpuSchedulerLayout
     public const int MaxDirtyRegionCapacity = 1024;
     public const int SchedulerWorkgroupSize = 64;
     // Private scheduler state is distinct from the public 32-byte probe state.
-    // It carries both dirty-latency start and the applied invalidation marker.
-    public const int ProbeStateStrideBytes = 40;
+    // It carries dirty-latency state, the applied invalidation marker, and the
+    // producer-validated one-based cache base used by lightweight consumers.
+    public const int ProbeStateStrideBytes = 44;
     public const int CandidateStrideBytes = 32;
-    // Source-ray cardinality is derived from (volume, transport category) at
-    // admission: hard/routine source work always uses the policy's full-ray
-    // count, while cached-solver work uses zero. The storage form therefore
-    // needs only the first seven words; the public candidate ABI remains 32 B.
-    public const int CandidateInputStorageStrideBytes = 28;
+    // Generation is re-read from immutable public state at admission and the
+    // sequence ordinal is the candidate's input index. Together with derived
+    // ray cardinalities, resident input needs only four identity/priority
+    // words; the public candidate ABI remains 32 B for tooling compatibility.
+    public const int CandidateInputStorageStrideBytes = 16;
     // Compact output stores the deterministic input-candidate index rather
     // than copying the full 32-byte record. Admission dereferences that index
     // in CandidateInput, preserving the ABI while avoiding a second full-size
     // candidate pool.
     public const int CandidateCompactIndexStrideBytes = sizeof(uint);
-    // Internal update/proposal storage has nine words. The scheduler carries
+    // Internal update/proposal storage has ten words. The scheduler carries
     // the small classification proposal in private flag bits until emit
-    // strips them from the public queue ABI; relocation then reuses all seven
-    // words for its transaction-private state proposal.
-    public const int UpdateRecordStrideBytes = 36;
+    // strips them from the public queue ABI. The final private word carries the
+    // producer-validated one-based cache base so serial emit performs no paging
+    // or mixed-stride address resolution.
+    public const int UpdateRecordStrideBytes = 40;
     public const int OutcomeStrideBytes = 60;
     public const int IndirectCommandStrideBytes = 16;
     // Ray-bucket metadata and commands are separate ABI regions.  The command
@@ -96,6 +98,16 @@ public sealed class SimpleDdgiGpuSchedulerLayout
     // the plan's readback budget while leaving room for future counters.
     public const int AuditSummaryBytes = 1024;
     public const int AuditSummaryWordCount = AuditSummaryBytes / sizeof(uint);
+    // Tail certification processes at most this many probes per frame. One
+    // atomic status word per probe lives in a dedicated arena region, keeping
+    // the exact ray-scratch stride/byte plan unchanged even on tiers whose
+    // update request capacity is below 256.
+    public const int TransportAuditWorkspaceProbeCapacity = 256;
+    public const int TransportAuditWorkspaceWordsPerProbe = 1;
+    public const int TransportAuditWorkspaceStrideBytes =
+        TransportAuditWorkspaceWordsPerProbe * sizeof(uint);
+    public const int TransportAuditWorkspaceBytes =
+        TransportAuditWorkspaceProbeCapacity * TransportAuditWorkspaceStrideBytes;
     public const int MaxRayBucketCount = SimpleDdgiSchedulerAbi.MaxRayBucketCount;
 
     private readonly Dictionary<string, SimpleDdgiSchedulerArenaRegion> _regions;
@@ -162,6 +174,7 @@ public sealed class SimpleDdgiGpuSchedulerLayout
     public SimpleDdgiSchedulerArenaRegion Outcomes => GetRegion(nameof(Outcomes));
     public SimpleDdgiSchedulerArenaRegion FeedbackSummary => GetRegion(nameof(FeedbackSummary));
     public SimpleDdgiSchedulerArenaRegion AuditSummary => GetRegion(nameof(AuditSummary));
+    public SimpleDdgiSchedulerArenaRegion AuditWorkspace => GetRegion(nameof(AuditWorkspace));
 
     public SimpleDdgiSchedulerArenaRegion GetRegion(string name)
     {
@@ -261,7 +274,7 @@ public sealed class SimpleDdgiGpuSchedulerLayout
                 "The configured Simple-DDGI scheduler capacity exceeds the device compute dispatch limit.");
         }
 
-        var regions = new List<SimpleDdgiSchedulerArenaRegion>(22);
+        var regions = new List<SimpleDdgiSchedulerArenaRegion>(23);
         ulong cursor = 0;
         Add("Frame", FrameBytes, 1, FrameBytes);
         Add("VolumePolicies", checked((ulong)GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount * VolumePolicyStrideBytes),
@@ -312,6 +325,8 @@ public sealed class SimpleDdgiGpuSchedulerLayout
             OutcomeStrideBytes, checked((uint)requestCapacity));
         Add("FeedbackSummary", ShippingFeedbackBytes, 4, checked((uint)(ShippingFeedbackBytes / sizeof(uint))));
         Add("AuditSummary", AuditSummaryBytes, sizeof(uint), AuditSummaryWordCount);
+        Add("AuditWorkspace", TransportAuditWorkspaceBytes,
+            TransportAuditWorkspaceStrideBytes, TransportAuditWorkspaceProbeCapacity);
 
         ulong validationReadbackBytes = validationEnabled
             ? Align(ShippingFeedbackBytes, ArenaAlignmentBytes)

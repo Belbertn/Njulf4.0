@@ -1,0 +1,243 @@
+#ifndef NJULF_DDGI_SIMPLE_STORAGE_ABI_GLSL
+#define NJULF_DDGI_SIMPLE_STORAGE_ABI_GLSL
+
+// Central address/format contract shared by ordinary DDGI consumers and the
+// resident commit shader. All mixed-stride cache access must pass this gate.
+const uint SIMPLE_DDGI_STORAGE_HEADER_WORDS = 60u;
+const uint SIMPLE_DDGI_STORAGE_VOLUME_WORDS = 28u;
+const uint SIMPLE_DDGI_STORAGE_MAX_VOLUMES = 16u;
+const uint SIMPLE_DDGI_STORAGE_PAGING_WORDS = 8u;
+const uint SIMPLE_DDGI_STORAGE_PAGING_BASE =
+    SIMPLE_DDGI_STORAGE_HEADER_WORDS +
+    SIMPLE_DDGI_STORAGE_MAX_VOLUMES * SIMPLE_DDGI_STORAGE_VOLUME_WORDS;
+const uint SIMPLE_DDGI_STORAGE_SPARSE_MODE = 2u;
+const uint SIMPLE_DDGI_STORAGE_PROBES_PER_PAGE = 8u;
+const uint SIMPLE_DDGI_STORAGE_FORMAT_MASK = 0x3u;
+const uint SIMPLE_DDGI_STORAGE_FORMAT_LEGACY_36 = 0u;
+const uint SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_28 = 1u;
+const uint SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_24 = 2u;
+const uint SIMPLE_DDGI_STORAGE_FORMAT_INVALID = 3u;
+const uint SIMPLE_DDGI_STORAGE_ABI_SHIFT = 4u;
+const uint SIMPLE_DDGI_STORAGE_ABI_MASK = 0xfu << SIMPLE_DDGI_STORAGE_ABI_SHIFT;
+const uint SIMPLE_DDGI_STORAGE_ABI_LEGACY = 4u;
+const uint SIMPLE_DDGI_STORAGE_ABI_PACKED = 5u;
+const uint SIMPLE_DDGI_STORAGE_CODEBOOK_SHIFT = 8u;
+const uint SIMPLE_DDGI_STORAGE_CODEBOOK_MASK = 0xffu <<
+    SIMPLE_DDGI_STORAGE_CODEBOOK_SHIFT;
+const uint SIMPLE_DDGI_STORAGE_CODEBOOK_VERSION = 1u;
+const uint SIMPLE_DDGI_STORAGE_RESERVED_MASK = 0xffff0000u;
+
+uint SimpleDdgiStorageExpectedStride(uint format)
+{
+    if (format == SIMPLE_DDGI_STORAGE_FORMAT_LEGACY_36)
+        return 9u;
+    if (format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_28)
+        return 7u;
+    if (format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_24)
+        return 6u;
+    return 0u;
+}
+
+// Scheduler volume policy is compiled from the same authoritative cache region
+// table as GPUSimpleDdgiVolume. Resolve the one-based per-probe address while
+// work is still parallel in the admission kernel, then carry it through the
+// private update record. This keeps the single-invocation emit kernel free of
+// sparse paging walks and preserves the high bit for the split-trace fallback
+// handshake.
+bool TryResolveSimpleDdgiTransportCacheProbeBase(
+    uint cacheRegionBaseWord,
+    uint cacheWordsPerProbe,
+    uint cachePhysicalFirstProbe,
+    uint cachePhysicalProbeCount,
+    uint physicalProbeIndex,
+    out uint cacheProbeBaseWordPlusOne)
+{
+    cacheProbeBaseWordPlusOne = 0u;
+    if (physicalProbeIndex < cachePhysicalFirstProbe ||
+        cacheWordsPerProbe == 0u || cachePhysicalProbeCount == 0u)
+    {
+        return false;
+    }
+
+    uint localPhysicalProbe = physicalProbeIndex - cachePhysicalFirstProbe;
+    if (localPhysicalProbe >= cachePhysicalProbeCount)
+        return false;
+
+    // One-based zero is invalid and bit 31 is reserved by the public queue.
+    const uint maximumCacheProbeBaseWord = 0x7ffffffeu;
+    uint offsetHigh;
+    uint offsetLow;
+    umulExtended(
+        localPhysicalProbe,
+        cacheWordsPerProbe,
+        offsetHigh,
+        offsetLow);
+    if (cacheRegionBaseWord > maximumCacheProbeBaseWord || offsetHigh != 0u ||
+        offsetLow > maximumCacheProbeBaseWord - cacheRegionBaseWord)
+    {
+        return false;
+    }
+
+    cacheProbeBaseWordPlusOne = cacheRegionBaseWord +
+        offsetLow + 1u;
+    return true;
+}
+
+// One mapping contract for full source sequences and maintenance subsets.
+// Counts are bounded to 256 by the public DDGI ABI, so the products cannot
+// overflow a uint.
+uint SimpleDdgiStorageDirectionRayIndex(
+    uint localRayOrdinal,
+    uint activeRayCount,
+    uint sourceRayCount,
+    uint maximumRayCount)
+{
+    uint safeMaximum = max(maximumRayCount, 1u);
+    uint safeActive = clamp(activeRayCount, 1u, safeMaximum);
+    uint safeSource = clamp(sourceRayCount, 1u, safeMaximum);
+    uint sourceOrdinal = min(
+        localRayOrdinal * safeSource / safeActive,
+        safeSource - 1u);
+    return sourceOrdinal * safeMaximum / safeSource;
+}
+
+// Queue producers resolve sparse/dense physical ownership once per probe and
+// publish this one-based address. Per-ray consumers still pass through this
+// gate so format, ABI, codebook, stride, cardinality, and uint overflow remain
+// validated by the same storage contract as full address resolution.
+bool TryResolveSimpleDdgiTransportCacheAddressFromProbeBase(
+    uint cacheProbeBaseWordPlusOne,
+    uint directionRayIndex,
+    uint raysPerProbe,
+    uint cacheStrideWords,
+    uint layoutFlags,
+    out uint cacheWord,
+    out uint format)
+{
+    cacheWord = 0u;
+    format = layoutFlags & SIMPLE_DDGI_STORAGE_FORMAT_MASK;
+    uint abi = (layoutFlags & SIMPLE_DDGI_STORAGE_ABI_MASK) >>
+        SIMPLE_DDGI_STORAGE_ABI_SHIFT;
+    uint codebook = (layoutFlags & SIMPLE_DDGI_STORAGE_CODEBOOK_MASK) >>
+        SIMPLE_DDGI_STORAGE_CODEBOOK_SHIFT;
+    bool formatMatchesAbi =
+        (abi == SIMPLE_DDGI_STORAGE_ABI_LEGACY &&
+            format == SIMPLE_DDGI_STORAGE_FORMAT_LEGACY_36) ||
+        (abi == SIMPLE_DDGI_STORAGE_ABI_PACKED &&
+            (format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_28 ||
+             format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_24));
+    uint expectedStride = SimpleDdgiStorageExpectedStride(format);
+    if (cacheProbeBaseWordPlusOne == 0u || raysPerProbe == 0u ||
+        directionRayIndex >= raysPerProbe ||
+        (layoutFlags & SIMPLE_DDGI_STORAGE_RESERVED_MASK) != 0u ||
+        codebook != SIMPLE_DDGI_STORAGE_CODEBOOK_VERSION ||
+        !formatMatchesAbi || expectedStride == 0u ||
+        cacheStrideWords != expectedStride)
+    {
+        return false;
+    }
+
+    uint cacheProbeBaseWord = cacheProbeBaseWordPlusOne - 1u;
+    if (directionRayIndex >
+            (0xffffffffu - cacheProbeBaseWord) / cacheStrideWords)
+    {
+        return false;
+    }
+    cacheWord = cacheProbeBaseWord + directionRayIndex * cacheStrideWords;
+    return true;
+}
+
+bool TryResolveSimpleDdgiTransportCacheAddress(
+    uint paramsBufferIndex,
+    uint volumeIndex,
+    uint physicalProbeIndex,
+    uint directionRayIndex,
+    uint raysPerProbe,
+    uint sparsePhysicalPageCapacity,
+    out uint cacheWord,
+    out uint format,
+    out uint layoutFlags)
+{
+    cacheWord = 0u;
+    format = SIMPLE_DDGI_STORAGE_FORMAT_INVALID;
+    layoutFlags = 0u;
+    if (volumeIndex >= SIMPLE_DDGI_STORAGE_MAX_VOLUMES ||
+        raysPerProbe == 0u || directionRayIndex >= raysPerProbe)
+    {
+        return false;
+    }
+
+    uint volumeBase = SIMPLE_DDGI_STORAGE_HEADER_WORDS +
+        volumeIndex * SIMPLE_DDGI_STORAGE_VOLUME_WORDS;
+    vec4 gridAndFirst = ReadStorageAlignedVec4Uniform(
+        paramsBufferIndex,
+        volumeBase + 4u);
+    uvec4 cacheLayout = floatBitsToUint(ReadStorageAlignedVec4Uniform(
+        paramsBufferIndex,
+        volumeBase + 24u));
+    uint pagingBase = SIMPLE_DDGI_STORAGE_PAGING_BASE +
+        volumeIndex * SIMPLE_DDGI_STORAGE_PAGING_WORDS;
+    uvec4 pagingAddress = ReadStorageAlignedUVec4Uniform(
+        paramsBufferIndex,
+        pagingBase);
+    uvec4 pagingLayout = ReadStorageAlignedUVec4Uniform(
+        paramsBufferIndex,
+        pagingBase + 4u);
+
+    uint cacheBaseWord = cacheLayout.x;
+    uint cacheStrideWords = cacheLayout.y;
+    layoutFlags = cacheLayout.w;
+    format = layoutFlags & SIMPLE_DDGI_STORAGE_FORMAT_MASK;
+    uint abi = (layoutFlags & SIMPLE_DDGI_STORAGE_ABI_MASK) >>
+        SIMPLE_DDGI_STORAGE_ABI_SHIFT;
+    uint codebook = (layoutFlags & SIMPLE_DDGI_STORAGE_CODEBOOK_MASK) >>
+        SIMPLE_DDGI_STORAGE_CODEBOOK_SHIFT;
+    bool formatMatchesAbi =
+        (abi == SIMPLE_DDGI_STORAGE_ABI_LEGACY &&
+            format == SIMPLE_DDGI_STORAGE_FORMAT_LEGACY_36) ||
+        (abi == SIMPLE_DDGI_STORAGE_ABI_PACKED &&
+            (format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_28 ||
+             format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_24));
+    if ((layoutFlags & SIMPLE_DDGI_STORAGE_RESERVED_MASK) != 0u ||
+        codebook != SIMPLE_DDGI_STORAGE_CODEBOOK_VERSION ||
+        !formatMatchesAbi ||
+        cacheStrideWords != SimpleDdgiStorageExpectedStride(format))
+    {
+        return false;
+    }
+
+    bool sparse = pagingAddress.w == SIMPLE_DDGI_STORAGE_SPARSE_MODE;
+    uint physicalFirst = sparse ? pagingLayout.w : pagingAddress.z;
+    uint physicalCount;
+    if (sparse)
+    {
+        if (sparsePhysicalPageCapacity > 0xffffffffu /
+                SIMPLE_DDGI_STORAGE_PROBES_PER_PAGE)
+            return false;
+        physicalCount = sparsePhysicalPageCapacity *
+            SIMPLE_DDGI_STORAGE_PROBES_PER_PAGE;
+    }
+    else
+    {
+        uvec3 grid = uvec3(max(gridAndFirst.xyz, vec3(1.0)));
+        if (grid.x > 0xffffffffu / grid.y ||
+            grid.x * grid.y > 0xffffffffu / grid.z)
+            return false;
+        physicalCount = grid.x * grid.y * grid.z;
+    }
+    if (physicalProbeIndex < physicalFirst ||
+        physicalProbeIndex - physicalFirst >= physicalCount)
+        return false;
+
+    uint localProbeIndex = physicalProbeIndex - physicalFirst;
+    if (localProbeIndex >
+            (0xffffffffu - directionRayIndex) / raysPerProbe)
+        return false;
+    uint rayIndex = localProbeIndex * raysPerProbe + directionRayIndex;
+    if (rayIndex > (0xffffffffu - cacheBaseWord) / cacheStrideWords)
+        return false;
+    cacheWord = cacheBaseWord + rayIndex * cacheStrideWords;
+    return true;
+}
+
+#endif

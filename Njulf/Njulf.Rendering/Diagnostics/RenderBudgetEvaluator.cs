@@ -93,17 +93,37 @@ namespace Njulf.Rendering.Diagnostics
             // a release gate. Unique residency is reported from disjoint sources instead.
             ulong globalIlluminationMemoryBytes = giResidency.UniqueResidentBytes;
             ulong ddgiMemoryBytes = diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes;
-            // Simple DDGI keeps its canonical writer in SSBOs and may add a
-            // sampled-image mirror. V2 additionally owns a private Jacobi target
-            // and persistent source-ray cache, all charged against the same hard
-            // layout budget.
-            ulong ddgiAtlasMemoryBytes = diagnostics.SimpleDdgiActive != 0
-                ? SaturatingAdd(
+            // Simple DDGI keeps disjoint typed resources. Prefer the compiled
+            // storage contract so partial mirrors cannot make a consumer infer
+            // canonical bytes by subtracting an optional image allocation.
+            SimpleDdgiStorageDiagnostics simpleStorage = diagnostics.SimpleDdgiStorage;
+            ulong ddgiAtlasMemoryBytes;
+            if (diagnostics.SimpleDdgiActive == 0)
+            {
+                ddgiAtlasMemoryBytes = diagnostics.DdgiTextureBytes;
+            }
+            else if (simpleStorage.IsAvailable)
+            {
+                ddgiAtlasMemoryBytes = SaturatingAdd(
+                    SaturatingAdd(
+                        SaturatingAdd(
+                            SaturatingAdd(
+                                simpleStorage.CanonicalIrradianceBytes,
+                                simpleStorage.CanonicalVisibilityBytes),
+                            diagnostics.SimpleDdgiTransportIrradianceAtlasBytes),
+                        simpleStorage.SourceCacheBytes),
+                    simpleStorage.MirrorAllocatedBytes);
+            }
+            else
+            {
+                // Compatibility fallback for diagnostics captured before the
+                // explicit storage schema was available.
+                ddgiAtlasMemoryBytes = SaturatingAdd(
                     SaturatingAdd(
                         diagnostics.SimpleDdgiAtlasBytes,
                         diagnostics.SimpleDdgiTransportIrradianceAtlasBytes),
-                    diagnostics.SimpleDdgiTransportSourceCacheBytes)
-                : diagnostics.DdgiTextureBytes;
+                    diagnostics.SimpleDdgiTransportSourceCacheBytes);
+            }
             bool forwardGiRequired = diagnostics.GlobalIlluminationDdgiActive != 0 ||
                 diagnostics.SimpleDdgiActive != 0;
             bool hasForwardGiIncrementalTiming = diagnostics.GpuForwardGiIncrementalAttribution is

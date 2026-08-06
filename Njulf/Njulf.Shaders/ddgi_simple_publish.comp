@@ -113,12 +113,12 @@ void main()
              texel < texelCount;
              texel += gl_WorkGroupSize.x)
         {
-            vec4 value = ReadSimpleDdgiAtlasTexel(
+            vec4 value = ReadSimpleDdgiIrradianceTexel(
                 pc.TransportIrradianceAtlasBufferIndex,
                 update.physicalProbeIndex,
                 texel,
                 params.irradianceTexels);
-            WriteSimpleDdgiAtlasTexel(
+            WriteSimpleDdgiIrradianceTexel(
                 pc.IrradianceAtlasBufferIndex,
                 update.physicalProbeIndex,
                 texel,
@@ -134,6 +134,12 @@ void main()
     {
         uint receiverFlags = 0u;
         if ((state.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u)
+            receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_FRESH;
+        // Compact receiver records do not carry the compute-state visibility
+        // bit. Alias an invalid visibility payload to their existing FRESH
+        // rejection gate so a delayed CPU publication cannot expose zeroed or
+        // partially refreshed moments.
+        if ((state.flags & SIMPLE_DDGI_PROBE_FLAG_VISIBILITY_VALID) == 0u)
             receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_FRESH;
         if ((state.flags & SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED) != 0u)
             receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_SCROLL_EXPOSED;

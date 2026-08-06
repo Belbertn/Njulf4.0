@@ -1254,7 +1254,8 @@ namespace Njulf.Rendering.Data
         // Y = conservative architectural-thickness proxy. The shader uses a
         // fraction of it as an additional cap, preventing coarse rings from
         // looking through thin walls. Z = thin-wall leak-clamp strength for the
-        // Simple-DDGI receiver and recursive-bounce paths. W remains reserved.
+        // Simple-DDGI receiver and recursive-bounce paths. W = exact provisioned
+        // sampled-atlas probe-layer capacity (zero while the mirror is inactive).
         public Vector4 BiasLimitsAndPadding;
         // X/Y/Z/W = published irradiance atlas, private transport target,
         // persistent source-cache bindless indices, transport generation.
@@ -1271,7 +1272,7 @@ namespace Njulf.Rendering.Data
         public Vector4 ResidencyControls;
     }
 
-    // 96 bytes. Appended after GPUSimpleDdgiParams in the simple DDGI params buffer.
+    // 112 bytes. Appended after GPUSimpleDdgiParams in the simple DDGI params buffer.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiVolume
     {
@@ -1283,6 +1284,11 @@ namespace Njulf.Rendering.Data
         // cardinality, W reserved.
         public Vector4 UpdateStartAndCount;
         public Vector4 RaysAndReserved;
+        // Integer payload encoded with bit-preserving uint/float conversion:
+        // x = source-cache base word, y = cache stride words,
+        // z = compact sampled-atlas first layer + 1 (zero = unmirrored),
+        // w = source format, mirror payload, storage ABI, and codebook version.
+        public Vector4 CacheLayout;
     }
 
     // 32 bytes. Parallel to GPUSimpleDdgiVolume and mirrored by
@@ -1531,39 +1537,68 @@ namespace Njulf.Rendering.Data
         public uint Reserved1;
     }
 
-    // 32 bytes. RadianceDistance.w retains full-precision surface distance.
-    // DirectionHitFlags.w bit-packs half-precision visibility distance and hit
-    // kind so visibility-only backfaces never alter bounce or relocation.
+    // 20 bytes. RadianceDistance.w retains full-precision surface distance.
+    // PackedVisibilityHitEpoch contains FP16 visibility distance in bits 0..15,
+    // exact hit kind in bits 16..18, direction epoch in bits 19..23, and
+    // validity/reserved flags in bits 24..31. Direction is reconstructed from
+    // probe/ray identity and the checked-in rotation codebook.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiRayResult
+    {
+        public Vector4 RadianceDistance;
+        public uint PackedVisibilityHitEpoch;
+    }
+
+    // 32-byte validation/rollback scratch record. It is never reinterpreted as
+    // GPUSimpleDdgiRayResult; changing modes recreates the scratch allocation.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiLegacyRayResult
     {
         public Vector4 RadianceDistance;
         public Vector4 DirectionHitFlags;
     }
 
-    // 36 bytes. Persistent source transport cache. A cache entry represents one
-    // physical probe slot and one deterministic ray direction, so direct/sky/
-    // emissive source tracing can be reused across multiple bounce iterations.
-    // Source radiance and distance use four IEEE binary16 lanes. Radiance is
-    // already bounded to the finite binary16 range by the transport contract;
-    // retaining the original 36-byte footprint leaves room for exact, full-width
-    // source-generation and source-epoch identity without reducing probe/ray
-    // capacity at the existing production memory tiers.
+    // 36-byte validation/rollback source-cache ABI. Radiance and source hit
+    // distance remain IEEE binary32, and the octahedral ray direction remains
+    // stored so Validate mode can shadow-compare codebook reconstruction.
     // The high byte of PackedTransmission stores the complete source sequence
     // cardinality; zero encodes the supported maximum of 256 and its RGB bytes
-    // remain the packed transmission lobe.
+    // remain the packed transmission lobe. The five-bit direction epoch shares
+    // GenerationFlagsAndDirectionEpoch with the physical generation and flags.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiTransportRayCache
     {
-        public uint PackedSourceRadianceXY;
-        public uint PackedSourceRadianceZDistance;
+        public Vector4 SourceRadianceDistance;
         public uint PackedDirection;
         public uint PackedNormal;
         public uint PackedAlbedo;
         public uint PackedTransmission;
-        public uint GenerationAndFlags;
-        public uint SourceLightingGeneration;
-        public uint SourceEpoch;
+        public uint GenerationFlagsAndDirectionEpoch;
+    }
+
+    // Exact Compact-28 persistent source-cache ABI.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiTransportRayCacheCompact28
+    {
+        public uint PackedSourceRadianceXY;
+        public uint PackedSourceRadianceZReserved;
+        public float SourceDistance;
+        public uint PackedNormal;
+        public uint PackedAlbedo;
+        public uint PackedTransmission;
+        public uint GenerationFlagsAndDirectionEpoch;
+    }
+
+    // Exact Compact-24 persistent source-cache ABI.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiTransportRayCacheCompact24
+    {
+        public uint PackedSourceRadianceXY;
+        public uint PackedSourceRadianceZDistance;
+        public uint PackedNormal;
+        public uint PackedAlbedo;
+        public uint PackedTransmission;
+        public uint GenerationFlagsAndDirectionEpoch;
     }
 
     // 32 bytes. Simple DDGI per-probe state: relocation.xyz/active, then flags/age/classification/debug.
@@ -1617,7 +1652,11 @@ namespace Njulf.Rendering.Data
         // Full residency-arena transaction identity. This complements the
         // per-page mapping generation and closes ABA across arena replacement.
         public uint ResidencyResourceGeneration;
-        public uint Reserved2;
+        // Low 31 bits contain the first source-cache word owned by
+        // PhysicalProbeIndex, plus one. Zero is invalid; bit 31 is a transient
+        // split-trace cache-fallback handshake. Publishing the base once avoids
+        // rebuilding sparse/dense region ownership for every dispatched ray.
+        public uint CacheProbeBaseWordPlusOne;
     }
 
     // 48 bytes. Mirrors SIMPLE_DDGI_RELOCATION_CLASSIFICATION_STRIDE_WORDS.
@@ -1740,47 +1779,22 @@ namespace Njulf.Rendering.Data
     }
 
     /// <summary>
-    /// Audit-only push constants. The first 136 bytes intentionally mirror
-    /// <see cref="GPUSimpleDdgiPushConstants"/>; the trailing fields select a
-    /// chunk of the frozen participant list and the compact atomic summary.
+    /// Audit-only push constants. This purpose-built ABI stays within Vulkan's
+    /// guaranteed 128-byte push-constant capacity while selecting a chunk of
+    /// the frozen participant list, its bounded workspace, and atomic summary.
     /// </summary>
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiTransportAuditPushConstants
     {
         public uint ParamsBufferIndex;
-        public uint IrradianceAtlasBufferIndex;
-        public uint VisibilityAtlasBufferIndex;
         public uint RayResultScratchBufferIndex;
-        public uint CurrentFrameIndex;
-        public uint LightCount;
-        public uint DirectionalLightCount;
-        public uint LocalLightCount;
-        public uint MaxShadedLights;
-        public uint EmissiveSourceCount;
-        public uint FarFieldParamsBufferIndex;
-        public uint FarFieldVoxelBufferIndex;
-        public uint FarFieldInstanceBufferIndex;
-        public uint Flags;
-        public uint MaterialTextureMaxCascade;
         public uint ProbeStateBufferIndex;
-        public uint ProbeUpdateQueueBufferIndex;
-        public uint RelocationClassificationBufferIndex;
         public uint TransportSourceCacheBufferIndex;
         public uint TransportReadIrradianceAtlasBufferIndex;
-        public uint TransportWriteIrradianceAtlasBufferIndex;
-        public uint PrivateVisibilityAtlasOffsetWords;
         public uint TransportGeneration;
-        public uint PrimaryDirectionalLightIndex;
-        public uint DispatchQueueOffset;
         public uint DispatchProbeCount;
         public uint DispatchRaysPerProbe;
         public uint SchedulerArenaBufferIndex;
-        public uint SchedulerRayBucketIndex;
-        public uint SchedulerRayBucketCommandsOffsetWords;
-        public uint SchedulerRayBucketMetadataOffsetWords;
-        public uint SchedulerOutcomesOffsetWords;
-        public uint SchedulerCountersOffsetWords;
-        public uint SchedulerUpdateRecordsOffsetWords;
         public uint AuditSummaryBufferIndex;
         public uint AuditSummaryBaseWord;
         public uint AuditProbeOffset;
@@ -1788,7 +1802,6 @@ namespace Njulf.Rendering.Data
         public uint AuditExpectedParticipantCount;
         public uint AuditExpectedTexelCount;
         public uint AuditChunkIndex;
-        public uint AuditFlags;
         public uint AuditSchedulerFrameOffsetWords;
         public uint AuditVolumeTableGeneration;
         public uint AuditPhysicalOwnershipGeneration;
@@ -1802,6 +1815,12 @@ namespace Njulf.Rendering.Data
         public uint AuditSchedulerResourceGeneration;
         public uint AuditSchedulerProbeStateOffsetWords;
         public uint AuditSolveEpoch;
+        public uint AuditWorkspaceBaseWord;
+        // Optional witness selected from the preceding complete audit. The
+        // pair consumes the final eight bytes of Vulkan's guaranteed 128-byte
+        // push-constant capacity.
+        public uint AuditWitnessProbeIndex;
+        public uint AuditWitnessTexelIndex;
     }
 
     /// <summary>
@@ -1842,6 +1861,25 @@ namespace Njulf.Rendering.Data
         public uint CacheSourceGenerationFailureCount;
         public uint CacheSourceEpochFailureCount;
         public uint CachePhysicalGenerationFailureCount;
+        // Upper twelve bits: monotonic FP32 defect bucket. Lower twenty bits:
+        // probeIndex * 64 + irradiance texel. This is a diagnostic witness;
+        // FixedPointDefectBits remains the exact certificate maximum.
+        public uint MaximumDefectWitnessKey;
+        public uint DetailedWitnessValid;
+        public uint DetailedWitnessProbeIndex;
+        public uint DetailedWitnessTexelIndex;
+        public uint DetailedWitnessWeightSumBits;
+        public uint DetailedWitnessCandidateRBits;
+        public uint DetailedWitnessCandidateGBits;
+        public uint DetailedWitnessCandidateBBits;
+        public uint DetailedWitnessCanonicalRBits;
+        public uint DetailedWitnessCanonicalGBits;
+        public uint DetailedWitnessCanonicalBBits;
+        public uint DetailedWitnessProbeResidualBits;
+        public uint DetailedWitnessSourceRayCount;
+        public uint DetailedWitnessPrivateRBits;
+        public uint DetailedWitnessPrivateGBits;
+        public uint DetailedWitnessPrivateBBits;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1944,7 +1982,10 @@ namespace Njulf.Rendering.Data
         public uint MaterialTextureMaxCascade;
         public uint MaxShadedLights;
         public uint SequenceStride;
-        public uint LaneCursorGeneration;
+        // Cache region metadata comes from the authoritative storage compiler.
+        // Admission resolves one per-probe base in parallel and stores it in the
+        // private update record for the serial emit stage.
+        public uint CacheBaseWord;
         public int CellDeltaX;
         public int CellDeltaY;
         public int CellDeltaZ;
@@ -1952,9 +1993,11 @@ namespace Njulf.Rendering.Data
         // Mirrors the CPU visibility-candidate radius for authored volumes.
         // Ring volumes use their fixed ring radius and ignore this padding.
         public float ProximityRadiusPadding;
-        public uint Reserved0;
-        public uint Reserved1;
-        public uint Reserved2;
+        public uint CacheWordsPerProbe;
+        // Low/high 16 bits are physical-first/count. The hard Simple-DDGI
+        // capacity is 32,768, so both authoritative compiler values fit.
+        public uint CachePhysicalFirstAndCount;
+        public uint CacheLayoutFlags;
     }
 
     // 48 bytes.  Dirty-region records are bounded and coalesced by the CPU;
@@ -1971,7 +2014,7 @@ namespace Njulf.Rendering.Data
         public uint Reserved1;
     }
 
-    // 40 bytes / ten uint words.  The packed word has documented,
+    // 44 bytes / eleven uint words.  The packed word has documented,
     // unit-tested bounds in SimpleDdgiSchedulerProbeStatePacking.  The private
     // scheduler ABI keeps dirty-latency start and the applied invalidation
     // marker in separate words; neither is allowed to alias the other.
@@ -1988,6 +2031,10 @@ namespace Njulf.Rendering.Data
         public uint PackedTransportAndLifecycle;
         public uint AppliedInvalidationMarker;
         public uint Reserved0;
+        // One-based first cache word for this probe. Commit publishes this
+        // only after validating the same address carried by the producer
+        // transaction; zero remains the invalid/uncommitted sentinel.
+        public uint CacheProbeBaseWordPlusOne;
     }
 
     // 32 bytes.  Invalid candidates use ProbeIndex == uint.MaxValue.  The

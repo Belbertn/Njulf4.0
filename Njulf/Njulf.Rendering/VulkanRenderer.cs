@@ -4214,6 +4214,9 @@ namespace Njulf.Rendering
                 SimpleDdgiSampledAtlasGroupCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiSampledAtlasGroupCount : 0,
                 SimpleDdgiSampledAtlasLayersPerTexture = giUsesSimpleDdgi ? sceneData.SimpleDdgiSampledAtlasLayersPerTexture : 0,
                 SimpleDdgiSampledAtlasImageBytes = giUsesSimpleDdgi ? sceneData.SimpleDdgiSampledAtlasImageBytes : 0UL,
+                SimpleDdgiStorage = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiStorage
+                    : SimpleDdgiStorageDiagnostics.Unavailable,
                 SimpleDdgiRayScratchBytes = giUsesSimpleDdgi
                     ? _simpleDdgiVolumeManager?.RayScratchBytes ?? 0UL
                     : 0UL,
@@ -9267,6 +9270,10 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiSampledAtlasLayersPerTexture = _simpleDdgiVolumeManager.SampledAtlasLayersPerTexture;
             sceneData.SimpleDdgiSampledAtlasImageBytes = _simpleDdgiVolumeManager.SampledAtlasImageBytes;
             sceneData.SimpleDdgiSampledAtlasFallbackReason = _simpleDdgiVolumeManager.SampledAtlasFallbackReason;
+            sceneData.SimpleDdgiStorage = _simpleDdgiVolumeManager.CreateStorageDiagnostics() with
+            {
+                ValidationCounters = sceneData.SimpleDdgiStorageValidation
+            };
             sceneData.SimpleDdgiRecentered = _simpleDdgiVolumeManager.RecenteredThisFrame ? 1 : 0;
             sceneData.SimpleDdgiAtlasPreservedOnRecenter = _simpleDdgiVolumeManager.AtlasPreservedOnRecenterThisFrame ? 1 : 0;
             sceneData.SimpleDdgiAtlasCleared = _simpleDdgiVolumeManager.AtlasClearedThisFrame ? 1 : 0;
@@ -11413,6 +11420,18 @@ namespace Njulf.Rendering
             SceneRenderingData sceneData,
             DdgiInvestigationCounters counters)
         {
+            sceneData.SimpleDdgiStorageValidation = counters.StorageValidation;
+            if (sceneData.SimpleDdgiStorage.IsAvailable)
+            {
+                // Storage layout data is populated before the render graph,
+                // while completed GPU counters become available afterward.
+                // Refresh the nested capture contract here so reports never
+                // retain the default counters copied during frame setup.
+                sceneData.SimpleDdgiStorage = sceneData.SimpleDdgiStorage with
+                {
+                    ValidationCounters = counters.StorageValidation
+                };
+            }
             if (counters.ReadbackValid == 0)
             {
                 sceneData.DdgiInvestigationCountersReadbackValid = 0;
