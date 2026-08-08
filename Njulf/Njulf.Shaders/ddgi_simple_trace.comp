@@ -983,39 +983,6 @@ void main()
             hitKind >= 0.5);
     }
 
-    // A failed cached lookup may trace a safe scratch result for this frame,
-    // but it is not a complete source transaction. Persisting that maintenance
-    // subset would replace one cache entry with the wrong cardinality and
-    // source identity, poisoning all later solves and the frozen audit.
-    if (transportV2 && sourceRefresh)
-    {
-#if SIMPLE_DDGI_TRACE_SHADER_ROLE == SIMPLE_DDGI_TRACE_SHADER_ROLE_FINAL
-        if (!splitNearHit)
-#endif
-        {
-        WriteSimpleDdgiTransportRayCache(
-            pc.TransportSourceCacheBufferIndex,
-            update.cacheProbeBaseWordPlusOne &
-                SIMPLE_DDGI_TRACE_CACHE_BASE_MASK,
-            update.volumeIndex,
-            update.physicalProbeIndex,
-            directionRayIndex,
-            volume,
-            params,
-            radiance,
-            hitDistance,
-            direction,
-            cacheNormal,
-            cacheAlbedo,
-            cacheTransmission,
-            cacheMaterialOcclusion,
-            hitKind,
-            sourceCacheProbeGeneration,
-            update.sourceLightingGeneration,
-            update.sourceEpoch,
-            sourceRayCount);
-        }
-    }
     float visibilityDistance = hitDistance;
     float visibilityHitKind = hitKind;
 #if SIMPLE_DDGI_TRACE_SHADER_ROLE == SIMPLE_DDGI_TRACE_SHADER_ROLE_SINGLE || \
@@ -1030,10 +997,67 @@ void main()
         if (backfaceVisibilityDistance < visibilityDistance)
         {
             visibilityDistance = backfaceVisibilityDistance;
-            visibilityHitKind = 2.0;
+            visibilityHitKind =
+                SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE;
         }
     }
 #endif
+    // A failed cached lookup may trace a safe scratch result for this frame,
+    // but it is not a complete source transaction. Persisting that maintenance
+    // subset would replace one cache entry with the wrong cardinality and
+    // source identity, poisoning all later solves and the frozen audit.
+    //
+    // Persist the exact projection classification after the ordered backface
+    // visibility query. This is the same hit kind written to scratch, consumed
+    // by cached reuse, and reconstructed by the fixed-point audit.
+    if (transportV2 && sourceRefresh)
+    {
+#if SIMPLE_DDGI_TRACE_SHADER_ROLE == SIMPLE_DDGI_TRACE_SHADER_ROLE_FINAL
+        if (splitNearHit)
+        {
+            // SOURCE already published the complete near-hit payload. FINAL
+            // owns the subsequent backface-only query and patches just its
+            // exact classification before the transaction may commit.
+            if (visibilityHitKind != hitKind)
+            {
+                UpdateSimpleDdgiTransportRayCacheHitKind(
+                    pc.TransportSourceCacheBufferIndex,
+                    update.cacheProbeBaseWordPlusOne &
+                        SIMPLE_DDGI_TRACE_CACHE_BASE_MASK,
+                    directionRayIndex,
+                    volume,
+                    params,
+                    sourceCacheProbeGeneration,
+                    update.sourceEpoch,
+                    visibilityHitKind);
+            }
+        }
+        else
+#endif
+        {
+            WriteSimpleDdgiTransportRayCache(
+                pc.TransportSourceCacheBufferIndex,
+                update.cacheProbeBaseWordPlusOne &
+                    SIMPLE_DDGI_TRACE_CACHE_BASE_MASK,
+                update.volumeIndex,
+                update.physicalProbeIndex,
+                directionRayIndex,
+                volume,
+                params,
+                radiance,
+                hitDistance,
+                direction,
+                cacheNormal,
+                cacheAlbedo,
+                cacheTransmission,
+                cacheMaterialOcclusion,
+                visibilityHitKind,
+                sourceCacheProbeGeneration,
+                update.sourceLightingGeneration,
+                update.sourceEpoch,
+                sourceRayCount);
+        }
+    }
     WriteSimpleRayResult(
         globalRay,
         params,

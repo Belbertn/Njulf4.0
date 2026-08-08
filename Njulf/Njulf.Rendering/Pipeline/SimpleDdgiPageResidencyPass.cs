@@ -74,6 +74,8 @@ public sealed unsafe class SimpleDdgiPageResidencyPass : RenderPassBase
     {
         GlobalIlluminationSettings gi = _settings.GlobalIllumination;
         return _pipelines[0].Handle != 0 &&
+            sceneData.SimpleDdgiPageFullManagementRequired != 0 &&
+            !_volumeManager.TransportTailAuditPending &&
             gi.EffectiveUseDdgi &&
             gi.SimpleDdgiStructuredGatherEnabled &&
             _volumeManager.ProbeResidencyMode.CollectsDemand() &&
@@ -94,6 +96,9 @@ public sealed unsafe class SimpleDdgiPageResidencyPass : RenderPassBase
             throw new InvalidOperationException("Simple-DDGI page layout is not resident.");
         SimpleDdgiGpuSchedulerLayout? schedulerLayout =
             _volumeManager.GpuScheduler.Layout;
+        bool cameraCut = sceneData.HiZPolicyCameraCut != 0;
+        bool bootstrap =
+            _volumeManager.ProbeResidencyBootstrapClassificationActive;
         var pushConstants = new GPUSimpleDdgiPageResidencyPushConstants
         {
             ParamsBufferIndex = BindlessIndex.SimpleDdgiParamsBuffer,
@@ -117,7 +122,19 @@ public sealed unsafe class SimpleDdgiPageResidencyPass : RenderPassBase
             GeometryGeneration = _volumeManager.ProbeResidencyGeometryGeneration,
             SourceGeneration = _volumeManager.SourceLightingGeneration,
             CohortGeneration = _volumeManager.SourceLightingGeneration,
-            CameraCut = sceneData.HiZPolicyCameraCut != 0 ? 1u : 0u
+            AllocationFlags =
+                (cameraCut
+                    ? SimpleDdgiProbePageLayout.PhysicalPageAllocationCameraCut
+                    : 0u) |
+                (bootstrap
+                    ? SimpleDdgiProbePageLayout.PhysicalPageAllocationBootstrap
+                    : 0u),
+            VisiblePublicationProbeBudget = checked((uint)
+                _volumeManager.ProbeResidencyVisiblePublicationProbeBudget),
+            PublicationLatencyTargetFrames = checked((uint)
+                (cameraCut || bootstrap
+                    ? SimpleDdgiProbePageLayout.CameraCutPublicationLatencyTargetFrames
+                    : SimpleDdgiProbePageLayout.OrdinaryPublicationLatencyTargetFrames))
         };
 
         InsertDemandVisibilityBarrier(cmd);

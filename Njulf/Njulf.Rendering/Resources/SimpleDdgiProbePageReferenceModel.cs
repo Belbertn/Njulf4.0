@@ -473,18 +473,6 @@ public sealed class SimpleDdgiProbePageReferenceModel
             }
 
             bool suppressed = page.Lifecycle == SimpleDdgiPageLifecycle.SuppressedEmpty;
-            bool retryDue = suppressed && demanded &&
-                frameSerial >= page.LastSuppressedFrame &&
-                frameSerial - page.LastSuppressedFrame >= settings.SuppressedRetryFrames;
-            if (retryDue)
-            {
-                page.Lifecycle = page.PhysicalPageIndex >= 0
-                    ? SimpleDdgiPageLifecycle.ResidentFresh
-                    : SimpleDdgiPageLifecycle.NonResident;
-                page.EmptyConfirmationCount = 0;
-                page.DemandClass = SimpleDdgiPageDemandClass.SuppressedRetry;
-                suppressed = false;
-            }
 
             if (page.PhysicalPageIndex < 0)
             {
@@ -603,18 +591,14 @@ public sealed class SimpleDdgiProbePageReferenceModel
             admissionCount++;
         }
 
-        // Retention expiry and confirmed-empty suppression are residency
-        // transitions in their own right. They must not wait for a later
-        // admission to happen to consume the same physical slot.
+        // A confirmed-empty page retires immediately. An ordinary expired
+        // page remains as a cache entry while a free slot exists and is still
+        // present in the ordered victim list when admission pressure arrives.
         while (evictionCount < settings.MaximumEvictionsPerFrame &&
                victimCursor < victimCandidateCount)
         {
             VictimCandidate victim = _victimCandidates[victimCursor++];
-            // A cut only removes ordinary retention protection while a new
-            // demand needs capacity. It must not flush every old page after
-            // that demand has been admitted. Naturally expired and confirmed
-            // empty pages still retire without waiting for another admission.
-            if (!victim.ConfirmedEmpty && !victim.Expired)
+            if (!victim.ConfirmedEmpty)
                 continue;
             if (_pages[victim.VirtualPageIndex].PhysicalPageIndex !=
                 victim.PhysicalPageIndex)

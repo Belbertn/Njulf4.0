@@ -47,10 +47,11 @@ public sealed class SimpleDdgiLayoutCompilerTests
 
         Assert.Multiple(() =>
         {
-            // Production fixture with Compact-28 cache rays and 20-byte
-            // direction-free scratch selected by the default packed ABI.
-            Assert.That(dense.LiveBytes, Is.EqualTo(134_803_040UL));
-            Assert.That(sparse.LiveBytes, Is.EqualTo(107_894_128UL));
+            // Production fixture with Compact-28 cache rays, 20-byte
+            // direction-free scratch, and the scheduler's 64-byte private
+            // visible-page cohort reservation extension.
+            Assert.That(dense.LiveBytes, Is.EqualTo(134_803_136UL));
+            Assert.That(sparse.LiveBytes, Is.EqualTo(107_894_224UL));
             Assert.That(dense.LiveBytes - sparse.LiveBytes,
                 Is.EqualTo(26_908_912UL));
             Assert.That(sparse.VirtualProbeCount, Is.EqualTo(15_368));
@@ -133,7 +134,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(
                 SimpleDdgiMemoryPlan.TransportRayCacheBytes,
                 Is.EqualTo((ulong)Marshal.SizeOf<GPUSimpleDdgiTransportRayCache>()));
-            Assert.That(SimpleDdgiMemoryPlan.TransportRayCacheAbiVersion, Is.EqualTo(5u));
+            Assert.That(SimpleDdgiMemoryPlan.TransportRayCacheAbiVersion, Is.EqualTo(6u));
             Assert.That(
                 SimpleDdgiMemoryPlan.ProbeStateBytesPerProbe,
                 Is.EqualTo((ulong)Marshal.SizeOf<GPUSimpleDdgiProbeState>()));
@@ -682,6 +683,88 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(mirrored.SampledAtlasLayout.AdmittedProbeCount, Is.Zero);
             Assert.That(mirrored.AcceptedMemoryPlan.SampledAtlasImageBytes, Is.Zero);
             Assert.That(mirrored.RequestedPersistentBytes, Is.GreaterThan(canonical.RequestedPersistentBytes));
+        });
+    }
+
+    [Test]
+    public void ShadowCompile_RetainsDensePayloadForSparseEligibleNearRing()
+    {
+        SimpleDdgiLayoutVolumeRequest[] requests =
+        [
+            new(
+                "near-ring",
+                10_000,
+                false,
+                SimpleDdgiVolumePurpose.TransitionSupport,
+                0,
+                1.0f,
+                64)
+            {
+                GridCountX = 4,
+                GridCountY = 4,
+                GridCountZ = 4,
+                SparseNearRingEligible = true
+            },
+            new(
+                "outer-ring",
+                10_001,
+                false,
+                SimpleDdgiVolumePurpose.TransitionSupport,
+                -1,
+                2.0f,
+                32)
+            {
+                GridCountX = 4,
+                GridCountY = 2,
+                GridCountZ = 4
+            }
+        ];
+        var budget = new SimpleDdgiLayoutBudget(
+            DdgiQualityTier.DdgiHigh,
+            ProbeBudget: 96,
+            PersistentMemoryBudgetBytes: ulong.MaxValue,
+            VolumeBudget: 2);
+
+        SimpleDdgiLayoutReport report = SimpleDdgiLayoutCompiler.Compile(
+            requests,
+            budget,
+            sampledAtlasRequested: false,
+            SimpleDdgiLayoutAdmissionMode.Reject,
+            transportV2Enabled: true,
+            transportRayCapacity: 8,
+            residentPrivateTargets: true,
+            schedulerMode: SimpleDdgiSchedulerMode.GpuResident,
+            residencyMode: SimpleDdgiProbeResidencyMode.Shadow,
+            sparsePhysicalPageBudget: 4,
+            sparseMinimumPhysicalPageBudget: 1,
+            maximumPageAdmissionsPerFrame: 2);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.AcceptedProbeCount, Is.EqualTo(96));
+            Assert.That(report.AcceptedMemoryPlan.ResidencyMode,
+                Is.EqualTo(SimpleDdgiProbeResidencyMode.Shadow));
+            Assert.That(report.AcceptedMemoryPlan.SparseVirtualProbeCount,
+                Is.EqualTo(64));
+            Assert.That(report.AcceptedMemoryPlan.SparseVirtualPageCount,
+                Is.EqualTo(8));
+            Assert.That(report.AcceptedMemoryPlan.SparsePhysicalPageCapacity,
+                Is.EqualTo(4));
+            Assert.That(report.AcceptedMemoryPlan.DensePayloadProbeCount,
+                Is.EqualTo(96));
+            Assert.That(report.AcceptedMemoryPlan.PhysicalProbeCapacity,
+                Is.EqualTo(96));
+            Assert.That(report.AcceptedMemoryPlan.ResidencyArenaBytes,
+                Is.GreaterThan(0UL));
+            Assert.That(report.StorageLayout.Regions.Count, Is.EqualTo(2));
+            Assert.That(report.StorageLayout.Regions[0].PhysicalFirstProbe,
+                Is.Zero);
+            Assert.That(report.StorageLayout.Regions[0].PhysicalProbeCount,
+                Is.EqualTo(64));
+            Assert.That(report.StorageLayout.Regions[1].PhysicalFirstProbe,
+                Is.EqualTo(64));
+            Assert.That(report.StorageLayout.Regions[1].PhysicalProbeCount,
+                Is.EqualTo(32));
         });
     }
 

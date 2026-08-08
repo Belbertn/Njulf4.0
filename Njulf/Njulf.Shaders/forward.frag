@@ -13,6 +13,9 @@ layout(early_fragment_tests) in;
 #endif
 
 #include "common.glsl"
+#if FORWARD_DDGI_RECEIVER_CACHE
+#include "forward_ddgi_receiver_cache.glsl"
+#endif
 #include "gi_material_transport.glsl"
 #include "material_coverage.glsl"
 // Detailed captures need representative gather counts, not one globally
@@ -237,6 +240,45 @@ const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
 #define FORWARD_WEIGHTED_OIT 0
 #endif
 
+#ifndef FORWARD_DDGI_RECEIVER_CACHE
+#define FORWARD_DDGI_RECEIVER_CACHE 0
+#endif
+
+#ifndef FORWARD_DDGI_RECEIVER_CACHE_REQUIRED
+#define FORWARD_DDGI_RECEIVER_CACHE_REQUIRED 0
+#endif
+
+#ifndef FORWARD_GLOBAL_ILLUMINATION_DISABLED
+#define FORWARD_GLOBAL_ILLUMINATION_DISABLED 0
+#endif
+
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED && !FORWARD_DDGI_RECEIVER_CACHE
+#error FORWARD_DDGI_RECEIVER_CACHE_REQUIRED requires FORWARD_DDGI_RECEIVER_CACHE
+#endif
+
+#if FORWARD_DDGI_RECEIVER_CACHE && !NJULF_DDGI_DETAILED_COUNTERS && !NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
+#define FORWARD_DDGI_RECEIVER_CACHE_ACTIVE 1
+#else
+#define FORWARD_DDGI_RECEIVER_CACHE_ACTIVE 0
+#endif
+
+#if FORWARD_DDGI_RECEIVER_CACHE_ACTIVE && FORWARD_DDGI_RECEIVER_CACHE_REQUIRED
+#define FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE 1
+#else
+#define FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE 0
+#endif
+
+// Cache-required and GI-disabled opaque artifacts are deliberately narrow
+// native programs.  Keeping this as a preprocessor decision (rather than a
+// constant runtime branch) prevents parameter-buffer reads, sparse receiver
+// demand atomics, far-field fallback code, and debug-only gather paths from
+// consuming registers or instruction-cache space in the performance pair.
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE || FORWARD_GLOBAL_ILLUMINATION_DISABLED
+#define FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE 1
+#else
+#define FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE 0
+#endif
+
 uint ForwardDebugViewMode()
 {
     return pc.Push.DebugAndAoFlags & 0xffu;
@@ -282,6 +324,11 @@ bool ForwardReflectionCaptureEnabled()
     // Bit 31 is reserved in DiagnosticFlags so adding the capture mode does
     // not change the established 256-byte forward push-constant ABI.
     return (pc.Push.DiagnosticFlags & (1u << 31u)) != 0u;
+}
+
+bool ForwardDdgiReceiverCacheEnabled()
+{
+    return (pc.Push.DiagnosticFlags & (1u << 30u)) != 0u;
 }
 
 bool DdgiForwardEstimateCountersEnabled()
@@ -2051,6 +2098,13 @@ void EvaluateIbl(
     vec3 f0 = mix(dielectricF0, albedo, metallic);
     float nDotV = max(dot(normal, viewDirection), 0.0);
     vec3 fresnel = FresnelSchlickRoughness(nDotV, f0, roughness);
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+    // The cache producer evaluates diffuse environment irradiance once per
+    // low-frequency gather sample and preserves it separately from DDGI so
+    // their AO policies remain exact. Avoid repeating this cubemap lookup for
+    // every full-resolution opaque fragment.
+    diffuseIbl = vec3(0.0);
+#else
     vec3 irradiance = EvaluateEnvironmentDiffuseIrradiance(environment, normal);
     // Diffuse IBL is an irradiance-derived radiance field.  AO is applied once by
     // indirect composition to the environment-owned share; DDGI retains its own
@@ -2061,6 +2115,7 @@ void EvaluateIbl(
     diffuseIbl = EvaluateGiDiffuseFromIrradiance(
         irradiance,
         diffuseReflectance);
+#endif
 
     vec3 reflectionDirection = reflect(-viewDirection, normal);
     float maxLod = max(float(environment.PrefilteredMipCount) - 1.0, 0.0);
@@ -3147,6 +3202,36 @@ void main()
         directLighting = mix(directLighting, cascadeColor, 0.35);
     }
 
+    vec3 finalDiffuseIndirect = vec3(0.0);
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+    // Pipeline selection is the authoritative handshake: this native program
+    // is bound only after the current-depth cache dispatch and its
+    // compute-to-fragment barrier complete. The producer scans a complete 8x8
+    // tile when its center is empty, so every opaque fragment has a
+    // representative. The cached terms already include DDGI intensity,
+    // ownership/leak attenuation, and far-field environment visibility.
+    // The material compiler clamps diffuseReflectance, material AO is already
+    // normalized above, and the producer stores finite non-negative terms.
+    // Compose the same linear transport directly so the hot consumer does not
+    // repeat those range checks for every full-resolution fragment.
+    // Load at first use to keep both cached RGB fields out of the direct-light
+    // loop's live register set. The producer already applied intensity,
+    // ownership, leak attenuation, fallback weight, far-field visibility, and
+    // the Lambert factor.
+    ForwardDdgiReceiverCacheSample cachedGather =
+        SampleForwardDdgiReceiverCache(
+            gl_FragCoord.xy,
+            floatBitsToUint(pc.Push.Time));
+    finalDiffuseIndirect =
+        (cachedGather.DdgiIrradiance * ambientOcclusion +
+         cachedGather.EnvironmentIrradiance * indirectAo) *
+        diffuseReflectance;
+#elif FORWARD_GLOBAL_ILLUMINATION_DISABLED
+    // Benchmark control artifact. This is a separate native program so the
+    // A/B delta measures only the incremental cache consumer work and does not
+    // retain the sparse-gather graph as dead control flow.
+    finalDiffuseIndirect = diffuseIbl * indirectAo;
+#else
     bool globalIlluminationEnabled = geometryDecal
         ? ForwardDecalGlobalIlluminationEnabled()
         : ForwardGlobalIlluminationEnabled() != 0u;
@@ -3180,7 +3265,6 @@ void main()
 #endif
     vec3 ddgiDiffuse = vec3(0.0);
     vec3 finalDdgiDiffuse = vec3(0.0);
-    vec3 finalDiffuseIndirect = vec3(0.0);
 #if !FORWARD_WEIGHTED_OIT && NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
     uint materialTransportProvenance =
         MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN;
@@ -3207,20 +3291,35 @@ void main()
         // are excluded before this reaches lighting composition.
         if (geometryDecal)
             RecordDecalFragmentAttribution(DECAL_ESTIMATED_DDGI_GATHER_COUNTER);
-        SimpleDdgiGatherResult simpleGather = SampleSimpleDdgiGather(
+        SimpleDdgiGatherResult simpleGather = EmptySimpleDdgiGatherResult();
+        float simpleSupport;
+        float simpleDirectionalSupport;
+        float simpleRadiometricOwnership;
+        float simpleLeakAttenuation;
+        vec3 simpleIrradiance;
+        // Reflection captures, detailed/provenance artifacts, and any frame
+        // where cache creation or dispatch is unavailable bind this exact
+        // fallback artifact.
+        simpleGather = SampleSimpleDdgiGather(
             simpleDdgiParams,
             fragWorldPosition,
             ddgiNormal,
             viewDirection);
-        float simpleSupport = clamp(simpleGather.validSupport, 0.0, 1.0);
-        float simpleDirectionalSupport = clamp(simpleGather.directionalSupport, 0.0, 1.0);
-        float simpleRadiometricOwnership = SimpleDdgiRadiometricOwnership(simpleGather);
-        float simpleLeakAttenuation = SimpleDdgiLeakAttenuation(simpleGather, simpleDdgiParams);
+        simpleSupport = clamp(simpleGather.validSupport, 0.0, 1.0);
+        simpleDirectionalSupport = clamp(
+            simpleGather.directionalSupport,
+            0.0,
+            1.0);
+        simpleRadiometricOwnership =
+            SimpleDdgiRadiometricOwnership(simpleGather);
+        simpleLeakAttenuation = SimpleDdgiLeakAttenuation(
+            simpleGather,
+            simpleDdgiParams);
+        simpleIrradiance = simpleGather.irradiance;
         float simpleOwnership = simpleRadiometricOwnership * simpleLeakAttenuation;
         // Leak attenuation represents blocked transport, not missing field
         // coverage, so it must not be refilled with the environment complement.
         float simpleFallback = (1.0 - simpleRadiometricOwnership) * simpleDdgiParams.environmentFallbackIntensity;
-        vec3 simpleIrradiance = simpleGather.irradiance;
 #if NJULF_DDGI_DETAILED_COUNTERS
         simpleDdgiContributingVolumeColor = simpleGather.contributingVolumeColor;
         simpleDdgiSourceCacheIrradiance = simpleGather.sourceCacheIrradiance;
@@ -3408,6 +3507,9 @@ void main()
 #if !FORWARD_WEIGHTED_OIT && NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
     WriteMaterialTransportProvenance(materialTransportProvenance);
 #endif
+#endif // FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE
+
+#if !FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT)
     {
         WriteForwardColor(vec4(finalDiffuseIndirect, 1.0));
@@ -3908,6 +4010,7 @@ void main()
         return;
     }
 #endif
+#endif // !FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE
 
     vec3 color = finalDiffuseIndirect + specularIbl + directLighting + emissive;
 

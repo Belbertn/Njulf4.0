@@ -28,6 +28,40 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
             feedbackShader,
             Does.Contain(
                 "SIMPLE_DDGI_SCHEDULER_COUNTER_COMMIT_REJECTED));"));
+        Assert.That(
+            feedbackShader,
+            Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_FEEDBACK_COMMIT_FAILURE_OFFSET +"));
+
+        string commitShader = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_commit_local.comp");
+        Assert.Multiple(() =>
+        {
+            Assert.That(commitShader, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_CACHE_CLASSIFICATION"));
+            Assert.That(commitShader, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_CACHE_GENERATION"));
+            Assert.That(commitShader, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_CACHE_EPOCH_OR_CARDINALITY"));
+            Assert.That(commitShader, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_COUNTER_TRANSACTION_PREDICATE_MASK"));
+            Assert.That(
+                SimpleDdgiSchedulerAbi.FeedbackCommitFailureOffsetWords +
+                    SimpleDdgiSchedulerAbi.CommitFailureCategoryCount,
+                Is.LessThanOrEqualTo(
+                    SimpleDdgiGpuSchedulerLayout.ShippingFeedbackBytes /
+                    sizeof(uint)));
+            Assert.That(
+                64 + SimpleDdgiSchedulerAbi.MaxLaneCount,
+                Is.LessThanOrEqualTo(
+                    SimpleDdgiSchedulerAbi.FeedbackCommitFailureOffsetWords));
+            Assert.That(
+                SimpleDdgiSchedulerAbi.FeedbackCacheReadFailureOffsetWords,
+                Is.LessThan(
+                    SimpleDdgiGpuSchedulerLayout.ShippingFeedbackBytes /
+                    sizeof(uint)));
+        });
     }
 
     [Test]

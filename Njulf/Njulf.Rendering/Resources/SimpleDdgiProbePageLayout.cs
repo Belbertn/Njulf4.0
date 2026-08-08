@@ -141,6 +141,16 @@ public sealed class SimpleDdgiProbePageLayout
     public const int PageDimensionY = 2;
     public const int PageDimensionZ = 2;
     public const int ProbesPerPage = 8;
+    public const uint PhysicalPageAllocationCameraCut = 1u << 0;
+    public const uint PhysicalPageAllocationBootstrap = 1u << 1;
+    public const int PhysicalPageAllocationDemandClassShift = 8;
+    public const uint PhysicalPageAllocationDemandClassMask =
+        0xffu << PhysicalPageAllocationDemandClassShift;
+    public const int PhysicalPageAllocationValidProbeCountShift = 16;
+    public const uint PhysicalPageAllocationValidProbeCountMask =
+        0xffu << PhysicalPageAllocationValidProbeCountShift;
+    public const int OrdinaryPublicationLatencyTargetFrames = 2;
+    public const int CameraCutPublicationLatencyTargetFrames = 8;
     public const uint DemandEpochMask = 0x00ff_ffffu;
     public const uint MappingGenerationWrapThreshold = uint.MaxValue - 65_535u;
     public const ulong RegionAlignment = 16UL;
@@ -475,6 +485,52 @@ public sealed class SimpleDdgiProbePageLayout
 
     public static uint DemandEpochForFrame(uint frameIndex) =>
         frameIndex % (DemandEpochMask - 1u) + 1u;
+
+    /// <summary>
+    /// Packs the immutable allocation classification consumed by both the
+    /// residency latency audit and the resident scheduler. The low bits remain
+    /// allocation-event flags; the demand class is snapshotted so an admitted
+    /// visible page keeps its publication priority even if sampled demand moves
+    /// away before all eight probes commit.
+    /// </summary>
+    public static uint PackPhysicalPageAllocation(
+        uint allocationFlags,
+        SimpleDdgiPageDemandClass demandClass,
+        int validProbeCount = ProbesPerPage)
+    {
+        if ((uint)validProbeCount > ProbesPerPage)
+            throw new ArgumentOutOfRangeException(nameof(validProbeCount));
+
+        return
+        (allocationFlags &
+            (PhysicalPageAllocationCameraCut |
+                PhysicalPageAllocationBootstrap)) |
+        ((uint)demandClass << PhysicalPageAllocationDemandClassShift) |
+        ((uint)validProbeCount << PhysicalPageAllocationValidProbeCountShift);
+    }
+
+    /// <summary>
+    /// Maximum number of valid probes that may be simultaneously incomplete
+    /// in the visible publication cohort. One target frame is reserved for the
+    /// GPU demand/allocation/classification handoff; the remaining source-work
+    /// frames form the cohort. At least one page is permitted so a very small
+    /// development budget still makes forward progress.
+    /// </summary>
+    public static int ResolveVisiblePublicationPartialProbeCapacity(
+        int sourceProbeBudget,
+        int publicationLatencyTargetFrames)
+    {
+        if (sourceProbeBudget <= 0 || publicationLatencyTargetFrames <= 0)
+            return 0;
+
+        int sourceWorkFrames = Math.Max(
+            publicationLatencyTargetFrames - 1,
+            1);
+        long capacity = (long)sourceProbeBudget * sourceWorkFrames;
+        return (int)Math.Min(
+            GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount,
+            Math.Max(ProbesPerPage, capacity));
+    }
 
     /// <summary>
     /// The packed demand stamp has only 24 epoch bits. Reusing epoch one in an

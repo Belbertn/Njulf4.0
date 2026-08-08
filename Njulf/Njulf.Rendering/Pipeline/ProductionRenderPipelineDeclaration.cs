@@ -125,7 +125,7 @@ internal sealed class ProductionRenderPipelineDeclaration
 
         declarations.Add(
             Pass("ForwardPlusPass",
-                ReadDepthAttachment(RenderGraphResourceId.SceneDepth),
+                ReadDepthAttachmentAndCompute(RenderGraphResourceId.SceneDepth),
                 Read(RenderGraphResourceId.SceneSubmissionBuffers),
                 Read(RenderGraphResourceId.ForwardVisibilityBuffers),
                 Read(RenderGraphResourceId.FoliageBuffers),
@@ -141,10 +141,11 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadFragmentSampled(RenderGraphResourceId.MaterialTextures),
                 ReadGraphicsStorage(RenderGraphResourceId.LightBuffers),
                 ReadGraphicsStorage(RenderGraphResourceId.EnvironmentData),
-                ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
-                ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
-                ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiReceiverProbes),
-                ReadWriteGraphicsStorage(RenderGraphResourceId.SimpleDdgiResidency),
+                ReadGraphicsAndComputeStorage(RenderGraphResourceId.SimpleDdgiParameters),
+                ReadGraphicsAndComputeStorage(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
+                ReadGraphicsAndComputeStorage(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
+                ReadGraphicsAndComputeStorage(RenderGraphResourceId.SimpleDdgiReceiverProbes),
+                ReadWriteGraphicsAndComputeStorage(RenderGraphResourceId.SimpleDdgiResidency),
 #if DEBUG || NJULF_DETAILED_INVESTIGATION
                 // Only diagnostic forward artifacts can inspect update-side
                 // source-cache generations. Production receiver artifacts have
@@ -777,6 +778,39 @@ internal sealed class ProductionRenderPipelineDeclaration
             RenderGraphQueueIntent.Graphics);
     }
 
+    private static RenderGraphResourceUsage ReadGraphicsAndComputeStorage(
+        RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.Read,
+            PipelineStageFlags2.TaskShaderBitExt |
+            PipelineStageFlags2.MeshShaderBitExt |
+            PipelineStageFlags2.VertexShaderBit |
+            PipelineStageFlags2.FragmentShaderBit |
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit,
+            ImageLayout.Undefined,
+            RenderGraphQueueIntent.Graphics);
+    }
+
+    private static RenderGraphResourceUsage ReadWriteGraphicsAndComputeStorage(
+        RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.ReadWrite,
+            PipelineStageFlags2.TaskShaderBitExt |
+            PipelineStageFlags2.MeshShaderBitExt |
+            PipelineStageFlags2.VertexShaderBit |
+            PipelineStageFlags2.FragmentShaderBit |
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit |
+            AccessFlags2.ShaderStorageWriteBit,
+            ImageLayout.Undefined,
+            RenderGraphQueueIntent.Graphics);
+    }
+
     private static RenderGraphResourceUsage ReadGraphicsIndirect(RenderGraphResourceId resource)
     {
         return new RenderGraphResourceUsage(
@@ -820,6 +854,22 @@ internal sealed class ProductionRenderPipelineDeclaration
             PipelineStageFlags2.EarlyFragmentTestsBit |
             PipelineStageFlags2.LateFragmentTestsBit |
             PipelineStageFlags2.FragmentShaderBit,
+            AccessFlags2.DepthStencilAttachmentReadBit |
+            AccessFlags2.ShaderSampledReadBit,
+            ImageLayout.DepthStencilReadOnlyOptimal,
+            RenderGraphQueueIntent.Graphics);
+    }
+
+    private static RenderGraphResourceUsage ReadDepthAttachmentAndCompute(
+        RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.Read,
+            PipelineStageFlags2.EarlyFragmentTestsBit |
+            PipelineStageFlags2.LateFragmentTestsBit |
+            PipelineStageFlags2.FragmentShaderBit |
+            PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.DepthStencilAttachmentReadBit |
             AccessFlags2.ShaderSampledReadBit,
             ImageLayout.DepthStencilReadOnlyOptimal,

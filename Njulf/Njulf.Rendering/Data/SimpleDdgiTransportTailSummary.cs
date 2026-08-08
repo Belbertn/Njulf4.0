@@ -12,7 +12,25 @@ public enum SimpleDdgiTransportPhase : byte
     AcceleratedSolve = 1,
     AuditFrozen = 2,
     Certified = 3,
-    Tracking = 4
+    Tracking = 4,
+    /// <summary>
+    /// The scheduler and audit observed different participant snapshots.  No
+    /// canonical data is mutated in this phase; the next fence-complete
+    /// scheduler summary must establish a new participant witness first.
+    /// </summary>
+    ParticipantReconciliation = 5,
+    /// <summary>
+    /// Invalid numerical evidence discarded the transaction-private solve
+    /// state.  The last coherent canonical field remains receiver-visible
+    /// while a bounded source/solve generation is rebuilt.
+    /// </summary>
+    FailClosedRecovery = 6,
+    /// <summary>
+    /// The requested tolerance is below the representable canonical storage
+    /// floor.  This is terminal for the current configuration and deliberately
+    /// does not dispatch another identical audit.
+    /// </summary>
+    UnsupportedTolerance = 7
 }
 
 /// <summary>
@@ -35,7 +53,53 @@ public enum SimpleDdgiTransportCertificationReason : byte
     InvalidContractionBound = 10,
     Certified = 11,
     Tracking = 12,
-    CounterOverflow = 13
+    CounterOverflow = 13,
+    InvalidCache = 14,
+    AuditReadbackTimeout = 15,
+    SameTupleReauditBlocked = 16,
+    CompletedAuditUnconsumed = 17,
+    SourceCohortNoProgress = 18,
+    FailClosedRecovery = 19,
+    ConvergenceDeadlineExceeded = 20
+}
+
+/// <summary>
+/// Concrete control-plane work requested by the most recent audit decision.
+/// Keeping the action separate from the diagnostic reason prevents manager
+/// integration from inferring destructive recovery policy from a float or a
+/// broad phase name.
+/// </summary>
+public enum SimpleDdgiTransportRecoveryAction : byte
+{
+    None = 0,
+    ReconcileParticipants = 1,
+    RepairSourceCache = 2,
+    AdvanceSolveEpoch = 3,
+    RebuildPrivateField = 4,
+    ReportUnsupportedTolerance = 5
+}
+
+/// <summary>One bounded virtual/physical identity captured for an audit mismatch.</summary>
+public readonly record struct SimpleDdgiTransportMismatchIdentity(
+    uint VirtualProbeIndex,
+    uint PhysicalProbeIndex)
+{
+    public static SimpleDdgiTransportMismatchIdentity None { get; } = new(
+        uint.MaxValue,
+        uint.MaxValue);
+
+    public bool IsValid => VirtualProbeIndex != uint.MaxValue;
+
+    public static SimpleDdgiTransportMismatchIdentity FromPacked(uint packed)
+    {
+        uint virtualPlusOne = packed & 0xffffu;
+        uint physicalPlusOne = packed >> 16;
+        return virtualPlusOne == 0u
+            ? None
+            : new SimpleDdgiTransportMismatchIdentity(
+                virtualPlusOne - 1u,
+                physicalPlusOne == 0u ? uint.MaxValue : physicalPlusOne - 1u);
+    }
 }
 
 /// <summary>
@@ -81,6 +145,11 @@ public readonly record struct SimpleDdgiTransportTailSummary
     public uint ExpectedParticipantCount { get; init; }
     public uint AuditedParticipantCount { get; init; }
     public uint ExcludedInactiveCount { get; init; }
+    /// <summary>
+    /// Virtual probes that were not resident and published when the exact
+    /// participant snapshot was frozen. This is expected sparse-domain
+    /// exclusion evidence, not incomplete coverage of that snapshot.
+    /// </summary>
     public uint ExcludedNotVisibleCount { get; init; }
     public uint ExcludedStaleSourceCount { get; init; }
     public uint ExcludedInvalidCacheCount { get; init; }
@@ -91,6 +160,10 @@ public readonly record struct SimpleDdgiTransportTailSummary
     public uint CachePhysicalGenerationFailureCount { get; init; }
     public uint NonFiniteCount { get; init; }
     public uint CounterOverflowCount { get; init; }
+    public SimpleDdgiTransportMismatchIdentity FirstNotResidentIdentity { get; init; }
+    public SimpleDdgiTransportMismatchIdentity FirstStaleSourceIdentity { get; init; }
+    public SimpleDdgiTransportMismatchIdentity FirstInvalidCacheIdentity { get; init; }
+    public SimpleDdgiTransportMismatchIdentity FirstNonFiniteIdentity { get; init; }
     public uint AuditedTexelCount { get; init; }
     public uint ExpectedTexelCount { get; init; }
     public float FixedPointDefect { get; init; }
@@ -133,7 +206,11 @@ public readonly record struct SimpleDdgiTransportTailSummary
 
     public static SimpleDdgiTransportTailSummary Empty => new()
     {
-        Reason = SimpleDdgiTransportCertificationReason.AuditNotStarted
+        Reason = SimpleDdgiTransportCertificationReason.AuditNotStarted,
+        FirstNotResidentIdentity = SimpleDdgiTransportMismatchIdentity.None,
+        FirstStaleSourceIdentity = SimpleDdgiTransportMismatchIdentity.None,
+        FirstInvalidCacheIdentity = SimpleDdgiTransportMismatchIdentity.None,
+        FirstNonFiniteIdentity = SimpleDdgiTransportMismatchIdentity.None
     };
 
     public bool HasExactParticipantCoverage =>

@@ -366,6 +366,8 @@ namespace Njulf.Rendering.Data
         /// <see cref="GpuForwardGiGatherTimingCoverage"/> documents this boundary.
         /// </summary>
         public long GpuForwardGiGatherMicroseconds { get; set; }
+        /// <summary>Exclusive opaque receiver-cache compute dispatch.</summary>
+        public long GpuSimpleDdgiReceiverCacheMicroseconds { get; set; }
         /// <summary>0 unavailable; 1 inclusive forward draw scope containing GI gather.</summary>
         public int GpuForwardGiGatherTimingCoverage { get; set; }
         public long GpuTransparentMicroseconds { get; set; }
@@ -772,6 +774,8 @@ namespace Njulf.Rendering.Data
         public uint SimpleDdgiSchedulerFeedbackAcceptedCount { get; set; }
         public uint SimpleDdgiSchedulerFeedbackCommittedCount { get; set; }
         public uint SimpleDdgiSchedulerFeedbackFailedCommitCount { get; set; }
+        public string SimpleDdgiSchedulerCommitFailureBreakdown { get; set; } =
+            string.Empty;
         public uint SimpleDdgiSchedulerFeedbackPendingFreshCount { get; set; }
         public uint SimpleDdgiSchedulerFeedbackPendingSourceCount { get; set; }
         public uint SimpleDdgiSchedulerFeedbackPendingSourceInvalidFlagCount { get; set; }
@@ -1104,10 +1108,25 @@ namespace Njulf.Rendering.Data
         public long GpuDdgiPublishMicroseconds { get; set; }
         public long GpuDdgiUpdateMicroseconds { get; set; }
         public long GpuSimpleDdgiTraceMicroseconds { get; set; }
+        /// <summary>
+        /// One when proactive depth demand and the full sparse reconciliation
+        /// transaction are required this frame. Certified static frames keep
+        /// only the lightweight interval-feedback closeout active.
+        /// </summary>
+        public int SimpleDdgiPageFullManagementRequired { get; set; }
         public long GpuSimpleDdgiPageDemandMicroseconds { get; set; }
         public long GpuSimpleDdgiPageResidencyMicroseconds { get; set; }
         public long GpuSimpleDdgiPageFeedbackMicroseconds { get; set; }
         public long GpuSimpleDdgiScheduleMicroseconds { get; set; }
+        public long GpuSimpleDdgiScheduleResetMicroseconds { get; set; }
+        public long GpuSimpleDdgiScheduleClassifyMicroseconds { get; set; }
+        public long GpuSimpleDdgiSchedulePrefixMicroseconds { get; set; }
+        public long GpuSimpleDdgiScheduleLaneBaseMicroseconds { get; set; }
+        public long GpuSimpleDdgiScheduleCompactMicroseconds { get; set; }
+        public long GpuSimpleDdgiScheduleTailAdmitMicroseconds { get; set; }
+        public long GpuSimpleDdgiScheduleAdmitMicroseconds { get; set; }
+        public long GpuSimpleDdgiScheduleMaterializeMicroseconds { get; set; }
+        public long GpuSimpleDdgiScheduleEmitMicroseconds { get; set; }
         public long GpuSimpleDdgiTransportMicroseconds { get; set; }
         public long GpuSimpleDdgiAcceleratedSolveMicroseconds { get; set; }
         public long GpuSimpleDdgiBlendMicroseconds { get; set; }
@@ -1517,6 +1536,7 @@ namespace Njulf.Rendering.Data
             GpuLightCullMicroseconds = 0;
             GpuForwardOpaqueMicroseconds = 0;
             GpuForwardGiGatherMicroseconds = 0;
+            GpuSimpleDdgiReceiverCacheMicroseconds = 0;
             GpuForwardGiGatherTimingCoverage = 0;
             GpuTransparentMicroseconds = 0;
             GpuDirectionalShadowMicroseconds = 0;
@@ -1980,6 +2000,7 @@ namespace Njulf.Rendering.Data
             SimpleDdgiSchedulerFeedbackAcceptedCount = 0;
             SimpleDdgiSchedulerFeedbackCommittedCount = 0;
             SimpleDdgiSchedulerFeedbackFailedCommitCount = 0;
+            SimpleDdgiSchedulerCommitFailureBreakdown = string.Empty;
             SimpleDdgiSchedulerFeedbackPendingFreshCount = 0;
             SimpleDdgiSchedulerFeedbackPendingSourceCount = 0;
             SimpleDdgiSchedulerFeedbackPendingSourceInvalidFlagCount = 0;
@@ -2295,10 +2316,20 @@ namespace Njulf.Rendering.Data
             GpuDdgiPublishMicroseconds = 0;
             GpuDdgiUpdateMicroseconds = 0;
             GpuSimpleDdgiTraceMicroseconds = 0;
+            SimpleDdgiPageFullManagementRequired = 0;
             GpuSimpleDdgiPageDemandMicroseconds = 0;
             GpuSimpleDdgiPageResidencyMicroseconds = 0;
             GpuSimpleDdgiPageFeedbackMicroseconds = 0;
             GpuSimpleDdgiScheduleMicroseconds = 0;
+            GpuSimpleDdgiScheduleResetMicroseconds = 0;
+            GpuSimpleDdgiScheduleClassifyMicroseconds = 0;
+            GpuSimpleDdgiSchedulePrefixMicroseconds = 0;
+            GpuSimpleDdgiScheduleLaneBaseMicroseconds = 0;
+            GpuSimpleDdgiScheduleCompactMicroseconds = 0;
+            GpuSimpleDdgiScheduleTailAdmitMicroseconds = 0;
+            GpuSimpleDdgiScheduleAdmitMicroseconds = 0;
+            GpuSimpleDdgiScheduleMaterializeMicroseconds = 0;
+            GpuSimpleDdgiScheduleEmitMicroseconds = 0;
             GpuSimpleDdgiTransportMicroseconds = 0;
             GpuSimpleDdgiAcceleratedSolveMicroseconds = 0;
             GpuSimpleDdgiBlendMicroseconds = 0;

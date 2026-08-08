@@ -4,6 +4,13 @@
 
 #include "ddgi_simple_schedule_shared.glsl"
 
+// transport_participant.glsl is also compiled by the feedback and audit
+// roles; keep the public inactive classification value explicit in this lean
+// scheduler role rather than pulling in the full DDGI storage ABI.
+const uint SIMPLE_DDGI_CLASSIFICATION_INACTIVE = 1u;
+
+#include "ddgi_simple_transport_participant.glsl"
+
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 uint SchedulerNextGeneration(uint generation)
@@ -15,6 +22,9 @@ uint SchedulerNextGeneration(uint generation)
 
 void main()
 {
+    if (SchedulerCertifiedQuiesced())
+        return;
+
     uint sequenceOrdinal = gl_GlobalInvocationID.x;
     if (sequenceOrdinal >= SchedulerActiveProbeCount())
         return;
@@ -80,9 +90,29 @@ void main()
     bool fresh = (stateFlags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u;
     bool scrollExposed = (stateFlags & SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED) != 0u;
     bool relocationRetry = (stateFlags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u;
-    bool inactive = (stateFlags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u;
+    uint classification = ReadStorageWordUniform(
+        pc.ProbeStateBufferIndex,
+        stateBase + 6u);
+    float activeWeight = ReadStorageFloatUniform(
+        pc.ProbeStateBufferIndex,
+        stateBase + 3u);
+    bool inactive =
+        (stateFlags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u ||
+        classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE ||
+        isnan(activeWeight) || isinf(activeWeight) ||
+        activeWeight <= 0.001;
     uint retryFrames = max(SchedulerFrame(28u), 1u);
-    bool inactiveRetry = inactive && stateAge >= retryFrames;
+    // The exact tail participant denominator is frozen while a global
+    // source/solve/audit transaction is in progress. Inactive probes are
+    // excluded from that denominator; admitting their periodic reactivation
+    // here would continuously grow the source cohort underneath delayed
+    // feedback and prevent the final active probes from ever reaching zero.
+    // Certified/tracking frames reopen the retry policy, and any successful
+    // reactivation then starts a new bounded certificate wave normally.
+    bool tailParticipantCutFrozen = SchedulerTailCertification() &&
+        SchedulerGlobalConvergence();
+    bool inactiveRetry = inactive && !tailParticipantCutFrozen &&
+        stateAge >= retryFrames;
 
     uint countX = max(SchedulerVolumeCurrentCountX(volumeIndex), 1u);
     uint countY = max(SchedulerVolumeCurrentCountY(volumeIndex), 1u);
@@ -148,14 +178,43 @@ void main()
         SchedulerVolumeFullRays(volumeIndex),
         1u,
         SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
+    uint sourceEpoch = SchedulerArenaRead(schedulerStateBase + 3u);
+    uint sourceVolumeGeneration = SchedulerArenaRead(schedulerStateBase + 4u);
+    uint cacheProbeBaseWordPlusOne = SchedulerArenaRead(schedulerStateBase + 10u);
     bool sourceReady = SchedulerTransportV2() &&
-        sourceRays == requiredSourceRays &&
-        sourceGeneration == SchedulerSourceGeneration() && !sourceInvalid;
+        SimpleDdgiTransportSourceReady(
+            stateFlags,
+            sourceRays,
+            requiredSourceRays,
+            sourceGeneration,
+            SchedulerSourceGeneration(),
+            sourceEpoch,
+            sourceVolumeGeneration,
+            SchedulerVolumeGeneration(),
+            schedulerMetadata,
+            cacheProbeBaseWordPlusOne);
     uint lastSourceFrame = SchedulerArenaRead(schedulerStateBase + 1u);
+    uint sourceRefreshInterval = max(SchedulerFrame(29u), 1u);
+    uint periodicControlFrame = SchedulerPeriodicSourceRefreshControlFrame();
+    bool periodicWaveMember = SchedulerPeriodicSourceRefreshWave() &&
+        SchedulerSourceRefreshDueAtCutoff(
+            lastSourceFrame,
+            periodicControlFrame,
+            sourceRefreshInterval);
+    bool periodicRefreshGateOpen = SchedulerFrameReached(
+        SchedulerFrameIndex(),
+        periodicControlFrame);
     bool routineDue = SchedulerTransportV2() && sourceReady &&
-        (!SchedulerTailCertification() ||
-            (!SchedulerGlobalConvergence() && SchedulerSolveEpoch() == 0u)) &&
-        (SchedulerFrameIndex() - lastSourceFrame >= max(SchedulerFrame(29u), 1u));
+        (SchedulerTailCertification()
+            ? SchedulerSolveEpoch() == 0u &&
+                (periodicWaveMember ||
+                    (!SchedulerGlobalConvergence() &&
+                     !SchedulerPeriodicSourceRefreshWave() &&
+                     periodicRefreshGateOpen &&
+                     SchedulerFrameIndex() - lastSourceFrame >=
+                        sourceRefreshInterval))
+            : SchedulerFrameIndex() - lastSourceFrame >=
+                sourceRefreshInterval);
 
     uint ring = min(SchedulerVolumeRing(volumeIndex), 2u);
     uint workClass;
@@ -210,9 +269,6 @@ void main()
     int importance = baseImportance + (proximity ? 3 : 0) +
         (scrollExposed ? 1 : 0);
     bool visible = visibilityRefreshRequired && importance >= 4;
-    float activeWeight = ReadStorageFloatUniform(
-        pc.ProbeStateBufferIndex,
-        stateBase + 3u);
     bool stableTailParticipant =
         sourceReady &&
         !fresh &&
@@ -232,7 +288,8 @@ void main()
             relocationRetry ||
             globalDirty ||
             regionalDirty ||
-            sourceInvalid);
+            sourceInvalid ||
+            routineDue);
     if (SchedulerTailCertification() && pendingTailSource)
     {
         atomicAdd(
@@ -295,7 +352,20 @@ void main()
             SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID |
             SIMPLE_DDGI_SCHEDULER_REASON_TOPOLOGY);
     }
-    if (visibleZeroSupport)
+    // Inactive is an admission gate, not merely a lower-priority work class.
+    // A freshly classified inactive probe can legitimately retain FRESH or
+    // RELOCATION_PENDING while its receiver payload is invalidated.  Testing
+    // visibleZeroSupport first would let those flags bypass the bounded retry
+    // interval, pollute the frozen tail cohort's per-volume quotas, and starve
+    // the final active source repairs.  Initial probes are bootstrapped with an
+    // active weight of one, so this ordering does not suppress first-time
+    // classification; an inactive probe re-enters only through inactiveRetry.
+    if (inactive && !inactiveRetry)
+    {
+        SchedulerWriteInvalidCandidate(candidateBase);
+        return;
+    }
+    else if (visibleZeroSupport)
     {
         workClass = SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_ZERO_SUPPORT;
         transport = SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE;
@@ -312,11 +382,6 @@ void main()
         rayTier = SIMPLE_DDGI_SCHEDULER_RAY_FULL;
         reasons |= fresh ? SIMPLE_DDGI_SCHEDULER_REASON_FRESH : 0u;
         reasons |= scrollExposed ? SIMPLE_DDGI_SCHEDULER_REASON_SCROLL : 0u;
-    }
-    else if (inactive && !inactiveRetry)
-    {
-        SchedulerWriteInvalidCandidate(candidateBase);
-        return;
     }
     else if (relocationRetry || inactiveRetry)
     {
@@ -373,6 +438,24 @@ void main()
     // Cardinalities are deterministic policy values for this volume, transport
     // category, and ray tier. Admission derives them after selecting a
     // candidate, so the large classification pool stores no redundant counts.
+    bool sourceTransport =
+        transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE ||
+        transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
+    if (sourceTransport &&
+        SchedulerSparseVisiblePagePublicationPending(
+            probeIndex,
+            volumeIndex,
+            physicalProbeIndex,
+            pageMappingGeneration))
+    {
+        reasons |= SIMPLE_DDGI_SCHEDULER_REASON_VISIBLE_PAGE_COHORT;
+        atomicAdd(
+            BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[
+                pc.CountersOffsetWords +
+                    SIMPLE_DDGI_SCHEDULER_COUNTER_VISIBLE_PAGE_COHORT_BASE +
+                    volumeIndex],
+            1u);
+    }
     uint lane = SchedulerLaneIndex(volumeIndex, workClass, transport, rayTier);
     if (lane >= SIMPLE_DDGI_SCHEDULER_MAX_LANES)
     {

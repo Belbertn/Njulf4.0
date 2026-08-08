@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Pipeline.PipelineObjects;
 using Njulf.Rendering.Resources;
@@ -27,8 +28,23 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
         "ddgi_simple_schedule_prefix.comp.spv",
         "ddgi_simple_schedule_lane_base.comp.spv",
         "ddgi_simple_schedule_compact.comp.spv",
+        "ddgi_simple_schedule_admit_tail.comp.spv",
         "ddgi_simple_schedule_admit.comp.spv",
+        "ddgi_simple_schedule_materialize.comp.spv",
         "ddgi_simple_schedule_emit.comp.spv"
+    ];
+
+    private static readonly string[] TimingNames =
+    [
+        "SimpleDdgiSchedule.Reset",
+        "SimpleDdgiSchedule.Classify",
+        "SimpleDdgiSchedule.Prefix",
+        "SimpleDdgiSchedule.LaneBase",
+        "SimpleDdgiSchedule.Compact",
+        "SimpleDdgiSchedule.TailAdmit",
+        "SimpleDdgiSchedule.Admit",
+        "SimpleDdgiSchedule.Materialize",
+        "SimpleDdgiSchedule.Emit"
     ];
 
     private readonly RenderSettings _settings;
@@ -92,18 +108,52 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
 
     public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
     {
+        ExecuteStages(cmd, frameIndex, timestamps: null);
+    }
+
+    public override void Execute(
+        CommandBuffer cmd,
+        int frameIndex,
+        SceneRenderingData sceneData,
+        GpuTimestampRecorder? timestamps)
+    {
+        ExecuteStages(cmd, frameIndex, timestamps);
+    }
+
+    private void ExecuteStages(
+        CommandBuffer cmd,
+        int frameIndex,
+        GpuTimestampRecorder? timestamps)
+    {
         SimpleDdgiGpuSchedulerLayout layout = _volumeManager.GpuScheduler.Layout ??
             throw new InvalidOperationException("Simple DDGI scheduler layout is not resident.");
         GPUSimpleDdgiSchedulePushConstants pushConstants =
             _volumeManager.GpuScheduler.BuildPushConstants();
 
-        DispatchStage(cmd, pushConstants, 0, 1);
-        DispatchStage(cmd, pushConstants, 1, SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.ActiveProbeCount));
-        DispatchStage(cmd, pushConstants, 2, SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.LaneCapacity));
-        DispatchStage(cmd, pushConstants, 3, SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.LaneCapacity));
-        DispatchStage(cmd, pushConstants, 4, SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.ActiveProbeCount));
-        DispatchStage(cmd, pushConstants, 5, SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.LaneCapacity));
-        DispatchStage(cmd, pushConstants, 6, 1);
+        Span<uint> groupCounts =
+        [
+            1,
+            SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.ActiveProbeCount),
+            SimpleDdgiGpuSchedulerLayout.GroupsFor((layout.LaneCapacity + 1) / 2),
+            1,
+            SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.ActiveProbeCount),
+            1,
+            1,
+            SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.RequestCapacity),
+            1
+        ];
+        for (int stage = 0; stage < groupCounts.Length; stage++)
+        {
+            timestamps?.BeginPass(cmd, frameIndex, TimingNames[stage]);
+            try
+            {
+                DispatchStage(cmd, pushConstants, stage, groupCounts[stage]);
+            }
+            finally
+            {
+                timestamps?.EndPass(cmd, frameIndex);
+            }
+        }
     }
 
     public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

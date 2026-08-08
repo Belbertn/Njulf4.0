@@ -126,6 +126,14 @@
         <StorageMode>2</StorageMode>
         <Role>3</Role>
       </SimpleDdgiAuditShaderVariant>
+      <!-- Admission's generic policy and mutually-exclusive tail source/solve
+           policy share one source, but compile into separate native programs.
+           This removes the generic private quota workspace from the
+           latency-sensitive tail program without creating a second algorithm. -->
+      <SimpleDdgiAdmissionShaderVariant Include="ddgi_simple_schedule_admit_tail.comp">
+        <Source>ddgi_simple_schedule_admit.comp</Source>
+        <Role>1</Role>
+      </SimpleDdgiAdmissionShaderVariant>
       <GpuDiagnosticTaskShader Include="depth.task;forward.task;forward_compacted.task" />
       <ForwardSimpleFragmentShader Include="forward.frag" />
       <ForwardWeightedOitFragmentShader Include="forward.frag" />
@@ -184,6 +192,7 @@
         <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\ddgi_simple_trace_packed.comp.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\ddgi_simple_trace_packed.comp.spv" />
         <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\ddgi_simple_transport_solve.comp.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\ddgi_simple_transport_solve.comp.spv" />
         <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\ddgi_simple_transport_audit_prepare_*.comp.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\ddgi_simple_transport_audit_prepare_*.comp.spv" />
+        <ObsoleteGiShaderArtifact Include="$(MSBuildProjectDirectory)\obj\**\Shaders\forward*_receiver_cache.mesh.spv;$(MSBuildProjectDirectory)\bin\**\Shaders\forward*_receiver_cache.mesh.spv" />
       </ItemGroup>
       <Delete Files="@(ObsoleteGiShaderArtifact)" />
     </Target>
@@ -191,7 +200,7 @@
     <Target Name="CompileNjulfShaders"
             BeforeTargets="AssignTargetPaths"
             Inputs="@(ShaderSource);@(ShaderInclude);$(MSBuildProjectFullPath)"
-            Outputs="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv');@(SimpleDdgiTraceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(SimpleDdgiTransportShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(SimpleDdgiAuditShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv');@(MaterialTransportProvenanceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');$(IntermediateOutputPath)Shaders\forward_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_simple_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_opaque_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv;$(IntermediateOutputPath)Shaders\foliage_forward_ddgi.frag.spv">
+            Outputs="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv');@(SimpleDdgiTraceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(SimpleDdgiTransportShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(SimpleDdgiAuditShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(SimpleDdgiAdmissionShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv');@(MaterialTransportProvenanceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');$(IntermediateOutputPath)Shaders\forward_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_simple_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_opaque_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_ddgi_cache_required.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi_cache_required.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi_cache_required.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_gi_disabled.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_gi_disabled.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_gi_disabled.frag.spv;$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv;$(IntermediateOutputPath)Shaders\foliage_forward_ddgi.frag.spv">
       <MakeDir Directories="$(IntermediateOutputPath)Shaders" />
       <MakeDir Directories="$(OutDir)Shaders" />
 
@@ -215,6 +224,10 @@
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DSIMPLE_DDGI_SCHEDULER_ADMISSION_ROLE=%(SimpleDdgiAdmissionShaderVariant.Role) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(SimpleDdgiAdmissionShaderVariant.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(SimpleDdgiAdmissionShaderVariant.Source)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
       <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_COMPACTED_MESH=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_compacted.mesh.spv&quot; &quot;$(MSBuildProjectDirectory)\forward.mesh&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
@@ -227,6 +240,9 @@
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
+      <!-- The base opaque artifacts are exact, cache-independent fallbacks.
+           Cache-required artifacts are separate native programs so production
+           raster cannot retain the large sparse-gather control-flow graph. -->
       <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_OPAQUE=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_ddgi.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
@@ -236,6 +252,30 @@
             StandardErrorImportance="High" />
 
       <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_SIMPLE_OPAQUE=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_OPAQUE=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_ddgi_cache_required.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi_cache_required.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi_cache_required.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_OPAQUE=1 -DFORWARD_GLOBAL_ILLUMINATION_DISABLED=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_gi_disabled.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DFORWARD_GLOBAL_ILLUMINATION_DISABLED=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_simple_gi_disabled.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_GLOBAL_ILLUMINATION_DISABLED=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_gi_disabled.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
@@ -267,6 +307,10 @@
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
+      <Copy SourceFiles="@(SimpleDdgiAdmissionShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
       <Copy SourceFiles="$(IntermediateOutputPath)Shaders\forward_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_simple_compacted.mesh.spv"
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
@@ -284,6 +328,14 @@
             SkipUnchangedFiles="true" />
 
       <Copy SourceFiles="$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi.frag.spv"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
+      <Copy SourceFiles="$(IntermediateOutputPath)Shaders\forward_opaque_ddgi_cache_required.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi_cache_required.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi_cache_required.frag.spv"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
+      <Copy SourceFiles="$(IntermediateOutputPath)Shaders\forward_opaque_gi_disabled.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_gi_disabled.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_gi_disabled.frag.spv"
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
@@ -312,6 +364,9 @@
         <EmbeddedResource Include="@(SimpleDdgiAuditShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')">
           <LogicalName>Njulf.Shaders.%(Identity)</LogicalName>
         </EmbeddedResource>
+        <EmbeddedResource Include="@(SimpleDdgiAdmissionShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')">
+          <LogicalName>Njulf.Shaders.%(Identity)</LogicalName>
+        </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_compacted.mesh.spv">
           <LogicalName>Njulf.Shaders.forward_compacted.mesh</LogicalName>
         </EmbeddedResource>
@@ -329,6 +384,24 @@
         </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi.frag.spv">
           <LogicalName>Njulf.Shaders.forward_opaque_simple_full_input_ddgi.frag</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_ddgi_cache_required.frag.spv">
+          <LogicalName>Njulf.Shaders.forward_opaque_ddgi_cache_required.frag</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi_cache_required.frag.spv">
+          <LogicalName>Njulf.Shaders.forward_opaque_simple_ddgi_cache_required.frag</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi_cache_required.frag.spv">
+          <LogicalName>Njulf.Shaders.forward_opaque_simple_full_input_ddgi_cache_required.frag</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_gi_disabled.frag.spv">
+          <LogicalName>Njulf.Shaders.forward_opaque_gi_disabled.frag</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple_gi_disabled.frag.spv">
+          <LogicalName>Njulf.Shaders.forward_opaque_simple_gi_disabled.frag</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_gi_disabled.frag.spv">
+          <LogicalName>Njulf.Shaders.forward_opaque_simple_full_input_gi_disabled.frag</LogicalName>
         </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv">
           <LogicalName>Njulf.Shaders.forward_weighted_oit.frag</LogicalName>

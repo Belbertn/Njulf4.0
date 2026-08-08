@@ -55,6 +55,7 @@ public sealed class SimpleDdgiTransportCachePackingTests
             Assert.That(result.ProbeGeneration, Is.EqualTo(source.ProbeGeneration));
             Assert.That(result.SourceEpoch, Is.EqualTo(source.SourceEpoch));
             Assert.That(result.SourceRayCount, Is.EqualTo(source.SourceRayCount));
+            Assert.That(result.HitKind, Is.EqualTo(source.HitKind));
             Assert.That(result.Distance, Is.EqualTo(source.Distance).Within(
                 format is SimpleDdgiTransportCacheFormat.Legacy36 or
                     SimpleDdgiTransportCacheFormat.Compact28
@@ -63,6 +64,40 @@ public sealed class SimpleDdgiTransportCachePackingTests
             Assert.That(Vector3.Dot(result.Direction, reconstructed), Is.GreaterThan(0.999999f));
             Assert.That(error.MaximumRadianceAbsoluteError, Is.LessThan(0.002f));
         });
+    }
+
+    [TestCase(SimpleDdgiTransportCacheFormat.Legacy36)]
+    [TestCase(SimpleDdgiTransportCacheFormat.Compact28)]
+    [TestCase(SimpleDdgiTransportCacheFormat.Compact24)]
+    public void CacheFormats_PreserveEveryExactHitClassification(
+        SimpleDdgiTransportCacheFormat format)
+    {
+        Span<uint> words = stackalloc uint[9];
+        for (int hitKind = 0; hitKind <= 4; hitKind++)
+        {
+            SimpleDdgiTransportCachePacking.Sample source = CreateSample() with
+            {
+                HitKind = hitKind
+            };
+            Assert.That(SimpleDdgiTransportCachePacking.Pack(
+                format,
+                source,
+                words,
+                out _), Is.EqualTo(format.WordCount()));
+            Assert.That(SimpleDdgiTransportCachePacking.TryUnpack(
+                format,
+                words,
+                0u,
+                0u,
+                256u,
+                source.ProbeGeneration,
+                source.SourceLightingGeneration,
+                source.SourceEpoch,
+                source.SourceRayCount,
+                out SimpleDdgiTransportCachePacking.Sample decoded), Is.True);
+            Assert.That(decoded.HitKind, Is.EqualTo(hitKind),
+                $"{format}: classification {hitKind}");
+        }
     }
 
     [Test]
@@ -322,8 +357,9 @@ public sealed class SimpleDdgiTransportCachePackingTests
             source,
             compact28,
             out _);
-        compact28[6] &= ~SimpleDdgiTransportCachePacking.HitFlag;
-        compact28[6] |= SimpleDdgiTransportCachePacking.BackfaceFlag;
+        compact28[6] &= ~SimpleDdgiTransportCachePacking.ClassificationMask;
+        compact28[6] |= 6u <<
+            SimpleDdgiTransportCachePacking.ClassificationShift;
         Assert.That(TryDecode(
             SimpleDdgiTransportCacheFormat.Compact28,
             compact28,

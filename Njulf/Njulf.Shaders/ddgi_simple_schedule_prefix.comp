@@ -8,27 +8,51 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 void main()
 {
-    uint lane = gl_GlobalInvocationID.x;
-    if (lane >= SIMPLE_DDGI_SCHEDULER_MAX_LANES)
+    if (SchedulerCertifiedQuiesced())
         return;
 
+    // Two adjacent lanes occupy one packed word for every candidate group.
+    // Own that complete word in one invocation so prefix publication is a
+    // plain store. The previous per-lane implementation made both invocations
+    // contend through a compare/exchange loop for every group (more than 200k
+    // atomic updates in the high profile).
+    uint lanePair = gl_GlobalInvocationID.x;
+    uint lane0 = lanePair * 2u;
+    if (lane0 >= SIMPLE_DDGI_SCHEDULER_MAX_LANES)
+        return;
+    uint lane1 = lane0 + 1u;
+
     uint groupCount = SchedulerCandidateGroupCount();
-    uint total = 0u;
+    uint total0 = 0u;
+    uint total1 = 0u;
     for (uint group = 0u; group < groupCount; group++)
     {
-        uint count = SchedulerGroupLaneCount(group, lane);
-        SchedulerWriteGroupLaneValue(group, lane, total);
-        total += count;
+        uint logicalIndex = group * SIMPLE_DDGI_SCHEDULER_MAX_LANES + lane0;
+        uint wordOffset = pc.CandidateGroupLaneCountsOffsetWords +
+            (logicalIndex >> 1u);
+        uint packedCounts = SchedulerArenaRead(wordOffset);
+        uint count0 = packedCounts & 0xffffu;
+        uint count1 = packedCounts >> 16u;
+        SchedulerArenaWrite(
+            wordOffset,
+            (min(total0, 0xffffu) & 0xffffu) |
+                ((min(total1, 0xffffu) & 0xffffu) << 16u));
+        total0 += count0;
+        total1 += count1;
     }
-    SchedulerArenaWrite(pc.LaneCandidateCountsOffsetWords + lane, total);
-    SchedulerArenaWrite(pc.LaneTotalsOffsetWords + lane, total);
-    SchedulerArenaWrite(pc.LanePrefixesOffsetWords + lane, 0u);
-    if (lane == 0u)
+    SchedulerArenaWrite(pc.LaneCandidateCountsOffsetWords + lane0, total0);
+    SchedulerArenaWrite(pc.LanePrefixesOffsetWords + lane0, 0u);
+    if (lane1 < SIMPLE_DDGI_SCHEDULER_MAX_LANES)
+    {
+        SchedulerArenaWrite(pc.LaneCandidateCountsOffsetWords + lane1, total1);
+        SchedulerArenaWrite(pc.LanePrefixesOffsetWords + lane1, 0u);
+    }
+    if (lanePair == 0u)
     {
         SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_PREFIX,
-            SchedulerGroupsFor(SIMPLE_DDGI_SCHEDULER_MAX_LANES), 1u, 1u);
+            SchedulerGroupsFor((SIMPLE_DDGI_SCHEDULER_MAX_LANES + 1u) / 2u), 1u, 1u);
         SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_LANE_BASE,
-            SchedulerGroupsFor(SIMPLE_DDGI_SCHEDULER_MAX_LANES), 1u, 1u);
+            1u, 1u, 1u);
         SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_COMPACT,
             SchedulerGroupsFor(SchedulerCandidateCapacity()), 1u, 1u);
     }

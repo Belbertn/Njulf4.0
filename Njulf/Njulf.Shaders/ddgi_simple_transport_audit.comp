@@ -7,6 +7,7 @@
 #define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
 #define SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE 1
 #include "ddgi_simple_shared.glsl"
+#include "ddgi_simple_transport_participant.glsl"
 #define SIMPLE_DDGI_AUDIT_SHADER_ROLE_RAYS 2
 #define SIMPLE_DDGI_AUDIT_SHADER_ROLE_REDUCE 3
 #ifndef SIMPLE_DDGI_AUDIT_SHADER_ROLE
@@ -101,6 +102,10 @@ const uint SIMPLE_DDGI_AUDIT_DETAILED_WITNESS_SOURCE_RAYS_WORD = 32u;
 const uint SIMPLE_DDGI_AUDIT_DETAILED_WITNESS_PRIVATE_R_WORD = 33u;
 const uint SIMPLE_DDGI_AUDIT_DETAILED_WITNESS_PRIVATE_G_WORD = 34u;
 const uint SIMPLE_DDGI_AUDIT_DETAILED_WITNESS_PRIVATE_B_WORD = 35u;
+const uint SIMPLE_DDGI_AUDIT_FIRST_NOT_RESIDENT_IDENTITY_WORD = 36u;
+const uint SIMPLE_DDGI_AUDIT_FIRST_STALE_SOURCE_IDENTITY_WORD = 37u;
+const uint SIMPLE_DDGI_AUDIT_FIRST_INVALID_CACHE_IDENTITY_WORD = 38u;
+const uint SIMPLE_DDGI_AUDIT_FIRST_NONFINITE_IDENTITY_WORD = 39u;
 const uint SIMPLE_DDGI_AUDIT_WITNESS_ADDRESS_BITS = 20u;
 const uint SIMPLE_DDGI_AUDIT_WITNESS_ADDRESS_MASK =
     (1u << SIMPLE_DDGI_AUDIT_WITNESS_ADDRESS_BITS) - 1u;
@@ -170,6 +175,25 @@ void SimpleDdgiAuditAtomicMax(uint relativeWord, uint value)
     if (pc.AuditSummaryBufferIndex != 0u)
         atomicMax(BindlessStorageBuffers[nonuniformEXT(pc.AuditSummaryBufferIndex)].Words[
             SimpleDdgiAuditWord(relativeWord)], value);
+}
+
+void SimpleDdgiAuditRecordFirstIdentity(
+    uint relativeWord,
+    uint virtualProbeIndex,
+    uint physicalProbeIndex)
+{
+    if (pc.AuditSummaryBufferIndex == 0u)
+        return;
+    uint virtualPlusOne = min(virtualProbeIndex + 1u, 0xffffu);
+    uint physicalPlusOne = physicalProbeIndex == 0xffffffffu
+        ? 0u
+        : min(physicalProbeIndex + 1u, 0xffffu);
+    uint packedIdentity = virtualPlusOne | (physicalPlusOne << 16u);
+    atomicCompSwap(
+        BindlessStorageBuffers[nonuniformEXT(pc.AuditSummaryBufferIndex)].Words[
+            SimpleDdgiAuditWord(relativeWord)],
+        0u,
+        packedIdentity);
 }
 
 void SimpleDdgiAuditWrite(uint relativeWord, uint value)
@@ -308,24 +332,20 @@ uint ResolveSimpleDdgiAuditProbe(
     SimpleDdgiParams params,
     uint probeIndex,
     out SimpleDdgiAuditProbeContext context,
-    out uint failureMask)
+    out uint failureMask,
+    out bool participantEligible)
 {
     failureMask = 0u;
+    participantEligible = false;
     context.localProbeIndex = 0u;
     context.volumeIndex = 0xffffffffu;
-    context.physicalProbeIndex = 0u;
+    context.physicalProbeIndex = 0xffffffffu;
     context.sourceEpoch = 0u;
     context.sourceRayCount = 0u;
     context.cacheProbeBaseWordPlusOne = 0u;
     context.state = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
     if (isnan(context.state.activeWeight) || isinf(context.state.activeWeight))
         return SIMPLE_DDGI_AUDIT_STATUS_NONFINITE;
-    if (context.state.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE ||
-        (context.state.flags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u ||
-        context.state.activeWeight <= 0.001)
-    {
-        return SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_INACTIVE;
-    }
     if (!ResolveSimpleDdgiProbeVolume(
             probeIndex,
             params,
@@ -355,12 +375,6 @@ uint ResolveSimpleDdgiAuditProbe(
         context.volume,
         paging,
         SimpleDdgiProbeCoord(context.localProbeIndex, context.volume));
-    if (!address.published)
-        return SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_NOT_VISIBLE;
-
-    // Unpublished sparse probes intentionally have no current scheduler source
-    // generation. Publication is therefore the primary participation test;
-    // only a published address may be rejected as a stale frozen source.
     uint schedulerStateBase = pc.AuditSchedulerProbeStateOffsetWords +
         probeIndex * SIMPLE_DDGI_AUDIT_PROBE_STATE_WORDS;
     uint sourceLightingGeneration = ReadStorageWordUniform(
@@ -372,26 +386,71 @@ uint ResolveSimpleDdgiAuditProbe(
     uint volumeGeneration = ReadStorageWordUniform(
         pc.SchedulerArenaBufferIndex,
         schedulerStateBase + 4u);
+    uint schedulerMetadata = ReadStorageWordUniform(
+        pc.SchedulerArenaBufferIndex,
+        schedulerStateBase + 5u);
+    uint packedLifecycle = ReadStorageWordUniform(
+        pc.SchedulerArenaBufferIndex,
+        schedulerStateBase + 7u);
     uint solveEpoch = ReadStorageWordUniform(
         pc.SchedulerArenaBufferIndex,
         schedulerStateBase + 9u);
-    if (sourceLightingGeneration != pc.AuditSourceLightingGeneration ||
-        context.sourceEpoch == 0u ||
-        volumeGeneration != pc.AuditVolumeTableGeneration ||
-        solveEpoch != pc.AuditSolveEpoch)
-    {
-        return SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_STALE_SOURCE;
-    }
+    context.cacheProbeBaseWordPlusOne = ReadStorageWordUniform(
+        pc.SchedulerArenaBufferIndex,
+        schedulerStateBase + 10u);
     context.physicalProbeIndex = address.physicalProbeIndex;
-    context.sourceRayCount = SimpleDdgiRequiredSourceRayCount(
+    uint requiredSourceRayCount = SimpleDdgiRequiredSourceRayCount(
         params,
         context.volume);
-    if (context.sourceRayCount == 0u ||
-        context.sourceRayCount > params.raysPerProbe)
+    context.sourceRayCount = packedLifecycle & 0x1ffu;
+
+    bool eligible = SimpleDdgiTransportParticipantEligible(
+        true,
+        address.resident,
+        address.published,
+        context.state.classification,
+        context.state.flags,
+        context.state.activeWeight,
+        context.sourceRayCount,
+        requiredSourceRayCount,
+        sourceLightingGeneration,
+        pc.AuditSourceLightingGeneration,
+        context.sourceEpoch,
+        volumeGeneration,
+        pc.AuditVolumeTableGeneration,
+        schedulerMetadata,
+        context.cacheProbeBaseWordPlusOne);
+    participantEligible = eligible;
+    if (!eligible)
+    {
+        if (context.state.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE ||
+            (context.state.flags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u ||
+            context.state.activeWeight <= 0.001)
+        {
+            return SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_INACTIVE;
+        }
+        if (!address.resident || !address.published)
+            return SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_NOT_VISIBLE;
+        if (sourceLightingGeneration != pc.AuditSourceLightingGeneration ||
+            context.sourceEpoch == 0u ||
+            volumeGeneration != pc.AuditVolumeTableGeneration)
+        {
+            return SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_STALE_SOURCE;
+        }
+        failureMask = context.sourceRayCount != requiredSourceRayCount ||
+            requiredSourceRayCount == 0u ||
+            requiredSourceRayCount > params.raysPerProbe
+                ? SIMPLE_DDGI_AUDIT_CACHE_FAILURE_CARDINALITY
+                : SIMPLE_DDGI_AUDIT_CACHE_FAILURE_IDENTITY;
+        return SIMPLE_DDGI_AUDIT_STATUS_INVALID_CACHE;
+    }
+    if (requiredSourceRayCount > params.raysPerProbe)
     {
         failureMask = SIMPLE_DDGI_AUDIT_CACHE_FAILURE_CARDINALITY;
         return SIMPLE_DDGI_AUDIT_STATUS_INVALID_CACHE;
     }
+    if (solveEpoch != pc.AuditSolveEpoch)
+        return SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_STALE_SOURCE;
 
     return SIMPLE_DDGI_AUDIT_STATUS_VALID;
 }
@@ -407,7 +466,7 @@ uint ResolveSimpleDdgiAuditRayProbe(
     failureMask = 0u;
     context.localProbeIndex = 0u;
     context.volumeIndex = 0xffffffffu;
-    context.physicalProbeIndex = 0u;
+    context.physicalProbeIndex = 0xffffffffu;
     context.sourceEpoch = 0u;
     context.sourceRayCount = 0u;
     context.cacheProbeBaseWordPlusOne = 0u;
@@ -436,35 +495,18 @@ uint ResolveSimpleDdgiAuditRayProbe(
     uint volumeGeneration = ReadStorageWordUniform(
         pc.SchedulerArenaBufferIndex,
         schedulerStateBase + 4u);
+    uint schedulerMetadata = ReadStorageWordUniform(
+        pc.SchedulerArenaBufferIndex,
+        schedulerStateBase + 5u);
+    uint packedLifecycle = ReadStorageWordUniform(
+        pc.SchedulerArenaBufferIndex,
+        schedulerStateBase + 7u);
     uint solveEpoch = ReadStorageWordUniform(
         pc.SchedulerArenaBufferIndex,
         schedulerStateBase + 9u);
     context.cacheProbeBaseWordPlusOne = ReadStorageWordUniform(
         pc.SchedulerArenaBufferIndex,
         schedulerStateBase + 10u);
-    if (context.cacheProbeBaseWordPlusOne == 0u)
-    {
-        // Zero is the authoritative sentinel for a virtual probe that has no
-        // physical cache allocation. Check it before transient source flags or
-        // generation fields: those fields intentionally remain invalid while
-        // a sparse probe is unpublished. The reduction still requires exact
-        // participant coverage, so a genuinely resident probe that loses this
-        // word fails closed through the audited-count mismatch.
-        return SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_NOT_VISIBLE;
-    }
-    if ((context.state.flags & SIMPLE_DDGI_AUDIT_TRANSIENT_FLAGS) != 0u)
-    {
-        failureMask = SIMPLE_DDGI_AUDIT_CACHE_FAILURE_IDENTITY;
-        return SIMPLE_DDGI_AUDIT_STATUS_INVALID_CACHE;
-    }
-    if (sourceLightingGeneration != pc.AuditSourceLightingGeneration ||
-        context.sourceEpoch == 0u ||
-        volumeGeneration != pc.AuditVolumeTableGeneration ||
-        solveEpoch != pc.AuditSolveEpoch)
-    {
-        return SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_STALE_SOURCE;
-    }
-
     if (!ResolveSimpleDdgiProbeVolume(
             probeIndex,
             params,
@@ -473,34 +515,96 @@ uint ResolveSimpleDdgiAuditRayProbe(
     {
         return SIMPLE_DDGI_AUDIT_STATUS_NONFINITE;
     }
-    context.sourceRayCount = SimpleDdgiRequiredSourceRayCount(
+    uint requiredSourceRayCount = SimpleDdgiRequiredSourceRayCount(
         params,
         context.volume);
-    if (context.sourceRayCount == 0u ||
-        context.sourceRayCount > params.raysPerProbe)
+    context.sourceRayCount = packedLifecycle & 0x1ffu;
+    bool addressAvailable = context.cacheProbeBaseWordPlusOne != 0u;
+    bool eligible = SimpleDdgiTransportParticipantEligible(
+        true,
+        addressAvailable,
+        addressAvailable,
+        context.state.classification,
+        context.state.flags,
+        context.state.activeWeight,
+        context.sourceRayCount,
+        requiredSourceRayCount,
+        sourceLightingGeneration,
+        pc.AuditSourceLightingGeneration,
+        context.sourceEpoch,
+        volumeGeneration,
+        pc.AuditVolumeTableGeneration,
+        schedulerMetadata,
+        context.cacheProbeBaseWordPlusOne);
+    if (!eligible)
+    {
+        if (!addressAvailable)
+            return SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_NOT_VISIBLE;
+        if (sourceLightingGeneration != pc.AuditSourceLightingGeneration ||
+            context.sourceEpoch == 0u ||
+            volumeGeneration != pc.AuditVolumeTableGeneration)
+        {
+            return SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_STALE_SOURCE;
+        }
+        failureMask = context.sourceRayCount != requiredSourceRayCount ||
+            requiredSourceRayCount == 0u ||
+            requiredSourceRayCount > params.raysPerProbe
+                ? SIMPLE_DDGI_AUDIT_CACHE_FAILURE_CARDINALITY
+                : SIMPLE_DDGI_AUDIT_CACHE_FAILURE_IDENTITY;
+        return SIMPLE_DDGI_AUDIT_STATUS_INVALID_CACHE;
+    }
+    if (requiredSourceRayCount > params.raysPerProbe)
     {
         failureMask = SIMPLE_DDGI_AUDIT_CACHE_FAILURE_CARDINALITY;
         return SIMPLE_DDGI_AUDIT_STATUS_INVALID_CACHE;
     }
+    if (solveEpoch != pc.AuditSolveEpoch)
+        return SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_STALE_SOURCE;
     return SIMPLE_DDGI_AUDIT_STATUS_VALID;
 }
 #endif
 
-void SimpleDdgiAuditRecordStatus(uint status, uint failureMask)
+void SimpleDdgiAuditRecordStatus(
+    uint status,
+    uint failureMask,
+    uint virtualProbeIndex,
+    uint physicalProbeIndex)
 {
     if (status == SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_INACTIVE)
         SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_EXCLUDED_INACTIVE_WORD, 1u);
     else if (status == SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_NOT_VISIBLE)
+    {
         SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_EXCLUDED_NOT_VISIBLE_WORD, 1u);
+        SimpleDdgiAuditRecordFirstIdentity(
+            SIMPLE_DDGI_AUDIT_FIRST_NOT_RESIDENT_IDENTITY_WORD,
+            virtualProbeIndex,
+            physicalProbeIndex);
+    }
     else if (status == SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_STALE_SOURCE)
+    {
         SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_EXCLUDED_STALE_SOURCE_WORD, 1u);
+        SimpleDdgiAuditRecordFirstIdentity(
+            SIMPLE_DDGI_AUDIT_FIRST_STALE_SOURCE_IDENTITY_WORD,
+            virtualProbeIndex,
+            physicalProbeIndex);
+    }
     else if (status == SIMPLE_DDGI_AUDIT_STATUS_INVALID_CACHE)
     {
         SimpleDdgiAuditRecordCacheFailureMask(failureMask);
         SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_INVALID_CACHE_WORD, 1u);
+        SimpleDdgiAuditRecordFirstIdentity(
+            SIMPLE_DDGI_AUDIT_FIRST_INVALID_CACHE_IDENTITY_WORD,
+            virtualProbeIndex,
+            physicalProbeIndex);
     }
     else
+    {
         SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_NONFINITE_WORD, 1u);
+        SimpleDdgiAuditRecordFirstIdentity(
+            SIMPLE_DDGI_AUDIT_FIRST_NONFINITE_IDENTITY_WORD,
+            virtualProbeIndex,
+            physicalProbeIndex);
+    }
 }
 
 uint SimpleDdgiAuditWorkspaceFlagsForStatus(uint status, uint failureMask)
@@ -604,13 +708,13 @@ void SimpleDdgiAuditRunRayPhase()
             sourceBase + sourceStride - 1u)
         : 0u;
     uint failureMask = !addressValid || sourceStride == 0u ||
-            (generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG) == 0u
+            !SimpleDdgiTransportCacheHitKindIsValid(generationAndFlags)
         ? SIMPLE_DDGI_AUDIT_CACHE_FAILURE_IDENTITY
         : 0u;
     if (addressValid && sourceStride != 0u &&
-        (generationAndFlags & SIMPLE_DDGI_UPDATE_GENERATION_MASK) !=
+        (generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK) !=
             (SimpleDdgiProbeGeneration(context.state) &
-                SIMPLE_DDGI_UPDATE_GENERATION_MASK))
+                SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK))
     {
         failureMask |= SIMPLE_DDGI_AUDIT_CACHE_FAILURE_PHYSICAL_GENERATION;
     }
@@ -787,17 +891,17 @@ void SimpleDdgiAuditRunReducePhase()
     if (!SimpleDdgiAuditGenerationsMatch(params))
     {
         if (localTexel == 0u)
+        {
             SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_NONFINITE_WORD, 1u);
+            SimpleDdgiAuditRecordFirstIdentity(
+                SIMPLE_DDGI_AUDIT_FIRST_NONFINITE_IDENTITY_WORD,
+                probeIndex,
+                0xffffffffu);
+        }
         return;
     }
     if (localTexel == 0u)
     {
-        SimpleDdgiAuditAtomicMax(
-            SIMPLE_DDGI_AUDIT_EXPECTED_PARTICIPANT_WORD,
-            pc.AuditExpectedParticipantCount);
-        SimpleDdgiAuditAtomicMax(
-            SIMPLE_DDGI_AUDIT_EXPECTED_TEXEL_WORD,
-            pc.AuditExpectedTexelCount);
         SimpleDdgiAuditAtomicMax(
             SIMPLE_DDGI_AUDIT_CHUNK_WORD,
             pc.AuditChunkIndex);
@@ -805,15 +909,30 @@ void SimpleDdgiAuditRunReducePhase()
 
     SimpleDdgiAuditProbeContext context;
     uint contextFailureMask;
+    bool participantEligible;
     uint currentStatus = ResolveSimpleDdgiAuditProbe(
         params,
         probeIndex,
         context,
-        contextFailureMask);
+        contextFailureMask,
+        participantEligible);
+    if (localTexel == 0u && participantEligible)
+    {
+        SimpleDdgiAuditAtomicAdd(
+            SIMPLE_DDGI_AUDIT_EXPECTED_PARTICIPANT_WORD,
+            1u);
+        SimpleDdgiAuditAtomicAdd(
+            SIMPLE_DDGI_AUDIT_EXPECTED_TEXEL_WORD,
+            params.irradianceTexels * params.irradianceTexels);
+    }
     if (currentStatus != SIMPLE_DDGI_AUDIT_STATUS_VALID)
     {
         if (localTexel == 0u)
-            SimpleDdgiAuditRecordStatus(currentStatus, contextFailureMask);
+            SimpleDdgiAuditRecordStatus(
+                currentStatus,
+                contextFailureMask,
+                probeIndex,
+                context.physicalProbeIndex);
         return;
     }
 
@@ -845,7 +964,11 @@ void SimpleDdgiAuditRunReducePhase()
     if (status != SIMPLE_DDGI_AUDIT_STATUS_VALID)
     {
         if (localTexel == 0u)
-            SimpleDdgiAuditRecordStatus(status, failureMask);
+            SimpleDdgiAuditRecordStatus(
+                status,
+                failureMask,
+                probeIndex,
+                context.physicalProbeIndex);
         return;
     }
 
@@ -897,7 +1020,9 @@ void SimpleDdgiAuditRunReducePhase()
         if (localTexel == 0u)
             SimpleDdgiAuditRecordStatus(
                 SIMPLE_DDGI_AUDIT_STATUS_INVALID_CACHE,
-                SIMPLE_DDGI_AUDIT_CACHE_FAILURE_IDENTITY);
+                SIMPLE_DDGI_AUDIT_CACHE_FAILURE_IDENTITY,
+                probeIndex,
+                context.physicalProbeIndex);
         return;
     }
 
@@ -928,6 +1053,10 @@ void SimpleDdgiAuditRunReducePhase()
         isnan(weightSum) || isinf(weightSum))
     {
         SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_NONFINITE_WORD, 1u);
+        SimpleDdgiAuditRecordFirstIdentity(
+            SIMPLE_DDGI_AUDIT_FIRST_NONFINITE_IDENTITY_WORD,
+            probeIndex,
+            context.physicalProbeIndex);
         return;
     }
     vec3 candidate = SimpleDdgiEvaluatePositiveIrradiance(
@@ -944,6 +1073,10 @@ void SimpleDdgiAuditRunReducePhase()
         any(lessThan(canonical, vec3(0.0))))
     {
         SimpleDdgiAuditAtomicAdd(SIMPLE_DDGI_AUDIT_NONFINITE_WORD, 1u);
+        SimpleDdgiAuditRecordFirstIdentity(
+            SIMPLE_DDGI_AUDIT_FIRST_NONFINITE_IDENTITY_WORD,
+            probeIndex,
+            context.physicalProbeIndex);
         return;
     }
 

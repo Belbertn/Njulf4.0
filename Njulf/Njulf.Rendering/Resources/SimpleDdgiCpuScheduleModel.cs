@@ -51,6 +51,18 @@ public static class SimpleDdgiSchedulerAbi
         (int)SimpleDdgiSchedulerTransportCategory.Count *
         (int)SimpleDdgiSchedulerRayTier.Count;
     public const int MaxRayBucketCount = 6;
+    public const int FeedbackCommitFailureOffsetWords = 960;
+    public const int CommitFailureCategoryCount = 10;
+    public const int FeedbackTransactionPredicateOffsetWords = 970;
+    public const int FeedbackMissingCompletionOffsetWords = 971;
+    public const int FeedbackProducerFailureOffsetWords = 972;
+    public const int FeedbackCacheReadFailureOffsetWords = 973;
+    // Fence-complete participant-scoped mutation witnesses. Admission counts
+    // include inactive retry probes, which are outside the frozen certificate
+    // and must not invalidate it unless they actually rejoin the participant
+    // set after commit/classification.
+    public const int FeedbackActiveSourceMutationOffsetWords = 974;
+    public const int FeedbackActiveCanonicalMutationOffsetWords = 975;
     public const uint PhysicalGenerationMask = 0x00ff_ffffu;
     public const uint UpdateRayCountShift = 16u;
     public const uint UpdateRayCountMask = 0xffff_0000u;
@@ -76,6 +88,16 @@ public static class SimpleDdgiSchedulerAbi
     // tracks those values for diagnostics, but fairness and the frozen audit
     // own V2 retirement.
     public const uint SchedulerFeatureTransportTailCertification = 1u << 9;
+    // Periodic V2 source replacement is one frozen cohort.  Without this bit,
+    // an overdue field is refreshed one delayed batch at a time and every
+    // batch invalidates the certificate that was just produced for the prior
+    // batch.
+    public const uint SchedulerFeaturePeriodicSourceRefreshWave = 1u << 10;
+    // Exact current certificate, no dirty/source/page transition, and a
+    // non-pulse frame. Shaders retain persistent cursors but skip transient
+    // candidate/compaction work while feedback continues to validate the
+    // resident participant population.
+    public const uint SchedulerFeatureCertifiedQuiesced = 1u << 11;
     public const uint ReasonFresh = (uint)SimpleDdgiSchedulerCandidateReason.Fresh;
     public const uint ReasonScrollExposed = (uint)SimpleDdgiSchedulerCandidateReason.ScrollExposed;
     public const uint ReasonRegionalDirty = (uint)SimpleDdgiSchedulerCandidateReason.RegionalDirty;

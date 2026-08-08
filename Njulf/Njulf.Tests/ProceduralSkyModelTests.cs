@@ -376,7 +376,7 @@ public sealed class ProceduralSkyModelTests
                 Is.EqualTo(BindlessIndex.SimpleDdgiStorageValidationBufferBase + 1));
             Assert.That(
                 BindlessIndex.StaticBufferCount,
-                Is.EqualTo(BindlessIndex.SimpleDdgiStorageValidationBufferFrame1 + 1));
+                Is.EqualTo(BindlessIndex.SimpleDdgiReceiverGatherBufferFrame1 + 1));
         });
     }
 

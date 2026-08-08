@@ -7,6 +7,22 @@ namespace Njulf.Rendering.Resources
 {
     internal static class SimpleDdgiSceneBounds
     {
+        internal static bool ShouldRefreshSnapshot(
+            bool hasSnapshot,
+            bool sameScene,
+            ulong previousSceneContentRevision,
+            ulong sceneContentRevision)
+        {
+            // A zero revision means that the caller cannot prove scene
+            // immutability. Preserve the conservative legacy behavior in that
+            // case instead of allowing an unversioned transform change to use
+            // stale bounds.
+            return !hasSnapshot ||
+                !sameScene ||
+                sceneContentRevision == 0UL ||
+                sceneContentRevision != previousSceneContentRevision;
+        }
+
         public static BoundingBox Estimate(Scene scene)
         {
             if (scene == null)

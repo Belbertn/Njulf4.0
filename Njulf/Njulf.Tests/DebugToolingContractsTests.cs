@@ -63,7 +63,8 @@ namespace Njulf.Tests
                 ("DDGI effective albedo", RendererDiagnosticsBuffer.DdgiAlbedoCounterBase, RendererDiagnosticsBuffer.DdgiAlbedoCounterCount),
                 ("simple DDGI gather multiplicity", RendererDiagnosticsBuffer.SimpleDdgiGatherMultiplicityCounterBase, RendererDiagnosticsBuffer.SimpleDdgiGatherMultiplicityCounterCount),
                 ("decal fragment attribution", RendererDiagnosticsBuffer.DecalFragmentAttributionCounterBase, RendererDiagnosticsBuffer.DecalFragmentAttributionCounterCount),
-                ("simple DDGI storage validation", RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterBase, RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount)
+                ("simple DDGI storage validation", RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterBase, RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount),
+                ("simple DDGI per-volume energy evidence", RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyEvidenceCounterBase, RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyEvidenceCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -103,6 +104,10 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiGatherMultiplicityCounterCount, Is.EqualTo(9));
                 Assert.That(RendererDiagnosticsBuffer.DecalFragmentAttributionCounterCount, Is.EqualTo(6));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount, Is.EqualTo(23));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyEvidenceHistogramCount, Is.EqualTo(16));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyEvidenceCounterStride, Is.EqualTo(39));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyEvidenceCounterCount, Is.EqualTo(
+                    GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount * 39));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize,
                     Is.GreaterThanOrEqualTo((ulong)RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount * sizeof(uint)));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize % 256ul, Is.Zero);
@@ -120,6 +125,12 @@ namespace Njulf.Tests
                     "SIMPLE_DDGI_INVALID_SOURCE_EPOCH_COUNTER ="));
                 Assert.That(commonShader, Does.Contain(
                     "SIMPLE_DDGI_INVALID_HIT_KIND_COUNTER ="));
+                Assert.That(commonShader, Does.Contain(
+                    "SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_COUNTER_BASE ="));
+                Assert.That(simpleSharedShader, Does.Contain(
+                    "void RecordSimpleDdgiVolumeEnergyEvidence("));
+                Assert.That(simpleSharedShader, Does.Contain(
+                    "(winnerKey << SIMPLE_DDGI_ENERGY_EVIDENCE_PAYLOAD_BITS) | payload"));
                 Assert.That(commonShader, Does.Contain(
                     "void AddSimpleDdgiStorageValidationDiagnostic("));
                 Assert.That(simpleSharedShader, Does.Contain(
@@ -451,6 +462,34 @@ namespace Njulf.Tests
                     RendererBuildFeatures.IsGlobalIlluminationDebugViewAvailable(
                         GlobalIlluminationDebugView.FarFieldSunShadow),
                     Is.True);
+            });
+        }
+
+        [Test]
+        public void SimpleDdgiEnergyEvidenceLuminanceDecode_ReservedZeroAndLogEndpointsAreExact()
+        {
+            float previous = -1.0f;
+            for (uint code = 0; code <= 2047; code++)
+            {
+                float decoded = RendererDiagnosticsBuffer.DecodeSimpleDdgiEnergyEvidenceLuminance(code);
+                Assert.That(decoded, Is.GreaterThanOrEqualTo(previous), $"code {code}");
+                previous = decoded;
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    RendererDiagnosticsBuffer.DecodeSimpleDdgiEnergyEvidenceLuminance(0),
+                    Is.Zero);
+                Assert.That(
+                    RendererDiagnosticsBuffer.DecodeSimpleDdgiEnergyEvidenceLuminance(1),
+                    Is.Zero);
+                Assert.That(
+                    RendererDiagnosticsBuffer.DecodeSimpleDdgiEnergyEvidenceLuminance(2047),
+                    Is.EqualTo(64.0f).Within(0.0001f));
+                Assert.That(
+                    RendererDiagnosticsBuffer.DecodeSimpleDdgiEnergyEvidenceLuminance(uint.MaxValue),
+                    Is.EqualTo(64.0f).Within(0.0001f));
             });
         }
 

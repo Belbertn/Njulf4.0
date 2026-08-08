@@ -116,6 +116,12 @@ namespace Njulf.Rendering.Resources
         private ulong _lastTlasInstanceSignature;
         private bool _hasTlasInstanceSignature;
         private int _lastTlasInstanceCount;
+        private AccelerationStructurePreparationIdentity _lastPreparationIdentity;
+        private bool _hasReusablePreparation;
+        private ulong _lastPreparationResourceGeneration;
+        private int _cachedStaticInstanceCandidateCount;
+        private int _cachedStaticInstanceResidentCount;
+        private int _cachedStaticInstanceCulledCount;
         private ulong _frameSerial;
         private ulong _resourceGeneration;
 
@@ -255,7 +261,8 @@ namespace Njulf.Rendering.Resources
             GpuTimestampRecorder? gpuTimestamps = null,
             int frameIndex = 0,
             AccelerationStructureResidencyPolicy? residencyPolicy = null,
-            bool alphaMaskedTransportEnabled = true)
+            bool alphaMaskedTransportEnabled = true,
+            ulong sceneContentRevision = 0)
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
@@ -280,16 +287,46 @@ namespace Njulf.Rendering.Resources
 
             if (!enabled)
             {
+                _hasReusablePreparation = false;
                 _lastFallbackReason = string.Empty;
                 return CreateStats(false);
             }
 
             if (!Supported)
+            {
+                _hasReusablePreparation = false;
                 return CreateStats(false);
+            }
 
             try
             {
-                InvalidateCachedStructuresIfMeshBuffersChanged();
+                bool meshBuffersChanged = InvalidateCachedStructuresIfMeshBuffersChanged();
+                AccelerationStructurePreparationIdentity preparationIdentity =
+                    CreatePreparationIdentity(
+                        sceneContentRevision,
+                        _residencyPolicy,
+                        alphaMaskedTransportEnabled);
+                if (!meshBuffersChanged && CanReusePreparation(preparationIdentity))
+                {
+                    // The scene builder's content revision covers object identity,
+                    // visibility, transforms, meshes, materials, and static-batch
+                    // revisions.  Preserve the already published TLAS rather than
+                    // rescanning and rehashing the same scene every stable frame.
+                    // Active BLAS ages still advance so a later residency-policy
+                    // transition starts its eviction grace period at the real last
+                    // use, not at the frame on which this preparation was cached.
+                    TouchActiveBottomLevelAccelerationStructures();
+                    TopLevelInstanceCount = _lastTlasInstanceCount;
+                    _lastStaticInstanceCandidateCount = _cachedStaticInstanceCandidateCount;
+                    _lastStaticInstanceResidentCount = _cachedStaticInstanceResidentCount;
+                    _lastStaticInstanceCulledCount = _cachedStaticInstanceCulledCount;
+                    _lastTlasSkipCount = 1;
+                    _lastFallbackReason = string.Empty;
+                    _lastBuildMicroseconds = ElapsedMicroseconds(buildStart);
+                    return CreateStats(Active);
+                }
+
+                _hasReusablePreparation = false;
                 CollectStaticOpaqueInstances(scene, _instanceScratch, alphaMaskedTransportEnabled);
                 ApplyResidencyPolicy(_instanceScratch);
                 if (!ApplyMemoryResidencyPolicy(_instanceScratch))
@@ -377,11 +414,13 @@ namespace Njulf.Rendering.Resources
                 }
 
                 _lastFallbackReason = string.Empty;
+                CacheReusablePreparation(preparationIdentity);
                 _lastBuildMicroseconds = ElapsedMicroseconds(buildStart);
                 return CreateStats(Active);
             }
             catch (Exception ex) when (ex is VulkanException or InvalidOperationException or ArgumentException or OverflowException)
             {
+                _hasReusablePreparation = false;
                 _lastFallbackReason = ex.Message;
                 TopLevelInstanceCount = 0;
                 _lastBuildMicroseconds = ElapsedMicroseconds(buildStart);
@@ -1056,12 +1095,70 @@ namespace Njulf.Rendering.Resources
             return false;
         }
 
-        private void InvalidateCachedStructuresIfMeshBuffersChanged()
+        private static AccelerationStructurePreparationIdentity CreatePreparationIdentity(
+            ulong sceneContentRevision,
+            AccelerationStructureResidencyPolicy residencyPolicy,
+            bool alphaMaskedTransportEnabled)
+        {
+            // Camera motion cannot alter the selected instance set when both the
+            // distance and count limits are open.  Normalizing it out allows the
+            // high-quality tier to retain this fast path during ordinary camera
+            // traversal while all settings that can affect memory admission remain
+            // part of the exact identity.
+            if (!RequiresStaticResidencySelection(residencyPolicy))
+                residencyPolicy = residencyPolicy with { CameraPosition = CoreVector3.Zero };
+
+            return new AccelerationStructurePreparationIdentity(
+                sceneContentRevision,
+                residencyPolicy,
+                alphaMaskedTransportEnabled);
+        }
+
+        private bool CanReusePreparation(AccelerationStructurePreparationIdentity identity)
+        {
+            return identity.SceneContentRevision != 0 &&
+                _hasReusablePreparation &&
+                _lastPreparationIdentity.Equals(identity) &&
+                _lastPreparationResourceGeneration == _resourceGeneration &&
+                _readyBlasCompactions.Count == 0 &&
+                _tlas.Handle.Handle != 0 &&
+                _hasTlasInstanceSignature &&
+                _lastTlasInstanceCount > 0 &&
+                _instanceScratch.Count == _lastTlasInstanceCount &&
+                string.IsNullOrEmpty(_lastFallbackReason);
+        }
+
+        private void CacheReusablePreparation(AccelerationStructurePreparationIdentity identity)
+        {
+            if (identity.SceneContentRevision == 0 || !Active)
+            {
+                _hasReusablePreparation = false;
+                return;
+            }
+
+            _lastPreparationIdentity = identity;
+            _lastPreparationResourceGeneration = _resourceGeneration;
+            _cachedStaticInstanceCandidateCount = _lastStaticInstanceCandidateCount;
+            _cachedStaticInstanceResidentCount = _lastStaticInstanceResidentCount;
+            _cachedStaticInstanceCulledCount = _lastStaticInstanceCulledCount;
+            _hasReusablePreparation = true;
+        }
+
+        private void TouchActiveBottomLevelAccelerationStructures()
+        {
+            foreach (MeshHandle mesh in _activeMeshScratch)
+            {
+                if (_blasCache.TryGetValue(mesh, out BottomLevelAccelerationStructure? blas))
+                    blas.LastUsedFrameSerial = _frameSerial;
+            }
+        }
+
+        private bool InvalidateCachedStructuresIfMeshBuffersChanged()
         {
             BufferHandle vertexPositionBuffer = _meshManager.VertexPositionBuffer;
             BufferHandle indexBuffer = _meshManager.IndexBuffer;
             if (_lastVertexPositionBuffer == vertexPositionBuffer && _lastIndexBuffer == indexBuffer)
-                return;
+                return false;
 
             _blasSizeEstimateCache.Clear();
 
@@ -1078,6 +1175,8 @@ namespace Njulf.Rendering.Resources
             RecalculateAccelerationStructureBytes();
             _lastVertexPositionBuffer = vertexPositionBuffer;
             _lastIndexBuffer = indexBuffer;
+            _hasReusablePreparation = false;
+            return true;
         }
 
         private BottomLevelAccelerationStructure BuildBottomLevelAccelerationStructure(
@@ -2328,6 +2427,11 @@ namespace Njulf.Rendering.Resources
             CoreMatrix4x4 WorldMatrix,
             AccelerationStructureGeometryDomain Domain = AccelerationStructureGeometryDomain.Static,
             GeometryInstanceFlagsKHR InstanceFlags = GeometryInstanceFlagsKHR.ForceOpaqueBitKhr);
+
+        private readonly record struct AccelerationStructurePreparationIdentity(
+            ulong SceneContentRevision,
+            AccelerationStructureResidencyPolicy ResidencyPolicy,
+            bool AlphaMaskedTransportEnabled);
 
         private sealed class BottomLevelAccelerationStructure
         {

@@ -89,6 +89,7 @@ namespace Njulf.Rendering.Resources
         private bool _pagedGpuStateDirty;
         private Scene? _staticInstanceScene;
         private ulong _staticInstanceSceneContentRevision;
+        private uint _staticInstanceMaterialDataRevision;
         private bool _hasStaticInstanceSnapshot;
         private bool _hasPagedSceneSignature;
         // Latched at the start of Upload so allocation, shader parameters, and
@@ -597,8 +598,20 @@ namespace Njulf.Rendering.Resources
                 sameScene,
                 _staticInstanceSceneContentRevision,
                 sceneContentRevision);
+            uint materialDataRevision = _materialManager.MaterialDataRevision;
+            bool materialRevisionCheckRequired = ShouldCheckStaticMaterialRevisions(
+                _hasStaticInstanceSnapshot,
+                _staticInstanceMaterialDataRevision,
+                materialDataRevision);
+            if (!snapshotRefreshRequired && !materialRevisionCheckRequired)
+                return false;
+
             if (!snapshotRefreshRequired && !HasStaticMaterialRevisionChanges())
             {
+                // A global material revision may represent a raster-only edit.
+                // Remember that it was inspected so settled frames do not
+                // repeat an O(instance) selective-revision scan.
+                _staticInstanceMaterialDataRevision = materialDataRevision;
                 return false;
             }
 
@@ -669,6 +682,7 @@ namespace Njulf.Rendering.Resources
 
             _staticInstanceScene = scene;
             _staticInstanceSceneContentRevision = sceneContentRevision;
+            _staticInstanceMaterialDataRevision = materialDataRevision;
             _hasStaticInstanceSnapshot = true;
             return true;
         }
@@ -705,6 +719,19 @@ namespace Njulf.Rendering.Resources
                 !sameScene ||
                 sceneContentRevision == 0 ||
                 sceneContentRevision != previousSceneContentRevision;
+        }
+
+        internal static bool ShouldCheckStaticMaterialRevisions(
+            bool hasSnapshot,
+            uint previousMaterialDataRevision,
+            uint materialDataRevision)
+        {
+            // MaterialDataRevision is monotonic and nonzero in production. A
+            // zero value remains fail-open for tests or legacy producers that
+            // cannot supply a stable revision contract.
+            return !hasSnapshot ||
+                materialDataRevision == 0u ||
+                materialDataRevision != previousMaterialDataRevision;
         }
 
         private void RequestCameraPages(

@@ -1,7 +1,7 @@
 - Surfels as a near-field dynamic cache.
 - Ray traced transparency.
 - Ray traced caustics.
-- Multi-bounce DDGI beyond temporal accumulation.
+- Accelerate same-frame convergence of cached multi-bounce Transport V2 for urgent and local changes while preserving the certified fixed point.
 - Emissive mesh importance sampling.
 - Hardware ray traced reflections replacement.
 - Neural denoising or vendor-specific upscalers

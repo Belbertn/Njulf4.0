@@ -177,15 +177,16 @@ void main()
                 SIMPLE_DDGI_RESIDENCY_COUNTER_MAPPING_ERRORS),
             1u);
     }
+    uint pageValidProbeMask = pageTopologyValid
+        ? SimpleDdgiValidPageProbeMask(volume, paging, localPage)
+        : 0u;
+    uint pageValidProbeCount = uint(bitCount(pageValidProbeMask));
 
     if (resident && published && inFlightCount == 0u &&
         pageTopologyValid)
     {
         bool allInactive = true;
-        uint validMask = SimpleDdgiValidPageProbeMask(
-            volume,
-            paging,
-            localPage);
+        uint validMask = pageValidProbeMask;
         for (uint slot = 0u; slot < SIMPLE_DDGI_PROBES_PER_PAGE; slot++)
         {
             if ((validMask & (1u << slot)) == 0u)
@@ -218,22 +219,11 @@ void main()
     }
 
     uint lastRelevant = history.z;
-    bool retryDue = suppressed && demandClass != 0u &&
-        pc.CurrentFrame >= lastRelevant &&
-        pc.CurrentFrame - lastRelevant >= ResidencyRead(params, 14u);
-    if (retryDue)
-    {
-        suppressed = false;
-        emptyConfirmations = 0u;
-        demandClass = SIMPLE_DDGI_PAGE_DEMAND_CLASS_SUPPRESSED_RETRY;
-        distanceBucket = 255u;
-        ResidencyAtomicAdd(
-            params,
-            ResidencyCounterWord(
-                params,
-                SIMPLE_DDGI_RESIDENCY_COUNTER_RETRY),
-            1u);
-    }
+    // A confirmed-empty page is a geometry classification result. Sparse
+    // predictor/receiver stamps are intentionally sampled and may skip an
+    // epoch, so neither elapsed time nor a demand-edge is evidence that this
+    // result changed. Geometry-generation invalidation above (or an explicit
+    // development pin) is the bounded authoritative escape hatch.
 
     if (demandClass != 0u)
     {
@@ -257,11 +247,16 @@ void main()
     bool protectedPage = (demandClass != 0u && !suppressed) || pinned ||
         inFlightCount != 0u ||
         (table.z & SIMPLE_DDGI_PAGE_TABLE_INITIALIZING) != 0u ||
-        (!published && retained && pc.CameraCut == 0u);
+        (!published && retained &&
+            (pc.AllocationFlags &
+                SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_CAMERA_CUT) == 0u);
     bool retentionExpired = resident && lastRelevant != 0u &&
         pc.CurrentFrame >= lastRelevant &&
         pc.CurrentFrame - lastRelevant >= ResidencyRead(params, 11u);
-    bool pressureVictim = pc.CameraCut != 0u || retentionExpired;
+    bool pressureVictim =
+        (pc.AllocationFlags &
+            SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_CAMERA_CUT) != 0u ||
+        retentionExpired;
 
     if (resident)
         classFlags |= SIMPLE_DDGI_PAGE_CLASS_RESIDENT;
@@ -304,7 +299,8 @@ void main()
         params,
         classBase + 3u,
         demandClass | (distanceBucket << 8u) |
-            (min(volumeIndex, 255u) << 16u));
+            (min(volumeIndex, 255u) << 16u) |
+            (min(pageValidProbeCount, 255u) << 24u));
     if ((classFlags & SIMPLE_DDGI_PAGE_CLASS_MISSING) != 0u)
         ResidencyAtomicAdd(
             params,

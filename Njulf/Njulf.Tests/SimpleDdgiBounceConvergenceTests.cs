@@ -369,10 +369,10 @@ public sealed class SimpleDdgiBounceConvergenceTests
         });
     }
 
-    [TestCase(240, 15_368, 2_048, 15_368, 256, 240)]
-    [TestCase(600, 15_368, 2_048, 15_368, 256, 600)]
-    [TestCase(900, 15_368, 2_048, 15_368, 256, 900)]
-    [TestCase(120, 1_024, 0, 1_024, 256, 120)]
+    [TestCase(240, 15_368, 2_048, 15_368, 256, 543)]
+    [TestCase(600, 15_368, 2_048, 15_368, 256, 1_253)]
+    [TestCase(900, 15_368, 2_048, 15_368, 256, 1_777)]
+    [TestCase(120, 1_024, 0, 1_024, 256, 233)]
     [TestCase(1, 1_024, 128, 1_024, 256, 28)]
     public void PeriodicSourceRefresh_ProvidesCompleteTailSolverOpportunity(
         int configuredFrames,
@@ -442,8 +442,99 @@ public sealed class SimpleDdgiBounceConvergenceTests
             Assert.That(Resolve(participants: 2_048), Is.EqualTo(52));
             Assert.That(Resolve(budget: 256), Is.EqualTo(16));
             Assert.That(Resolve(auditChunk: 128), Is.EqualTo(32));
-            Assert.That(Resolve(configured: 60), Is.EqualTo(60));
+            Assert.That(Resolve(configured: 60), Is.EqualTo(126));
         });
+    }
+
+    [Test]
+    public void PeriodicSourceRefresh_DenseCadenceIncludesAuthoredSweepAndTailOpportunity()
+    {
+        int sparse =
+            SimpleDdgiVolumeManager.ResolveEffectiveTransportSourceRefreshFrames(
+                configuredRefreshFrames: 480,
+                participantCount: 5_822,
+                updateBudget: 128,
+                probeCount: 15_368,
+                auditChunkProbeCount: 256);
+        int dense =
+            SimpleDdgiVolumeManager.ResolveEffectiveTransportSourceRefreshFrames(
+                configuredRefreshFrames: 480,
+                participantCount: 15_368,
+                updateBudget: 128,
+                probeCount: 15_368,
+                auditChunkProbeCount: 256);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sparse, Is.EqualTo(480));
+            Assert.That(dense, Is.EqualTo(1_114));
+            Assert.That(
+                SimpleDdgiVolumeManager.ResolveTransportSourceSweepFrames(
+                    configuredRefreshFrames: 480,
+                    participantCount: 15_368,
+                    updateBudget: 128,
+                    probeCount: 15_368),
+                Is.EqualTo(466));
+        });
+    }
+
+    [Test]
+    public void PeriodicSourceRefresh_UsesReadyPlusBlockingCohortDuringRepair()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ResolveGpuResidentTransportRefreshParticipantCount(
+                        sourceReadyParticipantCount: 4_006,
+                        blockingSourceWorkCount: 9_240,
+                        probeCount: 15_368),
+                Is.EqualTo(13_246));
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ResolveGpuResidentTransportRefreshParticipantCount(
+                        sourceReadyParticipantCount: 13_000,
+                        blockingSourceWorkCount: 9_000,
+                        probeCount: 15_368),
+                Is.EqualTo(15_368));
+        });
+    }
+
+    [Test]
+    public void SourceGenerationChange_RebasesOnlyAnActiveConvergenceDeadline()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ResolveTransportConvergenceStartFrameAfterSourceChange(
+                        currentStartFrame: 49u,
+                        sourceChangeFrame: 547u,
+                        convergencePending: true),
+                Is.EqualTo(547u));
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ResolveTransportConvergenceStartFrameAfterSourceChange(
+                        currentStartFrame: 49u,
+                        sourceChangeFrame: 547u,
+                        convergencePending: false),
+                Is.EqualTo(49u));
+        });
+    }
+
+    [Test]
+    public void ConvergenceDeadline_DenseStartupIncludesBoundedAdmissionMargin()
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager
+                .ResolveTransportTailConvergenceDeadlineFrames(
+                    sourceSweepFrames: 466,
+                    probeCount: 15_368,
+                    solveProbeBudgetPerFrame: 128,
+                    acceleratedSweepCount: 2,
+                    auditDeadlineFrames: 65,
+                    framesInFlight: 3),
+            Is.EqualTo(1_239));
     }
 
     [TestCase(true, 24.0f, 60.0f)]

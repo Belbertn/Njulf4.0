@@ -119,6 +119,10 @@ namespace Njulf.Rendering.Data
         public uint TailExpectedParticipantCount { get; init; }
         public uint TailAuditedParticipantCount { get; init; }
         public uint TailExcludedInactiveCount { get; init; }
+        /// <summary>
+        /// Virtual probes outside the frozen resident/published participant
+        /// domain. Non-zero is normal for sparse DDGI residency.
+        /// </summary>
         public uint TailExcludedNotVisibleCount { get; init; }
         public uint TailExcludedStaleSourceCount { get; init; }
         public uint TailExcludedInvalidCacheCount { get; init; }
@@ -129,6 +133,10 @@ namespace Njulf.Rendering.Data
         public uint TailCachePhysicalGenerationFailureCount { get; init; }
         public uint TailNonFiniteCount { get; init; }
         public uint TailCounterOverflowCount { get; init; }
+        public SimpleDdgiTransportMismatchIdentity TailFirstNotResidentIdentity { get; init; }
+        public SimpleDdgiTransportMismatchIdentity TailFirstStaleSourceIdentity { get; init; }
+        public SimpleDdgiTransportMismatchIdentity TailFirstInvalidCacheIdentity { get; init; }
+        public SimpleDdgiTransportMismatchIdentity TailFirstNonFiniteIdentity { get; init; }
         public uint TailExpectedTexelCount { get; init; }
         public uint TailAuditedTexelCount { get; init; }
         public float TailFixedPointDefect { get; init; }
@@ -163,9 +171,25 @@ namespace Njulf.Rendering.Data
         public uint TailAuditChunkCount { get; init; }
         public bool TailAuditComplete { get; init; }
         public bool TailCertificateCurrent { get; init; }
+        public SimpleDdgiTransportRecoveryAction TailRecoveryAction { get; init; }
+        public ulong TailSameTupleReauditAttemptCount { get; init; }
+        public ulong TailRecoveryCount { get; init; }
+        public int TailNoProgressFrames { get; init; }
+        public int TailAuditReadbackDeadlineFrames { get; init; }
+        public int TailConvergenceDeadlineFrames { get; init; }
+        public int TailCompletedAuditReadbackAgeFrames { get; init; }
+        public ulong TailAuditReadbackTimeoutCount { get; init; }
+        public ulong TailSourceNoProgressRecoveryCount { get; init; }
+        public ulong TailConvergenceDeadlineRecoveryCount { get; init; }
         public static SimpleDdgiTransportConvergenceTelemetry Empty { get; } = new(
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0f,
-            Array.Empty<SimpleDdgiTransportRingConvergenceTelemetry>());
+            Array.Empty<SimpleDdgiTransportRingConvergenceTelemetry>())
+        {
+            TailFirstNotResidentIdentity = SimpleDdgiTransportMismatchIdentity.None,
+            TailFirstStaleSourceIdentity = SimpleDdgiTransportMismatchIdentity.None,
+            TailFirstInvalidCacheIdentity = SimpleDdgiTransportMismatchIdentity.None,
+            TailFirstNonFiniteIdentity = SimpleDdgiTransportMismatchIdentity.None
+        };
     }
 
     /// <summary>
@@ -302,7 +326,10 @@ namespace Njulf.Rendering.Data
         public uint PrimaryGatherCount { get; init; }
         /// <summary>Simple-DDGI volume gathers performed, including primary and coarser fallback gathers.</summary>
         public uint SampledGatherCount { get; init; }
-        /// <summary>1 when per-volume blend, transport, solver, and shadow energy counters were read back.</summary>
+        /// <summary>
+        /// 1 when per-volume blend, transport, solver, and shadow energy counters were read back,
+        /// or when the last detailed energy witness was retained with an explicit age.
+        /// </summary>
         public int EnergyCountersReadbackValid { get; init; }
         public SimpleDdgiVolumeEnergyCounters EnergyCounters { get; init; }
         /// <summary>Exact nearest-rank P95 of the CPU-resident ages for this volume.</summary>
@@ -1130,6 +1157,8 @@ namespace Njulf.Rendering.Data
         public int DdgiDetailedCountersEnabled { get; init; }
         /// <summary>Inclusive forward draw scope containing active GI gather work.</summary>
         public long GpuForwardGiGatherMicroseconds { get; init; }
+        /// <summary>Exclusive opaque Simple-DDGI receiver-cache compute dispatch.</summary>
+        public long GpuSimpleDdgiReceiverCacheMicroseconds { get; init; }
         /// <summary>0 unavailable; 1 inclusive forward draw scope.</summary>
         public int GpuForwardGiGatherTimingCoverage { get; init; }
         /// <summary>
@@ -1607,6 +1636,15 @@ namespace Njulf.Rendering.Data
         public long GpuSimpleDdgiPageResidencyMicroseconds { get; init; }
         public long GpuSimpleDdgiPageFeedbackMicroseconds { get; init; }
         public long GpuSimpleDdgiScheduleMicroseconds { get; init; }
+        public long GpuSimpleDdgiScheduleResetMicroseconds { get; init; }
+        public long GpuSimpleDdgiScheduleClassifyMicroseconds { get; init; }
+        public long GpuSimpleDdgiSchedulePrefixMicroseconds { get; init; }
+        public long GpuSimpleDdgiScheduleLaneBaseMicroseconds { get; init; }
+        public long GpuSimpleDdgiScheduleCompactMicroseconds { get; init; }
+        public long GpuSimpleDdgiScheduleTailAdmitMicroseconds { get; init; }
+        public long GpuSimpleDdgiScheduleAdmitMicroseconds { get; init; }
+        public long GpuSimpleDdgiScheduleMaterializeMicroseconds { get; init; }
+        public long GpuSimpleDdgiScheduleEmitMicroseconds { get; init; }
         public long GpuSimpleDdgiTransportMicroseconds { get; init; }
         public long GpuSimpleDdgiAcceleratedSolveMicroseconds { get; init; }
         public long GpuSimpleDdgiBlendMicroseconds { get; init; }
@@ -1623,6 +1661,8 @@ namespace Njulf.Rendering.Data
         public uint SimpleDdgiSchedulerFeedbackAcceptedCount { get; init; }
         public uint SimpleDdgiSchedulerFeedbackCommittedCount { get; init; }
         public uint SimpleDdgiSchedulerFeedbackFailedCommitCount { get; init; }
+        public string SimpleDdgiSchedulerCommitFailureBreakdown { get; init; } =
+            string.Empty;
         public uint SimpleDdgiSchedulerFeedbackPendingFreshCount { get; init; }
         public uint SimpleDdgiSchedulerFeedbackPendingSourceCount { get; init; }
         public uint SimpleDdgiSchedulerFeedbackPendingSourceInvalidFlagCount { get; init; }

@@ -165,6 +165,17 @@ uint ValidProbeCountForVirtualPage(
         localPage));
 }
 
+bool IsVisiblePublicationCohortDemand(uint packedDemand)
+{
+    uint demandClass = packedDemand & 0xffu;
+    return demandClass >= SIMPLE_DDGI_PAGE_DEMAND_CLASS_RECEIVER_MISS;
+}
+
+uint PackedValidProbeCount(uint packedDemand)
+{
+    return (packedDemand >> 24u) & 0xffu;
+}
+
 void EvictPhysicalPage(
     SimpleDdgiParams params,
     uint physicalPage,
@@ -230,12 +241,68 @@ void main()
     uint admissionLimit = min(
         ResidencyRead(params, 12u),
         params.sparsePhysicalPageCapacity);
+    bool publicationCohortBounded =
+        pc.VisiblePublicationProbeBudget != 0u &&
+        pc.PublicationLatencyTargetFrames != 0u;
+    uint visiblePartialProbeCapacity = publicationCohortBounded
+        ? min(
+            params.probeCount,
+            max(
+                SIMPLE_DDGI_PROBES_PER_PAGE,
+                pc.VisiblePublicationProbeBudget *
+                    (max(pc.PublicationLatencyTargetFrames, 2u) - 1u)))
+        : 0u;
+    uint visiblePartialProbeCount = 0u;
+    if (publicationCohortBounded)
+    {
+        // Count immutable allocation cohorts, not this frame's sampled demand.
+        // Once a visible page is admitted it must finish coherently even if the
+        // camera has already moved on. Metadata carries the exact valid-probe
+        // cardinality so odd-sized edge pages do not consume phantom slots.
+        for (uint physicalPage = 0u;
+             physicalPage < params.sparsePhysicalPageCapacity;
+             physicalPage++)
+        {
+            uint reverseBase = ResidencyPhysicalBase(params, physicalPage);
+            uint ownerPlusOne = ResidencyRead(params, reverseBase + 0u);
+            if (ownerPlusOne == 0u || ownerPlusOne > params.virtualPageCount)
+                continue;
+            uint allocation = ResidencyRead(params, reverseBase + 11u);
+            uint allocationDemand =
+                (allocation &
+                    SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_DEMAND_CLASS_MASK) >>
+                SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_DEMAND_CLASS_SHIFT;
+            if (allocationDemand <
+                SIMPLE_DDGI_PAGE_DEMAND_CLASS_RECEIVER_MISS)
+            {
+                continue;
+            }
+            uint tableBase = ResidencyTableBase(ownerPlusOne - 1u);
+            uint tableFlags = ResidencyRead(params, tableBase + 2u);
+            if (ResidencyRead(params, tableBase + 0u) != physicalPage + 1u ||
+                ResidencyRead(params, tableBase + 1u) !=
+                    ResidencyRead(params, reverseBase + 1u) ||
+                (tableFlags & SIMPLE_DDGI_PAGE_TABLE_VALID) == 0u ||
+                (tableFlags & SIMPLE_DDGI_PAGE_TABLE_PUBLISHED) != 0u)
+            {
+                continue;
+            }
+            uint validProbeCount =
+                (allocation &
+                    SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_VALID_PROBE_COUNT_MASK) >>
+                SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_VALID_PROBE_COUNT_SHIFT;
+            visiblePartialProbeCount += max(validProbeCount, 1u);
+        }
+    }
     uint admissions = 0u;
     uint evictions = 0u;
 
     while (admissions < min(admissionLimit, candidateCount))
     {
         uint bestVirtual = 0xffffffffu;
+        uint bestValidProbeCount = 0u;
+        bool bestIsVisiblePublicationCohort = false;
+        bool visiblePublicationCandidateDeferred = false;
         for (uint virtualPage = 0u;
              virtualPage < params.virtualPageCount;
              virtualPage++)
@@ -248,11 +315,40 @@ void main()
             {
                 continue;
             }
+            uint packedDemand = ResidencyRead(
+                params,
+                ResidencyClassBase(params, virtualPage) + 3u);
+            bool visiblePublicationCandidate =
+                IsVisiblePublicationCohortDemand(packedDemand);
+            uint validProbeCount = max(
+                PackedValidProbeCount(packedDemand),
+                1u);
+            if (publicationCohortBounded && visiblePublicationCandidate &&
+                validProbeCount > visiblePartialProbeCapacity - min(
+                    visiblePartialProbeCount,
+                    visiblePartialProbeCapacity))
+            {
+                visiblePublicationCandidateDeferred = true;
+                continue;
+            }
             if (AdmissionPrecedes(params, virtualPage, bestVirtual))
+            {
                 bestVirtual = virtualPage;
+                bestValidProbeCount = validProbeCount;
+                bestIsVisiblePublicationCohort =
+                    visiblePublicationCandidate;
+            }
         }
         if (bestVirtual == 0xffffffffu)
             break;
+        // Do not create background partial pages while a visible candidate is
+        // waiting for the bounded cohort. Its reserved source work is already
+        // occupied; ordinary maintenance receives only genuinely unused work.
+        if (visiblePublicationCandidateDeferred &&
+            !bestIsVisiblePublicationCohort)
+        {
+            break;
+        }
 
         uint physicalPage = FindFirstFreePhysicalPage(params);
         uint previousOwner = 0xffffffffu;
@@ -349,15 +445,19 @@ void main()
         ResidencyWrite(
             params,
             reverseBase + 11u,
-            pc.CameraCut != 0u
-                ? SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_CAMERA_CUT
-                : 0u);
+            pc.AllocationFlags &
+                (SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_CAMERA_CUT |
+                    SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_BOOTSTRAP) |
+                ((ResidencyRead(params, classBase + 3u) & 0xffu) <<
+                    SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_DEMAND_CLASS_SHIFT) |
+                (min(bestValidProbeCount, 255u) <<
+                    SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_VALID_PROBE_COUNT_SHIFT));
         ResidencyAtomicAdd(
             params,
             ResidencyCounterWord(
                 params,
                 SIMPLE_DDGI_RESIDENCY_COUNTER_ADMISSION_PROBES),
-            ValidProbeCountForVirtualPage(params, bestVirtual));
+            bestValidProbeCount);
 
         uint workBase = initBase + admissions * 4u;
         ResidencyWrite(params, workBase + 0u, bestVirtual);
@@ -368,13 +468,16 @@ void main()
             workBase + 3u,
             ResidencyRead(params, classBase + 3u));
         admissions++;
+        if (bestIsVisiblePublicationCohort)
+            visiblePartialProbeCount += bestValidProbeCount;
     }
 
-    // Expired and confirmed-empty pages leave the working set even when no
-    // new admission immediately needs their slot. This keeps the resident set
-    // faithful to retention/suppression policy and makes subsequent admissions
-    // use deterministic free pages. Churn remains bounded by the same per-frame
-    // transaction cap as initialization.
+    // Confirmed-empty pages leave the working set immediately so their coarse
+    // owner remains authoritative. Merely expired pages stay as a zero-cost
+    // cache while free physical slots exist; the admission loop above evicts
+    // them deterministically when capacity is actually needed. Eager expiry
+    // eviction made sparsely sampled depth demand alternate between unmap and
+    // re-admit despite hundreds of unused physical pages.
     while (evictions < min(admissionLimit, victimCount))
     {
         uint bestVictimPhysical = 0xffffffffu;
@@ -387,7 +490,7 @@ void main()
                 params,
                 ResidencyClassBase(params, candidateVirtual) + 0u);
             if ((classFlags & SIMPLE_DDGI_PAGE_CLASS_VICTIM) == 0u ||
-                (classFlags & SIMPLE_DDGI_PAGE_CLASS_EVICT_WHEN_IDLE) == 0u ||
+                (classFlags & SIMPLE_DDGI_PAGE_CLASS_SUPPRESSED) == 0u ||
                 (classFlags & SIMPLE_DDGI_PAGE_CLASS_SELECTED) != 0u)
             {
                 continue;

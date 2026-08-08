@@ -342,6 +342,7 @@ internal sealed class SampleInputController
     private SponzaGiCaptureRestoreState? _sponzaGiCaptureRestoreState;
     private readonly List<SampleSponzaGiCapturedArtifact> _sponzaGiCaptureArtifacts = [];
     private readonly List<SponzaGiPendingRendererScreenshot> _sponzaGiPendingRendererScreenshots = [];
+    private SampleSponzaGiTemporalTrace? _sponzaGiTemporalTrace;
     private SampleSponzaGiCaptureMode _sponzaGiCaptureMode;
     private SimpleDdgiStoragePackingMode _sponzaGiCaptureStoragePackingMode =
         SimpleDdgiStoragePackingMode.Packed;
@@ -1260,6 +1261,14 @@ internal sealed class SampleInputController
             throw new InvalidOperationException("A Sponza GI capture is already running.");
         if (!Enum.IsDefined(captureMode))
             throw new ArgumentOutOfRangeException(nameof(captureMode));
+        if (captureMode == SampleSponzaGiCaptureMode.DetailedDiagnostics &&
+            !RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled)
+        {
+            throw new InvalidOperationException(
+                "Detailed Sponza GI capture requires a Debug or " +
+                "DetailedInvestigation build so every requested receiver view " +
+                "and detailed counter is present in the shader artifact.");
+        }
         if (storagePackingModeOverride.HasValue &&
             !Enum.IsDefined(storagePackingModeOverride.Value))
         {
@@ -1369,6 +1378,7 @@ internal sealed class SampleInputController
         _sponzaGiScreenshotVerificationFrames = 0;
         _sponzaGiCaptureArtifacts.Clear();
         _sponzaGiPendingRendererScreenshots.Clear();
+        _sponzaGiTemporalTrace = new SampleSponzaGiTemporalTrace();
 
         contract.WriteContract(_sponzaGiCaptureDirectory);
         contract.WriteVisualMetricGate(_sponzaGiCaptureDirectory, captureMode);
@@ -1546,6 +1556,21 @@ internal sealed class SampleInputController
         }
 
         SampleSponzaGiCaptureInstruction instruction = _sponzaGiCaptureSequence.CurrentInstruction;
+        _sponzaGiTemporalTrace?.Record(instruction, _renderer.LastDiagnostics);
+        if (instruction.Stage == SampleSponzaGiCaptureStage.MotionTraversal &&
+            instruction.StageFrameIndex == instruction.StageFrameCount - 1 &&
+            !WriteSponzaGiTemporalTrace(
+                SampleSponzaGiCaptureContract.MotionTraversalName))
+        {
+            return;
+        }
+        if (instruction.Stage == SampleSponzaGiCaptureStage.VerticalTraversal &&
+            instruction.StageFrameIndex == instruction.StageFrameCount - 1 &&
+            !WriteSponzaGiTemporalTrace(
+                SampleSponzaGiCaptureContract.VerticalTraversalName))
+        {
+            return;
+        }
         if (instruction.Output != null &&
             instruction.CaptureWindowAfterRenderedFrame &&
             !CaptureSponzaGiOutput(instruction))
@@ -1652,6 +1677,9 @@ internal sealed class SampleInputController
                 AbortSponzaGiCapture(snapshotVerificationFailure);
                 return false;
             }
+
+            if (!WriteSponzaGiTemporalTrace(instruction.BookmarkName))
+                return false;
         }
 
         contract.WriteRunManifest(
@@ -1661,6 +1689,51 @@ internal sealed class SampleInputController
             captureMode: _sponzaGiCaptureMode,
             storagePackingMode: _sponzaGiCaptureStoragePackingMode,
             sampledAtlasCoverageMode: _sponzaGiCaptureSampledAtlasCoverageMode);
+        return true;
+    }
+
+    private bool WriteSponzaGiTemporalTrace(string traceName)
+    {
+        if (_sponzaGiCaptureSequence == null ||
+            _sponzaGiTemporalTrace == null ||
+            string.IsNullOrWhiteSpace(_sponzaGiCaptureDirectory))
+        {
+            return false;
+        }
+
+        if (_sponzaGiCaptureArtifacts.Any(artifact =>
+                string.Equals(artifact.Bookmark, traceName, StringComparison.Ordinal) &&
+                string.Equals(artifact.Output, "temporal-trace", StringComparison.Ordinal) &&
+                string.Equals(artifact.Kind, "temporal-trace", StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
+        SampleSponzaGiCaptureContract contract = _sponzaGiCaptureSequence.Contract;
+        string relativePath = contract.GetRelativeTemporalTracePath(traceName);
+        string path = Path.Combine(_sponzaGiCaptureDirectory, relativePath);
+        try
+        {
+            _sponzaGiTemporalTrace.Write(path, contract.Fingerprint, traceName);
+        }
+        catch (Exception ex)
+        {
+            AbortSponzaGiCapture(
+                $"Temporal trace export failed for '{traceName}': {ex.Message}");
+            return false;
+        }
+
+        if (!TryAddVerifiedSponzaGiArtifact(
+                contract,
+                traceName,
+                "temporal-trace",
+                "temporal-trace",
+                relativePath,
+                out string verificationFailure))
+        {
+            AbortSponzaGiCapture(verificationFailure);
+            return false;
+        }
         return true;
     }
 
@@ -1908,6 +1981,7 @@ internal sealed class SampleInputController
         _sponzaGiCaptureRestoreState = null;
         _sponzaGiCaptureArtifacts.Clear();
         _sponzaGiPendingRendererScreenshots.Clear();
+        _sponzaGiTemporalTrace = null;
         _sponzaGiScreenshotVerificationFrames = 0;
         _sponzaGiCaptureMode = SampleSponzaGiCaptureMode.ProductionTiming;
         _sponzaGiCaptureStoragePackingMode = SimpleDdgiStoragePackingMode.Packed;

@@ -17,6 +17,8 @@ public sealed class ShaderBuildTests
         "ddgi_simple_publish.comp",
         "ddgi_simple_publish_sampled.comp",
         "ddgi_simple_relocate_classify.comp",
+        "ddgi_simple_schedule_admit_tail.comp",
+        "ddgi_simple_schedule_materialize.comp",
         "farfield_voxelize.comp",
         "farfield_jumpflood.comp"
     ];

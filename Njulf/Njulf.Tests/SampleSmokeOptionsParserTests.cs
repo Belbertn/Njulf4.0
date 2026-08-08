@@ -1034,6 +1034,9 @@ public sealed class SampleSmokeOptionsParserTests
         Assert.Multiple(() =>
         {
             Assert.That(options.SponzaGiCaptureDirectory, Is.EqualTo(Path.GetFullPath(directory)));
+            Assert.That(
+                options.SponzaGiCaptureMode,
+                Is.EqualTo(SampleSponzaGiCaptureMode.DetailedDiagnostics));
             Assert.That(options.SceneKind, Is.EqualTo(SampleSceneKind.SponzaPlaza));
             Assert.That(options.PerformanceScenario, Is.EqualTo(SamplePerformanceScenario.GiSponzaRightWallStationary));
             Assert.That(options.EnableGpuTiming, Is.True);
@@ -1124,6 +1127,43 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(options.LongRunMaxRetainedSamples, Is.EqualTo(512));
             Assert.That(options.LongRunMemoryGrowthToleranceBytes, Is.EqualTo(2_097_152));
             Assert.That(options.LongRunReportPath, Is.EqualTo(Path.GetFullPath(report)));
+        });
+    }
+
+    [Test]
+    public void ParsesExplicitProductionSponzaGiCaptureMode()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "NjulfSponzaGiCaptureProduction");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--sponza-gi-capture-dir", directory,
+            "--sponza-gi-capture-mode", "production"
+        ]);
+
+        Assert.That(
+            options.SponzaGiCaptureMode,
+            Is.EqualTo(SampleSponzaGiCaptureMode.ProductionTiming));
+    }
+
+    [Test]
+    public void SponzaGiCaptureMode_RequiresCaptureDirectoryAndKnownValue()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => SampleSmokeOptionsParser.Parse(
+                    ["--sponza-gi-capture-mode", "production"]),
+                Throws.ArgumentException.With.Message.Contains(
+                    "requires --sponza-gi-capture-dir"));
+            Assert.That(
+                () => SampleSmokeOptionsParser.Parse(
+                [
+                    "--sponza-gi-capture-dir", Path.GetTempPath(),
+                    "--sponza-gi-capture-mode", "benchmark-ish"
+                ]),
+                Throws.ArgumentException.With.Message.Contains(
+                    "Invalid Sponza GI capture mode"));
         });
     }
 

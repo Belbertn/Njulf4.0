@@ -292,7 +292,7 @@ internal sealed class HelloGame : Game
             _inputController.StartSponzaGiCapture(
                 _smokeOptions.SponzaGiCaptureDirectory,
                 exitWhenComplete: true,
-                captureMode: SampleSponzaGiCaptureMode.DetailedDiagnostics,
+                captureMode: _smokeOptions.SponzaGiCaptureMode,
                 storagePackingModeOverride:
                     _smokeOptions.SimpleDdgiStoragePackingModeOverride,
                 sampledAtlasCoverageModeOverride:

@@ -4,6 +4,7 @@
 
 #include "common.glsl"
 
+
 #ifdef FORWARD_COMPACTED_MESH
 // The dense indirect path has no task-stage latency to hide. Two 32-lane
 // subgroups cover the production 48-vertex/64-triangle meshlets without the

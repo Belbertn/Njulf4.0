@@ -1,0 +1,105 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_schedule_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// Admission serializes only the policy decision and stable accepted order.
+// Resolve immutable state, sparse physical ownership, and the complete update
+// proposal in parallel; emit runs after the schedule-pass storage barrier and
+// therefore never observes the temporary five-word selection record.
+void main()
+{
+    uint updateIndex = gl_GlobalInvocationID.x;
+    uint accepted = min(
+        SchedulerArenaRead(
+            pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
+        SchedulerRequestCapacity());
+    if (updateIndex >= accepted)
+        return;
+
+    uint probeIndex;
+    uint volumeIndex;
+    uint workClassAndTransport;
+    uint rayTierAndReason;
+    uint expectedGeneration;
+    SchedulerReadUpdateSelection(
+        updateIndex,
+        probeIndex,
+        volumeIndex,
+        workClassAndTransport,
+        rayTierAndReason,
+        expectedGeneration);
+
+    uint transport = (workClassAndTransport >> 3u) & 3u;
+    uint rayTier = rayTierAndReason & 0xffu;
+    uint candidateReasons = rayTierAndReason >> 8u;
+    bool sourceWork =
+        transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE ||
+        transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
+    uint requiredSourceRayCount = clamp(
+        SchedulerVolumeFullRays(volumeIndex),
+        1u,
+        SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
+    uint activeRayCount = rayTier == SIMPLE_DDGI_SCHEDULER_RAY_FULL
+        ? requiredSourceRayCount
+        : clamp(
+            SchedulerVolumeMaintenanceRays(volumeIndex),
+            1u,
+            SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
+    uint sourceRayCount = SchedulerTransportV2()
+        ? requiredSourceRayCount
+        : (sourceWork ? requiredSourceRayCount : 0u);
+    if (SchedulerTransportV2() || sourceWork)
+        activeRayCount = requiredSourceRayCount;
+
+    uint flags = activeRayCount << SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_SHIFT;
+    if ((candidateReasons & SIMPLE_DDGI_SCHEDULER_REASON_FRESH) != 0u)
+        flags |= SIMPLE_DDGI_SCHEDULER_PROBE_FRESH;
+    if ((candidateReasons & SIMPLE_DDGI_SCHEDULER_REASON_SCROLL) != 0u)
+        flags |= SIMPLE_DDGI_SCHEDULER_PROBE_SCROLL;
+    if (rayTier == SIMPLE_DDGI_SCHEDULER_RAY_MAINTENANCE)
+        flags |= SIMPLE_DDGI_SCHEDULER_UPDATE_MAINTENANCE;
+    if ((candidateReasons & (
+            SIMPLE_DDGI_SCHEDULER_REASON_FRESH |
+            SIMPLE_DDGI_SCHEDULER_REASON_SCROLL |
+            SIMPLE_DDGI_SCHEDULER_REASON_REGIONAL_DIRTY |
+            SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY |
+            SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID |
+            SIMPLE_DDGI_SCHEDULER_REASON_RELOCATION_RETRY)) != 0u)
+    {
+        flags |= SIMPLE_DDGI_SCHEDULER_UPDATE_INVALIDATE;
+    }
+    if (sourceWork)
+    {
+        flags |= SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH;
+        if (transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE)
+            flags |= SIMPLE_DDGI_SCHEDULER_UPDATE_ROUTINE_SOURCE;
+    }
+    uint cascade = min(SchedulerVolumeWord(volumeIndex, 32u), 6u) + 1u;
+    uint maxLights = min(SchedulerVolumeWord(volumeIndex, 33u), 62u) + 1u;
+    flags |= cascade << 3u;
+    flags |= maxLights << 6u;
+
+    uint publicStateBase = probeIndex * SIMPLE_DDGI_PROBE_STATE_WORDS;
+    uint schedulingAge = ReadStorageWordUniform(
+        pc.ProbeStateBufferIndex,
+        publicStateBase + 5u);
+    uint schedulerStateBase = pc.SchedulerProbeStateOffsetWords +
+        probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+    uint updateSourceGeneration = sourceWork
+        ? SchedulerSourceGeneration()
+        : SchedulerArenaRead(schedulerStateBase + 2u);
+    SchedulerWriteUpdate(
+        updateIndex,
+        probeIndex,
+        volumeIndex,
+        flags,
+        expectedGeneration,
+        schedulingAge,
+        sourceRayCount,
+        updateSourceGeneration,
+        candidateReasons);
+}

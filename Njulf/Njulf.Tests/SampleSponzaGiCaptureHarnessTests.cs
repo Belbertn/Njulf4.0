@@ -27,19 +27,28 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(contract.Width, Is.EqualTo(1600));
             Assert.That(contract.Height, Is.EqualTo(900));
             Assert.That(contract.WarmupFrames, Is.EqualTo(SampleSponzaGiCaptureContract.FullSourceRefreshSweepFrameCount));
-            Assert.That(SampleSponzaGiCaptureContract.HighBookmarkStationarySettleFrameCount, Is.EqualTo(2048));
+            Assert.That(
+                SampleSponzaGiCaptureContract.HighBookmarkStationarySettleFrameCount,
+                Is.EqualTo(
+                    SampleSponzaGiCaptureContract.FullSourceRefreshSweepFrameCount +
+                    SampleSponzaGiCaptureContract.TailCertificationSettleFrameCount));
             Assert.That(contract.VerticalPathDurationSeconds, Is.InRange(10, 20));
             Assert.That(contract.VerticalTraversalFrameCount, Is.EqualTo(960));
-            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v9"));
-            Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(5_188));
+            Assert.That(contract.MotionTraversalFrameCount, Is.EqualTo(300));
+            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v11"));
+            Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(6_164));
             Assert.That(contract.LowBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeLow"));
             Assert.That(contract.LowBookmark.Position.Y, Is.EqualTo(1.35f));
             Assert.That(contract.HighBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeHigh"));
+            Assert.That(
+                SampleSponzaGiCaptureContract.VerticalTraversalName,
+                Is.EqualTo("SponzaPlazaUpperFacadeVerticalTraversal"));
             Assert.That(contract.HighBookmark.Position.Y, Is.EqualTo(10.35f));
             Assert.That(contract.ReceiverRois.Select(static roi => roi.Name), Is.EquivalentTo(new[]
             {
                 "central-upper-facade",
                 "right-upper-wall",
+                "upper-gallery-hotspot-pair",
                 "left-gallery-interior",
                 "right-gallery-interior",
                 "arcade-interior",
@@ -71,7 +80,13 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                 "fallback",
                 "probe-state",
                 "classification-invalid-score",
-                "update-reasons"
+                "update-reasons",
+                "visibility-moments",
+                "probe-relocation",
+                "probe-residency",
+                "residency-fallback",
+                "page-age",
+                "physical-page"
             }));
             SampleSponzaGiCaptureOutput directOnly = contract.Outputs.Single(static output => output.Name == "direct-only");
             Assert.That(directOnly.DisableGlobalIllumination, Is.True);
@@ -112,20 +127,78 @@ public sealed class SampleSponzaGiCaptureHarnessTests
     }
 
     [Test]
-    public void CoveragePath_ContainsEveryFixedTimestepOfTheLockedVerticalTraversal()
+    public void MotionTraversal_MovesTwoPointFiveMetresPausesAndReturnsExactly()
+    {
+        SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
+        SampleSponzaGiCameraBookmark first = contract.SampleMotionTraversalFrame(0);
+        SampleSponzaGiCameraBookmark outbound = contract.SampleMotionTraversalFrame(
+            SampleSponzaGiCaptureContract.MotionOutboundFrameCount - 1);
+        SampleSponzaGiCameraBookmark pauseLast = contract.SampleMotionTraversalFrame(
+            SampleSponzaGiCaptureContract.MotionOutboundFrameCount +
+            SampleSponzaGiCaptureContract.MotionPauseFrameCount - 1);
+        SampleSponzaGiCameraBookmark last = contract.SampleMotionTraversalFrame(
+            contract.MotionTraversalFrameCount - 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.Position, Is.EqualTo(contract.LowBookmark.Position));
+            Assert.That(outbound.Position.Z - first.Position.Z,
+                Is.EqualTo(SampleSponzaGiCaptureContract.MotionTraversalDistance).Within(1e-6f));
+            Assert.That(pauseLast.Position, Is.EqualTo(outbound.Position));
+            Assert.That(last.Position, Is.EqualTo(contract.LowBookmark.Position));
+            Assert.That(last.Yaw, Is.EqualTo(contract.LowBookmark.Yaw));
+            Assert.That(
+                () => contract.SampleMotionTraversalFrame(contract.MotionTraversalFrameCount),
+                Throws.TypeOf<ArgumentOutOfRangeException>());
+        });
+    }
+
+    [Test]
+    public void CoveragePath_ContainsEveryFixedTimestepOfBothLockedTraversals()
     {
         SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
         IReadOnlyList<SimpleDdgiCoverageCameraSample> path = contract.CreateCoverageCameraPath();
 
         Assert.Multiple(() =>
         {
-            Assert.That(path, Has.Count.EqualTo(960));
-            Assert.That(path[0].Name, Is.EqualTo(contract.LowBookmark.Name));
+            Assert.That(path, Has.Count.EqualTo(1_260));
+            Assert.That(path[0].Name,
+                Does.StartWith(SampleSponzaGiCaptureContract.MotionTraversalName));
             Assert.That(path[^1].Name, Is.EqualTo(contract.HighBookmark.Name));
             Assert.That(path[0].Position, Is.EqualTo(contract.LowBookmark.Position));
             Assert.That(path[^1].Position, Is.EqualTo(contract.HighBookmark.Position));
             Assert.That(path.Select(static sample => sample.Name).Distinct().Count(), Is.EqualTo(path.Count));
-            Assert.That(path[480].Position, Is.EqualTo(contract.SampleVerticalTraversalFrame(480).Position));
+            Assert.That(path[contract.MotionTraversalFrameCount + 480].Position,
+                Is.EqualTo(contract.SampleVerticalTraversalFrame(480).Position));
+        });
+    }
+
+    [Test]
+    public void TemporalTrace_IsBoundedAndReturnsOldestToNewest()
+    {
+        var trace = new SampleSponzaGiTemporalTrace();
+        SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
+        for (int i = 0; i < SampleSponzaGiTemporalTrace.Capacity + 37; i++)
+        {
+            trace.Record(
+                new SampleSponzaGiCaptureInstruction(
+                    SampleSponzaGiCaptureStage.MotionTraversal,
+                    i,
+                    SampleSponzaGiTemporalTrace.Capacity + 37,
+                    contract.LowBookmark,
+                    null,
+                    SampleSponzaGiCaptureContract.MotionTraversalName,
+                    false),
+                RendererDiagnostics.Empty);
+        }
+
+        IReadOnlyList<SampleSponzaGiTemporalTraceEntry> snapshot = trace.Snapshot();
+        Assert.Multiple(() =>
+        {
+            Assert.That(trace.Count, Is.EqualTo(SampleSponzaGiTemporalTrace.Capacity));
+            Assert.That(trace.TotalSampleCount, Is.EqualTo(549));
+            Assert.That(snapshot[0].SampleIndex, Is.EqualTo(37));
+            Assert.That(snapshot[^1].SampleIndex, Is.EqualTo(548));
         });
     }
 
@@ -244,7 +317,7 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(report.IsCovered, Is.True,
                 string.Join(Environment.NewLine, report.Issues.Select(static issue => issue.Message)));
             Assert.That(report.Samples, Has.Count.EqualTo(
-                contract.ReceiverRois.Count * contract.VerticalTraversalFrameCount * 15));
+                contract.ReceiverRois.Count * contract.CoverageCameraFrameCount * 15));
             Assert.That(report.Samples.Where(static sample => sample.IsInTransitionBand), Is.Not.Empty);
             Assert.That(report.Samples.Where(static sample => sample.IsInTransitionBand),
                 Has.All.Matches<SimpleDdgiReceiverCoverageSample>(sample => sample.HasCoarserFallback));
@@ -435,6 +508,23 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                 "coverage-oracle",
                 "sponza-gi-coverage-oracle.json",
                 "{\"schemaVersion\":\"test\"}"));
+            foreach (string traceName in new[]
+                     {
+                         contract.LowBookmark.Name,
+                         SampleSponzaGiCaptureContract.MotionTraversalName,
+                         SampleSponzaGiCaptureContract.VerticalTraversalName,
+                         contract.HighBookmark.Name
+                     })
+            {
+                artifacts.Add(CreateVerifiedTextArtifact(
+                    contract,
+                    directory,
+                    traceName,
+                    "temporal-trace",
+                    "temporal-trace",
+                    contract.GetRelativeTemporalTracePath(traceName),
+                    "{\"schemaVersion\":\"test\"}"));
+            }
             foreach (SampleSponzaGiCameraBookmark bookmark in new[] { contract.LowBookmark, contract.HighBookmark })
             {
                 foreach (SampleSponzaGiCaptureOutput output in contract.Outputs)

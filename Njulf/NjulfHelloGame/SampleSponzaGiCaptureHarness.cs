@@ -58,10 +58,11 @@ public enum SampleSponzaGiCaptureStage : byte
 {
     Warmup = 0,
     CaptureLowBookmark = 1,
-    VerticalTraversal = 2,
-    HighBookmarkStationarySettle = 3,
-    CaptureHighBookmark = 4,
-    Complete = 5
+    MotionTraversal = 2,
+    VerticalTraversal = 3,
+    HighBookmarkStationarySettle = 4,
+    CaptureHighBookmark = 5,
+    Complete = 6
 }
 
 /// <summary>
@@ -141,7 +142,7 @@ public sealed record SampleSponzaGiVisualMetricGate(
 /// </summary>
 public sealed class SampleSponzaGiCaptureContract
 {
-    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v9";
+    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v11";
     public const string VisualMetricGateSchemaVersion = "realtime-gi-closure-sponza-visual-metrics/v1";
     public const string CoverageOracleSchemaVersion = "realtime-gi-closure-sponza-coverage-oracle/v1";
     public const int LockedWidth = 1600;
@@ -152,9 +153,22 @@ public sealed class SampleSponzaGiCaptureContract
     // not mistaken for field-wide evidence. 2048 covers the observed ~1920
     // frame sweep with readback/presentation latency headroom.
     public const int FullSourceRefreshSweepFrameCount = 2048;
+    // A periodic source cohort can legally open near the end of that sweep.
+    // Reserve deterministic post-sweep time for its source repair plus all
+    // eight configured solve/audit generations; otherwise the high beauty
+    // snapshot can land inside a complete-but-not-yet-certified audit.
+    public const int TailCertificationSettleFrameCount = 640;
     public const int WarmupFrameCount = FullSourceRefreshSweepFrameCount;
-    public const int HighBookmarkStationarySettleFrameCount = FullSourceRefreshSweepFrameCount;
+    public const int HighBookmarkStationarySettleFrameCount =
+        FullSourceRefreshSweepFrameCount + TailCertificationSettleFrameCount;
     public const int VerticalTraversalDurationSeconds = 16;
+    public const float MotionTraversalDistance = 2.5f;
+    public const int MotionOutboundFrameCount = 120;
+    public const int MotionPauseFrameCount = 60;
+    public const int MotionReturnFrameCount = 120;
+    public const string MotionTraversalName = "SponzaPlazaHotspotTriggerTraversal";
+    public const string VerticalTraversalName =
+        "SponzaPlazaUpperFacadeVerticalTraversal";
     // One frame presents the requested state, one spans the two-frame GPU timing
     // latency, and the final frame captures the held state with settled telemetry.
     public const int FramesPerEndpointOutput = 3;
@@ -191,10 +205,15 @@ public sealed class SampleSponzaGiCaptureContract
     public string Fingerprint { get; }
 
     public int VerticalTraversalFrameCount => checked(VerticalPathDurationSeconds * FramesPerSecond);
+    public int MotionTraversalFrameCount => checked(
+        MotionOutboundFrameCount + MotionPauseFrameCount + MotionReturnFrameCount);
+    public int CoverageCameraFrameCount => checked(
+        MotionTraversalFrameCount + VerticalTraversalFrameCount);
 
     /// <summary>Frames from the initial low warmup through the final high image.</summary>
     public int TotalCaptureFrameCount => checked(
         WarmupFrames +
+        MotionTraversalFrameCount +
         VerticalTraversalFrameCount +
         HighBookmarkStationarySettleFrameCount +
         Outputs.Count * 2 * FramesPerEndpointOutput);
@@ -271,13 +290,57 @@ public sealed class SampleSponzaGiCaptureContract
         float linear = frameCount <= 1 ? 1.0f : frameIndex / (float)(frameCount - 1);
         float t = linear * linear * (3.0f - 2.0f * linear);
         return new SampleSponzaGiCameraBookmark(
-            "SponzaPlazaUpperFacadeVerticalTraversal",
+            VerticalTraversalName,
             Vector3.Lerp(LowBookmark.Position, HighBookmark.Position, t),
             Lerp(LowBookmark.Yaw, HighBookmark.Yaw, t),
             Lerp(LowBookmark.Pitch, HighBookmark.Pitch, t),
             Lerp(LowBookmark.FieldOfView, HighBookmark.FieldOfView, t),
             Lerp(LowBookmark.NearPlane, HighBookmark.NearPlane, t),
             Lerp(LowBookmark.FarPlane, HighBookmark.FarPlane, t));
+    }
+
+    /// <summary>
+    /// Locked ordinary-motion reproducer: move 2.5 metres along the plaza,
+    /// hold for one second, then return to the byte-identical start camera.
+    /// Each leg uses smoothstep so the path has no artificial velocity jump.
+    /// </summary>
+    public SampleSponzaGiCameraBookmark SampleMotionTraversalFrame(int frameIndex)
+    {
+        int frameCount = MotionTraversalFrameCount;
+        if (frameIndex < 0 || frameIndex >= frameCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(frameIndex),
+                frameIndex,
+                $"The motion traversal contains frames 0 through {frameCount - 1}.");
+        }
+
+        float distance;
+        if (frameIndex < MotionOutboundFrameCount)
+        {
+            float linear = MotionOutboundFrameCount <= 1
+                ? 1.0f
+                : frameIndex / (float)(MotionOutboundFrameCount - 1);
+            distance = MotionTraversalDistance * SmoothStep(linear);
+        }
+        else if (frameIndex < MotionOutboundFrameCount + MotionPauseFrameCount)
+        {
+            distance = MotionTraversalDistance;
+        }
+        else
+        {
+            int returnFrame = frameIndex - MotionOutboundFrameCount - MotionPauseFrameCount;
+            float linear = MotionReturnFrameCount <= 1
+                ? 1.0f
+                : returnFrame / (float)(MotionReturnFrameCount - 1);
+            distance = MotionTraversalDistance * (1.0f - SmoothStep(linear));
+        }
+
+        return LowBookmark with
+        {
+            Name = MotionTraversalName,
+            Position = LowBookmark.Position + new Vector3(0.0f, 0.0f, distance)
+        };
     }
 
     /// <summary>
@@ -288,17 +351,25 @@ public sealed class SampleSponzaGiCaptureContract
     /// </summary>
     public IReadOnlyList<SimpleDdgiCoverageCameraSample> CreateCoverageCameraPath()
     {
-        var path = new SimpleDdgiCoverageCameraSample[VerticalTraversalFrameCount];
-        for (int frameIndex = 0; frameIndex < path.Length; frameIndex++)
+        var path = new SimpleDdgiCoverageCameraSample[CoverageCameraFrameCount];
+        for (int frameIndex = 0; frameIndex < MotionTraversalFrameCount; frameIndex++)
+        {
+            SampleSponzaGiCameraBookmark camera = SampleMotionTraversalFrame(frameIndex);
+            path[frameIndex] = new SimpleDdgiCoverageCameraSample(
+                $"{MotionTraversalName}-{frameIndex:D4}",
+                camera.Position);
+        }
+        for (int frameIndex = 0; frameIndex < VerticalTraversalFrameCount; frameIndex++)
         {
             SampleSponzaGiCameraBookmark camera = SampleVerticalTraversalFrame(frameIndex);
             string name = frameIndex switch
             {
                 0 => LowBookmark.Name,
-                _ when frameIndex == path.Length - 1 => HighBookmark.Name,
-                _ => $"SponzaPlazaUpperFacadeVerticalTraversal-{frameIndex:D4}"
+                _ when frameIndex == VerticalTraversalFrameCount - 1 => HighBookmark.Name,
+                _ => $"{VerticalTraversalName}-{frameIndex:D4}"
             };
-            path[frameIndex] = new SimpleDdgiCoverageCameraSample(name, camera.Position);
+            path[MotionTraversalFrameCount + frameIndex] =
+                new SimpleDdgiCoverageCameraSample(name, camera.Position);
         }
 
         return Array.AsReadOnly(path);
@@ -465,6 +536,13 @@ public sealed class SampleSponzaGiCaptureContract
         return Path.Combine(directory, $"{fileName}.window.png");
     }
 
+    public string GetRelativeTemporalTracePath(string traceName)
+    {
+        if (string.IsNullOrWhiteSpace(traceName))
+            throw new ArgumentException("Trace name is required.", nameof(traceName));
+        return Path.Combine(ToFileSegment(traceName), "temporal-trace.json");
+    }
+
     public void WriteContract(string outputDirectory)
     {
         if (string.IsNullOrWhiteSpace(outputDirectory))
@@ -513,9 +591,11 @@ public sealed class SampleSponzaGiCaptureContract
         {
             schemaVersion = CoverageOracleSchemaVersion,
             contractFingerprint = Fingerprint,
+            motionTrajectoryFrameCount = MotionTraversalFrameCount,
             verticalTrajectoryFrameCount = VerticalTraversalFrameCount,
+            coverageCameraFrameCount = CoverageCameraFrameCount,
             receiverRoiCount = ReceiverRois.Count,
-            representativePointCount = report.Samples.Count / Math.Max(1, ReceiverRois.Count * VerticalTraversalFrameCount),
+            representativePointCount = report.Samples.Count / Math.Max(1, ReceiverRois.Count * CoverageCameraFrameCount),
             isCovered = report.IsCovered,
             expectedRingRecenterEvents = report.ExpectedRingRecenterEvents,
             layout = report.Layout,
@@ -753,6 +833,23 @@ public sealed class SampleSponzaGiCaptureContract
             string.Empty,
             "coverage-oracle",
             "sponza-gi-coverage-oracle.json");
+        foreach (string traceName in new[]
+                 {
+                     LowBookmark.Name,
+                     MotionTraversalName,
+                     VerticalTraversalName,
+                     HighBookmark.Name
+                 })
+        {
+            AddExpectedArtifactBlockers(
+                blockers,
+                outputDirectory,
+                artifacts,
+                traceName,
+                "temporal-trace",
+                "temporal-trace",
+                GetRelativeTemporalTracePath(traceName));
+        }
         foreach (SampleSponzaGiCameraBookmark bookmark in new[] { LowBookmark, HighBookmark })
         {
             foreach (SampleSponzaGiCaptureOutput output in Outputs)
@@ -870,12 +967,12 @@ public sealed class SampleSponzaGiCaptureContract
         ValidateBookmark(HighBookmark, nameof(HighBookmark));
         ValidateBounds(SceneBounds, nameof(SceneBounds));
 
-        if (ReceiverRois.Count != 9)
+        if (ReceiverRois.Count != 10)
             throw new InvalidOperationException(
                 "The closure capture requires the established coverage ROIs plus lit-side, shadowed-side, and adjacent curtain transport ROIs.");
-        if (Outputs.Count != 22)
+        if (Outputs.Count != 28)
             throw new InvalidOperationException(
-                "The closure capture requires the twenty-two locked beauty/direct/GI attribution outputs.");
+                "The closure capture requires the twenty-eight locked beauty/direct/GI and sparse-residency attribution outputs.");
 
         ValidateDistinctNames(ReceiverRois.Select(static roi => roi.Name), "receiver ROI");
         ValidateDistinctNames(Outputs.Select(static output => output.Name), "output");
@@ -916,7 +1013,7 @@ public sealed class SampleSponzaGiCaptureContract
             "central-upper-facade", "right-upper-wall", "left-gallery-interior",
             "right-gallery-interior", "arcade-interior", "outdoor-reference-patch",
             "curtain-lit-side-floor", "curtain-shadow-side-receiver",
-            "curtain-adjacent-bounce"
+            "curtain-adjacent-bounce", "upper-gallery-hotspot-pair"
         ];
         if (!ReceiverRois.Select(static roi => roi.Name).OrderBy(static value => value, StringComparer.Ordinal).SequenceEqual(
                 requiredReceiverRois.OrderBy(static value => value, StringComparer.Ordinal), StringComparer.Ordinal))
@@ -931,6 +1028,8 @@ public sealed class SampleSponzaGiCaptureContract
             "spatial-coverage", "support", "visibility", "ownership", "fallback",
             "data-confidence", "directional-support", "confidence-chain",
             "probe-state", "classification-invalid-score", "update-reasons"
+            , "visibility-moments", "probe-relocation", "probe-residency",
+            "residency-fallback", "page-age", "physical-page"
         ];
         if (!Outputs.Select(static output => output.Name).OrderBy(static value => value, StringComparer.Ordinal).SequenceEqual(
                 requiredOutputs.OrderBy(static value => value, StringComparer.Ordinal), StringComparer.Ordinal))
@@ -998,6 +1097,12 @@ public sealed class SampleSponzaGiCaptureContract
                     new BoundingBox(new Vector3(11.5f, 10.0f, -6.5f), new Vector3(18.5f, 18.0f, 11.5f)),
                     3.75f,
                     "Right upper wall, retained to tie the reproduction to the original right-wall scenario.",
+                    RequireCoarserFallback: true),
+                new SampleSponzaGiReceiverRoi(
+                    "upper-gallery-hotspot-pair",
+                    new BoundingBox(new Vector3(12.25f, 11.0f, -2.5f), new Vector3(17.75f, 16.75f, 5.0f)),
+                    3.75f,
+                    "Tight upper-gallery pair used for P95/maximum hotspot attribution without dilution by the broad façade ROI.",
                     RequireCoarserFallback: true),
                 new SampleSponzaGiReceiverRoi(
                     "left-gallery-interior",
@@ -1070,7 +1175,13 @@ public sealed class SampleSponzaGiCaptureContract
                 new SampleSponzaGiCaptureOutput("fallback", "fallback", GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight, false, "Environment fallback composition weight."),
                 new SampleSponzaGiCaptureOutput("probe-state", "probe-state", GlobalIlluminationDebugView.DdgiProbeState, false, "First gather rejection reason and combined rejection mask for unsupported Simple-DDGI receivers."),
                 new SampleSponzaGiCaptureOutput("classification-invalid-score", "classification-invalid-score", GlobalIlluminationDebugView.DdgiClassificationInvalidScore, false, "Probe relocation/classification invalid score."),
-                new SampleSponzaGiCaptureOutput("update-reasons", "update-reasons", GlobalIlluminationDebugView.DdgiUpdateReasons, false, "Scheduled probe update reasons and recovery activity.")
+                new SampleSponzaGiCaptureOutput("update-reasons", "update-reasons", GlobalIlluminationDebugView.DdgiUpdateReasons, false, "Scheduled probe update reasons and recovery activity."),
+                new SampleSponzaGiCaptureOutput("visibility-moments", "visibility-moments", GlobalIlluminationDebugView.DdgiVisibilityMoments, false, "Visibility mean and second-moment attribution."),
+                new SampleSponzaGiCaptureOutput("probe-relocation", "probe-relocation", GlobalIlluminationDebugView.DdgiProbeRelocation, false, "Probe relocation and classification ownership."),
+                new SampleSponzaGiCaptureOutput("probe-residency", "probe-residency", GlobalIlluminationDebugView.DdgiProbeResidency, false, "Fine-page residency state at the receiver."),
+                new SampleSponzaGiCaptureOutput("residency-fallback", "residency-fallback", GlobalIlluminationDebugView.DdgiResidencyFallback, false, "Coherent coarse fallback used while fine data is absent or warming."),
+                new SampleSponzaGiCaptureOutput("page-age", "page-age", GlobalIlluminationDebugView.DdgiPageAge, false, "Sparse-page age and publication latency attribution."),
+                new SampleSponzaGiCaptureOutput("physical-page", "physical-page", GlobalIlluminationDebugView.DdgiPhysicalPage, false, "Virtual-to-physical sparse-page identity.")
             ]);
     }
 
@@ -1088,6 +1199,12 @@ public sealed class SampleSponzaGiCaptureContract
         Append(builder, VerticalPathDurationSeconds);
         Append(builder, "coverage-oracle-full-fixed-trajectory");
         Append(builder, VerticalTraversalFrameCount);
+        Append(builder, MotionTraversalDistance);
+        Append(builder, MotionOutboundFrameCount);
+        Append(builder, MotionPauseFrameCount);
+        Append(builder, MotionReturnFrameCount);
+        Append(builder, MotionTraversalName);
+        Append(builder, VerticalTraversalName);
         Append(builder, FramesPerEndpointOutput);
         Append(builder, VisualMetricGateSchemaVersion);
         foreach (SampleSponzaGiVisualMetricRule metric in CreateRequiredVisualMetrics())
@@ -1385,6 +1502,293 @@ public sealed class SampleSponzaGiCaptureContract
     private static bool NearlyEqual(float left, float right) => MathF.Abs(left - right) <= 0.0001f;
 
     private static float Lerp(float left, float right, float t) => left + (right - left) * t;
+    private static float SmoothStep(float t) => t * t * (3.0f - 2.0f * t);
+}
+
+/// <summary>
+/// Compact per-frame evidence retained entirely in a fixed 512-entry ring.
+/// Recording reads only already-materialized, fence-complete diagnostics; it
+/// never scans probe or page arrays and performs no per-frame allocation.
+/// </summary>
+public sealed class SampleSponzaGiTemporalTrace
+{
+    public const string SchemaVersion = "simple-ddgi-sponza-temporal-trace/v3";
+    public const int Capacity = 512;
+
+    private static readonly JsonSerializerOptions TraceJsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        IncludeFields = true,
+        Converters = { new JsonStringEnumConverter() }
+    };
+
+    private readonly SampleSponzaGiTemporalTraceEntry[] _entries = new SampleSponzaGiTemporalTraceEntry[Capacity];
+    private int _nextIndex;
+    private int _count;
+    private ulong _totalSampleCount;
+
+    public int Count => _count;
+    public ulong TotalSampleCount => _totalSampleCount;
+
+    public void Record(
+        SampleSponzaGiCaptureInstruction instruction,
+        RendererDiagnostics diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(instruction);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+
+        var residency = diagnostics.SimpleDdgiProbeResidency;
+        SimpleDdgiTransportConvergenceTelemetry tail =
+            diagnostics.SimpleDdgiTransportConvergence;
+        _entries[_nextIndex] = new SampleSponzaGiTemporalTraceEntry
+        {
+            SampleIndex = _totalSampleCount,
+            Stage = instruction.Stage,
+            StageFrameIndex = instruction.StageFrameIndex,
+            StageFrameCount = instruction.StageFrameCount,
+            CameraPosition = instruction.Camera.Position,
+            CameraYaw = instruction.Camera.Yaw,
+            CameraPitch = instruction.Camera.Pitch,
+            CameraCut = diagnostics.HiZPolicyCameraCut,
+            Recentered = diagnostics.SimpleDdgiRecentered,
+            FramesSinceRecenter = diagnostics.SimpleDdgiFramesSinceLastRecenter,
+            ResidencyAvailable = residency.IsAvailable,
+            ResidencyFeedbackValid = residency.FeedbackValid,
+            ResidencyFeedbackFrameSerial = residency.FeedbackFrameSerial,
+            ResidencyResourceGeneration = residency.FeedbackResourceGeneration,
+            VisibleDemandPageCount = residency.VisibleDemandPageCount,
+            AdmissionCount = residency.AdmissionCount,
+            EvictionCount = residency.EvictionCount,
+            ResidentPageCount = residency.ResidentPageCount,
+            InitializingPageCount = residency.InitializingPageCount,
+            PublishedPageCount = residency.PublishedPageCount,
+            VisibleResidentHitPageCount = residency.VisibleDemandResidentHitPageCount,
+            VisibleMissingPageCount = residency.VisibleDemandMissingPageCount,
+            OrdinaryPublicationP95Frames = residency.OrdinaryAllocationToPublicationP95Frames,
+            CutPublicationP95Frames = residency.CutAllocationToPublicationP95Frames,
+            SchedulerFeedbackValid = diagnostics.SimpleDdgiSchedulerFeedbackValid,
+            SchedulerFeedbackFrameSerial = diagnostics.SimpleDdgiSchedulerFeedbackFrameSerial,
+            SchedulerResourceGeneration = diagnostics.SimpleDdgiSchedulerResourceGeneration,
+            SchedulerConsideredCount = diagnostics.SimpleDdgiSchedulerFeedbackConsideredCount,
+            SchedulerAcceptedCount = diagnostics.SimpleDdgiSchedulerFeedbackAcceptedCount,
+            SchedulerSourceProbeCount = diagnostics.SimpleDdgiSchedulerFeedbackSourceProbeCount,
+            SchedulerSourceRayCount = diagnostics.SimpleDdgiSchedulerFeedbackSourceRayCount,
+            SchedulerTransportRayCount = diagnostics.SimpleDdgiSchedulerFeedbackTransportRayCount,
+            SchedulerPublishedCount = diagnostics.SimpleDdgiSchedulerFeedbackPublishedCount,
+            SchedulerPendingFreshCount = diagnostics.SimpleDdgiSchedulerFeedbackPendingFreshCount,
+            SchedulerPendingSourceCount = diagnostics.SimpleDdgiSchedulerFeedbackPendingSourceCount,
+            SchedulerPendingSourceCardinalityCount =
+                diagnostics.SimpleDdgiSchedulerFeedbackPendingSourceCardinalityCount,
+            SchedulerPendingSourceGenerationCount =
+                diagnostics.SimpleDdgiSchedulerFeedbackPendingSourceGenerationCount,
+            SourceRefreshTargetProbeCount =
+                diagnostics.SimpleDdgiTransportSourceRefreshTargetProbeCount,
+            SourceRefreshCompletedProbeCount =
+                diagnostics.SimpleDdgiTransportSourceRefreshProbeCount,
+            SourceRefreshCapacityShortfall =
+                diagnostics.SimpleDdgiTransportSourceRefreshCapacityShortfall,
+            SourceCohortTransitionActive =
+                diagnostics.SimpleDdgiTransportSourceCohortTransitionActive,
+            SourceCohortElapsedFrames =
+                diagnostics.SimpleDdgiTransportSourceCohortElapsedFrames,
+            SourceStaleProbeCount = diagnostics.SimpleDdgiTransportSourceStepStaleProbeCount,
+            SourceMaximumAgeFrames = diagnostics.SimpleDdgiTransportSourceStepAgeMaximumFrames,
+            GlobalConvergenceElapsedFrames =
+                diagnostics.SimpleDdgiTransportGlobalConvergenceElapsedFrames,
+            TailPhase = tail.TailPhase,
+            TailReason = tail.TailReason,
+            TailRecoveryAction = tail.TailRecoveryAction,
+            TailSolveEpoch = tail.TailSolveEpoch,
+            TailAuditEpoch = tail.TailAuditEpoch,
+            TailExpectedParticipantCount = tail.TailExpectedParticipantCount,
+            TailAuditedParticipantCount = tail.TailAuditedParticipantCount,
+            TailExpectedTexelCount = tail.TailExpectedTexelCount,
+            TailAuditedTexelCount = tail.TailAuditedTexelCount,
+            TailDefect = tail.TailFixedPointDefect,
+            TailFieldMagnitude = tail.TailFieldMagnitude,
+            TailObservedContractionBound = tail.TailObservedContractionBound,
+            TailAbsoluteBound = tail.TailAbsoluteBound,
+            TailRelativeBound = tail.TailRelativeBound,
+            TailTolerance = tail.TailTolerance,
+            TailCanonicalQuantizationFloor = tail.TailCanonicalQuantizationFloor,
+            TailCertificateCurrent = tail.TailCertificateCurrent,
+            TailMaximumDefectWitnessProbeIndex =
+                tail.TailMaximumDefectWitnessProbeIndex,
+            TailMaximumDefectWitnessTexelIndex =
+                tail.TailMaximumDefectWitnessTexelIndex,
+            TailDetailedWitnessValid = tail.TailDetailedWitnessValid,
+            TailDetailedWitnessProbeIndex = tail.TailDetailedWitnessProbeIndex,
+            TailDetailedWitnessTexelIndex = tail.TailDetailedWitnessTexelIndex,
+            TailDetailedWitnessWeightSum = tail.TailDetailedWitnessWeightSum,
+            TailDetailedWitnessCandidate = new Vector3(
+                tail.TailDetailedWitnessCandidateR,
+                tail.TailDetailedWitnessCandidateG,
+                tail.TailDetailedWitnessCandidateB),
+            TailDetailedWitnessCanonical = new Vector3(
+                tail.TailDetailedWitnessCanonicalR,
+                tail.TailDetailedWitnessCanonicalG,
+                tail.TailDetailedWitnessCanonicalB),
+            TailDetailedWitnessPrivate = new Vector3(
+                tail.TailDetailedWitnessPrivateR,
+                tail.TailDetailedWitnessPrivateG,
+                tail.TailDetailedWitnessPrivateB),
+            TailDetailedWitnessProbeResidual =
+                tail.TailDetailedWitnessProbeResidual,
+            TailDetailedWitnessSourceRayCount =
+                tail.TailDetailedWitnessSourceRayCount,
+            TailAuditReadbackAgeFrames = tail.TailCompletedAuditReadbackAgeFrames,
+            TailAuditReadbackDeadlineFrames = tail.TailAuditReadbackDeadlineFrames,
+            TailConvergenceDeadlineFrames = tail.TailConvergenceDeadlineFrames,
+            TailRecoveryCount = tail.TailRecoveryCount,
+            TailConvergenceDeadlineRecoveryCount =
+                tail.TailConvergenceDeadlineRecoveryCount,
+            TailNoProgressFrames = tail.TailNoProgressFrames,
+            GpuFrameMicroseconds = diagnostics.GpuFrameMicroseconds,
+            GpuPageDemandMicroseconds = diagnostics.GpuSimpleDdgiPageDemandMicroseconds,
+            GpuPageResidencyMicroseconds = diagnostics.GpuSimpleDdgiPageResidencyMicroseconds,
+            GpuPageFeedbackMicroseconds = diagnostics.GpuSimpleDdgiPageFeedbackMicroseconds,
+            GpuScheduleMicroseconds = diagnostics.GpuSimpleDdgiScheduleMicroseconds,
+            GpuTransportMicroseconds = diagnostics.GpuSimpleDdgiTransportMicroseconds,
+            GpuAuditMicroseconds = diagnostics.GpuSimpleDdgiTransportAuditMicroseconds,
+            CpuSimpleDdgiRecordMicroseconds = diagnostics.CpuSimpleDdgiRecordMicroseconds,
+            CpuGlobalIlluminationRecordMicroseconds =
+                diagnostics.CpuGlobalIlluminationRecordMicroseconds,
+            CpuFenceWaitMicroseconds = diagnostics.CpuWaitForFrameFenceMicroseconds
+        };
+        _nextIndex = (_nextIndex + 1) % Capacity;
+        _count = Math.Min(Capacity, _count + 1);
+        _totalSampleCount++;
+    }
+
+    public IReadOnlyList<SampleSponzaGiTemporalTraceEntry> Snapshot()
+    {
+        var snapshot = new SampleSponzaGiTemporalTraceEntry[_count];
+        int first = (_nextIndex - _count + Capacity) % Capacity;
+        for (int i = 0; i < snapshot.Length; i++)
+            snapshot[i] = _entries[(first + i) % Capacity];
+        return Array.AsReadOnly(snapshot);
+    }
+
+    public void Write(string path, string contractFingerprint, string traceName)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("A temporal trace path is required.", nameof(path));
+        if (string.IsNullOrWhiteSpace(contractFingerprint))
+            throw new ArgumentException("A contract fingerprint is required.", nameof(contractFingerprint));
+        if (string.IsNullOrWhiteSpace(traceName))
+            throw new ArgumentException("A trace name is required.", nameof(traceName));
+
+        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+        var payload = new
+        {
+            schemaVersion = SchemaVersion,
+            contractFingerprint,
+            traceName,
+            capacity = Capacity,
+            totalSampleCount = _totalSampleCount,
+            entries = Snapshot()
+        };
+        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(payload, TraceJsonOptions);
+        SampleEvidenceFileIo.WriteAtomic(
+            path,
+            bytes,
+            SampleEvidenceFileIo.MaximumJsonBytes,
+            "Sponza Simple-DDGI temporal trace");
+    }
+}
+
+public readonly record struct SampleSponzaGiTemporalTraceEntry
+{
+    public ulong SampleIndex { get; init; }
+    public SampleSponzaGiCaptureStage Stage { get; init; }
+    public int StageFrameIndex { get; init; }
+    public int StageFrameCount { get; init; }
+    public Vector3 CameraPosition { get; init; }
+    public float CameraYaw { get; init; }
+    public float CameraPitch { get; init; }
+    public int CameraCut { get; init; }
+    public int Recentered { get; init; }
+    public int FramesSinceRecenter { get; init; }
+    public bool ResidencyAvailable { get; init; }
+    public bool ResidencyFeedbackValid { get; init; }
+    public ulong ResidencyFeedbackFrameSerial { get; init; }
+    public uint ResidencyResourceGeneration { get; init; }
+    public int VisibleDemandPageCount { get; init; }
+    public int AdmissionCount { get; init; }
+    public int EvictionCount { get; init; }
+    public int ResidentPageCount { get; init; }
+    public int InitializingPageCount { get; init; }
+    public int PublishedPageCount { get; init; }
+    public int VisibleResidentHitPageCount { get; init; }
+    public int VisibleMissingPageCount { get; init; }
+    public int OrdinaryPublicationP95Frames { get; init; }
+    public int CutPublicationP95Frames { get; init; }
+    public int SchedulerFeedbackValid { get; init; }
+    public ulong SchedulerFeedbackFrameSerial { get; init; }
+    public uint SchedulerResourceGeneration { get; init; }
+    public uint SchedulerConsideredCount { get; init; }
+    public uint SchedulerAcceptedCount { get; init; }
+    public uint SchedulerSourceProbeCount { get; init; }
+    public uint SchedulerSourceRayCount { get; init; }
+    public uint SchedulerTransportRayCount { get; init; }
+    public uint SchedulerPublishedCount { get; init; }
+    public uint SchedulerPendingFreshCount { get; init; }
+    public uint SchedulerPendingSourceCount { get; init; }
+    public uint SchedulerPendingSourceCardinalityCount { get; init; }
+    public uint SchedulerPendingSourceGenerationCount { get; init; }
+    public int SourceRefreshTargetProbeCount { get; init; }
+    public int SourceRefreshCompletedProbeCount { get; init; }
+    public int SourceRefreshCapacityShortfall { get; init; }
+    public int SourceCohortTransitionActive { get; init; }
+    public int SourceCohortElapsedFrames { get; init; }
+    public int SourceStaleProbeCount { get; init; }
+    public int SourceMaximumAgeFrames { get; init; }
+    public int GlobalConvergenceElapsedFrames { get; init; }
+    public SimpleDdgiTransportPhase TailPhase { get; init; }
+    public SimpleDdgiTransportCertificationReason TailReason { get; init; }
+    public SimpleDdgiTransportRecoveryAction TailRecoveryAction { get; init; }
+    public uint TailSolveEpoch { get; init; }
+    public uint TailAuditEpoch { get; init; }
+    public uint TailExpectedParticipantCount { get; init; }
+    public uint TailAuditedParticipantCount { get; init; }
+    public uint TailExpectedTexelCount { get; init; }
+    public uint TailAuditedTexelCount { get; init; }
+    public float TailDefect { get; init; }
+    public float TailFieldMagnitude { get; init; }
+    public float TailObservedContractionBound { get; init; }
+    public float TailAbsoluteBound { get; init; }
+    public float TailRelativeBound { get; init; }
+    public float TailTolerance { get; init; }
+    public float TailCanonicalQuantizationFloor { get; init; }
+    public bool TailCertificateCurrent { get; init; }
+    public uint TailMaximumDefectWitnessProbeIndex { get; init; }
+    public uint TailMaximumDefectWitnessTexelIndex { get; init; }
+    public bool TailDetailedWitnessValid { get; init; }
+    public uint TailDetailedWitnessProbeIndex { get; init; }
+    public uint TailDetailedWitnessTexelIndex { get; init; }
+    public float TailDetailedWitnessWeightSum { get; init; }
+    public Vector3 TailDetailedWitnessCandidate { get; init; }
+    public Vector3 TailDetailedWitnessCanonical { get; init; }
+    public Vector3 TailDetailedWitnessPrivate { get; init; }
+    public float TailDetailedWitnessProbeResidual { get; init; }
+    public uint TailDetailedWitnessSourceRayCount { get; init; }
+    public int TailAuditReadbackAgeFrames { get; init; }
+    public int TailAuditReadbackDeadlineFrames { get; init; }
+    public int TailConvergenceDeadlineFrames { get; init; }
+    public ulong TailRecoveryCount { get; init; }
+    public ulong TailConvergenceDeadlineRecoveryCount { get; init; }
+    public int TailNoProgressFrames { get; init; }
+    public long GpuFrameMicroseconds { get; init; }
+    public long GpuPageDemandMicroseconds { get; init; }
+    public long GpuPageResidencyMicroseconds { get; init; }
+    public long GpuPageFeedbackMicroseconds { get; init; }
+    public long GpuScheduleMicroseconds { get; init; }
+    public long GpuTransportMicroseconds { get; init; }
+    public long GpuAuditMicroseconds { get; init; }
+    public long CpuSimpleDdgiRecordMicroseconds { get; init; }
+    public long CpuGlobalIlluminationRecordMicroseconds { get; init; }
+    public long CpuFenceWaitMicroseconds { get; init; }
 }
 
 /// <summary>
@@ -1422,13 +1826,21 @@ public sealed class SampleSponzaGiCaptureSequence
                     _contract.LowBookmark.Name,
                     false),
                 SampleSponzaGiCaptureStage.CaptureLowBookmark => CaptureBookmarkInstruction(_contract.LowBookmark),
+                SampleSponzaGiCaptureStage.MotionTraversal => new SampleSponzaGiCaptureInstruction(
+                    _stage,
+                    _stageFrameIndex,
+                    _contract.MotionTraversalFrameCount,
+                    _contract.SampleMotionTraversalFrame(_stageFrameIndex),
+                    null,
+                    SampleSponzaGiCaptureContract.MotionTraversalName,
+                    false),
                 SampleSponzaGiCaptureStage.VerticalTraversal => new SampleSponzaGiCaptureInstruction(
                     _stage,
                     _stageFrameIndex,
                     _contract.VerticalTraversalFrameCount,
                     _contract.SampleVerticalTraversalFrame(_stageFrameIndex),
                     null,
-                    "SponzaPlazaUpperFacadeVerticalTraversal",
+                    SampleSponzaGiCaptureContract.VerticalTraversalName,
                     false),
                 SampleSponzaGiCaptureStage.HighBookmarkStationarySettle => new SampleSponzaGiCaptureInstruction(
                     _stage,
@@ -1468,6 +1880,10 @@ public sealed class SampleSponzaGiCaptureSequence
                 break;
             case SampleSponzaGiCaptureStage.CaptureLowBookmark when
                 _stageFrameIndex >= _contract.Outputs.Count * SampleSponzaGiCaptureContract.FramesPerEndpointOutput:
+                MoveTo(SampleSponzaGiCaptureStage.MotionTraversal);
+                break;
+            case SampleSponzaGiCaptureStage.MotionTraversal when
+                _stageFrameIndex >= _contract.MotionTraversalFrameCount:
                 MoveTo(SampleSponzaGiCaptureStage.VerticalTraversal);
                 break;
             case SampleSponzaGiCaptureStage.VerticalTraversal when _stageFrameIndex >= _contract.VerticalTraversalFrameCount:

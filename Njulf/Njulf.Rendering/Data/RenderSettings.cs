@@ -3598,6 +3598,22 @@ namespace Njulf.Rendering.Data
         public bool GpuMeshletCountersEnabled { get; set; }
         public bool DdgiForwardEstimateCountersEnabled { get; set; }
         public bool DirectionalShadowReceiverCountersEnabled { get; set; }
+
+        /// <summary>
+        /// Capture-only control for the disabled half of a paired forward-GI
+        /// timing run. It suppresses receiver evaluation without disabling DDGI
+        /// production, paging, transport, or reflection-capture state. Normal
+        /// rendering and every quality preset leave this false.
+        /// </summary>
+        public bool SuppressForwardGiGatherForBenchmark { get; set; }
+
+        /// <summary>
+        /// Capture-only quality oracle switch. It keeps DDGI enabled but
+        /// bypasses the production screen-space receiver cache so a settled
+        /// frame can be compared against the exact per-fragment gather.
+        /// Normal rendering and every quality preset leave this false.
+        /// </summary>
+        public bool ForceExactForwardGiGatherForBenchmark { get; set; }
     }
 
     public sealed class HiZOcclusionSettings

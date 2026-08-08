@@ -132,6 +132,51 @@ public sealed class TailDdgiQualificationTests
     }
 
     [Test]
+    public void TailCertificateAcceptance_AllowsSparseDomainExclusionsButRejectsInvalidEvidence()
+    {
+        RendererDiagnostics sparseCertified =
+            CreateDiagnostics(1_000, 128, 256) with
+            {
+                SimpleDdgiTransportConvergence =
+                    CreateTailTelemetry(certificateCurrent: true) with
+                    {
+                        TailExcludedNotVisibleCount = 9_376u
+                    }
+            };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SampleBenchmarkRunner.HasAcceptedCurrentSimpleDdgiTailCertificate(
+                    sparseCertified),
+                Is.True,
+                "Nonresident virtual probes are outside the frozen sparse participant domain.");
+            Assert.That(
+                SampleBenchmarkRunner.HasAcceptedCurrentSimpleDdgiTailCertificate(
+                    sparseCertified with
+                    {
+                        SimpleDdgiTransportConvergence =
+                            sparseCertified.SimpleDdgiTransportConvergence with
+                            {
+                                TailExcludedStaleSourceCount = 1u
+                            }
+                    }),
+                Is.False);
+            Assert.That(
+                SampleBenchmarkRunner.HasAcceptedCurrentSimpleDdgiTailCertificate(
+                    sparseCertified with
+                    {
+                        SimpleDdgiTransportConvergence =
+                            sparseCertified.SimpleDdgiTransportConvergence with
+                            {
+                                TailCacheIdentityFailureCount = 1u
+                            }
+                    }),
+                Is.False);
+        });
+    }
+
+    [Test]
     public void RunObserver_RejectsStaticConvergedWithoutCurrentCertificate()
     {
         var observer = new SampleTailDdgiRunObserver();
@@ -770,6 +815,7 @@ public sealed class TailDdgiQualificationTests
             ExpectedParticipantCount = 128u,
             AuditedParticipantCount = 128u,
             ExcludedInactiveCount = 4u,
+            ExcludedNotVisibleCount = 9_376u,
             ExpectedTexelCount = 8_192u,
             AuditedTexelCount = 8_192u,
             FinalTailBound = 0.005f,

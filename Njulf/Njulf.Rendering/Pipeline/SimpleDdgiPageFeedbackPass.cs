@@ -104,9 +104,11 @@ public sealed unsafe class SimpleDdgiPageFeedbackPass : RenderPassBase
             GeometryGeneration = _volumeManager.ProbeResidencyGeometryGeneration,
             SourceGeneration = _volumeManager.SourceLightingGeneration,
             CohortGeneration = _volumeManager.SourceLightingGeneration,
-            Stage = 5u,
-            Reserved0 = unchecked((uint)frameSerial),
-            Reserved1 = unchecked((uint)(frameSerial >> 32))
+            Stage = sceneData.SimpleDdgiPageFullManagementRequired != 0
+                ? 5u
+                : 6u,
+            FrameSerialLow = unchecked((uint)frameSerial),
+            FrameSerialHigh = unchecked((uint)(frameSerial >> 32))
         };
 
         _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);

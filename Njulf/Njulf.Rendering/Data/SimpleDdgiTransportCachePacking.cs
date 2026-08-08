@@ -11,9 +11,8 @@ namespace Njulf.Rendering.Data;
 public static class SimpleDdgiTransportCachePacking
 {
     public const uint GenerationMask = 0x00ff_ffffu;
-    public const uint ValidFlag = 1u << 24;
-    public const uint HitFlag = 1u << 25;
-    public const uint BackfaceFlag = 1u << 26;
+    public const int ClassificationShift = 24;
+    public const uint ClassificationMask = 0x7u << ClassificationShift;
     public const int DirectionEpochShift = 27;
     public const uint DirectionEpochMask = 0x1fu << DirectionEpochShift;
 
@@ -137,9 +136,7 @@ public static class SimpleDdgiTransportCachePacking
 
         uint generationAndFlags =
             (sample.ProbeGeneration & GenerationMask) |
-            ValidFlag |
-            (sample.HitKind >= 1 ? HitFlag : 0u) |
-            (sample.HitKind >= 2 ? BackfaceFlag : 0u) |
+            (checked((uint)sample.HitKind + 1u) << ClassificationShift) |
             ((sample.SourceEpoch & 0x1fu) << DirectionEpochShift);
         int generationWord = wordCount - 1;
         destination[generationWord] = generationAndFlags;
@@ -186,11 +183,11 @@ public static class SimpleDdgiTransportCachePacking
 
         int generationWord = wordCount - 1;
         uint generationAndFlags = source[generationWord];
-        if ((generationAndFlags & ValidFlag) == 0 ||
+        uint classificationCode = (generationAndFlags & ClassificationMask) >>
+            ClassificationShift;
+        if (classificationCode is < 1u or > 5u ||
             (generationAndFlags & GenerationMask) !=
-                (expectedProbeGeneration & GenerationMask) ||
-            (generationAndFlags & BackfaceFlag) != 0u &&
-                (generationAndFlags & HitFlag) == 0u)
+                (expectedProbeGeneration & GenerationMask))
             return false;
 
         Vector2 rg = format == SimpleDdgiTransportCacheFormat.Legacy36
@@ -273,9 +270,7 @@ public static class SimpleDdgiTransportCachePacking
             return false;
         }
 
-        int hitKind = (generationAndFlags & HitFlag) == 0u
-            ? 0
-            : (generationAndFlags & BackfaceFlag) != 0u ? 2 : 1;
+        int hitKind = checked((int)classificationCode - 1);
         sample = new Sample(
             radiance,
             distance,

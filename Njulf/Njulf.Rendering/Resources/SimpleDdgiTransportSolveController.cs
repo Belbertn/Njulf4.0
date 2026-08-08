@@ -50,6 +50,15 @@ public sealed class SimpleDdgiTransportSolveController
     private uint _solveEpoch;
     private uint _auditEpoch;
     private bool _auditCancelled;
+    private bool _completedAuditPending;
+    private SimpleDdgiTransportTailSummary _pendingAuditSummary;
+    private SimpleDdgiTransportGenerations _pendingAuditCurrentGenerations;
+    private SimpleDdgiTransportAuditTuple _lastRejectedAuditTuple;
+    private bool _hasLastRejectedAuditTuple;
+    private ulong _sameTupleReauditAttemptCount;
+    private ulong _recoveryCount;
+    private uint _recoveryGeneration;
+    private int _noProgressFrames;
 
     public SimpleDdgiTransportSolveController(int participantCapacity = 0)
     {
@@ -70,6 +79,12 @@ public sealed class SimpleDdgiTransportSolveController
     public int ExpectedParticipantCount => _expectedParticipantCount;
     public int VisitedParticipantCount => _visitedParticipantCount;
     public int ParticipantVisitCapacity => _participantVisitEpoch.Length;
+    public bool CompletedAuditPending => _completedAuditPending;
+    public ulong SameTupleReauditAttemptCount => _sameTupleReauditAttemptCount;
+    public ulong RecoveryCount => _recoveryCount;
+    public uint RecoveryGeneration => _recoveryGeneration;
+    public int NoProgressFrames => _noProgressFrames;
+    public SimpleDdgiTransportRecoveryAction RecoveryAction { get; private set; }
     public bool IsSolveEpochComplete =>
         Phase == SimpleDdgiTransportPhase.AcceleratedSolve &&
         _visitedParticipantCount == _expectedParticipantCount;
@@ -142,17 +157,25 @@ public sealed class SimpleDdgiTransportSolveController
     /// Starts a source-repair transaction and invalidates any certificate that
     /// belongs to the old source or ownership generations.
     /// </summary>
-    public void BeginSourceRepair(SimpleDdgiTransportGenerations generations)
+    public void BeginSourceRepair(
+        SimpleDdgiTransportGenerations generations,
+        SimpleDdgiTransportCertificationReason reason =
+            SimpleDdgiTransportCertificationReason.SourceRepairRequired,
+        SimpleDdgiTransportRecoveryAction recoveryAction =
+            SimpleDdgiTransportRecoveryAction.None)
     {
         FrozenGenerations = generations;
         _expectedParticipantCount = 0;
         _visitedParticipantCount = 0;
         _auditCancelled = false;
+        _completedAuditPending = false;
+        RecoveryAction = recoveryAction;
         Phase = SimpleDdgiTransportPhase.SourceRepair;
-        LastReason = SimpleDdgiTransportCertificationReason.SourceRepairRequired;
+        LastReason = reason;
         LastSummary = SimpleDdgiTransportTailSummary.Empty with
         {
-            Generations = FrozenGenerations
+            Generations = FrozenGenerations,
+            Reason = reason
         };
     }
 
@@ -175,6 +198,7 @@ public sealed class SimpleDdgiTransportSolveController
         EnsureParticipantCapacity(expectedParticipantCount);
         _expectedParticipantCount = expectedParticipantCount;
         AdvanceSolveEpoch(generations);
+        RecoveryAction = SimpleDdgiTransportRecoveryAction.None;
         LastReason = expectedParticipantCount == 0
             ? SimpleDdgiTransportCertificationReason.SolveEpochIncomplete
             : SimpleDdgiTransportCertificationReason.None;
@@ -274,10 +298,31 @@ public sealed class SimpleDdgiTransportSolveController
     /// </summary>
     public bool TryBeginAudit(SimpleDdgiTransportGenerations generations)
     {
+        if (_completedAuditPending)
+        {
+            LastReason = SimpleDdgiTransportCertificationReason.CompletedAuditUnconsumed;
+            return false;
+        }
+
         if (Phase != SimpleDdgiTransportPhase.AcceleratedSolve ||
             !IsSolveEpochComplete)
         {
             LastReason = SimpleDdgiTransportCertificationReason.SolveEpochIncomplete;
+            return false;
+        }
+
+        SimpleDdgiTransportAuditTuple candidate = CreateAuditTuple(
+            generations,
+            _expectedParticipantCount);
+        if (_hasLastRejectedAuditTuple && candidate == _lastRejectedAuditTuple)
+        {
+            _sameTupleReauditAttemptCount = SaturatingIncrement(
+                _sameTupleReauditAttemptCount);
+            EnterRecovery(
+                SimpleDdgiTransportPhase.ParticipantReconciliation,
+                SimpleDdgiTransportCertificationReason.SameTupleReauditBlocked,
+                SimpleDdgiTransportRecoveryAction.ReconcileParticipants,
+                clearParticipantWitness: true);
             return false;
         }
 
@@ -293,6 +338,7 @@ public sealed class SimpleDdgiTransportSolveController
         LastSummary = LastSummary with { Generations = FrozenGenerations };
         Phase = SimpleDdgiTransportPhase.AuditFrozen;
         LastReason = SimpleDdgiTransportCertificationReason.AuditInProgress;
+        RecoveryAction = SimpleDdgiTransportRecoveryAction.None;
         return true;
     }
 
@@ -305,6 +351,28 @@ public sealed class SimpleDdgiTransportSolveController
         SimpleDdgiTransportTailSummary summary,
         SimpleDdgiTransportGenerations currentGenerations)
     {
+        if (!TryStageCompletedAudit(summary, currentGenerations))
+            return false;
+
+        _ = TryConsumeCompletedAudit(out bool accepted);
+        return accepted;
+    }
+
+    /// <summary>
+    /// Stages one fence-complete audit summary.  Staging and consumption are
+    /// separate so a completed readback can never be overwritten or followed
+    /// by a new audit while manager integration is still deciding recovery.
+    /// </summary>
+    public bool TryStageCompletedAudit(
+        SimpleDdgiTransportTailSummary summary,
+        SimpleDdgiTransportGenerations currentGenerations)
+    {
+        if (_completedAuditPending)
+        {
+            LastReason = SimpleDdgiTransportCertificationReason.CompletedAuditUnconsumed;
+            return false;
+        }
+
         if (Phase != SimpleDdgiTransportPhase.AuditFrozen || _auditCancelled)
         {
             LastReason = SimpleDdgiTransportCertificationReason.AuditInProgress;
@@ -319,20 +387,73 @@ public sealed class SimpleDdgiTransportSolveController
             return false;
         }
 
+        _pendingAuditSummary = summary;
+        _pendingAuditCurrentGenerations = currentGenerations;
+        _completedAuditPending = true;
+        return true;
+    }
+
+    /// <summary>Consumes the staged summary exactly once.</summary>
+    public bool TryConsumeCompletedAudit(out bool accepted)
+    {
+        accepted = false;
+        if (!_completedAuditPending)
+            return false;
+
+        SimpleDdgiTransportTailSummary summary = _pendingAuditSummary;
+        SimpleDdgiTransportGenerations currentGenerations =
+            _pendingAuditCurrentGenerations;
+        _completedAuditPending = false;
+        _pendingAuditSummary = default;
+        _pendingAuditCurrentGenerations = default;
+
+        SimpleDdgiTransportAuditTuple rejectedTuple = CreateAuditTuple(
+            summary.Generations,
+            checked((int)Math.Min(int.MaxValue, summary.ExpectedParticipantCount)));
+
         if (!summary.HasExactParticipantCoverage || !summary.HasExactTexelCoverage)
         {
-            LastSummary = summary with { Reason = SimpleDdgiTransportCertificationReason.ParticipantCoverageIncomplete };
-            LastReason = SimpleDdgiTransportCertificationReason.ParticipantCoverageIncomplete;
-            Phase = SimpleDdgiTransportPhase.AcceleratedSolve;
-            return false;
+            bool cacheFailure = summary.ExcludedInvalidCacheCount != 0u ||
+                summary.CacheIdentityFailureCount != 0u ||
+                summary.CacheCardinalityFailureCount != 0u ||
+                summary.CacheSourceGenerationFailureCount != 0u ||
+                summary.CacheSourceEpochFailureCount != 0u ||
+                summary.CachePhysicalGenerationFailureCount != 0u ||
+                summary.ExcludedStaleSourceCount != 0u;
+            SimpleDdgiTransportCertificationReason reason = cacheFailure
+                ? SimpleDdgiTransportCertificationReason.InvalidCache
+                : SimpleDdgiTransportCertificationReason.ParticipantCoverageIncomplete;
+            LastSummary = summary with { Reason = reason };
+            RememberRejectedTuple(rejectedTuple);
+            EnterRecovery(
+                cacheFailure
+                    ? SimpleDdgiTransportPhase.SourceRepair
+                    : SimpleDdgiTransportPhase.ParticipantReconciliation,
+                reason,
+                cacheFailure
+                    ? SimpleDdgiTransportRecoveryAction.RepairSourceCache
+                    : SimpleDdgiTransportRecoveryAction.ReconcileParticipants,
+                clearParticipantWitness: true,
+                preserveSummary: true);
+            return true;
         }
 
-        if (!summary.HasFiniteEvidence)
+        if (summary.CounterOverflowCount != 0u || !summary.HasFiniteEvidence)
         {
-            LastSummary = summary with { Reason = SimpleDdgiTransportCertificationReason.NonFiniteEvidence };
-            LastReason = SimpleDdgiTransportCertificationReason.NonFiniteEvidence;
-            Phase = SimpleDdgiTransportPhase.AcceleratedSolve;
-            return false;
+            SimpleDdgiTransportCertificationReason reason =
+                summary.CounterOverflowCount != 0u ||
+                summary.Reason == SimpleDdgiTransportCertificationReason.CounterOverflow
+                    ? SimpleDdgiTransportCertificationReason.CounterOverflow
+                    : SimpleDdgiTransportCertificationReason.NonFiniteEvidence;
+            LastSummary = summary with { Reason = reason };
+            RememberRejectedTuple(rejectedTuple);
+            EnterRecovery(
+                SimpleDdgiTransportPhase.FailClosedRecovery,
+                reason,
+                SimpleDdgiTransportRecoveryAction.RebuildPrivateField,
+                clearParticipantWitness: true,
+                preserveSummary: true);
+            return true;
         }
 
         if (summary.Reason != SimpleDdgiTransportCertificationReason.Certified ||
@@ -355,20 +476,55 @@ public sealed class SimpleDdgiTransportSolveController
                     ? SimpleDdgiTransportCertificationReason.QuantizationLimited
                     : SimpleDdgiTransportCertificationReason.TailAboveTolerance
             };
+            RememberRejectedTuple(rejectedTuple);
             // A finite, complete audit above tolerance is useful evidence, but
             // it does not authorize another audit of the byte-identical field.
             // Start a distinct epoch and clear its visit witness so every probe
             // receives another cached solve before certification is attempted.
             if (LastReason == SimpleDdgiTransportCertificationReason.TailAboveTolerance)
+            {
+                RecoveryAction = SimpleDdgiTransportRecoveryAction.AdvanceSolveEpoch;
+                _recoveryCount = SaturatingIncrement(_recoveryCount);
                 AdvanceSolveEpoch(currentGenerations);
+            }
+            else if (LastReason == SimpleDdgiTransportCertificationReason.QuantizationLimited)
+            {
+                EnterRecovery(
+                    SimpleDdgiTransportPhase.UnsupportedTolerance,
+                    LastReason,
+                    SimpleDdgiTransportRecoveryAction.ReportUnsupportedTolerance,
+                    clearParticipantWitness: true,
+                    preserveSummary: true);
+            }
+            else if (LastReason is SimpleDdgiTransportCertificationReason.CounterOverflow or
+                     SimpleDdgiTransportCertificationReason.NonFiniteEvidence or
+                     SimpleDdgiTransportCertificationReason.InvalidContractionBound)
+            {
+                EnterRecovery(
+                    SimpleDdgiTransportPhase.FailClosedRecovery,
+                    LastReason,
+                    SimpleDdgiTransportRecoveryAction.RebuildPrivateField,
+                    clearParticipantWitness: true,
+                    preserveSummary: true);
+            }
             else
-                Phase = SimpleDdgiTransportPhase.AcceleratedSolve;
-            return false;
+            {
+                EnterRecovery(
+                    SimpleDdgiTransportPhase.ParticipantReconciliation,
+                    LastReason,
+                    SimpleDdgiTransportRecoveryAction.ReconcileParticipants,
+                    clearParticipantWitness: true,
+                    preserveSummary: true);
+            }
+            return true;
         }
 
         LastSummary = summary;
         LastReason = SimpleDdgiTransportCertificationReason.Certified;
         Phase = SimpleDdgiTransportPhase.Certified;
+        RecoveryAction = SimpleDdgiTransportRecoveryAction.None;
+        _hasLastRejectedAuditTuple = false;
+        accepted = true;
         return true;
     }
 
@@ -386,6 +542,141 @@ public sealed class SimpleDdgiTransportSolveController
 
         LastReason = reason;
         LastSummary = LastSummary with { Reason = reason };
+    }
+
+    /// <summary>
+    /// Cancels a readback that exceeded its computed fence deadline and starts
+    /// a distinct solve epoch.  The byte-identical completed visit witness is
+    /// never left armed after the timeout.
+    /// </summary>
+    public bool ExpireAudit(SimpleDdgiTransportGenerations currentGenerations)
+    {
+        if (Phase != SimpleDdgiTransportPhase.AuditFrozen)
+            return false;
+
+        RememberRejectedTuple(CreateAuditTuple(
+            FrozenGenerations,
+            _expectedParticipantCount));
+        LastReason = SimpleDdgiTransportCertificationReason.AuditReadbackTimeout;
+        LastSummary = LastSummary with
+        {
+            Reason = LastReason,
+            IsComplete = false
+        };
+        RecoveryAction = SimpleDdgiTransportRecoveryAction.AdvanceSolveEpoch;
+        _recoveryCount = SaturatingIncrement(_recoveryCount);
+        AdvanceSolveEpoch(currentGenerations);
+        return true;
+    }
+
+    /// <summary>
+    /// Enters the same bounded fail-closed path used by invalid audit evidence
+    /// when fence-complete scheduler feedback proves that a non-empty source
+    /// cohort is making no work progress.
+    /// </summary>
+    public void EnterSourceCohortRecovery(
+        SimpleDdgiTransportGenerations currentGenerations)
+    {
+        FrozenGenerations = currentGenerations;
+        LastSummary = LastSummary with
+        {
+            Generations = currentGenerations,
+            Reason = SimpleDdgiTransportCertificationReason.SourceCohortNoProgress,
+            IsComplete = false
+        };
+        EnterRecovery(
+            SimpleDdgiTransportPhase.FailClosedRecovery,
+            SimpleDdgiTransportCertificationReason.SourceCohortNoProgress,
+            SimpleDdgiTransportRecoveryAction.RebuildPrivateField,
+            clearParticipantWitness: true,
+            preserveSummary: true);
+    }
+
+    /// <summary>
+    /// Fails closed when the complete source/solve/audit wave exceeds its
+    /// computed end-to-end deadline even if individual phase/epoch counters
+    /// continue changing. This catches bounded but non-converging audit loops,
+    /// which a consecutive-no-progress detector intentionally cannot see.
+    /// </summary>
+    public void EnterConvergenceDeadlineRecovery(
+        SimpleDdgiTransportGenerations currentGenerations)
+    {
+        FrozenGenerations = currentGenerations;
+        LastSummary = LastSummary with
+        {
+            Generations = currentGenerations,
+            Reason =
+                SimpleDdgiTransportCertificationReason.ConvergenceDeadlineExceeded,
+            IsComplete = false
+        };
+        EnterRecovery(
+            SimpleDdgiTransportPhase.FailClosedRecovery,
+            SimpleDdgiTransportCertificationReason.ConvergenceDeadlineExceeded,
+            SimpleDdgiTransportRecoveryAction.RebuildPrivateField,
+            clearParticipantWitness: true,
+            preserveSummary: true);
+    }
+
+    public void ObserveProgressFrame(bool madeProgress)
+    {
+        _noProgressFrames = madeProgress
+            ? 0
+            : _noProgressFrames == int.MaxValue
+                ? int.MaxValue
+                : _noProgressFrames + 1;
+    }
+
+    public static int ResolveAuditReadbackDeadlineFrames(
+        int probeCount,
+        int chunkSize,
+        int framesInFlight,
+        int readbackMargin)
+    {
+        if (probeCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(probeCount));
+        if (chunkSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(chunkSize));
+        if (framesInFlight < 0)
+            throw new ArgumentOutOfRangeException(nameof(framesInFlight));
+        if (readbackMargin < 0)
+            throw new ArgumentOutOfRangeException(nameof(readbackMargin));
+
+        long chunks = Math.Max(1L, (probeCount + (long)chunkSize - 1L) / chunkSize);
+        return checked((int)Math.Min(
+            int.MaxValue,
+            chunks + framesInFlight + (long)readbackMargin));
+    }
+
+    public static int ResolveConvergenceDeadlineFrames(
+        int sourceSweepFrames,
+        int participantCount,
+        int solveProbeBudgetPerFrame,
+        int acceleratedSweepCount,
+        int auditDeadlineFrames,
+        int schedulingMarginFrames)
+    {
+        if (sourceSweepFrames < 0)
+            throw new ArgumentOutOfRangeException(nameof(sourceSweepFrames));
+        if (participantCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(participantCount));
+        if (solveProbeBudgetPerFrame <= 0)
+            throw new ArgumentOutOfRangeException(nameof(solveProbeBudgetPerFrame));
+        if (acceleratedSweepCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(acceleratedSweepCount));
+        if (auditDeadlineFrames < 0)
+            throw new ArgumentOutOfRangeException(nameof(auditDeadlineFrames));
+        if (schedulingMarginFrames < 0)
+            throw new ArgumentOutOfRangeException(nameof(schedulingMarginFrames));
+
+        long solveEpochFrames = Math.Max(
+            1L,
+            (participantCount + (long)solveProbeBudgetPerFrame - 1L) /
+                solveProbeBudgetPerFrame);
+        solveEpochFrames = checked(solveEpochFrames * acceleratedSweepCount);
+        long deadline = checked(
+            (long)sourceSweepFrames + solveEpochFrames +
+            auditDeadlineFrames + schedulingMarginFrames);
+        return checked((int)Math.Min(int.MaxValue, Math.Max(1L, deadline)));
     }
 
     public void EnterTracking()
@@ -409,6 +700,10 @@ public sealed class SimpleDdgiTransportSolveController
         _expectedParticipantCount = 0;
         _visitedParticipantCount = 0;
         _auditCancelled = Phase == SimpleDdgiTransportPhase.AuditFrozen;
+        _completedAuditPending = false;
+        RecoveryAction = requireSourceRepair
+            ? SimpleDdgiTransportRecoveryAction.RepairSourceCache
+            : SimpleDdgiTransportRecoveryAction.AdvanceSolveEpoch;
         Phase = requireSourceRepair
             ? SimpleDdgiTransportPhase.SourceRepair
             : SimpleDdgiTransportPhase.AcceleratedSolve;
@@ -546,6 +841,51 @@ public sealed class SimpleDdgiTransportSolveController
         Phase = SimpleDdgiTransportPhase.AcceleratedSolve;
     }
 
+    private void EnterRecovery(
+        SimpleDdgiTransportPhase phase,
+        SimpleDdgiTransportCertificationReason reason,
+        SimpleDdgiTransportRecoveryAction action,
+        bool clearParticipantWitness,
+        bool preserveSummary = false)
+    {
+        if (clearParticipantWitness)
+        {
+            _expectedParticipantCount = 0;
+            _visitedParticipantCount = 0;
+        }
+        _auditCancelled = true;
+        _completedAuditPending = false;
+        Phase = phase;
+        LastReason = reason;
+        RecoveryAction = action;
+        _recoveryGeneration = NextNonZero(_recoveryGeneration);
+        _recoveryCount = SaturatingIncrement(_recoveryCount);
+        if (!preserveSummary)
+            LastSummary = LastSummary with { Reason = reason, IsComplete = false };
+    }
+
+    private void RememberRejectedTuple(SimpleDdgiTransportAuditTuple tuple)
+    {
+        _lastRejectedAuditTuple = tuple;
+        _hasLastRejectedAuditTuple = true;
+    }
+
+    private static SimpleDdgiTransportAuditTuple CreateAuditTuple(
+        SimpleDdgiTransportGenerations generations,
+        int participantCount) => new(
+        generations.VolumeTable,
+        generations.PhysicalOwnership,
+        generations.SourceLighting,
+        generations.SourceEpoch,
+        generations.TransportOperator,
+        generations.CanonicalField,
+        generations.Solve,
+        generations.SchedulerResources,
+        Math.Max(0, participantCount));
+
+    private static ulong SaturatingIncrement(ulong value) =>
+        value == ulong.MaxValue ? ulong.MaxValue : value + 1UL;
+
     private static uint NextNonZero(uint value)
     {
         value++;
@@ -589,6 +929,17 @@ public sealed class SimpleDdgiTransportSolveController
 
     private static uint NonZeroGeneration(uint value) => value == 0u ? 1u : value;
 }
+
+public readonly record struct SimpleDdgiTransportAuditTuple(
+    uint VolumeTable,
+    uint PhysicalOwnership,
+    uint SourceLighting,
+    uint SourceEpoch,
+    uint TransportOperator,
+    uint CanonicalField,
+    uint SolveEpoch,
+    uint SchedulerResources,
+    int ParticipantCount);
 
 public readonly record struct SimpleDdgiTransportVolumeOrderKey(
     int VolumeIndex,

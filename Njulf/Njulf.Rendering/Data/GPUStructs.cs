@@ -472,6 +472,9 @@ namespace Njulf.Rendering.Data
         public Matrix4x4 InverseViewMatrix;
         public Matrix4x4 InverseProjectionMatrix;
         public Vector3 CameraPosition;
+        // Opaque receiver-cache variants reinterpret this otherwise-unused
+        // slot's bits as their power-of-two cache row-pitch shift. Other variants
+        // retain authored time, preserving the shared 256-byte ABI.
         public float Time;
         public Vector4 ScreenDimensions;
         public Vector4 NearFarPlanes;
@@ -889,8 +892,10 @@ namespace Njulf.Rendering.Data
         private const uint DdgiLayeredReceiverCountersEnabledFlag = 1u << 5;
         private const uint DecalReceiveShadowsFlag = 1u << 6;
         // Keep the forward push-constant ABI at 256 bytes. The low diagnostic
-        // bits are already part of the shader contract; bit 31 is reserved for
-        // the capture-only path and is exposed through the property below.
+        // bits are already part of the shader contract. Bit 30 selects the
+        // frame-local opaque DDGI receiver cache and bit 31 is reserved for the
+        // capture-only path exposed through the property below.
+        private const uint DdgiReceiverCacheEnabledFlag = 1u << 30;
         private const uint ReflectionCaptureEnabledFlag = 1u << 31;
         private const int DirectionalShadowPreviewCascadeShift = 8;
         private const uint DirectionalShadowPreviewCascadeMask = 0x03u;
@@ -953,7 +958,8 @@ namespace Njulf.Rendering.Data
             bool materialTransportProvenanceEnabled = false,
             bool decalGlobalIlluminationEnabled = false,
             bool ddgiLayeredReceiverCountersEnabled = false,
-            bool decalReceiveShadows = false)
+            bool decalReceiveShadows = false,
+            bool ddgiReceiverCacheEnabled = false)
         {
             return (ddgiForwardEstimateCountersEnabled ? DdgiForwardEstimateCountersEnabledFlag : 0u) |
                    (ddgiClipmapCoverageCountersEnabled ? DdgiClipmapCoverageCountersEnabledFlag : 0u) |
@@ -962,6 +968,7 @@ namespace Njulf.Rendering.Data
                    (decalGlobalIlluminationEnabled ? DecalGlobalIlluminationEnabledFlag : 0u) |
                    (ddgiLayeredReceiverCountersEnabled ? DdgiLayeredReceiverCountersEnabledFlag : 0u) |
                    (decalReceiveShadows ? DecalReceiveShadowsFlag : 0u) |
+                   (ddgiReceiverCacheEnabled ? DdgiReceiverCacheEnabledFlag : 0u) |
                    ((directionalShadowPreviewCascade & DirectionalShadowPreviewCascadeMask) <<
                     DirectionalShadowPreviewCascadeShift);
         }
@@ -1383,9 +1390,10 @@ namespace Njulf.Rendering.Data
         public uint AllocationFramePlusOne;
         public uint FirstScheduleFramePlusOne;
         public uint FirstPublicationFramePlusOne;
-        // SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_* flags. These classify
-        // diagnostic latency samples without using frame age as authority.
-        public uint AllocationFlags;
+        // SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_* flags plus the immutable
+        // allocation demand class in bits 8..15. The resident scheduler uses
+        // this snapshot to finish a visible page even if sampled demand moves.
+        public uint AllocationFlagsAndDemandClass;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1511,9 +1519,41 @@ namespace Njulf.Rendering.Data
         public uint Reserved0;
     }
 
-    // 72-byte common ABI for reset/classify/prefix/reconcile/initialize/
-    // feedback. FrameSerialLow/High occupy Reserved0/1 for the fixed delayed
-    // summary; CurrentFrame remains the virtual-state age clock.
+    // 112-byte ABI for the frame-local opaque receiver cache. One compute
+    // invocation evaluates a complete Simple-DDGI gather for one 12x12 screen
+    // block, then writes a packed 16-byte gather-lattice sample.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiReceiverCachePushConstants
+    {
+        public Matrix4x4 InverseViewProjectionMatrix;
+        public Vector4 CameraPositionAndPadding;
+        public uint ScreenWidth;
+        public uint ScreenHeight;
+        public uint CacheWidth;
+        public uint CacheHeight;
+        public uint ParamsBufferIndex;
+        public uint DepthTextureIndex;
+        public uint CacheBufferIndex;
+        public uint ReceiverScale;
+    }
+
+    // 24-byte ABI for publishing the reduced gather lattice to a frame-local
+    // aligned FP16 cache buffer. Keeping this separate from the gather constants
+    // prevents resolve invocations from carrying matrices or DDGI state.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiReceiverCacheResolvePushConstants
+    {
+        public uint GatherWidth;
+        public uint GatherHeight;
+        public uint CacheWidth;
+        public uint CacheHeight;
+        public uint GatherBufferIndex;
+        public uint PackedScaleAndEdgeExtents;
+    }
+
+    // 80-byte common ABI for reset/classify/prefix/reconcile/initialize/
+    // feedback. CurrentFrame remains the virtual-state age clock; the two
+    // publication fields bound the visible partial-page cohort in probe units.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiPageResidencyPushConstants
     {
@@ -1531,10 +1571,15 @@ namespace Njulf.Rendering.Data
         public uint GeometryGeneration;
         public uint SourceGeneration;
         public uint CohortGeneration;
-        public uint CameraCut;
+        // SimpleDdgiProbePageLayout.PhysicalPageAllocation* flags. Admission
+        // snapshots this classification into the physical-page metadata so a
+        // cold bootstrap can never pollute ordinary-motion or cut latency.
+        public uint AllocationFlags;
+        public uint VisiblePublicationProbeBudget;
+        public uint PublicationLatencyTargetFrames;
         public uint Stage;
-        public uint Reserved0;
-        public uint Reserved1;
+        public uint FrameSerialLow;
+        public uint FrameSerialHigh;
     }
 
     // 20 bytes. RadianceDistance.w retains full-precision surface distance.
@@ -1563,8 +1608,9 @@ namespace Njulf.Rendering.Data
     // stored so Validate mode can shadow-compare codebook reconstruction.
     // The high byte of PackedTransmission stores the complete source sequence
     // cardinality; zero encodes the supported maximum of 256 and its RGB bytes
-    // remain the packed transmission lobe. The five-bit direction epoch shares
-    // GenerationFlagsAndDirectionEpoch with the physical generation and flags.
+    // remain the packed transmission lobe. The final word stores the full
+    // 24-bit physical generation, a combined three-bit validity/exact-hit-kind
+    // code, and the five-bit direction epoch.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiTransportRayCache
     {
@@ -1848,6 +1894,8 @@ namespace Njulf.Rendering.Data
         // loosening the authored tail tolerance.
         public uint CanonicalQuantizationFloorBits;
         public uint ExcludedInactiveCount;
+        // Virtual probes outside the frozen resident/published participant
+        // domain. A non-zero value is normal with sparse residency.
         public uint ExcludedNotVisibleCount;
         public uint ExcludedStaleSourceCount;
         // Set when any checked audit counter would have wrapped. The host
@@ -1880,6 +1928,13 @@ namespace Njulf.Rendering.Data
         public uint DetailedWitnessPrivateRBits;
         public uint DetailedWitnessPrivateGBits;
         public uint DetailedWitnessPrivateBBits;
+        // First race-winning identity for each bounded mismatch class. Low and
+        // high 16-bit halves store virtual+1 and physical+1 respectively;
+        // zero is the absent sentinel.
+        public uint FirstNotResidentIdentity;
+        public uint FirstStaleSourceIdentity;
+        public uint FirstInvalidCacheIdentity;
+        public uint FirstNonFiniteIdentity;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1919,7 +1974,12 @@ namespace Njulf.Rendering.Data
         public uint SourceThroughputRayTarget;
         public uint SourceThroughputRayCapacity;
         public uint FrameIndex;
-        public uint DeterministicFlags;
+        // When PeriodicSourceRefreshWave is set this is the frozen cohort
+        // cutoff. Otherwise it is the earliest frame at which a certified
+        // field may open its next periodic source cohort. The deterministic
+        // scheduling policy is already expressed by fixed CPU-authored
+        // budgets and never consumed this word on the GPU.
+        public uint PeriodicSourceRefreshControlFrame;
         public uint FrameSerialLow;
         public uint FrameSerialHigh;
         public uint VolumeTableGeneration;

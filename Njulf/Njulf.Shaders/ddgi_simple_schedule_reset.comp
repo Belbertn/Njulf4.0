@@ -9,33 +9,56 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 void main()
 {
     uint localIndex = gl_LocalInvocationID.x;
-    uint requestCapacity = SchedulerRequestCapacity();
-    uint candidateCapacity = SchedulerCandidateCapacity();
-
-    for (uint i = localIndex; i < candidateCapacity * SIMPLE_DDGI_SCHEDULER_CANDIDATE_WORDS; i += 64u)
-        SchedulerArenaWrite(pc.CandidateInputOffsetWords + i, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE);
-    for (uint i = localIndex; i < SchedulerCandidateGroupLaneWordCount(); i += 64u)
-        SchedulerArenaWrite(pc.CandidateGroupLaneCountsOffsetWords + i, 0u);
-    for (uint i = localIndex; i < candidateCapacity * SIMPLE_DDGI_SCHEDULER_COMPACT_OUTPUT_WORDS; i += 64u)
-        SchedulerArenaWrite(pc.CandidateOutputOffsetWords + i, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE);
-    for (uint i = localIndex; i < requestCapacity * SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS; i += 64u)
-        SchedulerArenaWrite(pc.UpdateRecordsOffsetWords + i, 0u);
-    for (uint i = localIndex; i < SIMPLE_DDGI_SCHEDULER_MAX_LANES; i += 64u)
+    bool certifiedQuiesced = SchedulerCertifiedQuiesced();
+    // Classification deterministically overwrites every active candidate
+    // record, including the invalid sentinel on every rejection path. Compact
+    // likewise overwrites exactly the [0, eligibleCount) output interval that
+    // admission is allowed to read. Clearing either full-capacity pool here
+    // only duplicates those writes and makes a sparse one-probe frame pay for
+    // the complete 15k-probe arena.
+    if (!certifiedQuiesced)
     {
-        SchedulerArenaWrite(pc.LaneCandidateCountsOffsetWords + i, 0u);
-        SchedulerArenaWrite(pc.LanePrefixesOffsetWords + i, 0u);
-        SchedulerArenaWrite(pc.LaneTotalsOffsetWords + i, 0u);
-        // LaneCursors is persistent rotating state. It is initialized by the
-        // bootstrap upload and advanced only by successful admission; a
-        // frame reset must never turn it back into a compacted lane base.
-        SchedulerArenaWrite(pc.LaneAdmissionOffsetWords + i, 0u);
+        for (uint i = localIndex;
+             i < SchedulerCandidateGroupLaneWordCount();
+             i += 64u)
+        {
+            SchedulerArenaWrite(
+                pc.CandidateGroupLaneCountsOffsetWords + i,
+                0u);
+        }
+    }
+    // Emit consumes only [0, acceptedCount), and every admitted record is
+    // written in full. The same bound applies to outcome records initialized
+    // by emit, so neither private range needs a frame-wide clear.
+    if (!certifiedQuiesced)
+    {
+        for (uint i = localIndex;
+             i < SIMPLE_DDGI_SCHEDULER_MAX_LANES;
+             i += 64u)
+        {
+            SchedulerArenaWrite(pc.LaneCandidateCountsOffsetWords + i, 0u);
+            SchedulerArenaWrite(pc.LanePrefixesOffsetWords + i, 0u);
+            SchedulerArenaWrite(pc.LaneTotalsOffsetWords + i, 0u);
+            // LaneCursors is persistent rotating state. It is initialized by
+            // the bootstrap upload and advanced only by successful admission;
+            // a frame reset must never turn it back into a compacted lane base.
+            SchedulerArenaWrite(pc.LaneAdmissionOffsetWords + i, 0u);
+        }
     }
     for (uint i = localIndex; i < SIMPLE_DDGI_SCHEDULER_COUNTER_WORDS; i += 64u)
         SchedulerArenaWrite(pc.CountersOffsetWords + i, 0u);
-    for (uint i = localIndex; i < requestCapacity * SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS; i += 64u)
-        SchedulerArenaWrite(pc.OutcomesOffsetWords + i, 0u);
-    for (uint i = localIndex; i < SIMPLE_DDGI_SCHEDULER_FEEDBACK_WORDS; i += 64u)
+    uint feedbackClearEnd = certifiedQuiesced
+        ? 64u
+        : SIMPLE_DDGI_SCHEDULER_FEEDBACK_WORDS;
+    for (uint i = localIndex; i < feedbackClearEnd; i += 64u)
         SchedulerArenaWrite(pc.FeedbackOffsetWords + i, 0u);
+    if (certifiedQuiesced)
+    {
+        // Cursor words 64..959 are persistent and unchanged while admission
+        // is quiesced. Clear only the exceptional tail copied after them.
+        for (uint i = 960u + localIndex; i < 976u; i += 64u)
+            SchedulerArenaWrite(pc.FeedbackOffsetWords + i, 0u);
+    }
     for (uint command = localIndex; command < 6u; command += 64u)
     {
         uint commandBase = pc.RayBucketCommandsOffsetWords +

@@ -42,6 +42,13 @@
 #define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE true
 #endif
 
+// Some compact receivers (the frame-local opaque cache producer) are strict
+// read-only consumers. Give those variants a compile-time boundary so glslang
+// cannot retain unreachable residency atomics behind a constant-false branch.
+#ifndef SIMPLE_DDGI_RECEIVER_RESIDENCY_FEEDBACK
+#define SIMPLE_DDGI_RECEIVER_RESIDENCY_FEEDBACK 1
+#endif
+
 // Receiver variants opt in so sparse resident pages remain relevant even when
 // they are absent from the proactive depth predictor.
 #ifndef SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT
@@ -145,7 +152,7 @@ const uint SIMPLE_DDGI_VISIBILITY_TEXELS = 16u;
 const uint SIMPLE_DDGI_MAX_RAYS_PER_PROBE = 256u;
 const uint SIMPLE_DDGI_LEGACY_RAY_RESULT_STRIDE_WORDS = 8u;
 const uint SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS = 5u;
-const uint SIMPLE_DDGI_TRANSPORT_RAY_CACHE_ABI_VERSION = 5u;
+const uint SIMPLE_DDGI_TRANSPORT_RAY_CACHE_ABI_VERSION = 6u;
 const uint SIMPLE_DDGI_HEADER_WORDS = 60u;
 const uint SIMPLE_DDGI_FLAGS_WORD = 14u;
 const uint SIMPLE_DDGI_VOLUME_STRIDE_WORDS = 28u;
@@ -210,11 +217,6 @@ const uint SIMPLE_DDGI_VOLUME_KIND_RING = 2u;
 // A small support ramp prevents a single barely-valid trilinear corner from
 // abruptly taking ownership of the entire receiver when a fresh probe settles.
 const float SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP = 0.15;
-// Directional support is geometric estimator authority, not probe-data
-// availability or transport visibility. Keep its ownership ramp distinct so
-// an all-back-facing cell can yield to a coarser gather/environment without
-// relabelling healthy probe data as unavailable.
-const float SIMPLE_DDGI_OWNERSHIP_DIRECTIONAL_SUPPORT_RAMP = 0.15;
 // The low/high interval is reserved for the late all-occluded leak safeguard.
 // Normalized probe selection uses the cubic Chebyshev confidence below.
 const float SIMPLE_DDGI_VISIBILITY_SELECTION_LOW = 0.01;
@@ -705,7 +707,9 @@ void RecordSimpleDdgiMirrorSamplingPath(
         {
             AddSimpleDdgiStorageValidationDiagnostic(
                 diagnosticFrame,
-                SIMPLE_DDGI_MIRROR_SEAM_FALLBACK_COUNTER,
+                imageHit
+                    ? SIMPLE_DDGI_MIRROR_IMAGE_HIT_COUNTER
+                    : SIMPLE_DDGI_MIRROR_SEAM_FALLBACK_COUNTER,
                 1u);
         }
         return;
@@ -797,6 +801,122 @@ uint PackSimpleDdgiEnergyWeightSum(float value)
     return uint(round(clamp(value, 0.0, 16.0) * SIMPLE_DDGI_ENERGY_WEIGHT_SCALE));
 }
 
+// The coherent witness key uses 11 logarithmic luminance bits followed by the
+// 15-bit global virtual-probe index. The renderer contract caps the complete
+// Simple-DDGI field at 32,768 probes. Every metadata word stores the same key
+// followed by one six-bit payload chunk; independent atomic maxima therefore
+// converge on one exact witness without a cross-workgroup spin lock.
+const uint SIMPLE_DDGI_ENERGY_EVIDENCE_PROBE_BITS = 15u;
+const uint SIMPLE_DDGI_ENERGY_EVIDENCE_PROBE_MASK = 0x7fffu;
+const uint SIMPLE_DDGI_ENERGY_EVIDENCE_PAYLOAD_BITS = 6u;
+const uint SIMPLE_DDGI_ENERGY_EVIDENCE_PAYLOAD_MASK = 0x3fu;
+const uint SIMPLE_DDGI_ENERGY_EVIDENCE_HISTOGRAM_BASE = 23u;
+const float SIMPLE_DDGI_ENERGY_EVIDENCE_MAX_LUMINANCE = 64.0;
+
+uint PackSimpleDdgiEnergyEvidenceLuminance(float luminance)
+{
+    float normalized = log2(1.0 + clamp(
+        luminance,
+        0.0,
+        SIMPLE_DDGI_ENERGY_EVIDENCE_MAX_LUMINANCE)) /
+        log2(1.0 + SIMPLE_DDGI_ENERGY_EVIDENCE_MAX_LUMINANCE);
+    // Reserve zero for an empty counter bank so a black-but-valid witness is
+    // still distinguishable from missing readback evidence.
+    return uint(round(normalized * 2046.0)) + 1u;
+}
+
+uint SimpleDdgiEnergyEvidenceHistogramBucket(float luminance)
+{
+    float normalized = log2(1.0 + clamp(
+        luminance,
+        0.0,
+        SIMPLE_DDGI_ENERGY_EVIDENCE_MAX_LUMINANCE)) /
+        log2(1.0 + SIMPLE_DDGI_ENERGY_EVIDENCE_MAX_LUMINANCE);
+    return min(
+        uint(floor(normalized *
+            float(SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_HISTOGRAM_COUNT))),
+        SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_HISTOGRAM_COUNT - 1u);
+}
+
+uint PackSimpleDdgiEnergyEvidenceMoment(float value, float maximum)
+{
+    return uint(round(clamp(value / maximum, 0.0, 1.0) * 65535.0));
+}
+
+void MaxSimpleDdgiEnergyEvidenceChunks(
+    uint diagnosticFrame,
+    uint counterBase,
+    uint winnerKey,
+    uint value,
+    uint chunkCount)
+{
+#if NJULF_DDGI_DETAILED_COUNTERS
+    for (uint chunk = 0u; chunk < chunkCount; chunk++)
+    {
+        uint payload = (value >> (chunk * SIMPLE_DDGI_ENERGY_EVIDENCE_PAYLOAD_BITS)) &
+            SIMPLE_DDGI_ENERGY_EVIDENCE_PAYLOAD_MASK;
+        MaxRendererDiagnostic(
+            diagnosticFrame,
+            counterBase + chunk,
+            (winnerKey << SIMPLE_DDGI_ENERGY_EVIDENCE_PAYLOAD_BITS) | payload);
+    }
+#endif
+}
+
+void RecordSimpleDdgiVolumeEnergyEvidence(
+    SimpleDdgiParams params,
+    uint diagnosticFrame,
+    uint volumeIndex,
+    uint virtualProbeIndex,
+    uint virtualPageIndex,
+    uint physicalProbeIndex,
+    uint physicalPageIndex,
+    uint sourceLightingGeneration,
+    vec2 visibilityMoments,
+    float luminance)
+{
+#if NJULF_DDGI_DETAILED_COUNTERS
+    if (!SimpleDdgiDetailedDiagnosticsEnabled(params) ||
+        volumeIndex >= SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_COUNTER_COUNT)
+    {
+        return;
+    }
+
+    uint bank = SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_COUNTER_BASE +
+        volumeIndex * SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_COUNTER_STRIDE;
+    uint luminanceCode = PackSimpleDdgiEnergyEvidenceLuminance(luminance);
+    uint winnerKey = (luminanceCode << SIMPLE_DDGI_ENERGY_EVIDENCE_PROBE_BITS) |
+        (virtualProbeIndex & SIMPLE_DDGI_ENERGY_EVIDENCE_PROBE_MASK);
+    AddRendererDiagnostic(diagnosticFrame, bank + 0u, 1u);
+    MaxRendererDiagnostic(diagnosticFrame, bank + 1u, winnerKey);
+    MaxSimpleDdgiEnergyEvidenceChunks(
+        diagnosticFrame, bank + 2u, winnerKey, physicalProbeIndex + 1u, 3u);
+    MaxSimpleDdgiEnergyEvidenceChunks(
+        diagnosticFrame, bank + 5u, winnerKey, virtualPageIndex + 1u, 3u);
+    MaxSimpleDdgiEnergyEvidenceChunks(
+        diagnosticFrame, bank + 8u, winnerKey, physicalPageIndex + 1u, 3u);
+    MaxSimpleDdgiEnergyEvidenceChunks(
+        diagnosticFrame, bank + 11u, winnerKey, sourceLightingGeneration, 6u);
+    MaxSimpleDdgiEnergyEvidenceChunks(
+        diagnosticFrame,
+        bank + 17u,
+        winnerKey,
+        PackSimpleDdgiEnergyEvidenceMoment(visibilityMoments.x, 256.0),
+        3u);
+    MaxSimpleDdgiEnergyEvidenceChunks(
+        diagnosticFrame,
+        bank + 20u,
+        winnerKey,
+        PackSimpleDdgiEnergyEvidenceMoment(visibilityMoments.y, 65536.0),
+        3u);
+    uint bucket = SimpleDdgiEnergyEvidenceHistogramBucket(luminance);
+    AddRendererDiagnostic(
+        diagnosticFrame,
+        bank + SIMPLE_DDGI_ENERGY_EVIDENCE_HISTOGRAM_BASE + bucket,
+        1u);
+#endif
+}
+
 bool SimpleDdgiTraceEnergyDiagnosticRay(SimpleDdgiParams params, uint probeIndex, uint rayIndex)
 {
     return SimpleDdgiDetailedDiagnosticsEnabled(params) &&
@@ -854,8 +974,13 @@ void RecordSimpleDdgiBlendEnergyDiagnostics(
     uint diagnosticFrame,
     uint volumeIndex,
     uint probeIndex,
+    uint virtualPageIndex,
+    uint physicalProbeIndex,
+    uint physicalPageIndex,
+    uint sourceLightingGeneration,
     uint texel,
     vec3 irradiance,
+    vec2 visibilityMoments,
     float confidence)
 {
     if (!SimpleDdgiBlendEnergyDiagnosticTexel(params, probeIndex, texel))
@@ -878,6 +1003,17 @@ void RecordSimpleDdgiBlendEnergyDiagnostics(
         AddRendererDiagnostic(diagnosticFrame, bank + 0u, 1u);
         AddRendererDiagnostic(diagnosticFrame, bank + 1u, PackSimpleDdgiEnergyLuminance(luminance));
         AddRendererDiagnostic(diagnosticFrame, bank + 2u, PackSimpleDdgiEnergyWeight(safeConfidence));
+        RecordSimpleDdgiVolumeEnergyEvidence(
+            params,
+            diagnosticFrame,
+            volumeIndex,
+            probeIndex,
+            virtualPageIndex,
+            physicalProbeIndex,
+            physicalPageIndex,
+            sourceLightingGeneration,
+            visibilityMoments,
+            luminance);
     }
 }
 
@@ -1844,9 +1980,22 @@ uint SimpleDdgiVisibilityAtlasWord(
 // deterministic full-sequence ray direction.  `directionRayIndex`, rather than
 // the queue-local maintenance ray index, is the key so a low-rate maintenance
 // subset reuses exactly the source ray that was originally traced.
-const uint SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG = 1u << 24u;
-const uint SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG = 1u << 25u;
-const uint SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG = 1u << 26u;
+// The source-cache generation word has to retain all five public hit kinds.
+// The previous two-flag representation collapsed ordinary double-sided and
+// far-field backfaces into ONE_SIDED_BACK_FACE. The live blend kept the exact
+// scratch kind while cached transport/audit decoded the collapsed kind, so the
+// two paths projected different ray sets and a completed solve could never
+// satisfy its own fixed-point audit.
+//
+// Keep the record sizes and the complete 24-bit physical generation unchanged
+// by encoding {invalid, miss, front, back, one-sided back, far-field back} as
+// six values in the existing three metadata bits. Code zero is invalid; legal
+// hit kinds 0..4 are stored as codes 1..5.
+const uint SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK =
+    SIMPLE_DDGI_UPDATE_GENERATION_MASK;
+const uint SIMPLE_DDGI_TRANSPORT_CACHE_CLASSIFICATION_SHIFT = 24u;
+const uint SIMPLE_DDGI_TRANSPORT_CACHE_CLASSIFICATION_MASK =
+    0x7u << SIMPLE_DDGI_TRANSPORT_CACHE_CLASSIFICATION_SHIFT;
 const uint SIMPLE_DDGI_TRANSPORT_CACHE_DIRECTION_EPOCH_SHIFT = 27u;
 const uint SIMPLE_DDGI_TRANSPORT_CACHE_DIRECTION_EPOCH_MASK =
     0x1fu << SIMPLE_DDGI_TRANSPORT_CACHE_DIRECTION_EPOCH_SHIFT;
@@ -1872,6 +2021,33 @@ struct SimpleDdgiTransportRayCache
     uint sourceLightingGeneration;
     uint sourceEpoch;
 };
+
+uint PackSimpleDdgiTransportCacheHitKind(float hitKind)
+{
+    uint exactHitKind = uint(clamp(
+        round(hitKind),
+        SIMPLE_DDGI_RAY_HIT_KIND_MISS,
+        SIMPLE_DDGI_RAY_HIT_KIND_FAR_FIELD_BACK_FACE));
+    return (exactHitKind + 1u) <<
+        SIMPLE_DDGI_TRANSPORT_CACHE_CLASSIFICATION_SHIFT;
+}
+
+uint UnpackSimpleDdgiTransportCacheHitKind(uint generationAndFlags)
+{
+    uint code = (generationAndFlags &
+        SIMPLE_DDGI_TRANSPORT_CACHE_CLASSIFICATION_MASK) >>
+            SIMPLE_DDGI_TRANSPORT_CACHE_CLASSIFICATION_SHIFT;
+    return code == 0u ? 0u : code - 1u;
+}
+
+bool SimpleDdgiTransportCacheHitKindIsValid(uint generationAndFlags)
+{
+    uint code = (generationAndFlags &
+        SIMPLE_DDGI_TRANSPORT_CACHE_CLASSIFICATION_MASK) >>
+            SIMPLE_DDGI_TRANSPORT_CACHE_CLASSIFICATION_SHIFT;
+    return code >= 1u && code <=
+        uint(SIMPLE_DDGI_RAY_HIT_KIND_FAR_FIELD_BACK_FACE) + 1u;
+}
 
 uint PackSimpleDdgiTransportOctDirection(vec3 direction)
 {
@@ -2402,15 +2578,70 @@ void WriteSimpleDdgiTransportRayCache(
     }
 #endif
     WriteStorageWordUniform(bufferIndex, transmissionWord, packedTransmission);
-    uint flags = SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG |
-        (hitKind >= 0.5 ? SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG : 0u) |
-        (hitKind > 1.5 ? SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG : 0u) |
+    uint flags = PackSimpleDdgiTransportCacheHitKind(hitKind) |
         (SimpleDdgiDirectionEpoch(sourceEpoch) <<
             SIMPLE_DDGI_TRANSPORT_CACHE_DIRECTION_EPOCH_SHIFT);
     WriteStorageWordUniform(
         bufferIndex,
         generationWord,
-        (probeGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK) | flags);
+        (probeGeneration & SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK) | flags);
+}
+
+// The split trace writes the full near-hit source record in its SOURCE kernel,
+// then the FINAL kernel performs the receiver-visibility backface query. Patch
+// only the exact classification after that ordered query; rewriting the full
+// record would require duplicating material reconstruction in FINAL.
+void UpdateSimpleDdgiTransportRayCacheHitKind(
+    uint bufferIndex,
+    uint cacheProbeBaseWordPlusOne,
+    uint directionRayIndex,
+    SimpleDdgiVolume volume,
+    SimpleDdgiParams p,
+    uint expectedProbeGeneration,
+    uint expectedSourceEpoch,
+    float hitKind)
+{
+    bool validHitKind = !isnan(hitKind) && !isinf(hitKind) &&
+        hitKind >= SIMPLE_DDGI_RAY_HIT_KIND_MISS &&
+        hitKind <= SIMPLE_DDGI_RAY_HIT_KIND_FAR_FIELD_BACK_FACE &&
+        hitKind == round(hitKind);
+    uint baseWord;
+    uint format;
+    if (bufferIndex == 0u || expectedProbeGeneration == 0u ||
+        expectedSourceEpoch == 0u || !validHitKind ||
+        !TryResolveSimpleDdgiTransportCacheAddressFromProbeBase(
+            cacheProbeBaseWordPlusOne,
+            directionRayIndex,
+            p.raysPerProbe,
+            volume.cacheStrideWords,
+            volume.cacheLayoutFlags,
+            baseWord,
+            format))
+    {
+        return;
+    }
+
+    uint generationWord = baseWord +
+        SimpleDdgiStorageExpectedStride(format) - 1u;
+    uint generationAndFlags = ReadStorageWordUniform(
+        bufferIndex, generationWord);
+    uint cachedDirectionEpoch = (generationAndFlags &
+        SIMPLE_DDGI_TRANSPORT_CACHE_DIRECTION_EPOCH_MASK) >>
+            SIMPLE_DDGI_TRANSPORT_CACHE_DIRECTION_EPOCH_SHIFT;
+    if (!SimpleDdgiTransportCacheHitKindIsValid(generationAndFlags) ||
+        (generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK) !=
+            (expectedProbeGeneration &
+                SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK) ||
+        cachedDirectionEpoch != SimpleDdgiDirectionEpoch(expectedSourceEpoch))
+    {
+        return;
+    }
+
+    generationAndFlags =
+        (generationAndFlags &
+            ~SIMPLE_DDGI_TRANSPORT_CACHE_CLASSIFICATION_MASK) |
+        PackSimpleDdgiTransportCacheHitKind(hitKind);
+    WriteStorageWordUniform(bufferIndex, generationWord, generationAndFlags);
 }
 
 // Packed trace reuse consumes only source radiance, distance, and hit
@@ -2462,11 +2693,10 @@ bool ReadSimpleDdgiPackedTransportRayCacheForTrace(
         SIMPLE_DDGI_TRANSPORT_CACHE_DIRECTION_EPOCH_SHIFT;
     bool epochMatches = cachedDirectionEpoch ==
         SimpleDdgiDirectionEpoch(expectedSourceEpoch);
-    if ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG) == 0u ||
-        (generationAndFlags & SIMPLE_DDGI_UPDATE_GENERATION_MASK) !=
-            (expectedProbeGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK) ||
-        ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG) != 0u &&
-            (generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG) == 0u) ||
+    if ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK) !=
+            (expectedProbeGeneration &
+                SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK) ||
+        !SimpleDdgiTransportCacheHitKindIsValid(generationAndFlags) ||
         !epochMatches)
     {
         if (!epochMatches)
@@ -2500,11 +2730,8 @@ bool ReadSimpleDdgiPackedTransportRayCacheForTrace(
         return false;
     }
 
-    hitKind = (generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG) == 0u
-        ? SIMPLE_DDGI_RAY_HIT_KIND_MISS
-        : (generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG) != 0u
-            ? SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE
-            : SIMPLE_DDGI_RAY_HIT_KIND_FRONT_FACE;
+    hitKind = float(UnpackSimpleDdgiTransportCacheHitKind(
+        generationAndFlags));
     return true;
 }
 
@@ -2557,11 +2784,10 @@ bool ReadSimpleDdgiLegacyTransportRayCacheForTrace(
         SIMPLE_DDGI_TRANSPORT_CACHE_DIRECTION_EPOCH_SHIFT;
     bool epochMatches = cachedDirectionEpoch ==
         SimpleDdgiDirectionEpoch(expectedSourceEpoch);
-    if ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG) == 0u ||
-        (generationAndFlags & SIMPLE_DDGI_UPDATE_GENERATION_MASK) !=
-            (expectedProbeGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK) ||
-        ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG) != 0u &&
-            (generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG) == 0u) ||
+    if ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK) !=
+            (expectedProbeGeneration &
+                SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK) ||
+        !SimpleDdgiTransportCacheHitKindIsValid(generationAndFlags) ||
         !epochMatches)
     {
         if (!epochMatches)
@@ -2588,11 +2814,8 @@ bool ReadSimpleDdgiLegacyTransportRayCacheForTrace(
         return false;
     }
 
-    hitKind = (generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG) == 0u
-        ? SIMPLE_DDGI_RAY_HIT_KIND_MISS
-        : (generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG) != 0u
-            ? SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE
-            : SIMPLE_DDGI_RAY_HIT_KIND_FRONT_FACE;
+    hitKind = float(UnpackSimpleDdgiTransportCacheHitKind(
+        generationAndFlags));
     return true;
 }
 
@@ -2656,11 +2879,10 @@ bool ReadSimpleDdgiLegacyTransportRayCacheForSolve(
             SIMPLE_DDGI_TRANSPORT_CACHE_DIRECTION_EPOCH_SHIFT;
     bool epochMatches = cachedDirectionEpoch ==
         SimpleDdgiDirectionEpoch(expectedSourceEpoch);
-    if ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG) == 0u ||
-        (generationAndFlags & SIMPLE_DDGI_UPDATE_GENERATION_MASK) !=
-            (expectedProbeGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK) ||
-        ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG) != 0u &&
-            (generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG) == 0u) ||
+    if ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK) !=
+            (expectedProbeGeneration &
+                SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK) ||
+        !SimpleDdgiTransportCacheHitKindIsValid(generationAndFlags) ||
         !epochMatches)
     {
         if (!epochMatches)
@@ -2773,11 +2995,10 @@ bool ReadSimpleDdgiPackedTransportRayCacheForSolve(
         SIMPLE_DDGI_TRANSPORT_CACHE_DIRECTION_EPOCH_SHIFT;
     bool epochMatches = cachedDirectionEpoch ==
         SimpleDdgiDirectionEpoch(expectedSourceEpoch);
-    if ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG) == 0u ||
-        (generationAndFlags & SIMPLE_DDGI_UPDATE_GENERATION_MASK) !=
-            (expectedProbeGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK) ||
-        ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG) != 0u &&
-            (generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG) == 0u) ||
+    if ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK) !=
+            (expectedProbeGeneration &
+                SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK) ||
+        !SimpleDdgiTransportCacheHitKindIsValid(generationAndFlags) ||
         !epochMatches)
     {
         if (!epochMatches)
@@ -2837,6 +3058,107 @@ bool ReadSimpleDdgiPackedTransportRayCacheForSolve(
     return true;
 }
 
+// Decode failures are rare and already reject the resident transaction. Keep
+// their detailed inspection off the valid hot path: transport invokes this
+// helper only after the compact decoder returns false, then ORs the bounded
+// reason mask into the scheduler's spare exceptional-feedback word.
+const uint SIMPLE_DDGI_CACHE_READ_FAILURE_PRECONDITION = 1u << 0u;
+const uint SIMPLE_DDGI_CACHE_READ_FAILURE_ADDRESS = 1u << 1u;
+const uint SIMPLE_DDGI_CACHE_READ_FAILURE_GENERATION = 1u << 2u;
+const uint SIMPLE_DDGI_CACHE_READ_FAILURE_CLASSIFICATION = 1u << 3u;
+const uint SIMPLE_DDGI_CACHE_READ_FAILURE_DIRECTION_EPOCH = 1u << 4u;
+const uint SIMPLE_DDGI_CACHE_READ_FAILURE_DISTANCE_PADDING = 1u << 5u;
+const uint SIMPLE_DDGI_CACHE_READ_FAILURE_PAYLOAD = 1u << 6u;
+const uint SIMPLE_DDGI_CACHE_READ_FAILURE_TRANSMISSION_PADDING = 1u << 7u;
+const uint SIMPLE_DDGI_CACHE_READ_FAILURE_UNATTRIBUTED = 1u << 31u;
+
+uint DiagnoseSimpleDdgiPackedTransportRayCacheForSolve(
+    uint bufferIndex,
+    uint cacheProbeBaseWordPlusOne,
+    uint directionRayIndex,
+    SimpleDdgiVolume volume,
+    SimpleDdgiParams p,
+    uint expectedProbeGeneration,
+    uint expectedSourceLightingGeneration,
+    uint expectedSourceEpoch,
+    uint expectedSourceRayCount)
+{
+    uint failureMask = 0u;
+    if (bufferIndex == 0u || expectedProbeGeneration == 0u ||
+        expectedSourceLightingGeneration == 0u || expectedSourceEpoch == 0u ||
+        expectedSourceRayCount == 0u || expectedSourceRayCount > p.raysPerProbe)
+    {
+        failureMask |= SIMPLE_DDGI_CACHE_READ_FAILURE_PRECONDITION;
+    }
+
+    uint baseWord;
+    uint format;
+    if (!TryResolveSimpleDdgiTransportCacheAddressFromProbeBase(
+            cacheProbeBaseWordPlusOne,
+            directionRayIndex,
+            p.raysPerProbe,
+            volume.cacheStrideWords,
+            volume.cacheLayoutFlags,
+            baseWord,
+            format) ||
+        (format != SIMPLE_DDGI_CACHE_FORMAT_COMPACT_28 &&
+            format != SIMPLE_DDGI_CACHE_FORMAT_COMPACT_24))
+    {
+        return failureMask | SIMPLE_DDGI_CACHE_READ_FAILURE_ADDRESS;
+    }
+
+    uint generationWord = baseWord +
+        SimpleDdgiStorageExpectedStride(format) - 1u;
+    uint generationAndFlags = ReadStorageWordUniform(bufferIndex, generationWord);
+    if ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK) !=
+        (expectedProbeGeneration & SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK))
+    {
+        failureMask |= SIMPLE_DDGI_CACHE_READ_FAILURE_GENERATION;
+    }
+    if (!SimpleDdgiTransportCacheHitKindIsValid(generationAndFlags))
+        failureMask |= SIMPLE_DDGI_CACHE_READ_FAILURE_CLASSIFICATION;
+    uint cachedDirectionEpoch = (generationAndFlags &
+        SIMPLE_DDGI_TRANSPORT_CACHE_DIRECTION_EPOCH_MASK) >>
+            SIMPLE_DDGI_TRANSPORT_CACHE_DIRECTION_EPOCH_SHIFT;
+    if (cachedDirectionEpoch != SimpleDdgiDirectionEpoch(expectedSourceEpoch))
+        failureMask |= SIMPLE_DDGI_CACHE_READ_FAILURE_DIRECTION_EPOCH;
+
+    uint packedRg = ReadStorageWordUniform(bufferIndex, baseWord);
+    uint packedBAndDistance = ReadStorageWordUniform(bufferIndex, baseWord + 1u);
+    if (format == SIMPLE_DDGI_CACHE_FORMAT_COMPACT_28 &&
+        (packedBAndDistance & 0xffff0000u) != 0u)
+    {
+        failureMask |= SIMPLE_DDGI_CACHE_READ_FAILURE_DISTANCE_PADDING;
+    }
+    vec2 radianceRg = unpackHalf2x16(packedRg);
+    vec2 radianceBAndDistance = unpackHalf2x16(packedBAndDistance);
+    vec4 sourceRadianceDistance = vec4(
+        radianceRg,
+        radianceBAndDistance.x,
+        format == SIMPLE_DDGI_CACHE_FORMAT_COMPACT_28
+            ? uintBitsToFloat(ReadStorageWordUniform(bufferIndex, baseWord + 2u))
+            : radianceBAndDistance.y);
+    if (any(isnan(sourceRadianceDistance)) ||
+        any(isinf(sourceRadianceDistance)) ||
+        any(lessThan(sourceRadianceDistance.rgb, vec3(0.0))) ||
+        sourceRadianceDistance.w < 0.0)
+    {
+        failureMask |= SIMPLE_DDGI_CACHE_READ_FAILURE_PAYLOAD;
+    }
+
+    uint normalWord = format == SIMPLE_DDGI_CACHE_FORMAT_COMPACT_28
+        ? baseWord + 3u
+        : baseWord + 2u;
+    if ((ReadStorageWordUniform(bufferIndex, normalWord + 2u) &
+            0xff000000u) != 0u)
+    {
+        failureMask |= SIMPLE_DDGI_CACHE_READ_FAILURE_TRANSMISSION_PADDING;
+    }
+    return failureMask == 0u
+        ? SIMPLE_DDGI_CACHE_READ_FAILURE_UNATTRIBUTED
+        : failureMask;
+}
+
 bool ReadSimpleDdgiTransportRayCache(
     uint paramsBufferIndex,
     uint bufferIndex,
@@ -2890,11 +3212,10 @@ bool ReadSimpleDdgiTransportRayCache(
     uint generationWord = baseWord +
         SimpleDdgiStorageExpectedStride(format) - 1u;
     uint generationAndFlags = ReadStorageWordUniform(bufferIndex, generationWord);
-    if ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_VALID_FLAG) == 0u ||
-        (generationAndFlags & SIMPLE_DDGI_UPDATE_GENERATION_MASK) !=
-            (expectedProbeGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK) ||
-        ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG) != 0u &&
-            (generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG) == 0u))
+    if ((generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK) !=
+            (expectedProbeGeneration &
+                SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK) ||
+        !SimpleDdgiTransportCacheHitKindIsValid(generationAndFlags))
     {
         return false;
     }
@@ -3128,16 +3449,14 @@ bool ReadSimpleDdgiTransportRayCache(
 
 bool SimpleDdgiTransportRayCacheIsHit(SimpleDdgiTransportRayCache cache)
 {
-    return (cache.generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_HIT_FLAG) != 0u;
+    return UnpackSimpleDdgiTransportCacheHitKind(
+        cache.generationAndFlags) != uint(SIMPLE_DDGI_RAY_HIT_KIND_MISS);
 }
 
 float SimpleDdgiTransportRayCacheHitKind(SimpleDdgiTransportRayCache cache)
 {
-    if (!SimpleDdgiTransportRayCacheIsHit(cache))
-        return 0.0;
-    return (cache.generationAndFlags & SIMPLE_DDGI_TRANSPORT_CACHE_BACKFACE_FLAG) != 0u
-        ? 2.0
-        : 1.0;
+    return float(UnpackSimpleDdgiTransportCacheHitKind(
+        cache.generationAndFlags));
 }
 
 vec4 ReadSimpleDdgiIrradianceTexel(
@@ -3453,6 +3772,47 @@ vec4 SampleSimpleDdgiAtlasImageAtAddress(
             float(address.sampledLayerIndex)));
 }
 
+// The sampled mirror stores the same octahedral texels as the canonical SSBO.
+// Hardware bilinear filtering is exact for quads wholly inside a layer, but a
+// quad that crosses an octahedral boundary needs the canonical mirror-wrap
+// rule rather than sampler clamping. Fetch those four image texels explicitly;
+// this retains bit-identical source values without falling back to scattered
+// SSBO reads for common axis-aligned floor and wall normals.
+vec4 LoadSimpleDdgiAtlasImageTexelAtAddress(
+    int textureBaseIndex,
+    SimpleDdgiAtlasAddress address,
+    ivec2 coord,
+    uint texelsPerProbe)
+{
+    uint texelIndex = SimpleDdgiMirrorOctTexelIndex(coord, texelsPerProbe);
+    ivec2 wrappedCoord = ivec2(
+        int(texelIndex % texelsPerProbe),
+        int(texelIndex / texelsPerProbe));
+    int textureIndex = textureBaseIndex + int(address.sampledGroupIndex);
+    return texelFetch(
+        BindlessArrayTextures[nonuniformEXT(textureIndex)],
+        ivec3(wrappedCoord, int(address.sampledLayerIndex)),
+        0);
+}
+
+vec4 SampleSimpleDdgiAtlasImageWrappedBilinearAtAddress(
+    int textureBaseIndex,
+    SimpleDdgiAtlasAddress address,
+    ivec2 base,
+    vec2 fraction,
+    uint texelsPerProbe)
+{
+    vec4 s00 = LoadSimpleDdgiAtlasImageTexelAtAddress(
+        textureBaseIndex, address, base, texelsPerProbe);
+    vec4 s10 = LoadSimpleDdgiAtlasImageTexelAtAddress(
+        textureBaseIndex, address, base + ivec2(1, 0), texelsPerProbe);
+    vec4 s01 = LoadSimpleDdgiAtlasImageTexelAtAddress(
+        textureBaseIndex, address, base + ivec2(0, 1), texelsPerProbe);
+    vec4 s11 = LoadSimpleDdgiAtlasImageTexelAtAddress(
+        textureBaseIndex, address, base + ivec2(1, 1), texelsPerProbe);
+    return mix(mix(s00, s10, fraction.x), mix(s01, s11, fraction.x), fraction.y);
+}
+
 vec4 SampleSimpleDdgiIrradianceBilinearAtAddress(
     uint bufferIndex,
     SimpleDdgiAtlasAddress address,
@@ -3466,11 +3826,10 @@ vec4 SampleSimpleDdgiIrradianceBilinearAtAddress(
     vec2 f = fract(texelUv);
     bool interior = all(greaterThanEqual(base, ivec2(0))) &&
         all(lessThan(base + ivec2(1), ivec2(int(texelsPerProbe))));
-    bool imageHit = interior &&
-        SimpleDdgiCanSampleAtlasImageAtAddress(
-            p,
-            SIMPLE_DDGI_CACHE_IRRADIANCE_MIRROR_BIT,
-            address);
+    bool imageHit = SimpleDdgiCanSampleAtlasImageAtAddress(
+        p,
+        SIMPLE_DDGI_CACHE_IRRADIANCE_MIRROR_BIT,
+        address);
     RecordSimpleDdgiMirrorSamplingPath(
         p,
         address.irradianceBaseWord ^ 0x49525241u,
@@ -3483,10 +3842,17 @@ vec4 SampleSimpleDdgiIrradianceBilinearAtAddress(
             SIMPLE_DDGI_CACHE_IRRADIANCE_MIRROR_BIT));
     if (imageHit)
     {
-        return SampleSimpleDdgiAtlasImageAtAddress(
-            SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX,
-            address,
-            encodedDirection);
+        return interior
+            ? SampleSimpleDdgiAtlasImageAtAddress(
+                SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX,
+                address,
+                encodedDirection)
+            : SampleSimpleDdgiAtlasImageWrappedBilinearAtAddress(
+                SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX,
+                address,
+                base,
+                f,
+                texelsPerProbe);
     }
 
     vec4 s00 = ReadSimpleDdgiIrradianceTexelAtBase(
@@ -3517,11 +3883,10 @@ vec2 SampleSimpleDdgiVisibilityBilinearAtAddress(
     vec2 f = fract(texelUv);
     bool interior = all(greaterThanEqual(base, ivec2(0))) &&
         all(lessThan(base + ivec2(1), ivec2(int(texelsPerProbe))));
-    bool imageHit = interior &&
-        SimpleDdgiCanSampleAtlasImageAtAddress(
-            p,
-            SIMPLE_DDGI_CACHE_VISIBILITY_MIRROR_BIT,
-            address);
+    bool imageHit = SimpleDdgiCanSampleAtlasImageAtAddress(
+        p,
+        SIMPLE_DDGI_CACHE_VISIBILITY_MIRROR_BIT,
+        address);
     RecordSimpleDdgiMirrorSamplingPath(
         p,
         address.visibilityBaseWord ^ 0x56495349u,
@@ -3534,10 +3899,17 @@ vec2 SampleSimpleDdgiVisibilityBilinearAtAddress(
             SIMPLE_DDGI_CACHE_VISIBILITY_MIRROR_BIT));
     if (imageHit)
     {
-        return SampleSimpleDdgiAtlasImageAtAddress(
-            SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX,
-            address,
-            encodedDirection).xy;
+        return (interior
+            ? SampleSimpleDdgiAtlasImageAtAddress(
+                SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX,
+                address,
+                encodedDirection)
+            : SampleSimpleDdgiAtlasImageWrappedBilinearAtAddress(
+                SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX,
+                address,
+                base,
+                f,
+                texelsPerProbe)).xy;
     }
 
     vec2 s00 = ReadSimpleDdgiVisibilityMomentsAtBase(
@@ -3772,29 +4144,17 @@ float SimpleDdgiRadiometricOwnership(SimpleDdgiGatherResult gather)
     // independent of probe-to-receiver visibility: visibility already selects
     // the representative probes in the normalized gather and the late leak
     // attenuation remains responsible for genuinely all-blocked cells.
-    // Directional support is a separate geometric authority term. A cell can
-    // have complete, valid atlas data while every probe lies behind the receiver;
-    // that estimator must not publish zero irradiance at full ownership.
+    // Directional weighting is already part of the normalized estimator inside
+    // one gather. Applying it again as receiver ownership would turn the probe
+    // lattice into a visible confidence mask and open coarse/environment
+    // fallback beneath otherwise complete data.
     float spatialCoverage = clamp(gather.spatialCoverage, 0.0, 1.0);
     float validSupport = clamp(gather.validSupport, 0.0, 1.0);
-    float directionalSupport = clamp(gather.directionalSupport, 0.0, 1.0);
     float availabilityAuthority = smoothstep(
         0.0,
         SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP,
         validSupport);
-    float directionalAuthority = smoothstep(
-        0.0,
-        SIMPLE_DDGI_OWNERSHIP_DIRECTIONAL_SUPPORT_RAMP,
-        directionalSupport);
-    return spatialCoverage * availabilityAuthority * directionalAuthority;
-}
-
-float SimpleDdgiDirectionalGatherAuthority(SimpleDdgiGatherResult gather)
-{
-    return smoothstep(
-        0.0,
-        SIMPLE_DDGI_OWNERSHIP_DIRECTIONAL_SUPPORT_RAMP,
-        clamp(gather.directionalSupport, 0.0, 1.0));
+    return spatialCoverage * availabilityAuthority;
 }
 
 float SimpleDdgiLeakAttenuation(SimpleDdgiGatherResult gather, SimpleDdgiParams p)
@@ -4003,6 +4363,10 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
 #endif
     float availableMass = 0.0;
     float validMass = 0.0;
+    // Geometric directional support is retained for diagnostics. It must not be
+    // reused as cross-ring ownership: `directionalMass` below has already used
+    // it to select and normalize the representative probes for this ring.
+    float geometricDirectionalMass = 0.0;
     float directionalMass = 0.0;
     float visibleMass = 0.0;
 #if NJULF_DDGI_DETAILED_COUNTERS
@@ -4063,6 +4427,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
             uvec3(c));
         uint probeIndex = probeAddress.virtualProbeIndex;
 #if !SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE
+#if SIMPLE_DDGI_RECEIVER_RESIDENCY_FEEDBACK != 0
         uint receiverDemandEpoch = SimpleDdgiDemandEpochForFrame(
             p.frameIndex == 0xffffffffu
                 ? 1u
@@ -4096,6 +4461,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
                 probeAddress.virtualPageIndex,
                 receiverDemandEpoch);
         }
+#endif
 #endif
 #endif
 #if SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE
@@ -4150,7 +4516,8 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
                 SIMPLE_DDGI_RECEIVER_INVALID_ATLAS_ADDRESS ||
             atlasProbeAddress >= p.physicalProbeCapacity)
         {
-#if SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT == 0
+#if SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT == 0 && \
+    SIMPLE_DDGI_RECEIVER_RESIDENCY_FEEDBACK != 0
             // Depth-visible opaque receivers avoid common-case residency
             // atomics. A compact publication miss is the authoritative point
             // at which supplemental feedback is required.
@@ -4302,6 +4669,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
 #endif
         availableMass += dataWeight;
         validMass += selectedDataWeight;
+        geometricDirectionalMass += directionalTransportWeight;
         directionalMass += selectedDirectionalWeight;
         visibleMass += selectedDirectionalWeight * transportVisibility;
 #if NJULF_DDGI_DETAILED_COUNTERS
@@ -4314,15 +4682,18 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     result.validSupport = spatialCoverage > 0.000001
         ? clamp(availableMass / spatialCoverage, 0.0, 1.0)
         : 0.0;
-    // Keep selection mass separate from data availability. It remains the
-    // cascade/fallback interpolation authority and retains visibility shaping.
-    result.directionalSupport = validMass > 0.000001
-        ? clamp(directionalMass / validMass, 0.0, 1.0)
+    // Keep geometric selection support separate from data availability. This is
+    // diagnostic evidence, not cross-ring coverage or radiometric ownership.
+    result.directionalSupport = availableMass > 0.000001
+        ? clamp(geometricDirectionalMass / availableMass, 0.0, 1.0)
         : 0.0;
     result.transportVisibility = directionalMass > 0.000001
         ? clamp(visibleMass / directionalMass, 0.0, 1.0)
         : 0.0;
-    result.ownership = clamp(validMass, 0.0, 1.0);
+    // Internal cascade ownership is represented, state-valid spatial mass. It
+    // deliberately excludes visibility: blocked transport must remain blocked
+    // rather than being interpreted as a hole for a coarser cascade to fill.
+    result.ownership = clamp(availableMass, 0.0, 1.0);
     // Visibility is an interpolation/reliability weight. Normalizing it out is
     // the standard DDGI estimator and prevents probe-to-receiver visibility from
     // becoming a second ambient-occlusion term. Physical shadowing is already in
@@ -4477,26 +4848,33 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
     float innerWeight)
 {
     float w = clamp(innerWeight, 0.0, 1.0);
-    float innerValidMass = inner.ownership * w;
     // Inner data has priority, but a geometrically selected ring must not hide a
     // valid coarser ring when its own probes are fresh, inactive, or otherwise
-    // unsupported. The outer ring fills only the ownership still unrepresented.
-    float outerWeight = 1.0 - innerValidMass;
-    float outerValidMass = outer.ownership * outerWeight;
-    float validMass = outerValidMass + innerValidMass;
-    float outerDirectionalMass = outerValidMass * outer.directionalSupport;
-    float innerDirectionalMass = innerValidMass * inner.directionalSupport;
-    float directionalMass = outerDirectionalMass + innerDirectionalMass;
-    float outerVisibleMass = outerDirectionalMass * outer.transportVisibility;
-    float innerVisibleMass = innerDirectionalMass * inner.transportVisibility;
+    // unsupported. Compute represented mass exclusively from spatial coverage
+    // and state-valid availability. Visibility is transport evidence, not a
+    // coverage deficit: allowing visibility-selected ownership to open the outer
+    // ring produced probe-centred coarse-light hotspots.
+    float innerAvailableMass = inner.validSupport * inner.spatialCoverage * w;
+    float outerWeight = 1.0 - innerAvailableMass;
+    float outerAvailableMass = outer.validSupport * outer.spatialCoverage * outerWeight;
+    float availableMass = outerAvailableMass + innerAvailableMass;
+    // Each ring's irradiance is already a normalized directional estimator.
+    // Cross-ring composition therefore uses represented availability exactly
+    // once; multiplying by directional support here would imprint probe
+    // geometry a second time and could reopen a fully represented outer ring.
+    float directionalSupportMass =
+        outerAvailableMass * outer.directionalSupport +
+        innerAvailableMass * inner.directionalSupport;
+    float outerVisibleMass = outerAvailableMass * outer.transportVisibility;
+    float innerVisibleMass = innerAvailableMass * inner.transportVisibility;
     float visibleMass = outerVisibleMass + innerVisibleMass;
-    vec3 accumulated = outer.irradiance * outerDirectionalMass +
-        inner.irradiance * innerDirectionalMass;
+    vec3 accumulated = outer.irradiance * outerAvailableMass +
+        inner.irradiance * innerAvailableMass;
 #if NJULF_DDGI_DETAILED_COUNTERS
-    vec3 sourceCacheAccumulated = outer.sourceCacheIrradiance * outerDirectionalMass +
-        inner.sourceCacheIrradiance * innerDirectionalMass;
-    vec3 contributorColorAccumulated = outer.contributingVolumeColor * outerDirectionalMass +
-        inner.contributingVolumeColor * innerDirectionalMass;
+    vec3 sourceCacheAccumulated = outer.sourceCacheIrradiance * outerAvailableMass +
+        inner.sourceCacheIrradiance * innerAvailableMass;
+    vec3 contributorColorAccumulated = outer.contributingVolumeColor * outerAvailableMass +
+        inner.contributingVolumeColor * innerAvailableMass;
 #endif
     SimpleDdgiGatherResult result;
     float innerSpatialMass = inner.spatialCoverage * w;
@@ -4505,43 +4883,39 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
         innerSpatialMass + outerSpatialMass,
         0.0,
         1.0);
-    // Availability follows every field that can actually contribute. Keep this
-    // independent from visibility-selected `validMass`, which still decides how
-    // inner and outer irradiance are combined and whether recovery is required.
-    float innerAvailableMass = inner.validSupport * inner.spatialCoverage * w;
-    float outerAvailableMass = outer.validSupport * outer.spatialCoverage * outerWeight;
-    float availableMass = innerAvailableMass + outerAvailableMass;
+    // Availability follows every field that can actually contribute and uses
+    // the same representation masses that selected the cross-ring irradiance.
     result.validSupport = result.spatialCoverage > 0.000001
         ? clamp(availableMass / result.spatialCoverage, 0.0, 1.0)
         : 0.0;
-    result.directionalSupport = validMass > 0.000001
-        ? clamp(directionalMass / validMass, 0.0, 1.0)
+    result.directionalSupport = availableMass > 0.000001
+        ? clamp(directionalSupportMass / availableMass, 0.0, 1.0)
         : 0.0;
-    result.transportVisibility = directionalMass > 0.000001
-        ? clamp(visibleMass / directionalMass, 0.0, 1.0)
+    result.transportVisibility = availableMass > 0.000001
+        ? clamp(visibleMass / availableMass, 0.0, 1.0)
         : 0.0;
-    result.ownership = clamp(validMass, 0.0, 1.0);
+    result.ownership = clamp(availableMass, 0.0, 1.0);
     result.nonResidentProbeCount =
         inner.nonResidentProbeCount + outer.nonResidentProbeCount;
-    result.irradiance = directionalMass > 0.000001
-        ? clamp(accumulated / directionalMass, vec3(0.0), vec3(64.0))
+    result.irradiance = availableMass > 0.000001
+        ? clamp(accumulated / availableMass, vec3(0.0), vec3(64.0))
         : vec3(0.0);
 #if NJULF_DDGI_DETAILED_COUNTERS
-    result.sourceCacheIrradiance = directionalMass > 0.000001
-        ? clamp(sourceCacheAccumulated / directionalMass, vec3(0.0), vec3(64.0))
+    result.sourceCacheIrradiance = availableMass > 0.000001
+        ? clamp(sourceCacheAccumulated / availableMass, vec3(0.0), vec3(64.0))
         : vec3(0.0);
-    result.contributingVolumeColor = directionalMass > 0.000001
-        ? clamp(contributorColorAccumulated / directionalMass, vec3(0.0), vec3(1.0))
+    result.contributingVolumeColor = availableMass > 0.000001
+        ? clamp(contributorColorAccumulated / availableMass, vec3(0.0), vec3(1.0))
         : vec3(0.0);
 #endif
 #if NJULF_SIMPLE_DDGI_GATHER_ATTRIBUTION
     result.selectedVolume = inner.selectedVolume;
     result.secondaryVolume = outer.selectedVolume;
-    result.primaryContributionWeight = directionalMass > 0.000001
-        ? clamp(innerDirectionalMass / directionalMass, 0.0, 1.0)
+    result.primaryContributionWeight = availableMass > 0.000001
+        ? clamp(innerAvailableMass / availableMass, 0.0, 1.0)
         : 0.0;
-    result.secondaryContributionWeight = directionalMass > 0.000001
-        ? clamp(outerDirectionalMass / directionalMass, 0.0, 1.0)
+    result.secondaryContributionWeight = availableMass > 0.000001
+        ? clamp(outerAvailableMass / availableMass, 0.0, 1.0)
         : 0.0;
 #endif
 #if NJULF_DDGI_DETAILED_COUNTERS
@@ -4607,7 +4981,8 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
         SIMPLE_DDGI_GATHER_ROLE_PRIMARY,
         selectedInterpolationPosition,
         safeNormal);
-#if !SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE
+#if !SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE && \
+    SIMPLE_DDGI_RECEIVER_RESIDENCY_FEEDBACK != 0
     if (selected.nonResidentProbeCount != 0u)
     {
         SimpleDdgiRecordResidencyCounter(
@@ -4637,11 +5012,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
     // every interior receiver sample a coarser ring as well. A second gather is
     // still required at a ring edge, after a bias-domain crossing, or when the
     // primary field lacks the configured fraction of valid probe data.
-    float selectedDirectionalAuthority = SimpleDdgiDirectionalGatherAuthority(selected);
-    bool selectedDirectionalSupportUsable =
-        selected.directionalSupport >= SIMPLE_DDGI_OWNERSHIP_DIRECTIONAL_SUPPORT_RAMP;
-    float selectedTransitionOwnership =
-        selectedDirectionalSupportUsable ? selected.validSupport * edgeWeight : 0.0;
+    float selectedTransitionOwnership = selected.validSupport * edgeWeight;
     if (!selectedBiasOutsideSelectionDomain &&
         selectedTransitionOwnership >= p.secondVolumeOwnershipEarlyOutThreshold)
     {
@@ -4669,7 +5040,8 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
         fallbackVolume);
     if (foundFallback)
     {
-#if !SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE
+#if !SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE && \
+    SIMPLE_DDGI_RECEIVER_RESIDENCY_FEEDBACK != 0
         if (selected.nonResidentProbeCount != 0u)
         {
             SimpleDdgiRecordResidencyCounter(
@@ -4736,11 +5108,10 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
             diagnosticFrame,
             DDGI_INVESTIGATION_SIMPLE_VOLUME_SAMPLED_GATHER_COUNTER_BASE + fallbackVolumeIndex);
 #endif
-        // A fine cell with valid atlas data but no forward-facing corner must
-        // not hide a usable coarser cell. Directional authority changes only
-        // cascade composition; data availability remains independently visible
-        // through validSupport and the DataConfidence debug view.
-        float selectedGatherWeight = edgeWeight * selectedDirectionalAuthority;
+        // The ring-local gather has already used directional weights to select
+        // and normalize representative probes. Cascade composition is governed
+        // only by transition coverage and state-valid availability.
+        float selectedGatherWeight = edgeWeight;
         SimpleDdgiGatherResult combined = BlendSimpleDdgiGatherResults(
             fallback,
             selected,
@@ -4758,8 +5129,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
              recoverySample < SIMPLE_DDGI_MAX_RECOVERY_GATHER_SAMPLES;
              recoverySample++)
         {
-            if (combined.ownership >= SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP &&
-                combined.directionalSupport >= SIMPLE_DDGI_OWNERSHIP_DIRECTIONAL_SUPPORT_RAMP)
+            if (combined.ownership >= SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP)
                 break;
             uint recoveryVolumeIndex = 0u;
             SimpleDdgiVolume recoveryVolume;
@@ -4795,12 +5165,10 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
                     diagnosticFrame,
                     DDGI_INVESTIGATION_SIMPLE_VOLUME_SAMPLED_GATHER_COUNTER_BASE + recoveryVolumeIndex);
 #endif
-                float combinedDirectionalAuthority =
-                    SimpleDdgiDirectionalGatherAuthority(combined);
                 combined = BlendSimpleDdgiGatherResults(
                     recovery,
                     combined,
-                    combinedDirectionalAuthority);
+                    1.0);
             }
         }
 

@@ -20,6 +20,7 @@ public static class SampleSmokeOptionsParser
         "--health-report",
         "--baseline-snapshot-dir",
         "--sponza-gi-capture-dir",
+        "--sponza-gi-capture-mode",
         "--material-gi-capture-dir",
         "--material-gi-qualification-manifest",
         "--material-gi-qualification-candidate",
@@ -94,6 +95,9 @@ public static class SampleSmokeOptionsParser
         string? healthReportPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_HEALTH_REPORT"));
         string? baselineSnapshotDirectory = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR"));
         string? sponzaGiCaptureDirectory = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_SPONZA_GI_CAPTURE_DIR"));
+        SampleSponzaGiCaptureMode sponzaGiCaptureMode =
+            SampleSponzaGiCaptureMode.DetailedDiagnostics;
+        bool sponzaGiCaptureModeSpecified = false;
         string? materialGiCaptureDirectory = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_MATERIAL_GI_CAPTURE_DIR"));
         string? materialGiQualificationManifestPath = RendererValidationSettings.NormalizeOptionalPath(
             Environment.GetEnvironmentVariable("NJULF_MATERIAL_GI_QUALIFICATION_MANIFEST"));
@@ -324,6 +328,10 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--sponza-gi-capture-dir":
                     sponzaGiCaptureDirectory = RequirePath(value, "--sponza-gi-capture-dir");
+                    break;
+                case "--sponza-gi-capture-mode":
+                    sponzaGiCaptureMode = ParseSponzaGiCaptureMode(value);
+                    sponzaGiCaptureModeSpecified = true;
                     break;
                 case "--material-gi-capture-dir":
                     materialGiCaptureDirectory = RequirePath(value, "--material-gi-capture-dir");
@@ -779,6 +787,13 @@ public static class SampleSmokeOptionsParser
                 "--material-gi-capture-dir and --sponza-gi-capture-dir are independent standalone modes and cannot be combined.");
         }
 
+        if (sponzaGiCaptureModeSpecified &&
+            string.IsNullOrWhiteSpace(sponzaGiCaptureDirectory))
+        {
+            throw new ArgumentException(
+                "--sponza-gi-capture-mode requires --sponza-gi-capture-dir.");
+        }
+
         if (khronosRenderedGate is not null)
         {
             if (!string.IsNullOrWhiteSpace(materialGiCaptureDirectory) ||
@@ -1141,6 +1156,7 @@ public static class SampleSmokeOptionsParser
             transparencyMode,
             benchmark,
             sponzaGiCaptureDirectory,
+            sponzaGiCaptureMode,
             asyncComputeModeOverride,
             materialGiCaptureDirectory,
             qualityPresetOverride,
@@ -1175,6 +1191,29 @@ public static class SampleSmokeOptionsParser
             if (string.Equals(path.ToString(), normalized, StringComparison.OrdinalIgnoreCase))
                 return path;
         throw new ArgumentException($"Unknown async compute path '{value}'.");
+    }
+
+    private static SampleSponzaGiCaptureMode ParseSponzaGiCaptureMode(
+        string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException(
+                "Sponza GI capture mode requires a value. Valid values: detailed, production.");
+        }
+
+        return value.Trim()
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .ToLowerInvariant() switch
+        {
+            "detailed" or "diagnostics" or "detaileddiagnostics" =>
+                SampleSponzaGiCaptureMode.DetailedDiagnostics,
+            "production" or "timing" or "productiontiming" =>
+                SampleSponzaGiCaptureMode.ProductionTiming,
+            _ => throw new ArgumentException(
+                $"Invalid Sponza GI capture mode '{value}'. Valid values: detailed, production.")
+        };
     }
 
     private static SimpleDdgiSchedulerMode? ParseSimpleDdgiSchedulerMode(string? value)

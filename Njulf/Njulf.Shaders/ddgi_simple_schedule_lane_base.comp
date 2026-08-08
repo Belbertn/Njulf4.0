@@ -8,34 +8,86 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 void main()
 {
-    uint lane = gl_GlobalInvocationID.x;
-    if (lane >= SIMPLE_DDGI_SCHEDULER_MAX_LANES)
+    if (SchedulerCertifiedQuiesced())
         return;
-    SchedulerArenaWrite(pc.LaneAdmissionOffsetWords + lane, 0u);
+
+    // One deterministic linear scan is substantially cheaper than having lane
+    // N re-read all N preceding counters. The previous parallel shape still
+    // performed O(lanes^2) uncached SSBO reads (more than 400k at the shipping
+    // lane cap) and then repeated the whole scan in lane zero for `total`.
+    // This pass has only 896 bounded entries, so one invocation produces the
+    // identical stable prefix in O(lanes) work.
+    if (gl_GlobalInvocationID.x != 0u)
+        return;
+
     uint base = 0u;
-    for (uint i = 0u; i < lane; i++)
-        base += SchedulerArenaRead(pc.LaneCandidateCountsOffsetWords + i);
-    // LanePrefixes is the compacted candidate base. LaneCursors is persistent
-    // rotating state and must survive a frame reset and this prefix pass.
-    SchedulerArenaWrite(pc.LanePrefixesOffsetWords + lane, base);
-    if (lane == 0u)
+    for (uint lane = 0u; lane < SIMPLE_DDGI_SCHEDULER_MAX_LANES; lane++)
     {
-        uint total = 0u;
-        for (uint i = 0u; i < SIMPLE_DDGI_SCHEDULER_MAX_LANES; i++)
-            total += SchedulerArenaRead(pc.LaneCandidateCountsOffsetWords + i);
-        SchedulerArenaWrite(
-            pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_COMPACTED,
-            total);
-        if (total > SchedulerCandidateCapacity())
-        {
-            SchedulerArenaAtomicAdd(
-                pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_OVERFLOW,
-                1u);
-            return;
-        }
-        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_COMPACT,
-            SchedulerGroupsFor(SchedulerCandidateCapacity()), 1u, 1u);
-        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_ADMIT,
-            SchedulerGroupsFor(SIMPLE_DDGI_SCHEDULER_MAX_LANES), 1u, 1u);
+        SchedulerArenaWrite(pc.LaneAdmissionOffsetWords + lane, 0u);
+        // LanePrefixes is the compacted candidate base. LaneCursors is
+        // persistent rotating state and must survive this prefix pass.
+        SchedulerArenaWrite(pc.LanePrefixesOffsetWords + lane, base);
+        base += SchedulerArenaRead(pc.LaneCandidateCountsOffsetWords + lane);
     }
+    // LaneTotals is transaction-private after prefix reduction. Reuse it as
+    // a dense list of non-empty lanes in the admission pass's exact stable
+    // order: class, transport, ray tier, then volume. Admission can now walk
+    // the lanes that contain candidates instead of evaluating all 896 lanes
+    // for every overlapping priority phase. A sentinel terminates every
+    // partial list; the all-lanes-active case is bounded by MAX_LANES.
+    uint activeLaneCount = 0u;
+    for (uint workClass = 0u;
+         workClass < SIMPLE_DDGI_SCHEDULER_WORK_CLASSES;
+         workClass++)
+    {
+        for (uint transport = 0u;
+             transport < SIMPLE_DDGI_SCHEDULER_TRANSPORT_CATEGORIES;
+             transport++)
+        {
+            for (uint rayTier = 0u;
+                 rayTier < SIMPLE_DDGI_SCHEDULER_RAY_TIERS;
+                 rayTier++)
+            {
+                for (uint volume = 0u;
+                     volume < SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES;
+                     volume++)
+                {
+                    uint lane = SchedulerLaneIndex(
+                        volume,
+                        workClass,
+                        transport,
+                        rayTier);
+                    if (SchedulerArenaRead(
+                            pc.LaneCandidateCountsOffsetWords + lane) == 0u)
+                    {
+                        continue;
+                    }
+                    SchedulerArenaWrite(
+                        pc.LaneTotalsOffsetWords + activeLaneCount,
+                        lane);
+                    activeLaneCount++;
+                }
+            }
+        }
+    }
+    if (activeLaneCount < SIMPLE_DDGI_SCHEDULER_MAX_LANES)
+    {
+        SchedulerArenaWrite(
+            pc.LaneTotalsOffsetWords + activeLaneCount,
+            SIMPLE_DDGI_SCHEDULER_INVALID_PROBE);
+    }
+    SchedulerArenaWrite(
+        pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_COMPACTED,
+        base);
+    if (base > SchedulerCandidateCapacity())
+    {
+        SchedulerArenaAtomicAdd(
+            pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_OVERFLOW,
+            1u);
+        return;
+    }
+    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_COMPACT,
+        SchedulerGroupsFor(SchedulerCandidateCapacity()), 1u, 1u);
+    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_ADMIT,
+        1u, 1u, 1u);
 }

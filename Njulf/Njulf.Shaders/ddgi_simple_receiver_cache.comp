@@ -1,0 +1,348 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+// Current-frame depth prediction is the sole owner of opaque page demand.
+// This cache must remain a read-only compact receiver so moving the gather out
+// of the fragment shader cannot expand or perturb the sparse working set.
+#define SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT 0u
+#define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE false
+#define SIMPLE_DDGI_RECEIVER_RESIDENCY_FEEDBACK 0
+#define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 0
+#define SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 0u
+#define SIMPLE_DDGI_OPAQUE_GATHER_ORACLE 0
+#include "ddgi_simple_shared.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform SimpleDdgiReceiverCachePushBlock
+{
+    mat4 InverseViewProjectionMatrix;
+    vec4 CameraPositionAndPadding;
+    uint ScreenWidth;
+    uint ScreenHeight;
+    uint CacheWidth;
+    uint CacheHeight;
+    uint ParamsBufferIndex;
+    uint DepthTextureIndex;
+    uint CacheBufferIndex;
+    uint ReceiverScale;
+} pc;
+
+bool ReceiverCacheFinite(vec3 value)
+{
+    return !any(isnan(value)) && !any(isinf(value));
+}
+
+bool ReconstructReceiverPosition(
+    ivec2 pixel,
+    out vec3 worldPosition,
+    out float depth)
+{
+    ivec2 extent = ivec2(int(pc.ScreenWidth), int(pc.ScreenHeight));
+    if (any(lessThan(pixel, ivec2(0))) ||
+        any(greaterThanEqual(pixel, extent)))
+    {
+        worldPosition = vec3(0.0);
+        depth = 0.0;
+        return false;
+    }
+
+    depth = texelFetch(
+        BindlessTextures[nonuniformEXT(pc.DepthTextureIndex)],
+        pixel,
+        0).r;
+    // Njulf uses reverse-Z and clears depth to zero.
+    if (depth <= 0.000001 || isnan(depth) || isinf(depth))
+    {
+        worldPosition = vec3(0.0);
+        return false;
+    }
+
+    vec2 uv = (vec2(pixel) + vec2(0.5)) /
+        vec2(max(pc.ScreenWidth, 1u), max(pc.ScreenHeight, 1u));
+    vec4 world = MulRowMajor(
+        vec4(uv * 2.0 - vec2(1.0), depth, 1.0),
+        pc.InverseViewProjectionMatrix);
+    if (abs(world.w) <= 0.000001 || isnan(world.w) || isinf(world.w))
+    {
+        worldPosition = vec3(0.0);
+        return false;
+    }
+
+    worldPosition = world.xyz / world.w;
+    return ReceiverCacheFinite(worldPosition);
+}
+
+bool ReconstructReceiverPosition(ivec2 pixel, out vec3 worldPosition)
+{
+    float ignoredDepth;
+    return ReconstructReceiverPosition(pixel, worldPosition, ignoredDepth);
+}
+
+bool SelectRepresentativeReceiver(
+    uvec2 cacheCoord,
+    out ivec2 pixel,
+    out vec3 worldPosition,
+    out float receiverDepth)
+{
+    uint scale = max(pc.ReceiverScale, 1u);
+    ivec2 blockBase = ivec2(cacheCoord * scale);
+    ivec2 centerPixel = blockBase + ivec2(int(scale / 2u));
+    float centerDepth;
+    if (ReconstructReceiverPosition(
+            centerPixel,
+            worldPosition,
+            centerDepth))
+    {
+        pixel = centerPixel;
+        receiverDepth = centerDepth;
+        return true;
+    }
+
+    float closestDepth = 0.0;
+    bool found = false;
+    pixel = blockBase;
+    worldPosition = vec3(0.0);
+    receiverDepth = -1.0;
+
+    // Most occupied cells finish after one depth fetch. If the center is clear,
+    // scan the complete bounded tile. This makes cache coverage a strict
+    // consequence of current-frame opaque depth: every tile that can shade an
+    // opaque fragment receives a valid representative, including one-pixel
+    // rails, foliage cutouts, and triangle tips.
+    for (uint sampleY = 0u; sampleY < scale; sampleY++)
+    for (uint sampleX = 0u; sampleX < scale; sampleX++)
+    {
+        ivec2 candidatePixel = blockBase +
+            ivec2(int(sampleX), int(sampleY));
+        vec3 candidatePosition;
+        float candidateDepth;
+        if (!ReconstructReceiverPosition(
+                candidatePixel,
+                candidatePosition,
+                candidateDepth))
+        {
+            continue;
+        }
+
+        if (!found || candidateDepth > closestDepth)
+        {
+            found = true;
+            closestDepth = candidateDepth;
+            pixel = candidatePixel;
+            worldPosition = candidatePosition;
+            receiverDepth = candidateDepth;
+        }
+    }
+
+    return found;
+}
+
+bool SelectScreenDerivative(
+    vec3 center,
+    bool negativeValid,
+    vec3 negativePosition,
+    bool positiveValid,
+    vec3 positivePosition,
+    out vec3 derivative)
+{
+    vec3 negativeDerivative = center - negativePosition;
+    vec3 positiveDerivative = positivePosition - center;
+    if (negativeValid && positiveValid)
+    {
+        derivative = dot(negativeDerivative, negativeDerivative) <=
+                dot(positiveDerivative, positiveDerivative)
+            ? negativeDerivative
+            : positiveDerivative;
+        return true;
+    }
+    if (negativeValid)
+    {
+        derivative = negativeDerivative;
+        return true;
+    }
+    if (positiveValid)
+    {
+        derivative = positiveDerivative;
+        return true;
+    }
+    derivative = vec3(0.0);
+    return false;
+}
+
+vec3 ReconstructReceiverNormal(ivec2 pixel, vec3 worldPosition, vec3 viewDirection)
+{
+    vec3 leftPosition;
+    vec3 rightPosition;
+    vec3 upPosition;
+    vec3 downPosition;
+    bool leftValid = ReconstructReceiverPosition(pixel + ivec2(-1, 0), leftPosition);
+    bool rightValid = ReconstructReceiverPosition(pixel + ivec2(1, 0), rightPosition);
+    bool upValid = ReconstructReceiverPosition(pixel + ivec2(0, -1), upPosition);
+    bool downValid = ReconstructReceiverPosition(pixel + ivec2(0, 1), downPosition);
+
+    vec3 dx;
+    vec3 dy;
+    bool dxValid = SelectScreenDerivative(
+        worldPosition,
+        leftValid,
+        leftPosition,
+        rightValid,
+        rightPosition,
+        dx);
+    bool dyValid = SelectScreenDerivative(
+        worldPosition,
+        upValid,
+        upPosition,
+        downValid,
+        downPosition,
+        dy);
+
+    vec3 normal = viewDirection;
+    if (dxValid && dyValid)
+    {
+        vec3 candidate = cross(dx, dy);
+        float lengthSquared = dot(candidate, candidate);
+        if (lengthSquared > 0.0000001 && !isnan(lengthSquared) && !isinf(lengthSquared))
+            normal = candidate * inversesqrt(lengthSquared);
+    }
+
+    // Opaque forward flips back-facing geometric normals toward the visible
+    // side. Apply the same convention to the depth-derived normal.
+    if (dot(normal, viewDirection) < 0.0)
+        normal = -normal;
+    return normalize(normal);
+}
+
+void StoreReceiverCacheSample(uint entryIndex, uvec4 packed)
+{
+    uint word = entryIndex * 4u;
+    WriteStorageWordUniform(pc.CacheBufferIndex, word + 0u, packed.x);
+    WriteStorageWordUniform(pc.CacheBufferIndex, word + 1u, packed.y);
+    WriteStorageWordUniform(pc.CacheBufferIndex, word + 2u, packed.z);
+    WriteStorageWordUniform(pc.CacheBufferIndex, word + 3u, packed.w);
+}
+
+uvec4 EmptyReceiverCacheSample()
+{
+    // A zero ten-bit depth code is reserved for invalid/empty entries.
+    return uvec4(0u);
+}
+
+uint EncodeReceiverCacheDepth(float depth)
+{
+    // Ten logarithmic bits cover reverse-Z through 2^-16 with roughly 1.1%
+    // relative spacing. Code zero remains the invalid sentinel.
+    float normalized = clamp(
+        (log2(max(depth, 1.0 / 65536.0)) + 16.0) / 16.0,
+        0.0,
+        1.0);
+    return 1u + uint(round(normalized * 1022.0));
+}
+
+void main()
+{
+    uvec2 cacheCoord = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(cacheCoord, uvec2(pc.CacheWidth, pc.CacheHeight))))
+        return;
+
+    uint entryIndex = cacheCoord.y * pc.CacheWidth + cacheCoord.x;
+    ivec2 receiverPixel;
+    vec3 worldPosition;
+    float receiverDepth;
+    if (!SelectRepresentativeReceiver(
+            cacheCoord,
+            receiverPixel,
+            worldPosition,
+            receiverDepth))
+    {
+        StoreReceiverCacheSample(entryIndex, EmptyReceiverCacheSample());
+        return;
+    }
+
+    vec3 viewVector = pc.CameraPositionAndPadding.xyz - worldPosition;
+    float cameraDistance = length(viewVector);
+    if (!(cameraDistance > 0.00001) || isnan(cameraDistance) || isinf(cameraDistance))
+    {
+        StoreReceiverCacheSample(entryIndex, EmptyReceiverCacheSample());
+        return;
+    }
+
+    vec3 viewDirection = viewVector / cameraDistance;
+    vec3 normal = ReconstructReceiverNormal(
+        receiverPixel,
+        worldPosition,
+        viewDirection);
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    SimpleDdgiGatherResult gather = SampleSimpleDdgiGather(
+        params,
+        worldPosition,
+        normal,
+        viewDirection);
+
+    vec3 irradiance = clamp(gather.irradiance, vec3(0.0), vec3(65504.0));
+    if (!ReceiverCacheFinite(irradiance))
+        irradiance = vec3(0.0);
+    float ownership = clamp(SimpleDdgiRadiometricOwnership(gather), 0.0, 1.0);
+    float leakAttenuation = clamp(
+        SimpleDdgiLeakAttenuation(gather, params),
+        0.0,
+        1.0);
+    float environmentFallbackWeight =
+        (1.0 - ownership) * params.environmentFallbackIntensity;
+    bool evaluateFarFieldFallback =
+        environmentFallbackWeight >
+            SIMPLE_DDGI_ENVIRONMENT_FALLBACK_MIN_WEIGHT ||
+        (params.flags &
+            SIMPLE_DDGI_FLAG_FORCE_LEGACY_FAR_FIELD_FALLBACK) != 0u;
+    float farFieldSkyVisibility = 1.0;
+    if (evaluateFarFieldFallback &&
+        (params.flags & SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u)
+    {
+        farFieldSkyVisibility = EstimateFarFieldSkyVisibility(
+            worldPosition,
+            normal,
+            params,
+            0u);
+    }
+    // All remaining composition is linear. Fold the global intensity,
+    // radiometric ownership, leak attenuation, and far-field visibility here
+    // so cache-specific mesh programs can reconstruct the four-corner field
+    // without repeating transport composition.
+    vec3 weightedIrradiance = clamp(
+        irradiance * params.indirectIntensity * ownership * leakAttenuation,
+        vec3(0.0),
+        vec3(65504.0));
+    float weightedEnvironmentFallback = clamp(
+        environmentFallbackWeight * farFieldSkyVisibility,
+        0.0,
+        1.0);
+    vec3 weightedEnvironmentIrradiance = vec3(0.0);
+    GPUEnvironmentData environment = ReadEnvironmentData();
+    if (environment.Enabled != 0u && weightedEnvironmentFallback > 0.0)
+    {
+        weightedEnvironmentIrradiance =
+            EvaluateEnvironmentDiffuseIrradiance(environment, normal) *
+            weightedEnvironmentFallback;
+        if (!ReceiverCacheFinite(weightedEnvironmentIrradiance))
+            weightedEnvironmentIrradiance = vec3(0.0);
+        weightedEnvironmentIrradiance = clamp(
+            weightedEnvironmentIrradiance,
+            vec3(0.0),
+            vec3(65504.0));
+    }
+    StoreReceiverCacheSample(
+        entryIndex,
+        uvec4(
+            packHalf2x16(weightedIrradiance.xy),
+            packHalf2x16(vec2(
+                weightedIrradiance.z,
+                weightedEnvironmentIrradiance.x)),
+            packHalf2x16(weightedEnvironmentIrradiance.yz),
+            // Depth is reconstruction metadata only. Keep it separate from
+            // the six FP16 radiance channels so neither field loses precision.
+            EncodeReceiverCacheDepth(receiverDepth)));
+}

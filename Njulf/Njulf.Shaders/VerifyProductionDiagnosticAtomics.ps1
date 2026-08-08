@@ -27,6 +27,7 @@ if ($allShaderFiles.Count -eq 0) {
 # makes any new production atomic an intentional ABI review.
 $schedulerModuleNames = @(
     'ddgi_simple_schedule_admit.comp.spv',
+    'ddgi_simple_schedule_admit_tail.comp.spv',
     'ddgi_simple_schedule_classify.comp.spv',
     'ddgi_simple_schedule_commit_local.comp.spv',
     'ddgi_simple_schedule_commit_propagation.comp.spv',
@@ -34,6 +35,7 @@ $schedulerModuleNames = @(
     'ddgi_simple_schedule_emit.comp.spv',
     'ddgi_simple_schedule_feedback.comp.spv',
     'ddgi_simple_schedule_lane_base.comp.spv',
+    'ddgi_simple_schedule_materialize.comp.spv',
     'ddgi_simple_schedule_prefix.comp.spv',
     'ddgi_simple_schedule_reset.comp.spv'
 )
@@ -73,7 +75,10 @@ $algorithmicAtomicCounts = @{
     # blend target from reaching CommitLocal; the CPU scheduler takes the
     # equivalent fail-closed probe-state path without this global atomic.
     'ddgi_simple_blend.comp.spv' = 9
-    'ddgi_simple_page_classify.comp.spv' = 8
+    # Confirmed-empty pages now reopen only through geometry-generation or
+    # explicit-pin invalidation, so the obsolete timed-retry counter atomic is
+    # intentionally absent.
+    'ddgi_simple_page_classify.comp.spv' = 7
     # Workgroup-parallel virtual/reverse-map summary reductions use 23
     # additional functional shared-memory atomics. Pin the exact count so a
     # future diagnostic call site or accidental serialization cannot hide.
@@ -104,10 +109,13 @@ $algorithmicAtomicCounts = @{
     # max). All additive certificate/cache-rejection reductions are isolated in
     # the small second shader so native drivers never lower the recursive
     # operator, workgroup coordination, and certificate reduction together.
-    'ddgi_simple_transport_audit.comp.spv' = 27
-    'ddgi_simple_transport_audit_reduce_legacy.comp.spv' = 27
-    'ddgi_simple_transport_audit_reduce_validate.comp.spv' = 27
-    'ddgi_simple_transport_audit_reduce_packed.comp.spv' = 27
+    # Two additional functional reductions derive the frozen expected
+    # participant and texel population on-GPU from the shared eligibility
+    # predicate. They replace the delayed host-count witness.
+    'ddgi_simple_transport_audit.comp.spv' = 29
+    'ddgi_simple_transport_audit_reduce_legacy.comp.spv' = 29
+    'ddgi_simple_transport_audit_reduce_validate.comp.spv' = 29
+    'ddgi_simple_transport_audit_reduce_packed.comp.spv' = 29
     'ddgi_simple_transport_intermediate_publish.comp.spv' = 5
 }
 $missingAlgorithmicModules = @($algorithmicAtomicCounts.Keys | Where-Object {

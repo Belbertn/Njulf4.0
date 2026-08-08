@@ -476,7 +476,9 @@ internal sealed class SampleDiagnosticsReporter
             $"volumeDesign={FormatDdgiVolumeDesignSummary(diagnostics)}, " +
             $"classification={diagnostics.DdgiProbeClassificationCount}, cpuDdgiUs={diagnostics.CpuDdgiRecordMicroseconds}, " +
             $"cpuSimpleDdgiUs={diagnostics.CpuSimpleDdgiRecordMicroseconds}, cpuFarFieldUs={diagnostics.CpuFarFieldRecordMicroseconds}, cpuGiUs={diagnostics.CpuGlobalIlluminationRecordMicroseconds}, cpuAsBuildUs={diagnostics.CpuAccelerationStructureBuildMicroseconds}, " +
-            $"gpuDdgiUs={diagnostics.GpuDdgiUpdateMicroseconds}, bytes={diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes + diagnostics.AccelerationStructureBytes}.");
+            $"gpuDdgiUs={diagnostics.GpuDdgiUpdateMicroseconds}, " +
+            $"schedulerCommitFailures='{diagnostics.SimpleDdgiSchedulerCommitFailureBreakdown}', " +
+            $"bytes={diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes + diagnostics.AccelerationStructureBytes}.");
         SimpleDdgiUploadTiming upload = diagnostics.SimpleDdgiUploadTiming;
         Console.WriteLine(
             $"Frame diagnostics Simple DDGI upload: totalUs={upload.TotalMicroseconds}, " +
@@ -799,9 +801,53 @@ internal sealed class SampleDiagnosticsReporter
             {
                 result.Append("pending");
             }
+
+            result.Append(" energy=");
+            if (volume.EnergyCountersReadbackValid != 0)
+            {
+                SimpleDdgiVolumeEnergyCounters energy = volume.EnergyCounters;
+                result.Append("n/")
+                    .Append(energy.EvidenceSampleCount)
+                    .Append(" p95/p99/max=")
+                    .Append(energy.IrradianceLuminanceP95.ToString("F4", CultureInfo.InvariantCulture))
+                    .Append('/')
+                    .Append(energy.IrradianceLuminanceP99.ToString("F4", CultureInfo.InvariantCulture))
+                    .Append('/')
+                    .Append(energy.IrradianceLuminanceMaximum.ToString("F4", CultureInfo.InvariantCulture))
+                    .Append(" witness(vprobe/vpage/pprobe/ppage/source/m1/m2/coherent/age)=");
+                AppendOptionalIndex(result, energy.MaximumVirtualProbeIndex);
+                result.Append('/');
+                AppendOptionalIndex(result, energy.MaximumVirtualPageIndex);
+                result.Append('/');
+                AppendOptionalIndex(result, energy.MaximumPhysicalProbeIndex);
+                result.Append('/');
+                AppendOptionalIndex(result, energy.MaximumPhysicalPageIndex);
+                result.Append('/')
+                    .Append(energy.MaximumSourceLightingGeneration)
+                    .Append('/')
+                    .Append(energy.MaximumVisibilityMomentMean.ToString("F3", CultureInfo.InvariantCulture))
+                    .Append('/')
+                    .Append(energy.MaximumVisibilityMomentSecond.ToString("F3", CultureInfo.InvariantCulture))
+                    .Append('/')
+                    .Append(energy.MaximumWitnessCoherent)
+                    .Append('/')
+                    .Append(energy.EvidenceAgeFrames);
+            }
+            else
+            {
+                result.Append("pending");
+            }
         }
 
         return result.ToString();
+    }
+
+    private static void AppendOptionalIndex(StringBuilder result, uint value)
+    {
+        if (value == uint.MaxValue)
+            result.Append("none");
+        else
+            result.Append(value);
     }
 
     public void PrintMovementFrameDiagnostics(IRenderer renderer, FirstPersonCamera camera)

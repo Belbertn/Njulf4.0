@@ -107,9 +107,23 @@ namespace Njulf.Rendering.Resources
             DecalFragmentAttributionCounterBase +
             DecalFragmentAttributionCounterCount;
         public const int SimpleDdgiStorageValidationCounterCount = 23;
-        public const int CounterCount =
+        // Detailed-only, per-volume distribution/witness evidence. The first
+        // 23 words are count/winner/identity metadata and the final 16 words are
+        // a logarithmic irradiance-luminance histogram. Keyed atomic maxima make
+        // every witness field select the same (luminance, virtual-probe) tuple
+        // without a GPU spin lock.
+        public const int SimpleDdgiVolumeEnergyEvidenceCounterBase =
             SimpleDdgiStorageValidationCounterBase +
             SimpleDdgiStorageValidationCounterCount;
+        public const int SimpleDdgiVolumeEnergyEvidenceHistogramCount = 16;
+        public const int SimpleDdgiVolumeEnergyEvidenceCounterStride =
+            23 + SimpleDdgiVolumeEnergyEvidenceHistogramCount;
+        public const int SimpleDdgiVolumeEnergyEvidenceCounterCount =
+            GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount *
+            SimpleDdgiVolumeEnergyEvidenceCounterStride;
+        public const int CounterCount =
+            SimpleDdgiVolumeEnergyEvidenceCounterBase +
+            SimpleDdgiVolumeEnergyEvidenceCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const float DdgiShadowHitDistanceScale = 256.0f;
@@ -131,6 +145,12 @@ namespace Njulf.Rendering.Resources
         private readonly GpuMeshletCounters[] _lastCompletedCounters = new GpuMeshletCounters[FramesInFlight];
         private readonly DdgiForwardEstimateCounters[] _lastCompletedDdgiForwardEstimateCounters = new DdgiForwardEstimateCounters[FramesInFlight];
         private readonly DdgiInvestigationCounters[] _lastCompletedDdgiInvestigationCounters = new DdgiInvestigationCounters[FramesInFlight];
+        private readonly SimpleDdgiVolumeEnergyCounters[] _lastValidSimpleVolumeEnergyCounters =
+            new SimpleDdgiVolumeEnergyCounters[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
+        private readonly bool[] _lastValidSimpleVolumeEnergyCounterPresent =
+            new bool[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
+        private readonly uint[] _lastValidSimpleVolumeEnergyCounterAge =
+            new uint[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
         private readonly DirectionalShadowReceiverCounters[] _lastCompletedDirectionalShadowReceiverCounters = new DirectionalShadowReceiverCounters[FramesInFlight];
         private readonly FarFieldMaterialV2Counters[] _lastCompletedFarFieldMaterialV2Counters =
             new FarFieldMaterialV2Counters[FramesInFlight];
@@ -386,6 +406,29 @@ namespace Njulf.Rendering.Resources
                     break;
                 }
             }
+            for (int i = 0;
+                 i < SimpleDdgiVolumeEnergyEvidenceCounterCount && !volumeEnergyValid;
+                 i++)
+            {
+                if (counters[SimpleDdgiVolumeEnergyEvidenceCounterBase + i] != 0)
+                {
+                    volumeEnergyValid = true;
+                    investigationValid = true;
+                }
+            }
+            if (!volumeEnergyValid)
+            {
+                for (int i = 0;
+                     i < _lastValidSimpleVolumeEnergyCounterPresent.Length;
+                     i++)
+                {
+                    if (_lastValidSimpleVolumeEnergyCounterPresent[i])
+                    {
+                        volumeEnergyValid = true;
+                        break;
+                    }
+                }
+            }
             for (int i = 0; i < DecalFragmentAttributionCounterCount; i++)
             {
                 if (counters[DecalFragmentAttributionCounterBase + i] != 0)
@@ -442,7 +485,35 @@ namespace Njulf.Rendering.Resources
             }
             for (int i = 0; i < simpleVolumeEnergyCounters.Length; i++)
             {
-                simpleVolumeEnergyCounters[i] = ReadSimpleDdgiVolumeEnergyCounters(counters, i);
+                SimpleDdgiVolumeEnergyCounters current =
+                    ReadSimpleDdgiVolumeEnergyCounters(counters, i);
+                if (current.EvidenceSampleCount != 0)
+                {
+                    _lastValidSimpleVolumeEnergyCounters[i] = current;
+                    _lastValidSimpleVolumeEnergyCounterPresent[i] = true;
+                    _lastValidSimpleVolumeEnergyCounterAge[i] = 0;
+                    simpleVolumeEnergyCounters[i] = current;
+                }
+                else if (_lastValidSimpleVolumeEnergyCounterPresent[i])
+                {
+                    uint age = _lastValidSimpleVolumeEnergyCounterAge[i] == uint.MaxValue
+                        ? uint.MaxValue
+                        : _lastValidSimpleVolumeEnergyCounterAge[i] + 1u;
+                    _lastValidSimpleVolumeEnergyCounterAge[i] = age;
+                    SimpleDdgiVolumeEnergyCounters retained =
+                        _lastValidSimpleVolumeEnergyCounters[i] with
+                        {
+                            EvidenceAgeFrames = age
+                        };
+                    _lastValidSimpleVolumeEnergyCounters[i] = retained;
+                    simpleVolumeEnergyCounters[i] = HasSimpleDdgiVolumeEnergySamples(current)
+                        ? MergeSimpleDdgiVolumeEnergyEvidence(current, retained)
+                        : retained;
+                }
+                else
+                {
+                    simpleVolumeEnergyCounters[i] = current;
+                }
             }
             for (int reason = 0; reason < simpleGatherPrimaryRejectionCounts.Length; reason++)
             {
@@ -460,9 +531,10 @@ namespace Njulf.Rendering.Resources
                 directionAngularHistogram[bucket] = storageValidationCounters[13 + bucket];
             }
 
-            _lastCompletedDdgiInvestigationCounters[frameIndex] = investigationValid
+            _lastCompletedDdgiInvestigationCounters[frameIndex] =
+                investigationValid || volumeEnergyValid
                 ? new DdgiInvestigationCounters(
-                    ReadbackValid: 1,
+                    ReadbackValid: investigationValid ? 1 : 0,
                     SimpleForwardSampleCount: counters[DdgiInvestigationCounterBase + 0],
                     LegacyForwardSampleCount: counters[DdgiInvestigationCounterBase + 1],
                     FreshAtlasForwardSampleCount: counters[DdgiInvestigationCounterBase + 2],
@@ -516,6 +588,7 @@ namespace Njulf.Rendering.Resources
                     FarFieldStepBucket3Count: counters[FarFieldCounterBase + 8],
                     FarFieldStepBucket4Count: counters[FarFieldCounterBase + 9])
                 {
+                    EnergyReadbackValid = volumeEnergyValid ? 1 : 0,
                     GatherMultiplicity = new SimpleDdgiGatherMultiplicityCounters(
                         OneGatherPixelCount: counters[SimpleDdgiGatherMultiplicityCounterBase + 0],
                         TwoGatherPixelCount: counters[SimpleDdgiGatherMultiplicityCounterBase + 1],
@@ -815,6 +888,25 @@ namespace Njulf.Rendering.Resources
             float invTransport = transportSamples > 0 ? 1.0f / transportSamples : 0.0f;
             float invSolver = solverSamples > 0 ? 1.0f / solverSamples : 0.0f;
             float invShadowOccluded = shadowOccluded > 0 ? 1.0f / shadowOccluded : 0.0f;
+            int evidenceBase = SimpleDdgiVolumeEnergyEvidenceCounterBase +
+                volumeIndex * SimpleDdgiVolumeEnergyEvidenceCounterStride;
+            uint evidenceSamples = counters[evidenceBase + 0];
+            uint winnerKey = counters[evidenceBase + 1];
+            bool witnessCoherent = evidenceSamples != 0 && winnerKey != 0;
+            uint physicalProbe = DecodeSimpleDdgiEnergyEvidenceChunks(
+                counters, evidenceBase + 2, 3, winnerKey, ref witnessCoherent);
+            uint virtualPage = DecodeSimpleDdgiEnergyEvidenceChunks(
+                counters, evidenceBase + 5, 3, winnerKey, ref witnessCoherent);
+            uint physicalPage = DecodeSimpleDdgiEnergyEvidenceChunks(
+                counters, evidenceBase + 8, 3, winnerKey, ref witnessCoherent);
+            uint sourceGeneration = DecodeSimpleDdgiEnergyEvidenceChunks(
+                counters, evidenceBase + 11, 6, winnerKey, ref witnessCoherent);
+            uint visibilityMean = DecodeSimpleDdgiEnergyEvidenceChunks(
+                counters, evidenceBase + 17, 3, winnerKey, ref witnessCoherent);
+            uint visibilitySecond = DecodeSimpleDdgiEnergyEvidenceChunks(
+                counters, evidenceBase + 20, 3, winnerKey, ref witnessCoherent);
+            uint virtualProbe = winnerKey & 0x7fffu;
+            uint luminanceCode = winnerKey >> 15;
 
             return new SimpleDdgiVolumeEnergyCounters(
                 BlendSampleCount: blendSamples,
@@ -843,8 +935,120 @@ namespace Njulf.Rendering.Resources
                 ShadowVisibilityBeyondProbeSpacingCount: counters[counterBase + 16],
                 ShadowVisibilitySameInstanceCount: counters[counterBase + 17],
                 ShadowVisibilityCommittedHitDistanceAverage: counters[counterBase + 18] /
-                    DdgiShadowHitDistanceScale * invShadowOccluded);
+                    DdgiShadowHitDistanceScale * invShadowOccluded,
+                EvidenceSampleCount: evidenceSamples,
+                IrradianceLuminanceP95: ReadSimpleDdgiEnergyEvidencePercentile(
+                    counters,
+                    evidenceBase + 23,
+                    evidenceSamples,
+                    0.95),
+                IrradianceLuminanceP99: ReadSimpleDdgiEnergyEvidencePercentile(
+                    counters,
+                    evidenceBase + 23,
+                    evidenceSamples,
+                    0.99),
+                IrradianceLuminanceMaximum:
+                    DecodeSimpleDdgiEnergyEvidenceLuminance(luminanceCode),
+                MaximumVirtualProbeIndex: witnessCoherent
+                    ? virtualProbe
+                    : uint.MaxValue,
+                MaximumVirtualPageIndex: witnessCoherent && virtualPage != 0
+                    ? virtualPage - 1u
+                    : uint.MaxValue,
+                MaximumPhysicalProbeIndex: witnessCoherent && physicalProbe != 0
+                    ? physicalProbe - 1u
+                    : uint.MaxValue,
+                MaximumPhysicalPageIndex: witnessCoherent && physicalPage != 0
+                    ? physicalPage - 1u
+                    : uint.MaxValue,
+                MaximumVisibilityMomentMean: visibilityMean / 65535.0f * 256.0f,
+                MaximumVisibilityMomentSecond: visibilitySecond / 65535.0f * 65536.0f,
+                MaximumSourceLightingGeneration: sourceGeneration,
+                MaximumWitnessCoherent: witnessCoherent ? 1 : 0,
+                EvidenceAgeFrames: 0u);
         }
+
+        internal static float DecodeSimpleDdgiEnergyEvidenceLuminance(uint code)
+        {
+            if (code == 0)
+                return 0.0f;
+            float normalized = (Math.Clamp(code, 1u, 2047u) - 1u) / 2046.0f;
+            return (MathF.Pow(65.0f, normalized) - 1.0f);
+        }
+
+        private static uint DecodeSimpleDdgiEnergyEvidenceChunks(
+            uint* counters,
+            int counterBase,
+            int chunkCount,
+            uint winnerKey,
+            ref bool coherent)
+        {
+            uint value = 0;
+            for (int chunk = 0; chunk < chunkCount; chunk++)
+            {
+                uint packed = counters[counterBase + chunk];
+                coherent &= (packed >> 6) == winnerKey;
+                value |= (packed & 0x3fu) << (chunk * 6);
+            }
+            return value;
+        }
+
+        private static float ReadSimpleDdgiEnergyEvidencePercentile(
+            uint* counters,
+            int histogramBase,
+            uint sampleCount,
+            double percentile)
+        {
+            if (sampleCount == 0)
+                return 0.0f;
+
+            ulong target = Math.Max(
+                1ul,
+                (ulong)Math.Ceiling(sampleCount * Math.Clamp(percentile, 0.0, 1.0)));
+            ulong cumulative = 0;
+            for (int bucket = 0;
+                 bucket < SimpleDdgiVolumeEnergyEvidenceHistogramCount;
+                 bucket++)
+            {
+                cumulative += counters[histogramBase + bucket];
+                if (cumulative < target)
+                    continue;
+
+                // Return the conservative upper edge of the logarithmic bucket.
+                float normalized = (bucket + 1.0f) /
+                    SimpleDdgiVolumeEnergyEvidenceHistogramCount;
+                return MathF.Pow(65.0f, normalized) - 1.0f;
+            }
+
+            return 64.0f;
+        }
+
+        private static bool HasSimpleDdgiVolumeEnergySamples(
+            SimpleDdgiVolumeEnergyCounters value) =>
+            value.BlendSampleCount != 0 ||
+            value.TransportSampleCount != 0 ||
+            value.SolverGatherSampleCount != 0 ||
+            value.ShadowVisibilityRayCount != 0;
+
+        private static SimpleDdgiVolumeEnergyCounters MergeSimpleDdgiVolumeEnergyEvidence(
+            SimpleDdgiVolumeEnergyCounters current,
+            SimpleDdgiVolumeEnergyCounters retained) =>
+            current with
+            {
+                EvidenceSampleCount = retained.EvidenceSampleCount,
+                IrradianceLuminanceP95 = retained.IrradianceLuminanceP95,
+                IrradianceLuminanceP99 = retained.IrradianceLuminanceP99,
+                IrradianceLuminanceMaximum = retained.IrradianceLuminanceMaximum,
+                MaximumVirtualProbeIndex = retained.MaximumVirtualProbeIndex,
+                MaximumVirtualPageIndex = retained.MaximumVirtualPageIndex,
+                MaximumPhysicalProbeIndex = retained.MaximumPhysicalProbeIndex,
+                MaximumPhysicalPageIndex = retained.MaximumPhysicalPageIndex,
+                MaximumVisibilityMomentMean = retained.MaximumVisibilityMomentMean,
+                MaximumVisibilityMomentSecond = retained.MaximumVisibilityMomentSecond,
+                MaximumSourceLightingGeneration = retained.MaximumSourceLightingGeneration,
+                MaximumWitnessCoherent = retained.MaximumWitnessCoherent,
+                EvidenceAgeFrames = retained.EvidenceAgeFrames
+            };
 
         public void ResetCounters(CommandBuffer commandBuffer, int frameIndex)
         {

@@ -2181,9 +2181,12 @@ namespace Njulf.Rendering
                 !giSettings.DdgiAdaptiveBudgetingEnabled ||
                 detailedDdgiInstrumentationActive;
             bool hasCompletedSimpleDdgiGpuTiming = HasCompletedSimpleDdgiGpuTiming(completedGpuTimings);
+            bool hasCompletedSimpleDdgiScheduleTiming = HasCompletedGpuTiming(
+                completedGpuTimings,
+                "SimpleDdgiSchedulePass");
             if (_simpleDdgiVolumeManager != null &&
                 sceneData.SimpleDdgiActive != 0 &&
-                (fixedSimpleDdgiBudget || hasCompletedSimpleDdgiGpuTiming))
+                (fixedSimpleDdgiBudget || hasCompletedSimpleDdgiScheduleTiming))
             {
                 ulong targetGpuMicroseconds = checked((ulong)Math.Round(
                     Math.Max(0.0f, giSettings.EffectiveDdgiAdaptiveBudgetTimeMilliseconds) * 1_000.0));
@@ -4384,6 +4387,9 @@ namespace Njulf.Rendering
                 DdgiBlackFrameAfterAtlasClear = giUsesDdgi ? sceneData.DdgiBlackFrameAfterAtlasClear : 0,
                 DdgiBlackFrameDuringFreshAtlas = giUsesDdgi ? sceneData.DdgiBlackFrameDuringFreshAtlas : 0,
                 GpuForwardGiGatherMicroseconds = giEnabled ? sceneData.GpuForwardGiGatherMicroseconds : 0,
+                GpuSimpleDdgiReceiverCacheMicroseconds = giUsesSimpleDdgi
+                    ? sceneData.GpuSimpleDdgiReceiverCacheMicroseconds
+                    : 0,
                 GpuForwardGiGatherTimingCoverage = giEnabled ? sceneData.GpuForwardGiGatherTimingCoverage : 0,
                 GpuForwardGiGatherTimingAttribution = giEnabled && sceneData.GpuForwardGiGatherTimingCoverage != 0
                     ? GiTimingAttribution.Inclusive
@@ -4402,6 +4408,15 @@ namespace Njulf.Rendering
                 GpuSimpleDdgiPageResidencyMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiPageResidencyMicroseconds : 0,
                 GpuSimpleDdgiPageFeedbackMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiPageFeedbackMicroseconds : 0,
                 GpuSimpleDdgiScheduleMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiScheduleMicroseconds : 0,
+                GpuSimpleDdgiScheduleResetMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiScheduleResetMicroseconds : 0,
+                GpuSimpleDdgiScheduleClassifyMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiScheduleClassifyMicroseconds : 0,
+                GpuSimpleDdgiSchedulePrefixMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiSchedulePrefixMicroseconds : 0,
+                GpuSimpleDdgiScheduleLaneBaseMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiScheduleLaneBaseMicroseconds : 0,
+                GpuSimpleDdgiScheduleCompactMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiScheduleCompactMicroseconds : 0,
+                GpuSimpleDdgiScheduleTailAdmitMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiScheduleTailAdmitMicroseconds : 0,
+                GpuSimpleDdgiScheduleAdmitMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiScheduleAdmitMicroseconds : 0,
+                GpuSimpleDdgiScheduleMaterializeMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiScheduleMaterializeMicroseconds : 0,
+                GpuSimpleDdgiScheduleEmitMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiScheduleEmitMicroseconds : 0,
                 GpuSimpleDdgiTransportMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiTransportMicroseconds : 0,
                 GpuSimpleDdgiAcceleratedSolveMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiAcceleratedSolveMicroseconds : 0,
                 GpuSimpleDdgiBlendMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiBlendMicroseconds : 0,
@@ -4434,6 +4449,9 @@ namespace Njulf.Rendering
                 SimpleDdgiSchedulerFeedbackFailedCommitCount = giUsesSimpleDdgi
                     ? sceneData.SimpleDdgiSchedulerFeedbackFailedCommitCount
                     : 0u,
+                SimpleDdgiSchedulerCommitFailureBreakdown = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerCommitFailureBreakdown
+                    : string.Empty,
                 SimpleDdgiSchedulerFeedbackPendingFreshCount = giUsesSimpleDdgi
                     ? sceneData.SimpleDdgiSchedulerFeedbackPendingFreshCount
                     : 0u,
@@ -8517,6 +8535,15 @@ namespace Njulf.Rendering
             sceneData.GpuSimpleDdgiPageFeedbackMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("SimpleDdgiPageFeedbackPass");
             sceneData.GpuSimpleDdgiScheduleMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiSchedulePass");
+            sceneData.GpuSimpleDdgiScheduleResetMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiSchedule.Reset");
+            sceneData.GpuSimpleDdgiScheduleClassifyMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiSchedule.Classify");
+            sceneData.GpuSimpleDdgiSchedulePrefixMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiSchedule.Prefix");
+            sceneData.GpuSimpleDdgiScheduleLaneBaseMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiSchedule.LaneBase");
+            sceneData.GpuSimpleDdgiScheduleCompactMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiSchedule.Compact");
+            sceneData.GpuSimpleDdgiScheduleTailAdmitMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiSchedule.TailAdmit");
+            sceneData.GpuSimpleDdgiScheduleAdmitMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiSchedule.Admit");
+            sceneData.GpuSimpleDdgiScheduleMaterializeMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiSchedule.Materialize");
+            sceneData.GpuSimpleDdgiScheduleEmitMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiSchedule.Emit");
             sceneData.GpuSimpleDdgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiTracePass");
             sceneData.GpuSimpleDdgiAcceleratedSolveMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("SimpleDdgiAcceleratedSolvePass");
@@ -8552,6 +8579,8 @@ namespace Njulf.Rendering
                 : 0;
             sceneData.GpuForwardOpaqueMicroseconds = timings.GetGpuMicrosecondsOrZero("ForwardPlusPass");
             sceneData.GpuForwardGiGatherMicroseconds = timings.GetGpuMicrosecondsOrZero("ForwardGiGatherPass");
+            sceneData.GpuSimpleDdgiReceiverCacheMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("SimpleDdgiReceiverCachePass");
             sceneData.GpuForwardGiGatherTimingCoverage = HasCompletedGpuTiming(timings, "ForwardGiGatherPass") ? 1 : 0;
             sceneData.GpuTransparentMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("TransparentForwardPass") +
@@ -8899,7 +8928,17 @@ namespace Njulf.Rendering
                 farFieldCoverageAvailable,
                 dirtyRegions,
                 dirtySignature.CohortTransition,
-                scene.GlobalIlluminationProbeVolumes);
+                scene.GlobalIlluminationProbeVolumes,
+                sceneData.SceneContentRevision);
+
+            sceneData.SimpleDdgiPageFullManagementRequired =
+                _simpleDdgiVolumeManager.PrepareProbePageManagement(
+                    camera.Position,
+                    sceneData.ViewProjectionMatrix,
+                    sceneData.SceneContentRevision,
+                    sceneData.CaptureCameraCutSerial)
+                    ? 1
+                    : 0;
 
             PopulateSimpleDdgiFrameData(sceneData, simpleDdgiRayUpdateActive);
             sceneData.CpuDdgiRecordMicroseconds = 0;
@@ -9061,6 +9100,9 @@ namespace Njulf.Rendering
             // dedicated CommitLocal counter denotes a failed transaction.
             sceneData.SimpleDdgiSchedulerFeedbackFailedCommitCount =
                 schedulerFeedback.FailedCommitCount;
+            sceneData.SimpleDdgiSchedulerCommitFailureBreakdown =
+                _simpleDdgiVolumeManager.GpuScheduler
+                    .LastCommitFailureBreakdown.ToString();
             sceneData.SimpleDdgiSchedulerFeedbackPendingFreshCount =
                 schedulerFeedback.PendingFreshCount;
             sceneData.SimpleDdgiSchedulerFeedbackPendingSourceCount =
@@ -9332,11 +9374,15 @@ namespace Njulf.Rendering
             sceneData.DdgiCurrentIrradianceAtlasBytes = _simpleDdgiVolumeManager.IrradianceAtlasBytes;
             sceneData.DdgiCurrentVisibilityAtlasBytes = _simpleDdgiVolumeManager.VisibilityAtlasBytes;
             sceneData.DdgiAtlasMemoryBudgetBytes = Settings.GlobalIllumination.DdgiAtlasMemoryBudgetBytes;
-            sceneData.DdgiTextureBytes = _simpleDdgiVolumeManager.SampledAtlasImageBytes;
+            sceneData.DdgiTextureBytes = checked(
+                _simpleDdgiVolumeManager.SampledAtlasImageBytes);
             // Far-field residency is accounted against
             // FarFieldMemoryBudgetBytes and must not also consume the
             // independent DDGI atlas budget.
-            sceneData.DdgiBufferBytes = _simpleDdgiVolumeManager.BufferBytes;
+            sceneData.DdgiBufferBytes = checked(
+                _simpleDdgiVolumeManager.BufferBytes +
+                (_forwardPlusPass?.SimpleDdgiReceiverCacheBufferBytes ?? 0) +
+                (_forwardPlusPass?.SimpleDdgiReceiverGatherBufferTotalBytes ?? 0));
             sceneData.DdgiProbeRelocationCount = _simpleDdgiVolumeManager.ProbeRelocationCount;
             sceneData.DdgiProbeClassificationCount = probesToUpdate;
             sceneData.DdgiClassifiedInactiveProbeCountEstimate = _simpleDdgiVolumeManager.ClassifiedInactiveProbeCountEstimate;
@@ -10840,7 +10886,8 @@ namespace Njulf.Rendering
                         : int.MaxValue,
                     gi.GiAccelerationStructureEvictionGraceFrames,
                     AllowStaticMemoryCulling: farFieldCoverageReady),
-                alphaMaskedTransportEnabled: gi.DdgiAlphaMaskedTransportEnabled);
+                alphaMaskedTransportEnabled: gi.DdgiAlphaMaskedTransportEnabled,
+                sceneContentRevision: sceneData.SceneContentRevision);
             sceneData.AccelerationStructureBottomLevelCount = stats.BottomLevelCount;
             sceneData.AccelerationStructureTopLevelInstanceCount = stats.TopLevelInstanceCount;
             sceneData.AccelerationStructureBlasBuildCount = stats.BlasBuildCount;
@@ -11677,7 +11724,7 @@ namespace Njulf.Rendering
                     sampledCounts != null &&
                     (uint)volumeIndex < (uint)primaryCounts.Count &&
                     (uint)volumeIndex < (uint)sampledCounts.Count;
-                bool energyCountersValid = counters.ReadbackValid != 0 &&
+                bool energyCountersValid = counters.EnergyReadbackValid != 0 &&
                     energyCounts != null &&
                     (uint)volumeIndex < (uint)energyCounts.Count;
                 sceneData.DdgiVolumeDiagnostics[i] = entry with

@@ -28,6 +28,18 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _forwardSimpleFullInputPipeline;
         private VkPipeline _forwardCompactedSimplePipeline;
         private VkPipeline _forwardCompactedSimpleFullInputPipeline;
+        private VkPipeline _forwardReceiverCachePipeline;
+        private VkPipeline _forwardCompactedReceiverCachePipeline;
+        private VkPipeline _forwardSimpleReceiverCachePipeline;
+        private VkPipeline _forwardSimpleFullInputReceiverCachePipeline;
+        private VkPipeline _forwardCompactedSimpleReceiverCachePipeline;
+        private VkPipeline _forwardCompactedSimpleFullInputReceiverCachePipeline;
+        private VkPipeline _forwardGiDisabledPipeline;
+        private VkPipeline _forwardCompactedGiDisabledPipeline;
+        private VkPipeline _forwardSimpleGiDisabledPipeline;
+        private VkPipeline _forwardSimpleFullInputGiDisabledPipeline;
+        private VkPipeline _forwardCompactedSimpleGiDisabledPipeline;
+        private VkPipeline _forwardCompactedSimpleFullInputGiDisabledPipeline;
         private VkPipeline _transparentForwardPipeline;
         private VkPipeline _weightedOitTransparentPipeline;
         private VkPipeline _motionVectorPipeline;
@@ -35,6 +47,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _forwardVisibilityCompactionPipeline;
         private PipelineLayout _layout;
         private PipelineLayout _sceneSubmissionComputeLayout;
+        private DescriptorSetLayout _forwardReceiverCacheBufferSetLayout;
         private PipelineCache _pipelineCache;
         private bool _disposed;
 
@@ -58,6 +71,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     Marshal.SizeOf<GPUSceneOpaqueCompactionPushConstants>(),
                     Marshal.SizeOf<GPUForwardVisibilityCompactionPushConstants>())));
             CreatePipelineCache();
+            CreateForwardReceiverCacheBufferSetLayout();
             CreatePipelineLayout();
             CreateSceneSubmissionComputeLayout();
             CreatePipelines(colorFormat, depthFormat);
@@ -84,9 +98,98 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline Pipeline => _forwardPipeline;
         public PipelineLayout Layout => _layout;
         public PipelineLayout SceneSubmissionComputeLayout => _sceneSubmissionComputeLayout;
+        internal DescriptorSetLayout ForwardReceiverCacheBufferSetLayout =>
+            _forwardReceiverCacheBufferSetLayout;
         public RenderSettings Settings { get; }
         public bool GpuMeshletCountersEnabled { get; private set; }
         public bool MaterialTransportProvenanceAttachmentEnabled { get; private set; }
+
+        public VkPipeline ResolveOpaqueSpecializedPipeline(
+            VkPipeline exactPipeline,
+            bool receiverCacheRequired,
+            bool globalIlluminationDisabled)
+        {
+            if (MaterialTransportProvenanceAttachmentEnabled)
+            {
+                return exactPipeline;
+            }
+
+            if (globalIlluminationDisabled)
+            {
+                return ResolveOpaqueVariant(
+                    exactPipeline,
+                    _forwardGiDisabledPipeline,
+                    _forwardCompactedGiDisabledPipeline,
+                    _forwardSimpleGiDisabledPipeline,
+                    _forwardSimpleFullInputGiDisabledPipeline,
+                    _forwardCompactedSimpleGiDisabledPipeline,
+                    _forwardCompactedSimpleFullInputGiDisabledPipeline);
+            }
+
+            if (!receiverCacheRequired)
+                return exactPipeline;
+
+            return ResolveOpaqueVariant(
+                exactPipeline,
+                _forwardReceiverCachePipeline,
+                _forwardCompactedReceiverCachePipeline,
+                _forwardSimpleReceiverCachePipeline,
+                _forwardSimpleFullInputReceiverCachePipeline,
+                _forwardCompactedSimpleReceiverCachePipeline,
+                _forwardCompactedSimpleFullInputReceiverCachePipeline);
+        }
+
+        private VkPipeline ResolveOpaqueVariant(
+            VkPipeline exactPipeline,
+            VkPipeline fullPipeline,
+            VkPipeline compactedPipeline,
+            VkPipeline simplePipeline,
+            VkPipeline simpleFullInputPipeline,
+            VkPipeline compactedSimplePipeline,
+            VkPipeline compactedSimpleFullInputPipeline)
+        {
+            if (exactPipeline.Handle == _forwardPipeline.Handle)
+                return ResolveAvailableSpecializedPipeline(
+                    fullPipeline,
+                    exactPipeline);
+            if (exactPipeline.Handle == _forwardCompactedPipeline.Handle)
+                return ResolveAvailableSpecializedPipeline(
+                    compactedPipeline,
+                    exactPipeline);
+            if (exactPipeline.Handle == _forwardSimplePipeline.Handle)
+                return ResolveAvailableSpecializedPipeline(
+                    simplePipeline,
+                    exactPipeline);
+            if (exactPipeline.Handle == _forwardSimpleFullInputPipeline.Handle)
+                return ResolveAvailableSpecializedPipeline(
+                    simpleFullInputPipeline,
+                    exactPipeline);
+            if (exactPipeline.Handle == _forwardCompactedSimplePipeline.Handle)
+                return ResolveAvailableSpecializedPipeline(
+                    compactedSimplePipeline,
+                    exactPipeline);
+            if (exactPipeline.Handle ==
+                _forwardCompactedSimpleFullInputPipeline.Handle)
+            {
+                return ResolveAvailableSpecializedPipeline(
+                    compactedSimpleFullInputPipeline,
+                    exactPipeline);
+            }
+
+            return exactPipeline;
+        }
+
+        private static VkPipeline ResolveAvailableSpecializedPipeline(
+            VkPipeline specializedPipeline,
+            VkPipeline exactPipeline)
+        {
+            // Pipeline creation is atomic at renderer construction/recreation.
+            // The zero-handle guard keeps this resolver fail-safe if a future
+            // optional cache backend deliberately omits its native variant.
+            return specializedPipeline.Handle != 0
+                ? specializedPipeline
+                : exactPipeline;
+        }
 
         public void Recreate(Format colorFormat, Format depthFormat)
         {
@@ -126,11 +229,44 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _context.SetDebugName(_pipelineCache.Handle, ObjectType.PipelineCache, "Mesh Pipeline Cache");
         }
 
+        private void CreateForwardReceiverCacheBufferSetLayout()
+        {
+            var binding = new DescriptorSetLayoutBinding
+            {
+                Binding = 0,
+                DescriptorType = DescriptorType.StorageBuffer,
+                DescriptorCount = 1,
+                StageFlags = ShaderStageFlags.FragmentBit
+            };
+            var info = new DescriptorSetLayoutCreateInfo
+            {
+                SType = StructureType.DescriptorSetLayoutCreateInfo,
+                BindingCount = 1,
+                PBindings = &binding
+            };
+            Result result = _context.Api.CreateDescriptorSetLayout(
+                _context.Device,
+                &info,
+                null,
+                out _forwardReceiverCacheBufferSetLayout);
+            if (result != Result.Success)
+            {
+                throw new VulkanException(
+                    "Failed to create forward receiver-cache buffer descriptor layout",
+                    result);
+            }
+            _context.SetDebugName(
+                _forwardReceiverCacheBufferSetLayout.Handle,
+                ObjectType.DescriptorSetLayout,
+                "Forward Receiver Cache Buffer Descriptor Layout");
+        }
+
         private void CreatePipelineLayout()
         {
-            var setLayouts = stackalloc DescriptorSetLayout[2];
+            var setLayouts = stackalloc DescriptorSetLayout[3];
             setLayouts[0] = _bindlessHeap.StorageBufferSetLayout;
             setLayouts[1] = _bindlessHeap.TextureSamplerSetLayout;
+            setLayouts[2] = _forwardReceiverCacheBufferSetLayout;
 
             var pushConstantRange = new PushConstantRange
             {
@@ -144,7 +280,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             var layoutInfo = new PipelineLayoutCreateInfo
             {
                 SType = StructureType.PipelineLayoutCreateInfo,
-                SetLayoutCount = 2,
+                SetLayoutCount = 3,
                 PSetLayouts = setLayouts,
                 PushConstantRangeCount = 1,
                 PPushConstantRanges = &pushConstantRange
@@ -365,6 +501,48 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_forwardCompactedSimpleFullInputPipeline.Handle, ObjectType.Pipeline, "Compacted Simple Full-Input Opaque Forward Plus Mesh Pipeline");
 
+#if !DEBUG && !NJULF_DETAILED_INVESTIGATION
+            if (!materialTransportProvenanceEnabled)
+            {
+                const string cacheFullFragmentShaderName =
+                    "forward_opaque_ddgi_cache_required.frag.spv";
+                const string cacheSimpleFragmentShaderName =
+                    "forward_opaque_simple_ddgi_cache_required.frag.spv";
+                const string cacheSimpleFullInputFragmentShaderName =
+                    "forward_opaque_simple_full_input_ddgi_cache_required.frag.spv";
+
+                CreateOpaqueSpecializedPipelineSet(
+                    colorFormat,
+                    depthFormat,
+                    forwardTaskShaderName,
+                    cacheFullFragmentShaderName,
+                    cacheSimpleFragmentShaderName,
+                    cacheSimpleFullInputFragmentShaderName,
+                    "Receiver-Cache",
+                    out _forwardReceiverCachePipeline,
+                    out _forwardCompactedReceiverCachePipeline,
+                    out _forwardSimpleReceiverCachePipeline,
+                    out _forwardSimpleFullInputReceiverCachePipeline,
+                    out _forwardCompactedSimpleReceiverCachePipeline,
+                    out _forwardCompactedSimpleFullInputReceiverCachePipeline);
+
+                CreateOpaqueSpecializedPipelineSet(
+                    colorFormat,
+                    depthFormat,
+                    forwardTaskShaderName,
+                    "forward_opaque_gi_disabled.frag.spv",
+                    "forward_opaque_simple_gi_disabled.frag.spv",
+                    "forward_opaque_simple_full_input_gi_disabled.frag.spv",
+                    "GI-Disabled Control",
+                    out _forwardGiDisabledPipeline,
+                    out _forwardCompactedGiDisabledPipeline,
+                    out _forwardSimpleGiDisabledPipeline,
+                    out _forwardSimpleFullInputGiDisabledPipeline,
+                    out _forwardCompactedSimpleGiDisabledPipeline,
+                    out _forwardCompactedSimpleFullInputGiDisabledPipeline);
+            }
+#endif
+
             _transparentForwardPipeline = CreateGraphicsPipeline(
                 forwardTaskShaderName,
                 "forward.mesh.spv",
@@ -400,6 +578,114 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthBiasEnable: false);
             _context.SetDebugName(_motionVectorPipeline.Handle, ObjectType.Pipeline, "Motion Vector Mesh Pipeline");
 
+        }
+
+        private void CreateOpaqueSpecializedPipelineSet(
+            Format colorFormat,
+            Format depthFormat,
+            string forwardTaskShaderName,
+            string fullFragmentShaderName,
+            string simpleFragmentShaderName,
+            string simpleFullInputFragmentShaderName,
+            string debugVariantName,
+            out VkPipeline fullPipeline,
+            out VkPipeline compactedPipeline,
+            out VkPipeline simplePipeline,
+            out VkPipeline simpleFullInputPipeline,
+            out VkPipeline compactedSimplePipeline,
+            out VkPipeline compactedSimpleFullInputPipeline)
+        {
+            fullPipeline = CreateGraphicsPipeline(
+                forwardTaskShaderName,
+                "forward.mesh.spv",
+                fullFragmentShaderName,
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: false,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false);
+            compactedPipeline = CreateGraphicsPipeline(
+                taskShaderName: null,
+                "forward_compacted.mesh.spv",
+                fullFragmentShaderName,
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: false,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false);
+            simplePipeline = CreateGraphicsPipeline(
+                forwardTaskShaderName,
+                "forward_simple.mesh.spv",
+                simpleFragmentShaderName,
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: false,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false);
+            simpleFullInputPipeline = CreateGraphicsPipeline(
+                forwardTaskShaderName,
+                "forward.mesh.spv",
+                simpleFullInputFragmentShaderName,
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: false,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false);
+            compactedSimplePipeline = CreateGraphicsPipeline(
+                taskShaderName: null,
+                "forward_simple_compacted.mesh.spv",
+                simpleFragmentShaderName,
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: false,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false);
+            compactedSimpleFullInputPipeline = CreateGraphicsPipeline(
+                taskShaderName: null,
+                "forward_compacted.mesh.spv",
+                simpleFullInputFragmentShaderName,
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: false,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false);
+
+            _context.SetDebugName(
+                fullPipeline.Handle,
+                ObjectType.Pipeline,
+                $"Opaque Forward Plus {debugVariantName} Mesh Pipeline");
+            _context.SetDebugName(
+                compactedPipeline.Handle,
+                ObjectType.Pipeline,
+                $"Compacted Opaque Forward Plus {debugVariantName} Mesh Pipeline");
+            _context.SetDebugName(
+                simplePipeline.Handle,
+                ObjectType.Pipeline,
+                $"Simple Opaque Forward Plus {debugVariantName} Mesh Pipeline");
+            _context.SetDebugName(
+                simpleFullInputPipeline.Handle,
+                ObjectType.Pipeline,
+                $"Simple Full-Input Opaque Forward Plus {debugVariantName} Mesh Pipeline");
+            _context.SetDebugName(
+                compactedSimplePipeline.Handle,
+                ObjectType.Pipeline,
+                $"Compacted Simple Opaque Forward Plus {debugVariantName} Mesh Pipeline");
+            _context.SetDebugName(
+                compactedSimpleFullInputPipeline.Handle,
+                ObjectType.Pipeline,
+                $"Compacted Simple Full-Input Opaque Forward Plus {debugVariantName} Mesh Pipeline");
         }
 
         private void CreateComputePipelines()
@@ -943,6 +1229,84 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _forwardCompactedSimpleFullInputPipeline = default;
             }
 
+            if (_forwardReceiverCachePipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardReceiverCachePipeline, null);
+                _forwardReceiverCachePipeline = default;
+            }
+
+            if (_forwardCompactedReceiverCachePipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardCompactedReceiverCachePipeline, null);
+                _forwardCompactedReceiverCachePipeline = default;
+            }
+
+            if (_forwardSimpleReceiverCachePipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardSimpleReceiverCachePipeline, null);
+                _forwardSimpleReceiverCachePipeline = default;
+            }
+
+            if (_forwardSimpleFullInputReceiverCachePipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardSimpleFullInputReceiverCachePipeline, null);
+                _forwardSimpleFullInputReceiverCachePipeline = default;
+            }
+
+            if (_forwardCompactedSimpleReceiverCachePipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardCompactedSimpleReceiverCachePipeline, null);
+                _forwardCompactedSimpleReceiverCachePipeline = default;
+            }
+
+            if (_forwardCompactedSimpleFullInputReceiverCachePipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(
+                    _context.Device,
+                    _forwardCompactedSimpleFullInputReceiverCachePipeline,
+                    null);
+                _forwardCompactedSimpleFullInputReceiverCachePipeline = default;
+            }
+
+            if (_forwardGiDisabledPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardGiDisabledPipeline, null);
+                _forwardGiDisabledPipeline = default;
+            }
+
+            if (_forwardCompactedGiDisabledPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardCompactedGiDisabledPipeline, null);
+                _forwardCompactedGiDisabledPipeline = default;
+            }
+
+            if (_forwardSimpleGiDisabledPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardSimpleGiDisabledPipeline, null);
+                _forwardSimpleGiDisabledPipeline = default;
+            }
+
+            if (_forwardSimpleFullInputGiDisabledPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardSimpleFullInputGiDisabledPipeline, null);
+                _forwardSimpleFullInputGiDisabledPipeline = default;
+            }
+
+            if (_forwardCompactedSimpleGiDisabledPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardCompactedSimpleGiDisabledPipeline, null);
+                _forwardCompactedSimpleGiDisabledPipeline = default;
+            }
+
+            if (_forwardCompactedSimpleFullInputGiDisabledPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(
+                    _context.Device,
+                    _forwardCompactedSimpleFullInputGiDisabledPipeline,
+                    null);
+                _forwardCompactedSimpleFullInputGiDisabledPipeline = default;
+            }
+
             if (_transparentForwardPipeline.Handle != 0)
             {
                 _context.Api.DestroyPipeline(_context.Device, _transparentForwardPipeline, null);
@@ -995,6 +1359,15 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             if (_layout.Handle != 0)
                 _context.Api.DestroyPipelineLayout(_context.Device, _layout, null);
+
+            if (_forwardReceiverCacheBufferSetLayout.Handle != 0)
+            {
+                _context.Api.DestroyDescriptorSetLayout(
+                    _context.Device,
+                    _forwardReceiverCacheBufferSetLayout,
+                    null);
+                _forwardReceiverCacheBufferSetLayout = default;
+            }
 
             if (_sceneSubmissionComputeLayout.Handle != 0)
                 _context.Api.DestroyPipelineLayout(_context.Device, _sceneSubmissionComputeLayout, null);

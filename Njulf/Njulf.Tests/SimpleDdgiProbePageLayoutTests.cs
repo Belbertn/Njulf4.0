@@ -307,4 +307,40 @@ public sealed class SimpleDdgiProbePageLayoutTests
                 Is.False);
         });
     }
+
+    [Test]
+    public void VisiblePublicationCohort_IsDemandStampedAndBoundedByTwoFramesOfSourceWork()
+    {
+        uint packed = SimpleDdgiProbePageLayout.PackPhysicalPageAllocation(
+            SimpleDdgiProbePageLayout.PhysicalPageAllocationCameraCut,
+            SimpleDdgiPageDemandClass.VisibleSurface,
+            validProbeCount: 7);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                packed & SimpleDdgiProbePageLayout.PhysicalPageAllocationCameraCut,
+                Is.Not.Zero);
+            Assert.That(
+                (packed & SimpleDdgiProbePageLayout.PhysicalPageAllocationDemandClassMask) >>
+                    SimpleDdgiProbePageLayout.PhysicalPageAllocationDemandClassShift,
+                Is.EqualTo((uint)SimpleDdgiPageDemandClass.VisibleSurface));
+            Assert.That(
+                (packed & SimpleDdgiProbePageLayout.PhysicalPageAllocationValidProbeCountMask) >>
+                    SimpleDdgiProbePageLayout.PhysicalPageAllocationValidProbeCountShift,
+                Is.EqualTo(7u));
+            Assert.That(
+                SimpleDdgiProbePageLayout.ResolveVisiblePublicationPartialProbeCapacity(
+                    sourceProbeBudget: 128,
+                    publicationLatencyTargetFrames:
+                        SimpleDdgiProbePageLayout.OrdinaryPublicationLatencyTargetFrames),
+                Is.EqualTo(128));
+            Assert.That(
+                SimpleDdgiProbePageLayout.ResolveVisiblePublicationPartialProbeCapacity(1, 1),
+                Is.EqualTo(SimpleDdgiProbePageLayout.ProbesPerPage));
+            Assert.That(
+                SimpleDdgiProbePageLayout.ResolveVisiblePublicationPartialProbeCapacity(0, 2),
+                Is.Zero);
+        });
+    }
 }

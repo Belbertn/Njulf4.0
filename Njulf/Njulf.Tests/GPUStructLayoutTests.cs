@@ -298,6 +298,22 @@ namespace Njulf.Tests
                         false,
                         decalReceiveShadows: true) & 64u,
                     Is.EqualTo(64u));
+                Assert.That(
+                    GPUForwardPushConstants.PackDiagnosticFlags(
+                        false,
+                        ddgiReceiverCacheEnabled: true) & (1u << 30),
+                    Is.EqualTo(1u << 30));
+                Assert.That(
+                    GPUForwardPushConstants.PackDiagnosticFlags(
+                        false,
+                        ddgiReceiverCacheEnabled: true) & (1u << 31),
+                    Is.Zero);
+                Assert.That(
+                    Marshal.SizeOf<GPUSimpleDdgiReceiverCachePushConstants>(),
+                    Is.EqualTo(112));
+                Assert.That(
+                    Marshal.SizeOf<GPUSimpleDdgiReceiverCacheResolvePushConstants>(),
+                    Is.EqualTo(24));
             });
         }
 

@@ -92,7 +92,13 @@ public sealed record SampleTailDdgiRuntimeEvidence
     public uint ExpectedParticipantCount { get; init; }
     public uint AuditedParticipantCount { get; init; }
     public uint ExcludedInactiveCount { get; init; }
+    /// <summary>
+    /// Virtual probes outside the frozen resident/published participant
+    /// domain. The legacy property name is retained for report compatibility;
+    /// a non-zero value is expected when sparse residency is active.
+    /// </summary>
     public uint ExcludedNotVisibleCount { get; init; }
+    public uint ExcludedStaleSourceCount { get; init; }
     public uint InvalidCacheCount { get; init; }
     public uint CacheIdentityFailureCount { get; init; }
     public uint CacheCardinalityFailureCount { get; init; }
@@ -402,6 +408,7 @@ public static class SampleTailDdgiRuntimeEvidenceBuilder
             AuditedParticipantCount = tail.TailAuditedParticipantCount,
             ExcludedInactiveCount = tail.TailExcludedInactiveCount,
             ExcludedNotVisibleCount = tail.TailExcludedNotVisibleCount,
+            ExcludedStaleSourceCount = tail.TailExcludedStaleSourceCount,
             InvalidCacheCount = tail.TailExcludedInvalidCacheCount,
             CacheIdentityFailureCount = tail.TailCacheIdentityFailureCount,
             CacheCardinalityFailureCount = tail.TailCacheCardinalityFailureCount,

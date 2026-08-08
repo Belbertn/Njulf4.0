@@ -235,8 +235,16 @@ public sealed class SampleLifecycleSmokeRunnerTests
         Assert.Multiple(() =>
         {
             Assert.That(reloadCount, Is.EqualTo(1));
-            Assert.That(resizes, Does.Contain((800, 600)));
-            Assert.That(resizes[^1], Is.EqualTo((800, 600)));
+            Assert.That(
+                resizes,
+                Is.EqualTo(new[]
+                {
+                    (1280, 720),
+                    (1600, 900),
+                    (800, 600),
+                    (0, 0),
+                    (800, 600)
+                }));
             Assert.That(
                 resizeFrames.GroupBy(frame => frame).Select(group => group.Count()),
                 Has.All.EqualTo(1));

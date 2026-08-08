@@ -18,6 +18,9 @@ public static class SampleBenchmarkCaptureVariant
     public const string FarFieldForcedOld = "far-field-forced-old";
     public const string TailJacobi = "tail-jacobi";
     public const string TailAccelerated = "tail-accelerated";
+    public const string ForwardGiEnabled = "forward-gi-enabled";
+    public const string ForwardGiDisabled = "forward-gi-disabled";
+    public const string ForwardGiExact = "forward-gi-exact";
     public const string DecalMaterialPrefix = "decal-material:";
 
     public static bool IsTailVariant(string? variant)
@@ -39,6 +42,8 @@ public static class SampleBenchmarkCaptureVariant
         // can run more than once during startup/reload validation.
         settings.Decals.IsolatedMaterialIndex = -1;
         settings.GlobalIllumination.SimpleDdgiForceLegacyFarFieldFallbackEvaluation = false;
+        settings.Diagnostics.SuppressForwardGiGatherForBenchmark = false;
+        settings.Diagnostics.ForceExactForwardGiGatherForBenchmark = false;
 
         switch (normalized)
         {
@@ -67,6 +72,14 @@ public static class SampleBenchmarkCaptureVariant
                 settings.GlobalIllumination.SimpleDdgiTransportAccelerationEnabled =
                     normalized == TailAccelerated;
                 return normalized;
+            case ForwardGiEnabled:
+                return normalized;
+            case ForwardGiExact:
+                settings.Diagnostics.ForceExactForwardGiGatherForBenchmark = true;
+                return normalized;
+            case ForwardGiDisabled:
+                settings.Diagnostics.SuppressForwardGiGatherForBenchmark = true;
+                return normalized;
         }
 
         if (normalized.StartsWith(DecalMaterialPrefix, StringComparison.Ordinal))
@@ -92,6 +105,7 @@ public static class SampleBenchmarkCaptureVariant
             $"{Baseline}, {DecalsDisabled}, {DecalDdgiDisabled}, " +
             $"{DecalShadowsDisabled}, {FarFieldGated}, {FarFieldForcedOld}, " +
             $"{TailJacobi}, {TailAccelerated}, " +
+            $"{ForwardGiEnabled}, {ForwardGiDisabled}, {ForwardGiExact}, " +
             $"or {DecalMaterialPrefix}<index>.",
             nameof(variant));
     }

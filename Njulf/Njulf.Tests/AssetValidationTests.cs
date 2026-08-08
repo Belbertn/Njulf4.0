@@ -257,11 +257,22 @@ public sealed class AssetValidationTests
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            // Reusable MSBuild workers inherit the redirected pipe handles.
+            // If they outlive `dotnet run`, ReadToEndAsync can never observe
+            // EOF even though the actual AssetTool process has exited.
+            Environment =
+            {
+                ["MSBUILDDISABLENODEREUSE"] = "1",
+                ["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0"
+            }
         }.WithArguments(
             "run",
             "--project",
             projectPath,
+            "--configuration",
+            "Release",
+            "--no-restore",
             "--",
             "report",
             directory,
@@ -271,9 +282,26 @@ public sealed class AssetValidationTests
             "30000"));
 
         Assert.That(process, Is.Not.Null);
-        string stdout = await process!.StandardOutput.ReadToEndAsync();
-        string stderr = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
+        // Drain both redirected streams concurrently. A real shader rebuild can
+        // emit more than one pipe buffer of diagnostics; reading stdout to EOF
+        // before touching stderr deadlocks the child when that buffer fills.
+        Task<string> stdoutTask = process!.StandardOutput.ReadToEndAsync();
+        Task<string> stderrTask = process.StandardError.ReadToEndAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            Assert.Fail("Njulf.AssetTool did not exit within five minutes.");
+        }
+
+        string stdout = await stdoutTask;
+        string stderr = await stderrTask;
 
         Assert.Multiple(() =>
         {

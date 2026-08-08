@@ -154,7 +154,7 @@ namespace Njulf.Tests
                         nameof(GPUSimpleDdgiResidencyFeedback.DevelopmentPinnedPageCount)).ToInt32(),
                     Is.EqualTo(352));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiPageDemandPushConstants>(), Is.EqualTo(112));
-                Assert.That(Marshal.SizeOf<GPUSimpleDdgiPageResidencyPushConstants>(), Is.EqualTo(72));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiPageResidencyPushConstants>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiRayResult>(), Is.EqualTo(20));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiLegacyRayResult>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportRayCache>(), Is.EqualTo(36));
@@ -1063,6 +1063,38 @@ namespace Njulf.Tests
                         sceneContentRevision: 0),
                     Is.True,
                     "The legacy overload intentionally refreshes because it has no revision contract.");
+            });
+        }
+
+        [Test]
+        public void FarFieldMaterialRevisionScan_RunsOnlyWhenTheGlobalRevisionChanges()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    FarFieldClipmapManager.ShouldCheckStaticMaterialRevisions(
+                        hasSnapshot: true,
+                        previousMaterialDataRevision: 23u,
+                        materialDataRevision: 23u),
+                    Is.False);
+                Assert.That(
+                    FarFieldClipmapManager.ShouldCheckStaticMaterialRevisions(
+                        hasSnapshot: false,
+                        previousMaterialDataRevision: 23u,
+                        materialDataRevision: 23u),
+                    Is.True);
+                Assert.That(
+                    FarFieldClipmapManager.ShouldCheckStaticMaterialRevisions(
+                        hasSnapshot: true,
+                        previousMaterialDataRevision: 23u,
+                        materialDataRevision: 24u),
+                    Is.True);
+                Assert.That(
+                    FarFieldClipmapManager.ShouldCheckStaticMaterialRevisions(
+                        hasSnapshot: true,
+                        previousMaterialDataRevision: 23u,
+                        materialDataRevision: 0u),
+                    Is.True);
             });
         }
 

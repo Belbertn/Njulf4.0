@@ -225,7 +225,15 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             "Njulf.Shaders", "ddgi_simple_schedule_commit_local.comp");
         string reset = ReadRepoText("Njulf.Shaders", "ddgi_simple_schedule_reset.comp");
         string laneBase = ReadRepoText("Njulf.Shaders", "ddgi_simple_schedule_lane_base.comp");
+        string prefix = ReadRepoText("Njulf.Shaders", "ddgi_simple_schedule_prefix.comp");
+        string compact = ReadRepoText("Njulf.Shaders", "ddgi_simple_schedule_compact.comp");
+        string admit = ReadRepoText("Njulf.Shaders", "ddgi_simple_schedule_admit.comp");
+        string materialize = ReadRepoText(
+            "Njulf.Shaders", "ddgi_simple_schedule_materialize.comp");
+        string schedulePass = ReadRepoText(
+            "Njulf.Rendering", "Pipeline", "SimpleDdgiSchedulePass.cs");
         string feedback = ReadRepoText("Njulf.Shaders", "ddgi_simple_schedule_feedback.comp");
+        string shaderProject = ReadRepoText("Njulf.Shaders", "Njulf.Shaders.csproj");
 
         Assert.Multiple(() =>
         {
@@ -236,6 +244,13 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(shared, Does.Contain("SchedulerVolumeGeneration()"));
             Assert.That(shared, Does.Contain("SchedulerSourceGeneration()"));
             Assert.That(shared, Does.Contain("SchedulerTransportGeneration()"));
+            Assert.That(shared, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_FEATURE_PERIODIC_SOURCE_WAVE = 1u << 10u"));
+            Assert.That(shared, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_FEATURE_CERTIFIED_QUIESCED = 1u << 11u"));
+            Assert.That(shared, Does.Contain("SchedulerCertifiedQuiesced()"));
+            Assert.That(shared, Does.Contain(
+                "SchedulerSourceRefreshDueAtCutoff("));
             Assert.That(shared, Does.Contain("SchedulerRequiredCompletionMask"));
             Assert.That(shared, Does.Contain("SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_MASK"));
             Assert.That(shared, Does.Contain(
@@ -247,6 +262,9 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(consumerShared, Does.Contain("atomicAdd("));
             Assert.That(classify, Does.Contain(
                 "SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR"));
+            Assert.That(classify, Does.Contain("periodicWaveMember"));
+            Assert.That(classify, Does.Contain("periodicRefreshGateOpen"));
+            Assert.That(classify, Does.Contain("routineDue);"));
 
             Assert.That(emit, Does.Contain("SchedulerWriteOutcome("));
             Assert.That(emit, Does.Contain("SchedulerMarkOutcomeComplete("));
@@ -289,9 +307,97 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(commit, Does.Contain("PublishPackedSimpleDdgiReceiverProbe("));
 
             Assert.That(reset, Does.Not.Contain("pc.LaneCursorsOffsetWords"));
+            Assert.That(reset, Does.Contain("if (!certifiedQuiesced)"));
+            Assert.That(reset, Does.Contain("? 64u"));
             Assert.That(laneBase, Does.Contain("pc.LanePrefixesOffsetWords"));
             Assert.That(laneBase, Does.Not.Contain("pc.LaneCursorsOffsetWords"));
+            Assert.That(laneBase, Does.Contain("if (gl_GlobalInvocationID.x != 0u)"));
+            Assert.That(laneBase, Does.Contain(
+                "for (uint lane = 0u; lane < SIMPLE_DDGI_SCHEDULER_MAX_LANES; lane++)"));
+            Assert.That(laneBase, Does.Not.Contain("for (uint i = 0u; i < lane; i++)"));
+            Assert.That(laneBase, Does.Contain(
+                "pc.LaneTotalsOffsetWords + activeLaneCount"));
+            Assert.That(laneBase, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_INVALID_PROBE"));
+            Assert.That(laneBase, Does.Match(
+                @"SchedulerWriteIndirect\(SIMPLE_DDGI_SCHEDULER_DISPATCH_ADMIT,\s*1u, 1u, 1u\);"));
+            Assert.That(prefix, Does.Contain("uint lanePair = gl_GlobalInvocationID.x;"));
+            Assert.That(prefix, Does.Contain("uint packedCounts = SchedulerArenaRead(wordOffset);"));
+            Assert.That(prefix, Does.Not.Contain("SchedulerWriteGroupLaneValue"));
+            Assert.That(prefix, Does.Not.Contain("pc.LaneTotalsOffsetWords"));
+            Assert.That(compact, Does.Contain(
+                "shared uint CandidateLanes[SIMPLE_DDGI_SCHEDULER_WORKGROUP_SIZE];"));
+            Assert.That(compact, Does.Contain("CandidateLanes[localIndex] = lane;"));
+            Assert.That(compact, Does.Not.Contain("uint priorBase ="));
+            Assert.That(admit, Does.Contain("bool tailSourceOnly"));
+            Assert.That(admit, Does.Contain("bool tailSolveOnly"));
+            Assert.That(admit, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_ADMISSION_ROLE"));
+            Assert.That(admit, Does.Contain(
+                "const bool specializedTailPhase = true"));
+            Assert.That(admit, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_COUNTER_COMPACTED) == 0u"));
+            Assert.That(admit, Does.Contain("if (requestBudget == 0u)"));
+            Assert.That(admit, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_DISPATCH_EMIT"));
+            Assert.That(admit, Does.Contain("if (!specializedTailPhase)"));
+            Assert.That(admit, Does.Contain(
+                "volume >= activeVolumes || specializedTailPhase"));
+            Assert.That(admit, Does.Contain("specializedPendingByVolume"));
+            Assert.That(admit, Does.Contain(
+                "bool specializedTransport = tailSourceOnly"));
+            Assert.That(admit, Does.Contain(
+                "pc.LaneTotalsOffsetWords + activeIndex"));
+            Assert.That(admit, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_REASON_ROUTINE_DUE"));
+            Assert.That(admit, Does.Contain(
+                "(visiblePageBudget * pending) /"));
+            Assert.That(admit, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_COUNTER_VISIBLE_PAGE_COHORT_BASE"));
+            Assert.That(admit, Does.Contain(
+                "(remaining * available) / residualPendingTotal"));
+            Assert.That(admit, Does.Contain(
+                "quotas[volume] >= specializedPendingByVolume[volume]"));
+            Assert.That(admit, Does.Contain("uint admittedLaneMask[28]"));
+            Assert.That(admit, Does.Match(
+                @"admittedLaneMask\[lane >> 5u\]\s*\|=\s*1u << \(lane & 31u\)"));
+            Assert.That(admit, Does.Contain("SchedulerWriteUpdateSelection("));
+            Assert.That(admit, Does.Not.Contain("SchedulerWriteUpdate("));
+            Assert.That(admit, Does.Not.Contain(
+                "for (uint lane = 0u; lane < SIMPLE_DDGI_SCHEDULER_MAX_LANES; lane++)"));
+            Assert.That(admit, Does.Contain(
+                "uint firstPhase = tailSourceOnly ? 0u : (tailSolveOnly ? 6u : 0u);"));
+            Assert.That(schedulePass, Does.Contain(
+                "SimpleDdgiGpuSchedulerLayout.GroupsFor((layout.LaneCapacity + 1) / 2)"));
+            Assert.That(schedulePass, Does.Contain("SimpleDdgiSchedule.Admit"));
+            Assert.That(schedulePass, Does.Contain("SimpleDdgiSchedule.TailAdmit"));
+            Assert.That(schedulePass, Does.Contain("SimpleDdgiSchedule.Materialize"));
+            Assert.That(schedulePass, Does.Contain(
+                "GroupsFor(layout.RequestCapacity)"));
+            Assert.That(schedulePass, Does.Contain("GpuTimestampRecorder? timestamps"));
+            Assert.That(schedulePass, Does.Not.Contain(
+                "DispatchStage(cmd, pushConstants, 5, SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.LaneCapacity))"));
+            Assert.That(reset, Does.Not.Contain(
+                "candidateCapacity * SIMPLE_DDGI_SCHEDULER_CANDIDATE_WORDS"));
+            Assert.That(reset, Does.Not.Contain(
+                "requestCapacity * SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS"));
             Assert.That(feedback, Does.Contain("base + 64u + lane"));
+            Assert.That(feedback, Does.Contain(
+                "pc.LaneTotalsOffsetWords + activeIndex"));
+            Assert.That(feedback, Does.Contain(
+                "SIMPLE_DDGI_FEEDBACK_ACTIVE_SOURCE_MUTATION"));
+            Assert.That(feedback, Does.Contain(
+                "lastCommittedSourceRefreshFrame == SchedulerFrameIndex()"));
+            Assert.That(feedback, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_FEEDBACK_ACTIVE_CANONICAL_MUTATION_OFFSET"));
+            Assert.That(materialize, Does.Contain("SchedulerReadUpdateSelection("));
+            Assert.That(materialize, Does.Contain("SchedulerWriteUpdate("));
+            Assert.That(materialize, Does.Contain(
+                "updateIndex >= accepted"));
+            Assert.That(shaderProject, Does.Contain(
+                "SimpleDdgiAdmissionShaderVariant"));
+            Assert.That(shaderProject, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_ADMISSION_ROLE"));
         });
     }
 
@@ -346,10 +452,15 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiParams>(), Is.EqualTo(240));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiPushConstants>(), Is.EqualTo(136));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportAuditPushConstants>(), Is.EqualTo(128));
-            Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportAuditSummary>(), Is.EqualTo(144));
+            Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportAuditSummary>(), Is.EqualTo(160));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiSchedulePushConstants>(), Is.EqualTo(124));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiPublishPushConstants>(), Is.EqualTo(56));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiSchedulerFeedback>(), Is.EqualTo(256));
+            Assert.That(
+                Marshal.OffsetOf<GPUSimpleDdgiSchedulerFrame>(
+                    nameof(GPUSimpleDdgiSchedulerFrame.PeriodicSourceRefreshControlFrame))
+                    .ToInt32(),
+                Is.EqualTo(44));
         });
     }
 
@@ -433,11 +544,28 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
 
         string scheduleShared = ReadRepoText(
             "Njulf.Shaders", "ddgi_simple_schedule_shared.glsl");
+        string schedulerMetadataAbi = ReadRepoText(
+            "Njulf.Shaders", "ddgi_simple_scheduler_metadata_abi.glsl");
+        string pageResidencyShared = ReadRepoText(
+            "Njulf.Shaders", "ddgi_simple_page_residency_shared.glsl");
+        string pageFeedback = ReadRepoText(
+            "Njulf.Shaders", "ddgi_simple_page_feedback.comp");
         string producerShared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
         Assert.Multiple(() =>
         {
-            Assert.That(scheduleShared, Does.Contain(
+            Assert.That(schedulerMetadataAbi, Does.Contain(
                 "SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS = 11u"));
+            Assert.That(scheduleShared, Does.Contain(
+                "#include \"ddgi_simple_scheduler_metadata_abi.glsl\""));
+            Assert.That(pageResidencyShared, Does.Contain(
+                "virtualProbeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS"));
+            Assert.That(pageResidencyShared, Does.Contain(
+                "vec4(0.0, 0.0, 0.0, 1.0)"));
+            Assert.That(pageFeedback, Does.Contain(
+                "virtualProbe * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS"));
+            Assert.That(pageResidencyShared, Does.Not.Contain(
+                "virtualProbeIndex * 10u"));
+            Assert.That(pageFeedback, Does.Not.Contain("virtualProbe * 10u"));
             Assert.That(scheduleShared, Does.Contain(
                 "SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS = 10u"));
             Assert.That(scheduleShared, Does.Contain(

@@ -22,7 +22,20 @@ namespace Njulf.Rendering.Data
         uint ShadowVisibilityBelowProbeSpacingCount,
         uint ShadowVisibilityBeyondProbeSpacingCount,
         uint ShadowVisibilitySameInstanceCount,
-        float ShadowVisibilityCommittedHitDistanceAverage)
+        float ShadowVisibilityCommittedHitDistanceAverage,
+        uint EvidenceSampleCount,
+        float IrradianceLuminanceP95,
+        float IrradianceLuminanceP99,
+        float IrradianceLuminanceMaximum,
+        uint MaximumVirtualProbeIndex,
+        uint MaximumVirtualPageIndex,
+        uint MaximumPhysicalProbeIndex,
+        uint MaximumPhysicalPageIndex,
+        float MaximumVisibilityMomentMean,
+        float MaximumVisibilityMomentSecond,
+        uint MaximumSourceLightingGeneration,
+        int MaximumWitnessCoherent,
+        uint EvidenceAgeFrames)
     {
         public static SimpleDdgiVolumeEnergyCounters Empty { get; } = default;
     }
@@ -413,6 +426,13 @@ namespace Njulf.Rendering.Data
         uint FarFieldStepBucket4Count)
     {
         public static DdgiInvestigationCounters Empty { get; } = default;
+        /// <summary>
+        /// Indicates that <see cref="SimpleVolumeEnergyCounters"/> contains a
+        /// completed current-frame bank or an explicitly aged retained witness.
+        /// This is separate from <see cref="ReadbackValid"/> so retaining a
+        /// maximum witness cannot make unrelated gather counters look current.
+        /// </summary>
+        public int EnergyReadbackValid { get; init; }
         public SimpleDdgiGatherMultiplicityCounters GatherMultiplicity { get; init; }
         public DecalFragmentAttributionCounters DecalFragmentAttribution { get; init; }
         public SimpleDdgiStorageValidationCounters StorageValidation { get; init; }

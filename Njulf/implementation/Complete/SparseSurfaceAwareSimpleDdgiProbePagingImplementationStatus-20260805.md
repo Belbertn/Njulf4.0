@@ -4,8 +4,8 @@
 - Source plan: `SparseSurfaceAwareSimpleDdgiProbePagingImplementationPlan-20260803.md`
 - Base commit: `4e5b6f32939dee8acf53830819582c483ef6a102`
 - State: feature implementation complete and enabled for qualified tiers;
-  correctness/memory/lifecycle automation passes; full production promotion
-  evidence remains open
+  correctness/memory/lifecycle automation and the targeted Sponza hallway/
+  traversal production gates pass; broader cross-scene promotion remains open
 - Release sample assembly SHA-256:
   `b96173233be50c50114fdc3224e710c5af07170a0f6af699904f1024992052ed`
 - Release rendering assembly SHA-256:
@@ -170,7 +170,7 @@ The current High fixture reports:
 The memory saving exceeds both the 16 MiB/10% minimum and the 32 MiB target.
 It is calculated from immutable allocation capacity, not current occupancy.
 
-## Qualification still open
+## Original qualification gaps
 
 This status does not claim the plan's full production acceptance certificate.
 The implementation is enabled, but the following evidence gates remain:
@@ -197,3 +197,29 @@ remains reversible through the Dense setting, all unsupported prerequisites
 fail to dense coarser lighting, and async remains unpromoted. Do not label the
 feature fully production-qualified until the missing locked evidence passes the
 unchanged thresholds.
+
+## Hallway/refresh follow-up qualification
+
+The follow-up implementation in
+`../SimpleDdgiHallwayHotspotRefreshAndStutterFixPlan-20260806.md` supersedes the
+original status above for the targeted Sponza hallway and ordinary-traversal
+gates. It does not supersede the still-open broader scene matrix or Nsight
+signoff.
+
+Three clean target-GPU Release captures share contract fingerprint
+`e761924d1b914048439c67ac1c3f4030a50f7dc5bebcfdce669eea06e8a7f902`.
+Each completed with 121/121 artifacts verified by the capture gate and by an
+independent SHA-256/byte-length pass. Every traversal ended with 223 resident,
+223 published, and zero initializing pages; ordinary publication P95 was one
+frame and pending fresh/source work was zero. Their high endpoints each reached
+a current 1.4959423% tail certificate with exact 6,063/6,063 participant and
+388,032/388,032 texel coverage.
+
+The final high endpoint uses 111,474,128 allocated sparse bytes versus
+138,383,040 dense-equivalent bytes, avoids 26,908,912 bytes, and has zero
+retired bytes, mapping disagreements, duplicate owners, stale/range requests,
+or request overflow. Three production forward-gather pairs measured +0.065,
++0.044, and +0.057 ms P95; final production captures measured 0.614-0.620 ms
+total GI GPU and 0.058-0.066 ms GI CPU P95. The exact reports, hashes, quality
+oracle, lifecycle results, and qualified binary identities are recorded in
+section 7 of the follow-up document.

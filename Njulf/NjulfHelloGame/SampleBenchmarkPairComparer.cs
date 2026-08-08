@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Njulf.Rendering.Diagnostics;
 
 namespace NjulfHelloGame;
 
@@ -15,12 +16,23 @@ public sealed record SampleBenchmarkPairMetric(
     double RelativeDifference,
     bool WithinTolerance);
 
+public sealed record SampleBenchmarkPairedTimingEstimate(
+    string Name,
+    GiTimingAttribution Attribution,
+    double EnabledP95Milliseconds,
+    double DisabledP95Milliseconds,
+    double SignedDeltaMilliseconds,
+    double IncrementalP95Milliseconds);
+
 public sealed record SampleBenchmarkPairComparison(
     bool Comparable,
     bool RepeatabilityPassed,
     double P95Tolerance,
     IReadOnlyList<SampleBenchmarkPairMetric> Metrics,
-    IReadOnlyList<string> Failures);
+    IReadOnlyList<string> Failures)
+{
+    public SampleBenchmarkPairedTimingEstimate? ForwardGiGatherEstimate { get; init; }
+}
 
 /// <summary>
 /// Fail-closed comparison for repeated runs and deterministic A/B variants.
@@ -30,6 +42,7 @@ public sealed record SampleBenchmarkPairComparison(
 /// </summary>
 public static class SampleBenchmarkPairComparer
 {
+    private const string ForwardGiGatherPassName = "ForwardGiGatherPass";
     public const double DefaultP95Tolerance = 0.05;
     // The performance profile gives the GPU 10 ms. A pass below 0.50 ms cannot
     // consume five percent of that budget and is therefore reported, but is not
@@ -149,12 +162,17 @@ public static class SampleBenchmarkPairComparer
             }
         }
 
+        SampleBenchmarkPairedTimingEstimate? forwardGiEstimate =
+            BuildForwardGiGatherEstimate(baseline, variant, failures);
         return new SampleBenchmarkPairComparison(
             failures.Count == 0,
             repeatabilityPassed,
             p95Tolerance,
             Array.AsReadOnly(metrics.ToArray()),
-            Array.AsReadOnly(failures.Distinct(StringComparer.Ordinal).ToArray()));
+            Array.AsReadOnly(failures.Distinct(StringComparer.Ordinal).ToArray()))
+        {
+            ForwardGiGatherEstimate = forwardGiEstimate
+        };
     }
 
     private static SampleBenchmarkPairMetric CompareMetric(
@@ -189,6 +207,77 @@ public static class SampleBenchmarkPairComparer
             MinimumMajorPassP95Milliseconds
                 ? metric with { WithinTolerance = true }
                 : metric;
+    }
+
+    private static bool IsForwardGiPair(
+        string leftVariant,
+        string rightVariant)
+    {
+        bool leftEnabled = string.Equals(
+            leftVariant,
+            SampleBenchmarkCaptureVariant.ForwardGiEnabled,
+            StringComparison.OrdinalIgnoreCase);
+        bool leftDisabled = string.Equals(
+            leftVariant,
+            SampleBenchmarkCaptureVariant.ForwardGiDisabled,
+            StringComparison.OrdinalIgnoreCase);
+        bool rightEnabled = string.Equals(
+            rightVariant,
+            SampleBenchmarkCaptureVariant.ForwardGiEnabled,
+            StringComparison.OrdinalIgnoreCase);
+        bool rightDisabled = string.Equals(
+            rightVariant,
+            SampleBenchmarkCaptureVariant.ForwardGiDisabled,
+            StringComparison.OrdinalIgnoreCase);
+        return (leftEnabled && rightDisabled) || (leftDisabled && rightEnabled);
+    }
+
+    private static SampleBenchmarkPairedTimingEstimate? BuildForwardGiGatherEstimate(
+        SampleBenchmarkReport left,
+        SampleBenchmarkReport right,
+        ICollection<string> failures)
+    {
+        if (!IsForwardGiPair(
+                left.CaptureContract.Variant,
+                right.CaptureContract.Variant))
+        {
+            return null;
+        }
+
+        SampleBenchmarkReport enabled = string.Equals(
+            left.CaptureContract.Variant,
+            SampleBenchmarkCaptureVariant.ForwardGiEnabled,
+            StringComparison.OrdinalIgnoreCase)
+                ? left
+                : right;
+        SampleBenchmarkReport disabled = ReferenceEquals(enabled, left) ? right : left;
+        SampleBenchmarkTimingStats? enabledTiming = enabled.GpuPasses.FirstOrDefault(
+            static pass => string.Equals(
+                pass.Name,
+                ForwardGiGatherPassName,
+                StringComparison.Ordinal));
+        SampleBenchmarkTimingStats? disabledTiming = disabled.GpuPasses.FirstOrDefault(
+            static pass => string.Equals(
+                pass.Name,
+                ForwardGiGatherPassName,
+                StringComparison.Ordinal));
+        if (enabledTiming == null || disabledTiming == null)
+        {
+            failures.Add(
+                $"A forward-GI timing pair requires '{ForwardGiGatherPassName}' " +
+                "in both reports.");
+            return null;
+        }
+
+        double signedDelta = enabledTiming.P95Milliseconds -
+            disabledTiming.P95Milliseconds;
+        return new SampleBenchmarkPairedTimingEstimate(
+            "Forward GI gather P95 difference",
+            GiTimingAttribution.PairedEstimate,
+            enabledTiming.P95Milliseconds,
+            disabledTiming.P95Milliseconds,
+            signedDelta,
+            Math.Max(0.0, signedDelta));
     }
 }
 
@@ -305,6 +394,14 @@ public static class SampleBenchmarkPairComparisonCli
                 output.WriteLine(
                     $"Benchmark {(abComparison ? "A/B" : "repeatability")} comparison passed: " +
                     $"metrics={comparison.Metrics.Count} tolerance={comparison.P95Tolerance:P2}.");
+                if (comparison.ForwardGiGatherEstimate is { } forwardGi)
+                {
+                    output.WriteLine(
+                        $"Forward GI {forwardGi.Attribution}: " +
+                        $"enabledP95={forwardGi.EnabledP95Milliseconds:F3}ms " +
+                        $"disabledP95={forwardGi.DisabledP95Milliseconds:F3}ms " +
+                        $"incrementalP95={forwardGi.IncrementalP95Milliseconds:F3}ms.");
+                }
                 exitCode = 0;
             }
             else

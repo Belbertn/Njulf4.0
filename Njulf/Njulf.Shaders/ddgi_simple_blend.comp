@@ -259,7 +259,38 @@ vec2 ReadCachedSimpleRayVisibilityHit(SimpleDdgiParams params, uint localProbeOf
         SharedSimpleRayVisibilityHit[ray]);
 }
 
-float BlendIrradianceTexel(SimpleDdgiParams params, uint volumeIndex, uint virtualProbeIndex, uint physicalProbeIndex, uint localProbeOffset, uint texel, float probeHysteresis, bool sharedRayCacheEnabled, uint activeRayCount, bool maintenanceUpdate, bool freshUpdate)
+vec2 ReadSimpleDdgiDiagnosticVisibilityMoments(
+    SimpleDdgiParams params,
+    uint physicalProbeIndex,
+    vec3 direction)
+{
+    vec2 uv = clamp(SimpleDdgiOctEncode(normalize(direction)), vec2(0.0), vec2(0.999999));
+    uvec2 coordinate = min(
+        uvec2(uv * float(params.visibilityTexels)),
+        uvec2(params.visibilityTexels - 1u));
+    uint visibilityTexel = coordinate.y * params.visibilityTexels + coordinate.x;
+    return ReadSimpleDdgiVisibilityMoments(
+        pc.VisibilityAtlasBufferIndex,
+        physicalProbeIndex,
+        visibilityTexel,
+        params.visibilityTexels);
+}
+
+float BlendIrradianceTexel(
+    SimpleDdgiParams params,
+    uint volumeIndex,
+    uint virtualProbeIndex,
+    uint virtualPageIndex,
+    uint physicalProbeIndex,
+    uint physicalPageIndex,
+    uint sourceLightingGeneration,
+    uint localProbeOffset,
+    uint texel,
+    float probeHysteresis,
+    bool sharedRayCacheEnabled,
+    uint activeRayCount,
+    bool maintenanceUpdate,
+    bool freshUpdate)
 {
     uint x = texel % params.irradianceTexels;
     uint y = texel / params.irradianceTexels;
@@ -314,13 +345,31 @@ float BlendIrradianceTexel(SimpleDdgiParams params, uint volumeIndex, uint virtu
     vec3 irradiance = SimpleDdgiEvaluatePositiveIrradiance(
         accumulated,
         weightSum);
+    vec2 diagnosticVisibilityMoments = vec2(0.0);
+#if NJULF_DDGI_DETAILED_COUNTERS
+    if (SimpleDdgiBlendEnergyDiagnosticTexel(
+            params,
+            virtualProbeIndex,
+            texel))
+    {
+        diagnosticVisibilityMoments = ReadSimpleDdgiDiagnosticVisibilityMoments(
+            params,
+            physicalProbeIndex,
+            texelDirection);
+    }
+#endif
     RecordSimpleDdgiBlendEnergyDiagnostics(
         params,
         pc.CurrentFrameIndex,
         volumeIndex,
         virtualProbeIndex,
+        virtualPageIndex,
+        physicalProbeIndex,
+        physicalPageIndex,
+        sourceLightingGeneration,
         texel,
         irradiance,
+        diagnosticVisibilityMoments,
         weightSum > 0.000001 ? 1.0 : 0.0);
     float texelHysteresis = SimpleDdgiAdaptiveIrradianceHysteresis(params, previous, irradiance, probeHysteresis, maintenanceUpdate);
     vec4 blended = mix(vec4(irradiance, 1.0), previous, texelHysteresis);
@@ -539,19 +588,48 @@ vec3 EvaluateReducedSimpleDdgiIrradiance(vec3 direction)
     return max(irradiance, vec3(0.0));
 }
 
-float BlendReducedIrradianceTexel(SimpleDdgiParams params, uint volumeIndex, uint virtualProbeIndex, uint physicalProbeIndex, uint texel, float probeHysteresis, bool maintenanceUpdate, bool freshUpdate)
+float BlendReducedIrradianceTexel(
+    SimpleDdgiParams params,
+    uint volumeIndex,
+    uint virtualProbeIndex,
+    uint virtualPageIndex,
+    uint physicalProbeIndex,
+    uint physicalPageIndex,
+    uint sourceLightingGeneration,
+    uint texel,
+    float probeHysteresis,
+    bool maintenanceUpdate,
+    bool freshUpdate)
 {
     uint x = texel % params.irradianceTexels;
     uint y = texel / params.irradianceTexels;
     vec3 texelDirection = SimpleDdgiOctDecode((vec2(x, y) + vec2(0.5)) / vec2(params.irradianceTexels));
     vec3 irradiance = EvaluateReducedSimpleDdgiIrradiance(texelDirection);
+    vec2 diagnosticVisibilityMoments = vec2(0.0);
+#if NJULF_DDGI_DETAILED_COUNTERS
+    if (SimpleDdgiBlendEnergyDiagnosticTexel(
+            params,
+            virtualProbeIndex,
+            texel))
+    {
+        diagnosticVisibilityMoments = ReadSimpleDdgiDiagnosticVisibilityMoments(
+            params,
+            physicalProbeIndex,
+            texelDirection);
+    }
+#endif
     RecordSimpleDdgiBlendEnergyDiagnostics(
         params,
         pc.CurrentFrameIndex,
         volumeIndex,
         virtualProbeIndex,
+        virtualPageIndex,
+        physicalProbeIndex,
+        physicalPageIndex,
+        sourceLightingGeneration,
         texel,
         irradiance,
+        diagnosticVisibilityMoments,
         1.0);
     uint irradianceReadBuffer = SimpleDdgiIrradianceReadBuffer(params);
     uint irradianceWriteBuffer = SimpleDdgiIrradianceWriteBuffer(params);
@@ -625,6 +703,20 @@ void main()
         return;
     }
     uint physicalProbeIndex = update.physicalProbeIndex;
+#if NJULF_DDGI_DETAILED_COUNTERS
+    SimpleDdgiVolumePaging diagnosticPaging = ReadSimpleDdgiVolumePaging(
+        pc.ParamsBufferIndex,
+        update.volumeIndex);
+    uint diagnosticVirtualPageIndex = diagnosticPaging.pageTableFirst +
+        localProbeIndex / SIMPLE_DDGI_PROBES_PER_PAGE;
+    uint diagnosticPhysicalPageIndex = physicalProbeIndex /
+        SIMPLE_DDGI_PROBES_PER_PAGE;
+#else
+    // These identities are consumed only by detailed energy-witness telemetry.
+    // Keep the production blend path free of the additional paging-table read.
+    const uint diagnosticVirtualPageIndex = 0u;
+    const uint diagnosticPhysicalPageIndex = 0u;
+#endif
     if (!SimpleDdgiSolveVolumeMatches(
             pc.Flags,
             update.volumeIndex,
@@ -877,7 +969,18 @@ void main()
         {
             for (uint texel = local; texel < params.irradianceTexels * params.irradianceTexels; texel += gl_WorkGroupSize.x)
             {
-                float texelDelta = BlendReducedIrradianceTexel(params, update.volumeIndex, probeIndex, physicalProbeIndex, texel, probeHysteresis, maintenanceUpdate, freshUpdate);
+                float texelDelta = BlendReducedIrradianceTexel(
+                    params,
+                    update.volumeIndex,
+                    probeIndex,
+                    diagnosticVirtualPageIndex,
+                    physicalProbeIndex,
+                    diagnosticPhysicalPageIndex,
+                    update.sourceLightingGeneration,
+                    texel,
+                    probeHysteresis,
+                    maintenanceUpdate,
+                    freshUpdate);
                 localIrradianceDelta = max(localIrradianceDelta, texelDelta);
             }
         }
@@ -905,7 +1008,21 @@ void main()
         {
             for (uint texel = local; texel < params.irradianceTexels * params.irradianceTexels; texel += gl_WorkGroupSize.x)
             {
-                float texelDelta = BlendIrradianceTexel(params, update.volumeIndex, probeIndex, physicalProbeIndex, localProbeOffset, texel, probeHysteresis, sharedRayCacheEnabled, activeRayCount, maintenanceUpdate, freshUpdate);
+                float texelDelta = BlendIrradianceTexel(
+                    params,
+                    update.volumeIndex,
+                    probeIndex,
+                    diagnosticVirtualPageIndex,
+                    physicalProbeIndex,
+                    diagnosticPhysicalPageIndex,
+                    update.sourceLightingGeneration,
+                    localProbeOffset,
+                    texel,
+                    probeHysteresis,
+                    sharedRayCacheEnabled,
+                    activeRayCount,
+                    maintenanceUpdate,
+                    freshUpdate);
                 localIrradianceDelta = max(localIrradianceDelta, texelDelta);
             }
         }

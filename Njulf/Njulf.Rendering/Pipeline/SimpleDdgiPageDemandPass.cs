@@ -71,6 +71,7 @@ public sealed unsafe class SimpleDdgiPageDemandPass : RenderPassBase
     {
         GlobalIlluminationSettings gi = _settings.GlobalIllumination;
         return _pipeline.Handle != 0 &&
+            sceneData.SimpleDdgiPageFullManagementRequired != 0 &&
             gi.EffectiveUseDdgi &&
             gi.SimpleDdgiStructuredGatherEnabled &&
             _volumeManager.ProbeResidencyMode.CollectsDemand() &&

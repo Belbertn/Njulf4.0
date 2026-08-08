@@ -12,6 +12,41 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Resources;
 
+public readonly record struct SimpleDdgiSchedulerCommitFailureBreakdown(
+    uint Transaction,
+    uint PublicGeneration,
+    uint SourceEpoch,
+    uint PayloadIdentity,
+    uint CachePrecondition,
+    uint CacheAddress,
+    uint CacheClassification,
+    uint CacheGeneration,
+    uint CacheEpochOrCardinality,
+    uint ReceiverPack,
+    uint TransactionPredicateMask,
+    uint MissingCompletionMask,
+    uint ProducerFailureMask,
+    uint CacheReadFailureMask)
+{
+    public ulong Total =>
+        (ulong)Transaction + PublicGeneration + SourceEpoch + PayloadIdentity +
+        CachePrecondition + CacheAddress + CacheClassification +
+        CacheGeneration + CacheEpochOrCardinality + ReceiverPack;
+
+    public override string ToString() =>
+        $"transaction={Transaction},publicGeneration={PublicGeneration}," +
+        $"sourceEpoch={SourceEpoch},payloadIdentity={PayloadIdentity}," +
+        $"cachePrecondition={CachePrecondition},cacheAddress={CacheAddress}," +
+        $"cacheClassification={CacheClassification}," +
+        $"cacheGeneration={CacheGeneration}," +
+        $"cacheEpochOrCardinality={CacheEpochOrCardinality}," +
+        $"receiverPack={ReceiverPack}," +
+        $"transactionPredicateMask=0x{TransactionPredicateMask:x}," +
+        $"missingCompletionMask=0x{MissingCompletionMask:x}," +
+        $"producerFailureMask=0x{ProducerFailureMask:x}," +
+        $"cacheReadFailureMask=0x{CacheReadFailureMask:x}";
+}
+
 /// <summary>
 /// Owns the resident Simple-DDGI scheduler arena and its delayed, bounded
 /// feedback channel.  The class intentionally contains no CPU queue or
@@ -62,6 +97,10 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
     private readonly uint[] _lastFeedbackLaneCursors =
         new uint[SimpleDdgiSchedulerAbi.MaxLaneCount];
     private bool _hasLastFeedbackLaneCursors;
+    private SimpleDdgiSchedulerCommitFailureBreakdown
+        _lastCommitFailureBreakdown;
+    private uint _lastActiveSourceMutationCount;
+    private uint _lastActiveCanonicalMutationCount;
     private ulong _currentPolicyHash;
     private ulong _previousPolicyHash;
     private bool _policiesInitialized;
@@ -95,6 +134,31 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
     public ulong FallbackStateExportBytes => _fallbackExportReadbackBytes;
     public ulong RetiredBytes => _retirement.ActiveBytes;
     public ulong StaleFeedbackCount => _staleFeedbackCount;
+    public SimpleDdgiSchedulerCommitFailureBreakdown
+        LastCommitFailureBreakdown
+    {
+        get
+        {
+            lock (_lock)
+                return _lastCommitFailureBreakdown;
+        }
+    }
+    public uint LastActiveSourceMutationCount
+    {
+        get
+        {
+            lock (_lock)
+                return _lastActiveSourceMutationCount;
+        }
+    }
+    public uint LastActiveCanonicalMutationCount
+    {
+        get
+        {
+            lock (_lock)
+                return _lastActiveCanonicalMutationCount;
+        }
+    }
 
     public static ulong ResolveFallbackStateExportBytes(int probeCount)
     {
@@ -836,6 +900,36 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 feedback = default;
                 return false;
             }
+
+            int failureBase =
+                SimpleDdgiSchedulerAbi.FeedbackCommitFailureOffsetWords;
+            _lastCommitFailureBreakdown = new(
+                feedbackWords[failureBase + 0],
+                feedbackWords[failureBase + 1],
+                feedbackWords[failureBase + 2],
+                feedbackWords[failureBase + 3],
+                feedbackWords[failureBase + 4],
+                feedbackWords[failureBase + 5],
+                feedbackWords[failureBase + 6],
+                feedbackWords[failureBase + 7],
+                feedbackWords[failureBase + 8],
+                feedbackWords[failureBase + 9],
+                feedbackWords[
+                    SimpleDdgiSchedulerAbi
+                        .FeedbackTransactionPredicateOffsetWords],
+                feedbackWords[
+                    SimpleDdgiSchedulerAbi
+                        .FeedbackMissingCompletionOffsetWords],
+                feedbackWords[
+                    SimpleDdgiSchedulerAbi
+                        .FeedbackProducerFailureOffsetWords],
+                feedbackWords[
+                    SimpleDdgiSchedulerAbi
+                        .FeedbackCacheReadFailureOffsetWords]);
+            _lastActiveSourceMutationCount = feedbackWords[
+                SimpleDdgiSchedulerAbi.FeedbackActiveSourceMutationOffsetWords];
+            _lastActiveCanonicalMutationCount = feedbackWords[
+                SimpleDdgiSchedulerAbi.FeedbackActiveCanonicalMutationOffsetWords];
 
             // The fixed feedback header remains the CPU control-plane ABI.
             // The following 896 words carry the persistent lane cursors so an

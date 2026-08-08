@@ -261,6 +261,10 @@ public readonly record struct SimpleDdgiTransportAuditChunk
     public uint ExpectedTexelCount { get; init; }
     public uint AuditedParticipantCount { get; init; }
     public uint ExcludedInactiveCount { get; init; }
+    /// <summary>
+    /// Virtual probes outside the frozen resident/published participant set.
+    /// These do not count against exact coverage of that set.
+    /// </summary>
     public uint ExcludedNotVisibleCount { get; init; }
     public uint ExcludedStaleSourceCount { get; init; }
     public uint ExcludedInvalidCacheCount { get; init; }

@@ -164,6 +164,43 @@ public sealed class SimpleDdgiProbePagingShaderContractTests
     }
 
     [Test]
+    public void CertifiedStaticPaging_UsesBoundedFullAuditsAndLightweightIntervalCloseout()
+    {
+        string demandPass = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "SimpleDdgiPageDemandPass.cs");
+        string residencyPass = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "SimpleDdgiPageResidencyPass.cs");
+        string feedbackPass = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "SimpleDdgiPageFeedbackPass.cs");
+        string feedback = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_page_feedback.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(demandPass, Does.Contain(
+                "sceneData.SimpleDdgiPageFullManagementRequired != 0"));
+            Assert.That(residencyPass, Does.Contain(
+                "sceneData.SimpleDdgiPageFullManagementRequired != 0"));
+            Assert.That(feedbackPass, Does.Contain(
+                "sceneData.SimpleDdgiPageFullManagementRequired != 0"));
+            Assert.That(feedbackPass, Does.Contain("? 5u\n                : 6u"));
+            Assert.That(feedback, Does.Contain("if (pc.Stage == 6u)"));
+            Assert.That(feedback, Does.Contain(
+                "SIMPLE_DDGI_RESIDENCY_COUNTER_RECEIVER_REQUESTS"));
+            Assert.That(feedback, Does.Contain(
+                "SIMPLE_DDGI_RESIDENCY_COUNTER_NONRESIDENT_GATHER_REJECTIONS"));
+            Assert.That(feedback, Does.Contain("atomicExchange("));
+        });
+    }
+
+    [Test]
     public void CameraCutVictims_DoNotPrecedeNaturallyExpiredVictims()
     {
         string reconcile = ReadRepoText(
@@ -178,6 +215,22 @@ public sealed class SimpleDdgiProbePagingShaderContractTests
                 "if (candidateExpiresWhenIdle != bestExpiresWhenIdle)"));
             Assert.That(reconcile, Does.Contain(
                 "SIMPLE_DDGI_PAGE_CLASS_EVICT_WHEN_IDLE"));
+        });
+    }
+
+    [Test]
+    public void ExpiredPages_AreCachedUntilAdmissionPressureNeedsCapacity()
+    {
+        string reconcile = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_page_reconcile.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reconcile, Does.Contain(
+                "Merely expired pages stay as a zero-cost\n    // cache while free physical slots exist"));
+            Assert.That(reconcile, Does.Contain(
+                "(classFlags & SIMPLE_DDGI_PAGE_CLASS_SUPPRESSED) == 0u"));
         });
     }
 
@@ -457,7 +510,7 @@ public sealed class SimpleDdgiProbePagingShaderContractTests
     }
 
     [Test]
-    public void CameraCutPublicationLatency_IsReportedSeparatelyFromOrdinaryMotion()
+    public void PublicationLatency_SeparatesBootstrapCutAndOrdinaryMotion()
     {
         string reconcile = ReadRepoText(
             "Njulf.Shaders",
@@ -470,14 +523,79 @@ public sealed class SimpleDdgiProbePagingShaderContractTests
         {
             Assert.That(reconcile, Does.Contain(
                 "SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_CAMERA_CUT"));
+            Assert.That(reconcile, Does.Contain(
+                "SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_BOOTSTRAP"));
+            Assert.That(reconcile, Does.Contain("pc.AllocationFlags"));
             Assert.That(feedback, Does.Contain(
                 "ordinaryPublicationLatencyHistogram"));
             Assert.That(feedback, Does.Contain(
                 "cutPublicationLatencyHistogram"));
             Assert.That(feedback, Does.Contain(
+                "bool allocatedDuringBootstrap"));
+            Assert.That(feedback, Does.Contain(
+                "if (!allocatedDuringBootstrap)"));
+            Assert.That(feedback, Does.Contain(
                 "feedbackBase + 82u"));
             Assert.That(feedback, Does.Contain(
                 "feedbackBase + 87u"));
+        });
+    }
+
+    [Test]
+    public void VisiblePublicationCohort_IsProbeBoundedAndReceivesExactSourcePriority()
+    {
+        string pageClassify = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_page_classify.comp");
+        string reconcile = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_page_reconcile.comp");
+        string schedulerClassify = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_classify.comp");
+        string admit = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_admit.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pageClassify, Does.Contain(
+                "pageValidProbeCount"));
+            Assert.That(reconcile, Does.Contain(
+                "pc.VisiblePublicationProbeBudget *"));
+            Assert.That(reconcile, Does.Contain(
+                "visiblePartialProbeCount"));
+            Assert.That(reconcile, Does.Contain(
+                "visiblePublicationCandidateDeferred"));
+            Assert.That(reconcile, Does.Contain(
+                "SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_DEMAND_CLASS_SHIFT"));
+            Assert.That(schedulerClassify, Does.Contain(
+                "SchedulerSparseVisiblePagePublicationPending("));
+            Assert.That(schedulerClassify, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_COUNTER_VISIBLE_PAGE_COHORT_BASE"));
+            Assert.That(admit, Does.Contain(
+                "visiblePagePendingByVolume"));
+            Assert.That(admit, Does.Contain(
+                "visiblePageReservationPending"));
+            Assert.That(admit, Does.Contain(
+                "Return every unreserved request"));
+        });
+    }
+
+    [Test]
+    public void ConfirmedEmptyPage_RetriesOnlyOnAuthoritativeInvalidation()
+    {
+        string classify = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_page_classify.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(classify, Does.Contain(
+                "if (historyGeometry != currentGeometry)"));
+            Assert.That(classify, Does.Not.Contain(
+                "pc.CurrentFrame - lastRelevant >= ResidencyRead(params, 14u)"));
+            Assert.That(classify, Does.Not.Contain("bool retryDue"));
         });
     }
 

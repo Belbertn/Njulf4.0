@@ -330,7 +330,6 @@ public sealed class SampleBenchmarkRunner
                 tail.TailExpectedParticipantCount &&
             tail.TailExpectedTexelCount > 0u &&
             tail.TailAuditedTexelCount == tail.TailExpectedTexelCount &&
-            tail.TailExcludedNotVisibleCount == 0u &&
             tail.TailExcludedStaleSourceCount == 0u &&
             tail.TailExcludedInvalidCacheCount == 0u &&
             tail.TailCacheIdentityFailureCount == 0u &&
@@ -491,6 +490,15 @@ public sealed class SampleBenchmarkAnalyzer
         new("SimpleDdgiPageResidencyPass", d => d.GpuSimpleDdgiPageResidencyMicroseconds),
         new("SimpleDdgiPageFeedbackPass", d => d.GpuSimpleDdgiPageFeedbackMicroseconds),
         new("SimpleDdgiSchedulePass", d => d.GpuSimpleDdgiScheduleMicroseconds),
+        new("SimpleDdgiSchedule.Reset", d => d.GpuSimpleDdgiScheduleResetMicroseconds),
+        new("SimpleDdgiSchedule.Classify", d => d.GpuSimpleDdgiScheduleClassifyMicroseconds),
+        new("SimpleDdgiSchedule.Prefix", d => d.GpuSimpleDdgiSchedulePrefixMicroseconds),
+        new("SimpleDdgiSchedule.LaneBase", d => d.GpuSimpleDdgiScheduleLaneBaseMicroseconds),
+        new("SimpleDdgiSchedule.Compact", d => d.GpuSimpleDdgiScheduleCompactMicroseconds),
+        new("SimpleDdgiSchedule.TailAdmit", d => d.GpuSimpleDdgiScheduleTailAdmitMicroseconds),
+        new("SimpleDdgiSchedule.Admit", d => d.GpuSimpleDdgiScheduleAdmitMicroseconds),
+        new("SimpleDdgiSchedule.Materialize", d => d.GpuSimpleDdgiScheduleMaterializeMicroseconds),
+        new("SimpleDdgiSchedule.Emit", d => d.GpuSimpleDdgiScheduleEmitMicroseconds),
         new("SimpleDdgiTracePass", d => d.GpuSimpleDdgiTraceMicroseconds),
         new("SimpleDdgiAcceleratedSolvePass", d => d.GpuSimpleDdgiAcceleratedSolveMicroseconds),
         new("SimpleDdgiTransportPass", d => d.GpuSimpleDdgiTransportMicroseconds),
@@ -502,6 +510,8 @@ public sealed class SampleBenchmarkAnalyzer
         new("GlobalIlluminationCompositePass", d => d.GpuGiCompositeMicroseconds),
         new("TiledLightCullingPass", d => d.GpuLightCullMicroseconds),
         new("ForwardPlusPass", d => d.GpuForwardOpaqueMicroseconds),
+        new("ForwardGiGatherPass", d => d.GpuForwardGiGatherMicroseconds),
+        new("SimpleDdgiReceiverCachePass", d => d.GpuSimpleDdgiReceiverCacheMicroseconds),
         new("TransparentPasses", d => d.GpuTransparentMicroseconds),
         new("ParticlePasses", d => d.GpuParticleMicroseconds),
         new("TrailBeamPass", d => d.GpuTrailBeamMicroseconds),
@@ -526,7 +536,17 @@ public sealed class SampleBenchmarkAnalyzer
     private static readonly IReadOnlyList<TimingSelector> GpuIndependentTimings =
         GpuTimings
             // Foliage shadow telemetry aliases the directional-shadow pass.
-            .Where(static selector => selector.Name != "FoliageShadow")
+            // Scheduler stage timestamps are nested inside SchedulePass. They
+            // remain first-class attribution rows, but summing both parent and
+            // children makes a valid frame appear over-accounted by exactly the
+            // scheduler duration and invalidates otherwise locked captures.
+            .Where(static selector =>
+                selector.Name != "FoliageShadow" &&
+                selector.Name != "ForwardGiGatherPass" &&
+                selector.Name != "SimpleDdgiReceiverCachePass" &&
+                !selector.Name.StartsWith(
+                    "SimpleDdgiSchedule.",
+                    StringComparison.Ordinal))
             .ToArray();
 
     private static readonly IReadOnlyList<TimingSelector> CpuTimings =

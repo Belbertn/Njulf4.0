@@ -249,6 +249,24 @@ void main()
         // a full source refresh through the next probe-state readback.
         if (gpuScheduler)
         {
+#if SIMPLE_DDGI_STORAGE_SHADER_MODE == SIMPLE_DDGI_STORAGE_SHADER_MODE_PACKED
+            uint cacheReadFailureMask =
+                DiagnoseSimpleDdgiPackedTransportRayCacheForSolve(
+                    pc.TransportSourceCacheBufferIndex,
+                    update.cacheProbeBaseWordPlusOne & 0x7fffffffu,
+                    directionRayIndex,
+                    volume,
+                    params,
+                    sourceCacheProbeGeneration,
+                    update.sourceLightingGeneration,
+                    update.sourceEpoch,
+                    sourceRayCount);
+            atomicOr(
+                BindlessStorageBuffers[nonuniformEXT(
+                    pc.SchedulerArenaBufferIndex)].Words[
+                        pc.SchedulerCountersOffsetWords + 63u],
+                cacheReadFailureMask);
+#endif
             SimpleDdgiSchedulerFailOutcome(
                 pc.SchedulerArenaBufferIndex,
                 pc.SchedulerOutcomesOffsetWords,
@@ -420,7 +438,7 @@ void main()
 
     vec4 priorRadianceDistance;
     vec3 priorDirection;
-    vec2 visibilityHit;
+    vec2 priorVisibilityHit;
     uint priorDirectionEpoch;
     bool priorScratchValid = ReadSimpleDdgiRayResultStorage(
         pc.RayResultScratchBufferIndex,
@@ -432,10 +450,15 @@ void main()
         update.sourceEpoch,
         priorRadianceDistance,
         priorDirection,
-        visibilityHit,
+        priorVisibilityHit,
         priorDirectionEpoch);
-    if (!priorScratchValid)
-        visibilityHit = vec2(0.0);
+    // The frozen source cache owns the exact projection classification. Keep
+    // the independently traced visibility distance when available, but never
+    // inherit an older/collapsed scratch hit kind into a cached solve. Audit
+    // consumes this same cache classification.
+    vec2 visibilityHit = vec2(
+        priorScratchValid ? priorVisibilityHit.x : source.distance,
+        SimpleDdgiTransportRayCacheHitKind(source));
     WriteSimpleTransportRayResult(
         globalRay,
         params,

@@ -13,6 +13,42 @@ namespace Njulf.Tests;
 public sealed class SimpleDdgiVolumeManagerTests
 {
     [Test]
+    public void SceneBoundsSnapshot_ReusesOnlyVersionedContentFromTheSameScene()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiSceneBounds.ShouldRefreshSnapshot(
+                    hasSnapshot: true,
+                    sameScene: true,
+                    previousSceneContentRevision: 17UL,
+                    sceneContentRevision: 17UL),
+                Is.False);
+            Assert.That(
+                SimpleDdgiSceneBounds.ShouldRefreshSnapshot(
+                    hasSnapshot: true,
+                    sameScene: false,
+                    previousSceneContentRevision: 17UL,
+                    sceneContentRevision: 17UL),
+                Is.True);
+            Assert.That(
+                SimpleDdgiSceneBounds.ShouldRefreshSnapshot(
+                    hasSnapshot: true,
+                    sameScene: true,
+                    previousSceneContentRevision: 17UL,
+                    sceneContentRevision: 18UL),
+                Is.True);
+            Assert.That(
+                SimpleDdgiSceneBounds.ShouldRefreshSnapshot(
+                    hasSnapshot: true,
+                    sameScene: true,
+                    previousSceneContentRevision: 17UL,
+                    sceneContentRevision: 0UL),
+                Is.True);
+        });
+    }
+
+    [Test]
     public void SimpleDdgiDebugView_MapsSourceCacheToForwardShaderAbi()
     {
         Assert.Multiple(() =>
@@ -384,6 +420,71 @@ public sealed class SimpleDdgiVolumeManagerTests
             Is.EqualTo(expected));
     }
 
+    [TestCase(4_096, 128, true, 128)]
+    [TestCase(4_096, 64, true, 256)]
+    [TestCase(4_096, 32, true, 512)]
+    [TestCase(3_072, 192, true, 85)]
+    [TestCase(4_096, 128, false, 4_096)]
+    [TestCase(0, 128, true, 0)]
+    public void TransportV2RequestBudget_BoundsCompleteDirectionalRayWork(
+        int configuredBudget,
+        int maximumFullRaysPerProbe,
+        bool transportV2Active,
+        int expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveTransportV2RequestBudget(
+                configuredBudget,
+                maximumFullRaysPerProbe,
+                transportV2Active),
+            Is.EqualTo(expected));
+    }
+
+    [TestCase(4_096, 128, true, true, 512)]
+    [TestCase(4_096, 64, true, true, 1_024)]
+    [TestCase(256, 128, true, true, 256)]
+    [TestCase(4_096, 128, true, false, 128)]
+    [TestCase(4_096, 128, false, true, 4_096)]
+    [TestCase(0, 128, true, true, 0)]
+    public void TransportV2RequestCapacity_SeparatesCachedSolveFromSourceTracing(
+        int configuredBudget,
+        int maximumFullRaysPerProbe,
+        bool transportV2Active,
+        bool acceleratedTailSolveEnabled,
+        int expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveTransportV2SchedulerRequestCapacity(
+                configuredBudget,
+                maximumFullRaysPerProbe,
+                transportV2Active,
+                acceleratedTailSolveEnabled),
+            Is.EqualTo(expected));
+    }
+
+    [TestCase(4_096, 128, 512, true, false, 128)]
+    [TestCase(4_096, 128, 512, true, true, 512)]
+    [TestCase(256, 128, 512, true, true, 256)]
+    [TestCase(4_096, 128, 512, false, false, 512)]
+    [TestCase(-1, 128, 512, true, true, 0)]
+    public void TransportV2FrameBudget_UsesSolveCapacityOnlyForCachedEpochs(
+        int requestedBudget,
+        int sourceBudget,
+        int requestCapacity,
+        bool transportV2Active,
+        bool acceleratedSolveActive,
+        int expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveTransportV2FrameRequestBudget(
+                requestedBudget,
+                sourceBudget,
+                requestCapacity,
+                transportV2Active,
+                acceleratedSolveActive),
+            Is.EqualTo(expected));
+    }
+
     [TestCase(0, 1)]
     [TestCase(1, 1)]
     [TestCase(64, 64)]
@@ -540,6 +641,46 @@ public sealed class SimpleDdgiVolumeManagerTests
     {
         Assert.That(
             SimpleDdgiVolumeManager.ResolveTransitionMemoryLimit(budget),
+            Is.EqualTo(expected));
+    }
+
+    [TestCase(0, 4_096, 4_096, 20_000UL, 3_000UL, 276)]
+    [TestCase(1_024, 1_024, 4_096, 6_000UL, 3_000UL, 230)]
+    [TestCase(256, 256, 4_096, 1_000UL, 3_000UL, 288)]
+    [TestCase(256, 256, 4_096, 1_300UL, 3_000UL, 256)]
+    public void SchedulerFeedbackController_RespondsProportionallyWithoutAuditOnlyRecovery(
+        int feedbackCap,
+        int effectiveBudget,
+        int configuredBudget,
+        ulong completedGpuMicroseconds,
+        ulong targetGpuMicroseconds,
+        int expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveAdaptiveSchedulingBudgetCap(
+                feedbackCap,
+                effectiveBudget,
+                configuredBudget,
+                completedGpuMicroseconds,
+                targetGpuMicroseconds),
+            Is.EqualTo(expected));
+    }
+
+    [TestCase(false, 3_000UL, false, true)]
+    [TestCase(true, 3_000UL, false, false)]
+    [TestCase(false, 0UL, false, false)]
+    [TestCase(false, 3_000UL, true, false)]
+    public void SchedulerFeedbackController_DoesNotThrottleTheFixedV2RayEnvelope(
+        bool deterministicFixedBudget,
+        ulong targetGpuMicroseconds,
+        bool transportV2Active,
+        bool expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.UsesAdaptiveSchedulingFeedback(
+                deterministicFixedBudget,
+                targetGpuMicroseconds,
+                transportV2Active),
             Is.EqualTo(expected));
     }
 
@@ -811,10 +952,11 @@ public sealed class SimpleDdgiVolumeManagerTests
         Assert.Multiple(() =>
         {
             Assert.That(source, Does.Contain("HasCompletedSimpleDdgiGpuTiming(completedGpuTimings)"));
+            Assert.That(source, Does.Contain("hasCompletedSimpleDdgiScheduleTiming"));
             Assert.That(source, Does.Contain("_simpleDdgiVolumeManager.ReportSchedulingFeedback"));
             Assert.That(source, Does.Contain("EffectiveDdgiAdaptiveBudgetTimeMilliseconds"));
             Assert.That(source, Does.Contain("detailedDdgiInstrumentationActive"));
-            Assert.That(source, Does.Contain("fixedSimpleDdgiBudget || hasCompletedSimpleDdgiGpuTiming"));
+            Assert.That(source, Does.Contain("fixedSimpleDdgiBudget || hasCompletedSimpleDdgiScheduleTiming"));
             Assert.That(source, Does.Contain("DeterministicFixedBudget: fixedSimpleDdgiBudget"));
         });
     }
@@ -830,7 +972,16 @@ public sealed class SimpleDdgiVolumeManagerTests
         {
             Assert.That(
                 source,
-                Does.Contain("sceneData.DdgiBufferBytes = _simpleDdgiVolumeManager.BufferBytes;"));
+                Does.Contain("sceneData.DdgiBufferBytes = checked("));
+            Assert.That(
+                source,
+                Does.Contain("_simpleDdgiVolumeManager.BufferBytes +"));
+            Assert.That(
+                source,
+                Does.Contain("_forwardPlusPass?.SimpleDdgiReceiverCacheBufferBytes ?? 0"));
+            Assert.That(
+                source,
+                Does.Contain("_forwardPlusPass?.SimpleDdgiReceiverGatherBufferTotalBytes ?? 0"));
             Assert.That(
                 source,
                 Does.Not.Contain(

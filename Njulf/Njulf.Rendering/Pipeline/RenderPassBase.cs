@@ -121,7 +121,9 @@ namespace Njulf.Rendering.Pipeline
         /// on graphics queues and covers every atlas/state range without
         /// placing FragmentShaderBit in a compute-only command buffer.
         /// </summary>
-        protected unsafe void PublishComputeStorageToFragment(CommandBuffer cmd)
+        protected unsafe void PublishComputeStorageToFragment(
+            CommandBuffer cmd,
+            bool includeComputeReceiver = false)
         {
             var memoryBarrier = new MemoryBarrier2
             {
@@ -130,7 +132,10 @@ namespace Njulf.Rendering.Pipeline
                                PipelineStageFlags2.TransferBit,
                 SrcAccessMask = AccessFlags2.ShaderStorageWriteBit |
                                 AccessFlags2.TransferWriteBit,
-                DstStageMask = PipelineStageFlags2.FragmentShaderBit,
+                DstStageMask = PipelineStageFlags2.FragmentShaderBit |
+                               (includeComputeReceiver
+                                   ? PipelineStageFlags2.ComputeShaderBit
+                                   : PipelineStageFlags2.None),
                 DstAccessMask = AccessFlags2.ShaderStorageReadBit
             };
             var dependencyInfo = new DependencyInfo

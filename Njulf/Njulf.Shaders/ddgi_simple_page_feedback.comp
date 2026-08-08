@@ -159,6 +159,99 @@ void main()
         return;
     uint feedbackBase = SimpleDdgiFeedbackOffsetWords(params);
     uint local = gl_LocalInvocationID.x;
+    if (pc.Stage == 6u)
+    {
+        // A current transport certificate and unchanged camera/scene identity
+        // prove that mapping/population fields in the previous complete audit
+        // are still authoritative. Close only the receiver interval and stamp
+        // a new fence-correlated header; the periodic full transaction still
+        // re-audits both ownership directions at a bounded cadence.
+        if (local != 0u)
+            return;
+        uint counters = SimpleDdgiDemandCountersOffsetWords(params);
+        ResidencyWrite(params, feedbackBase + 0u, pc.FrameSerialLow);
+        ResidencyWrite(params, feedbackBase + 1u, pc.FrameSerialHigh);
+        ResidencyWrite(
+            params,
+            feedbackBase + 2u,
+            params.residencyResourceGeneration);
+        ResidencyWrite(params, feedbackBase + 3u, ResidencyRead(params, 3u));
+        ResidencyWrite(params, feedbackBase + 17u, 0u);
+        ResidencyWrite(params, feedbackBase + 18u, 0u);
+        ResidencyWrite(params, feedbackBase + 19u, 0u);
+        uint fastMappingFailureCount = 0u;
+        for (uint word = 23u; word <= 29u; word++)
+        {
+            uint counter = word <= 25u
+                ? SIMPLE_DDGI_RESIDENCY_COUNTER_MAPPING_ERRORS +
+                    (word - 23u)
+                : SIMPLE_DDGI_RESIDENCY_COUNTER_STALE_VIRTUAL +
+                    (word - 26u);
+            uint value = atomicExchange(
+                BindlessStorageBuffers[nonuniformEXT(
+                    params.residencyArenaBufferIndex)].Words[
+                        counters + counter],
+                0u);
+            ResidencyWrite(
+                params,
+                feedbackBase + word,
+                value);
+            if (word <= 25u)
+                fastMappingFailureCount += value;
+        }
+        ResidencyWrite(
+            params,
+            feedbackBase + 30u,
+            atomicExchange(
+                BindlessStorageBuffers[nonuniformEXT(
+                    params.residencyArenaBufferIndex)].Words[counters +
+                    SIMPLE_DDGI_RESIDENCY_COUNTER_NONRESIDENT_GATHER_REJECTIONS],
+                0u));
+        ResidencyWrite(
+            params,
+            feedbackBase + 31u,
+            atomicExchange(
+                BindlessStorageBuffers[nonuniformEXT(
+                    params.residencyArenaBufferIndex)].Words[counters +
+                    SIMPLE_DDGI_RESIDENCY_COUNTER_COARSER_FALLBACK],
+                0u));
+        ResidencyWrite(
+            params,
+            feedbackBase + 33u,
+            atomicExchange(
+                BindlessStorageBuffers[nonuniformEXT(
+                    params.residencyArenaBufferIndex)].Words[counters +
+                    SIMPLE_DDGI_RESIDENCY_COUNTER_RETRY],
+                0u));
+        uint status = ResidencyRead(params, feedbackBase + 40u);
+        status = fastMappingFailureCount == 0u
+            ? status & ~(1u << 1u)
+            : status | (1u << 1u);
+        ResidencyWrite(params, feedbackBase + 40u, status);
+        ResidencyWrite(params, feedbackBase + 41u, pc.SourceGeneration);
+        ResidencyWrite(params, feedbackBase + 42u, pc.CohortGeneration);
+        ResidencyWrite(params, feedbackBase + 43u, 0u);
+        ResidencyWrite(params, feedbackBase + 44u, 0u);
+        ResidencyWrite(params, feedbackBase + 45u, 0u);
+        ResidencyWrite(
+            params,
+            feedbackBase + 46u,
+            atomicExchange(
+                BindlessStorageBuffers[nonuniformEXT(
+                    params.residencyArenaBufferIndex)].Words[counters +
+                    SIMPLE_DDGI_RESIDENCY_COUNTER_RECEIVER_OVERFLOW],
+                0u));
+        ResidencyWrite(params, feedbackBase + 58u, pc.DemandEpoch);
+        ResidencyWrite(
+            params,
+            feedbackBase + 59u,
+            atomicExchange(
+                BindlessStorageBuffers[nonuniformEXT(
+                    params.residencyArenaBufferIndex)].Words[counters +
+                    SIMPLE_DDGI_RESIDENCY_COUNTER_RECEIVER_REQUESTS],
+                0u));
+        return;
+    }
     // The copied region is fixed at 1 KiB. Clear it deterministically so future
     // extensions never expose stale bytes from an earlier ABI.
     for (uint word = local; word < 256u; word += gl_WorkGroupSize.x)
@@ -295,10 +388,11 @@ void main()
         uint allocationStamp = ResidencyRead(params, reverseBase + 8u);
         uint firstScheduleStamp = ResidencyRead(params, reverseBase + 9u);
         uint firstPublicationStamp = ResidencyRead(params, reverseBase + 10u);
-        bool allocatedDuringCameraCut = (ResidencyRead(
-            params,
-            reverseBase + 11u) &
+        uint allocationFlags = ResidencyRead(params, reverseBase + 11u);
+        bool allocatedDuringCameraCut = (allocationFlags &
             SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_CAMERA_CUT) != 0u;
+        bool allocatedDuringBootstrap = (allocationFlags &
+            SIMPLE_DDGI_PHYSICAL_PAGE_ALLOCATION_BOOTSTRAP) != 0u;
         if (allocationStamp != 0u && firstScheduleStamp >= allocationStamp)
         {
             uint latency = firstScheduleStamp - allocationStamp;
@@ -321,25 +415,33 @@ void main()
                 1u);
             atomicAdd(publicationLatencySampleCount, 1u);
             atomicMax(publicationLatencyMaximum, latency);
-            if (allocatedDuringCameraCut)
+            // Cold resource bootstrap is intentionally retained in the
+            // all-allocation histogram above, but it is neither ordinary
+            // camera motion nor a steady-state cut/teleport. Mixing it into
+            // either qualified cohort made a completed 55-frame cold start
+            // masquerade as every later traversal's publication latency.
+            if (!allocatedDuringBootstrap)
             {
-                atomicAdd(
-                    cutPublicationLatencyHistogram[min(
-                        latency,
-                        SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS - 1u)],
-                    1u);
-                atomicAdd(cutPublicationLatencySampleCount, 1u);
-                atomicMax(cutPublicationLatencyMaximum, latency);
-            }
-            else
-            {
-                atomicAdd(
-                    ordinaryPublicationLatencyHistogram[min(
-                        latency,
-                        SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS - 1u)],
-                    1u);
-                atomicAdd(ordinaryPublicationLatencySampleCount, 1u);
-                atomicMax(ordinaryPublicationLatencyMaximum, latency);
+                if (allocatedDuringCameraCut)
+                {
+                    atomicAdd(
+                        cutPublicationLatencyHistogram[min(
+                            latency,
+                            SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS - 1u)],
+                        1u);
+                    atomicAdd(cutPublicationLatencySampleCount, 1u);
+                    atomicMax(cutPublicationLatencyMaximum, latency);
+                }
+                else
+                {
+                    atomicAdd(
+                        ordinaryPublicationLatencyHistogram[min(
+                            latency,
+                            SIMPLE_DDGI_RESIDENCY_LATENCY_BUCKETS - 1u)],
+                        1u);
+                    atomicAdd(ordinaryPublicationLatencySampleCount, 1u);
+                    atomicMax(ordinaryPublicationLatencyMaximum, latency);
+                }
             }
         }
     }
@@ -402,7 +504,7 @@ void main()
             virtualProbe < pc.SchedulerActiveProbeCount)
         {
             uint schedulerBase = pc.SchedulerProbeStateOffsetWords +
-                virtualProbe * 10u;
+                virtualProbe * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
             uint schedulerMetadata = ReadStorageWordUniform(
                 pc.SchedulerArenaBufferIndex,
                 schedulerBase + 5u);
@@ -588,8 +690,8 @@ void main()
     uint mappingErrors = feedbackMappingErrorCount;
 
     uint counters = SimpleDdgiDemandCountersOffsetWords(params);
-    ResidencyWrite(params, feedbackBase + 0u, pc.Reserved0);
-    ResidencyWrite(params, feedbackBase + 1u, pc.Reserved1);
+    ResidencyWrite(params, feedbackBase + 0u, pc.FrameSerialLow);
+    ResidencyWrite(params, feedbackBase + 1u, pc.FrameSerialHigh);
     ResidencyWrite(
         params,
         feedbackBase + 2u,

@@ -24,6 +24,8 @@ public sealed class SampleLifecycleSmokeRunner
     private int _sceneReloadsCompleted;
     private int _sceneReloadIssuedFrame = -1;
     private int _restoreNotBeforeFrame = int.MaxValue;
+    private readonly int _initialWindowWidth;
+    private readonly int _initialWindowHeight;
     private int _lastPositiveWindowWidth;
     private int _lastPositiveWindowHeight;
     private bool _awaitingSceneReloadFrame;
@@ -66,6 +68,8 @@ public sealed class SampleLifecycleSmokeRunner
                 nameof(initialWindowSize),
                 "The initial smoke window size must be positive.");
         }
+        _initialWindowWidth = initialSize.Width;
+        _initialWindowHeight = initialSize.Height;
         _lastPositiveWindowWidth = initialSize.Width;
         _lastPositiveWindowHeight = initialSize.Height;
     }
@@ -231,9 +235,16 @@ public sealed class SampleLifecycleSmokeRunner
     {
         (int Width, int Height)[] sequence =
         {
-            (1280, 720),
-            (1920, 1080),
-            (800, 600)
+            (Math.Min(1280, _initialWindowWidth),
+                Math.Min(720, _initialWindowHeight)),
+            // Requesting a client area larger than the desktop work area is
+            // backend-defined and Windows clamps it below the taskbar. The
+            // known-good initial client size still exercises a second
+            // swapchain rebuild without turning host window policy into a
+            // renderer failure.
+            (_initialWindowWidth, _initialWindowHeight),
+            (Math.Min(800, _initialWindowWidth),
+                Math.Min(600, _initialWindowHeight))
         };
 
         if (_resizeStep >= sequence.Length ||

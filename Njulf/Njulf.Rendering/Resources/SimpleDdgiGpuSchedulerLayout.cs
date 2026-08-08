@@ -93,7 +93,9 @@ public sealed class SimpleDdgiGpuSchedulerLayout
     public const int VolumePolicyStrideBytes = 176;
     public const int DirtyRegionStrideBytes = 48;
     public const int LaneScalarStrideBytes = sizeof(uint);
-    public const int CounterBytes = 256;
+    // The first 64 words are the stable diagnostic ABI. Sixteen private words
+    // follow for exact per-volume visible-page publication reservations.
+    public const int CounterBytes = 320;
     // One 1 KiB epoch-stamped reduction record keeps the audit summary below
     // the plan's readback budget while leaving room for future counters.
     public const int AuditSummaryBytes = 1024;

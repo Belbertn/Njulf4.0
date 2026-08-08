@@ -172,6 +172,52 @@ public sealed class SimpleDdgiProbePageReferenceModelTests
     }
 
     [Test]
+    public void ExpiredPage_RemainsCachedUntilAdmissionNeedsItsSlot()
+    {
+        var model = new SimpleDdgiProbePageReferenceModel(3, 2);
+        var transitions = new SimpleDdgiPageTransition[4];
+        SimpleDdgiPageReferenceSettings settings = Settings with
+        {
+            MaximumAdmissionsPerFrame = 1,
+            MaximumEvictionsPerFrame = 1
+        };
+
+        model.Reconcile(
+            1,
+            new[] { new SimpleDdgiPageDemand(0, SimpleDdgiPageDemandClass.VisibleSurface, 0) },
+            settings,
+            transitions);
+        model.MarkPublished(0, 1);
+        SimpleDdgiPageReconcileSummary expiredWithFreeSpace = model.Reconcile(
+            5,
+            Array.Empty<SimpleDdgiPageDemand>(),
+            settings,
+            transitions);
+        SimpleDdgiPageReconcileSummary fillsFreeSlot = model.Reconcile(
+            6,
+            new[] { new SimpleDdgiPageDemand(1, SimpleDdgiPageDemandClass.VisibleSurface, 0) },
+            settings,
+            transitions);
+        SimpleDdgiPageReconcileSummary underPressure = model.Reconcile(
+            7,
+            new[] { new SimpleDdgiPageDemand(2, SimpleDdgiPageDemandClass.VisibleSurface, 0) },
+            settings,
+            transitions);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(expiredWithFreeSpace.EvictionCount, Is.Zero);
+            Assert.That(model.GetPageState(0).PhysicalPageIndex, Is.EqualTo(-1),
+                "the oldest expired page must be selected when the full pool needs a slot");
+            Assert.That(fillsFreeSlot.AdmissionCount, Is.EqualTo(1));
+            Assert.That(fillsFreeSlot.EvictionCount, Is.Zero);
+            Assert.That(underPressure.AdmissionCount, Is.EqualTo(1));
+            Assert.That(underPressure.EvictionCount, Is.EqualTo(1));
+            Assert.That(model.GetPageState(2).PhysicalPageIndex, Is.GreaterThanOrEqualTo(0));
+        });
+    }
+
+    [Test]
     public void DemandGapResetsFirstRequestAgeBeforeLaterAdmission()
     {
         var model = new SimpleDdgiProbePageReferenceModel(3, 1);
@@ -294,7 +340,7 @@ public sealed class SimpleDdgiProbePageReferenceModelTests
     }
 
     [Test]
-    public void SuppressedPage_RetriesOnlyAtTheDeclaredBoundedInterval()
+    public void SuppressedPage_RetriesOnlyAfterGeometryChange()
     {
         var model = new SimpleDdgiProbePageReferenceModel(1, 1);
         var transitions = new SimpleDdgiPageTransition[2];
@@ -311,28 +357,45 @@ public sealed class SimpleDdgiProbePageReferenceModelTests
         model.MarkPublished(0, 1);
         model.ReportClassification(0, 8, 8, 1, 2);
         model.ReportClassification(0, 8, 8, 1, 3);
-        model.Reconcile(3, System.Array.Empty<SimpleDdgiPageDemand>(),
-            settings, transitions);
+        model.Reconcile(3, demand, settings, transitions);
 
-        SimpleDdgiPageReconcileSummary early = model.Reconcile(
+        SimpleDdgiPageReconcileSummary persistent = model.Reconcile(
             4,
             demand,
             settings,
             transitions);
-        SimpleDdgiPageReconcileSummary due = model.Reconcile(
+        SimpleDdgiPageReconcileSummary beyondLegacyRetry = model.Reconcile(
             7,
+            demand,
+            settings,
+            transitions);
+        model.Reconcile(
+            8,
+            System.Array.Empty<SimpleDdgiPageDemand>(),
+            settings,
+            transitions);
+        SimpleDdgiPageReconcileSummary resumedWithoutGeometryChange = model.Reconcile(
+            9,
+            demand,
+            settings,
+            transitions);
+        model.InvalidateGeometry(2u);
+        SimpleDdgiPageReconcileSummary afterGeometryChange = model.Reconcile(
+            10,
             demand,
             settings,
             transitions);
 
         Assert.Multiple(() =>
         {
-            Assert.That(early.AdmissionCount, Is.Zero);
-            Assert.That(early.SuppressedPageCount, Is.EqualTo(1));
-            Assert.That(due.AdmissionCount, Is.EqualTo(1));
-            Assert.That(due.SuppressedPageCount, Is.Zero);
-            Assert.That(model.GetPageState(0).DemandClass,
-                Is.EqualTo(SimpleDdgiPageDemandClass.SuppressedRetry));
+            Assert.That(persistent.AdmissionCount, Is.Zero);
+            Assert.That(persistent.SuppressedPageCount, Is.EqualTo(1));
+            Assert.That(beyondLegacyRetry.AdmissionCount, Is.Zero);
+            Assert.That(beyondLegacyRetry.SuppressedPageCount, Is.EqualTo(1));
+            Assert.That(resumedWithoutGeometryChange.AdmissionCount, Is.Zero);
+            Assert.That(resumedWithoutGeometryChange.SuppressedPageCount, Is.EqualTo(1));
+            Assert.That(afterGeometryChange.AdmissionCount, Is.EqualTo(1));
+            Assert.That(afterGeometryChange.SuppressedPageCount, Is.Zero);
         });
     }
 

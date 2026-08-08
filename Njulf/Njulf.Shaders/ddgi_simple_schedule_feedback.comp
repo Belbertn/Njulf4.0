@@ -11,6 +11,8 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 // so mirror the stable public classification value locally.
 const uint SIMPLE_DDGI_CLASSIFICATION_INACTIVE = 1u;
 
+#include "ddgi_simple_transport_participant.glsl"
+
 // The fixed feedback dispatch is one 64-lane workgroup. Accumulate one local
 // subtotal per lane and merge only those subtotals in shared memory; this
 // keeps the exact full-field reduction while avoiding a serial scan of every
@@ -35,7 +37,9 @@ const uint SIMPLE_DDGI_FEEDBACK_VISIBLE_SOURCE_READY = 16u;
 const uint SIMPLE_DDGI_FEEDBACK_VISIBLE_PUBLISHED = 17u;
 const uint SIMPLE_DDGI_FEEDBACK_PARTICIPANTS = 18u;
 const uint SIMPLE_DDGI_FEEDBACK_SOLVE_VISITED = 19u;
-const uint SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS = 20u;
+const uint SIMPLE_DDGI_FEEDBACK_ACTIVE_SOURCE_MUTATION = 20u;
+const uint SIMPLE_DDGI_FEEDBACK_ACTIVE_CANONICAL_MUTATION = 21u;
+const uint SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS = 22u;
 
 shared uint feedbackReduction[SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS];
 
@@ -68,6 +72,8 @@ void main()
     uint visiblePublished = 0u;
     uint participatingCount = 0u;
     uint solveEpochVisitedCount = 0u;
+    uint activeSourceMutationCount = 0u;
+    uint activeCanonicalMutationCount = 0u;
     uint activeProbeCount = min(SchedulerActiveProbeCount(), 32768u);
     for (uint probeIndex = localIndex;
          probeIndex < activeProbeCount;
@@ -79,16 +85,18 @@ void main()
             sourceVolumeIndex);
         uint physicalProbeIndex;
         uint pageMappingGeneration;
+        bool addressPublished;
         // Convergence/cohort denominators are resident-only. This explicit
         // mapping predicate is the authoritative retirement event observed by
         // the fence-complete summary; virtual near-ring capacity is never
         // mistaken for live solver work.
         if (!sourceVolumeValid ||
-            !SchedulerResolvePayloadAddress(
+            !SchedulerResolvePayloadAddressDetailed(
                 probeIndex,
                 sourceVolumeIndex,
                 physicalProbeIndex,
-                pageMappingGeneration))
+                pageMappingGeneration,
+                addressPublished))
         {
             continue;
         }
@@ -98,6 +106,8 @@ void main()
         uint classification = ReadStorageWordUniform(pc.ProbeStateBufferIndex, publicBase + 6u);
         uint privateBase = pc.SchedulerProbeStateOffsetWords +
             probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+        uint lastCommittedUpdateFrame = SchedulerArenaRead(privateBase + 0u);
+        uint lastCommittedSourceRefreshFrame = SchedulerArenaRead(privateBase + 1u);
         uint metadata = SchedulerArenaRead(privateBase + 5u);
         uint packedLifecycle = SchedulerArenaRead(privateBase + 7u);
         uint sourceRays = packedLifecycle & SIMPLE_DDGI_SCHEDULER_SOURCE_RAY_MASK;
@@ -108,6 +118,9 @@ void main()
             (packedLifecycle & SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_MASK) >>
             SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_SHIFT;
         uint sourceGeneration = SchedulerArenaRead(privateBase + 2u);
+        uint sourceEpoch = SchedulerArenaRead(privateBase + 3u);
+        uint volumeGeneration = SchedulerArenaRead(privateBase + 4u);
+        uint cacheProbeBaseWordPlusOne = SchedulerArenaRead(privateBase + 10u);
         uint requiredSourceRays = sourceVolumeValid
             ? clamp(
                 SchedulerVolumeFullRays(sourceVolumeIndex),
@@ -115,29 +128,55 @@ void main()
                 SIMPLE_DDGI_SCHEDULER_MAX_RAYS)
             : 0u;
         bool visible = (metadata & SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBLE) != 0u;
-        bool published = (metadata & SIMPLE_DDGI_SCHEDULER_PROBE_META_PUBLISHED) != 0u;
+        bool published = addressPublished;
         bool inactive = classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE ||
             (flags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u ||
             uintBitsToFloat(ReadStorageWordUniform(pc.ProbeStateBufferIndex, publicBase + 3u)) <= 0.001;
         bool sourceReady = SchedulerTransportV2() && sourceVolumeValid &&
-            sourceRays == requiredSourceRays &&
-            sourceGeneration == SchedulerSourceGeneration() &&
-            (metadata & SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR) == 0u &&
-            (flags & SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID) == 0u;
+            SimpleDdgiTransportSourceReady(
+                flags,
+                sourceRays,
+                requiredSourceRays,
+                sourceGeneration,
+                SchedulerSourceGeneration(),
+                sourceEpoch,
+                volumeGeneration,
+                SchedulerVolumeGeneration(),
+                metadata,
+                cacheProbeBaseWordPlusOne);
         bool hasFresh = (flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u;
         bool hasExposed = (flags & SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED) != 0u;
         bool hasRelocation = (flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u;
         // The certificate covers the complete active transport field. Camera
         // visibility remains a priority/telemetry signal and never changes the
         // participant denominator.
-        bool participating =
-            !inactive &&
-            sourceReady &&
-            !hasFresh &&
-            !hasExposed &&
-            !hasRelocation &&
-            (flags & SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID) == 0u;
+        bool participating = SimpleDdgiTransportParticipantEligible(
+            SchedulerTransportV2(),
+            true,
+            addressPublished,
+            classification,
+            flags,
+            uintBitsToFloat(ReadStorageWordUniform(
+                pc.ProbeStateBufferIndex,
+                publicBase + 3u)),
+            sourceRays,
+            requiredSourceRays,
+            sourceGeneration,
+            SchedulerSourceGeneration(),
+            sourceEpoch,
+            volumeGeneration,
+            SchedulerVolumeGeneration(),
+            metadata,
+            cacheProbeBaseWordPlusOne);
         participatingCount += participating ? 1u : 0u;
+        activeSourceMutationCount += participating &&
+            lastCommittedSourceRefreshFrame == SchedulerFrameIndex()
+                ? 1u
+                : 0u;
+        activeCanonicalMutationCount += participating &&
+            lastCommittedUpdateFrame == SchedulerFrameIndex()
+                ? 1u
+                : 0u;
         uint lastSolveEpoch = SchedulerArenaRead(privateBase + 9u);
         bool solveEpochVisited = participating &&
             SchedulerTailCertification() &&
@@ -153,9 +192,13 @@ void main()
                 stableUpdates >= max(SchedulerFrame(30u), 1u);
         bool hasUnpublished = visible && participating && !published;
 
-        pendingFresh += hasFresh ? 1u : 0u;
-        pendingExposed += hasExposed ? 1u : 0u;
-        pendingRelocation += hasRelocation ? 1u : 0u;
+        // These fixed feedback words are control-plane blockers, not broad
+        // lifecycle diagnostics. Match classify's pending-tail-source rule:
+        // transient bits on an inactive/excluded probe cannot keep the frozen
+        // active participant transaction in SourceRepair forever.
+        pendingFresh += !inactive && hasFresh ? 1u : 0u;
+        pendingExposed += !inactive && hasExposed ? 1u : 0u;
+        pendingRelocation += !inactive && hasRelocation ? 1u : 0u;
         // Source repair is counted over every active slot, independently of
         // whether it is eligible for the frozen audit denominator.
         pendingSource += SchedulerTransportV2() && !inactive && !sourceReady ? 1u : 0u;
@@ -176,9 +219,15 @@ void main()
                 ? 1u
                 : 0u;
         pendingSolver += SchedulerTransportV2() && participating && sourceReady && !solverReady ? 1u : 0u;
-        maximumFreshAge = max(maximumFreshAge, hasFresh ? age : 0u);
-        maximumExposedAge = max(maximumExposedAge, hasExposed ? age : 0u);
-        maximumRelocationAge = max(maximumRelocationAge, hasRelocation ? age : 0u);
+        maximumFreshAge = max(
+            maximumFreshAge,
+            !inactive && hasFresh ? age : 0u);
+        maximumExposedAge = max(
+            maximumExposedAge,
+            !inactive && hasExposed ? age : 0u);
+        maximumRelocationAge = max(
+            maximumRelocationAge,
+            !inactive && hasRelocation ? age : 0u);
         maximumUnpublishedAge = max(maximumUnpublishedAge, hasUnpublished ? age : 0u);
         maximumVisibleUnsupportedAge = max(
             maximumVisibleUnsupportedAge,
@@ -222,6 +271,12 @@ void main()
         visiblePublished);
     atomicAdd(feedbackReduction[SIMPLE_DDGI_FEEDBACK_PARTICIPANTS], participatingCount);
     atomicAdd(feedbackReduction[SIMPLE_DDGI_FEEDBACK_SOLVE_VISITED], solveEpochVisitedCount);
+    atomicAdd(
+        feedbackReduction[SIMPLE_DDGI_FEEDBACK_ACTIVE_SOURCE_MUTATION],
+        activeSourceMutationCount);
+    atomicAdd(
+        feedbackReduction[SIMPLE_DDGI_FEEDBACK_ACTIVE_CANONICAL_MUTATION],
+        activeCanonicalMutationCount);
     barrier();
 
     if (localIndex != 0u)
@@ -248,6 +303,10 @@ void main()
     visiblePublished = feedbackReduction[SIMPLE_DDGI_FEEDBACK_VISIBLE_PUBLISHED];
     participatingCount = feedbackReduction[SIMPLE_DDGI_FEEDBACK_PARTICIPANTS];
     solveEpochVisitedCount = feedbackReduction[SIMPLE_DDGI_FEEDBACK_SOLVE_VISITED];
+    activeSourceMutationCount =
+        feedbackReduction[SIMPLE_DDGI_FEEDBACK_ACTIVE_SOURCE_MUTATION];
+    activeCanonicalMutationCount =
+        feedbackReduction[SIMPLE_DDGI_FEEDBACK_ACTIVE_CANONICAL_MUTATION];
 
     uint considered = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_CONSIDERED);
     uint eligible = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE);
@@ -357,16 +416,23 @@ void main()
                 SIMPLE_DDGI_SCHEDULER_COUNTER_BUCKET_BASE + bucket));
     uint dispatchedLanes = 0u;
     uint noOpLanes = 0u;
-    uint activeLanes = min(
-        SchedulerActiveVolumeCount() * SIMPLE_DDGI_SCHEDULER_WORK_CLASSES *
-            SIMPLE_DDGI_SCHEDULER_TRANSPORT_CATEGORIES * SIMPLE_DDGI_SCHEDULER_RAY_TIERS,
-        SIMPLE_DDGI_SCHEDULER_MAX_LANES);
-    for (uint lane = 0u; lane < activeLanes; lane++)
+    if (!SchedulerCertifiedQuiesced())
     {
-        uint total = SchedulerArenaRead(pc.LaneTotalsOffsetWords + lane);
-        uint admission = SchedulerArenaRead(pc.LaneAdmissionOffsetWords + lane);
-        dispatchedLanes += total != 0u ? 1u : 0u;
-        noOpLanes += total != 0u && admission == 0u ? 1u : 0u;
+        // Lane-base publishes non-empty lane ids in LaneTotals. Walking that
+        // compact list preserves the exact dispatched/no-op definitions while
+        // avoiding a second full 896-lane diagnostic scan.
+        for (uint activeIndex = 0u;
+             activeIndex < SIMPLE_DDGI_SCHEDULER_MAX_LANES;
+             activeIndex++)
+        {
+            uint lane = SchedulerArenaRead(
+                pc.LaneTotalsOffsetWords + activeIndex);
+            if (lane == SIMPLE_DDGI_SCHEDULER_INVALID_PROBE)
+                break;
+            uint admission = SchedulerArenaRead(pc.LaneAdmissionOffsetWords + lane);
+            dispatchedLanes++;
+            noOpLanes += admission == 0u ? 1u : 0u;
+        }
     }
     SchedulerArenaWrite(base + 54u, dispatchedLanes);
     SchedulerArenaWrite(base + 55u, noOpLanes);
@@ -381,8 +447,53 @@ void main()
     // Feedback reserves the words after the fixed 64-word summary for the
     // persistent rotating lane cursors. They are copied only after the
     // summary generation/serial has been validated by the host.
-    for (uint lane = 0u; lane < SIMPLE_DDGI_SCHEDULER_MAX_LANES; lane++)
+    if (!SchedulerCertifiedQuiesced())
+    {
+        for (uint lane = 0u;
+             lane < SIMPLE_DDGI_SCHEDULER_MAX_LANES;
+             lane++)
+        {
+            SchedulerArenaWrite(
+                base + 64u + lane,
+                SchedulerArenaRead(pc.LaneCursorsOffsetWords + lane));
+        }
+    }
+    for (uint category = 0u;
+         category < SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_CATEGORY_COUNT;
+         category++)
+    {
         SchedulerArenaWrite(
-            base + 64u + lane,
-            SchedulerArenaRead(pc.LaneCursorsOffsetWords + lane));
+            base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_COMMIT_FAILURE_OFFSET +
+                category,
+            SchedulerArenaRead(
+                pc.CountersOffsetWords +
+                    SIMPLE_DDGI_SCHEDULER_COUNTER_COMMIT_FAILURE_BASE +
+                    category));
+    }
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_TRANSACTION_PREDICATE_OFFSET,
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_TRANSACTION_PREDICATE_MASK));
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_MISSING_COMPLETION_OFFSET,
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_MISSING_COMPLETION_MASK));
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_PRODUCER_FAILURE_OFFSET,
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_PRODUCER_FAILURE_MASK));
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_CACHE_READ_FAILURE_OFFSET,
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_CACHE_READ_FAILURE_MASK));
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_ACTIVE_SOURCE_MUTATION_OFFSET,
+        activeSourceMutationCount);
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_ACTIVE_CANONICAL_MUTATION_OFFSET,
+        activeCanonicalMutationCount);
 }

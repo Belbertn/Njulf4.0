@@ -1,0 +1,214 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(std430, set = 2, binding = 0) writeonly buffer ReceiverCacheOutputBlock
+{
+    uvec4 Entries[];
+} ReceiverCacheOutput;
+
+layout(push_constant) uniform SimpleDdgiReceiverCacheResolvePushBlock
+{
+    uint GatherWidth;
+    uint GatherHeight;
+    uint CacheWidth;
+    uint CacheHeight;
+    uint GatherBufferIndex;
+    uint PackedScaleAndEdgeExtents;
+} pc;
+
+const float RECEIVER_CACHE_INV_PI = 0.31830988618;
+
+struct ReceiverCacheGatherSample
+{
+    vec3 DdgiIrradiance;
+    vec3 EnvironmentIrradiance;
+};
+
+ReceiverCacheGatherSample EmptyReceiverCacheGatherSample()
+{
+    ReceiverCacheGatherSample result;
+    result.DdgiIrradiance = vec3(0.0);
+    result.EnvironmentIrradiance = vec3(0.0);
+    return result;
+}
+
+ReceiverCacheGatherSample MixReceiverCacheGatherSamples(
+    ReceiverCacheGatherSample a,
+    ReceiverCacheGatherSample b,
+    float weight)
+{
+    ReceiverCacheGatherSample result;
+    result.DdgiIrradiance = mix(
+        a.DdgiIrradiance,
+        b.DdgiIrradiance,
+        weight);
+    result.EnvironmentIrradiance = mix(
+        a.EnvironmentIrradiance,
+        b.EnvironmentIrradiance,
+        weight);
+    return result;
+}
+
+uint GatherScale()
+{
+    return max(pc.PackedScaleAndEdgeExtents & 0xffu, 1u);
+}
+
+uint CacheScale()
+{
+    return max((pc.PackedScaleAndEdgeExtents >> 8u) & 0xffu, 1u);
+}
+
+uvec2 LastCacheBlockExtent()
+{
+    return max(
+        uvec2(
+            (pc.PackedScaleAndEdgeExtents >> 16u) & 0xffu,
+            (pc.PackedScaleAndEdgeExtents >> 24u) & 0xffu),
+        uvec2(1u));
+}
+
+ReceiverCacheGatherSample LoadGatherSample(
+    uvec2 coord,
+    out uint depthCode)
+{
+    uint entryIndex = coord.y * pc.GatherWidth + coord.x;
+    uvec4 packed = ReadStorageAlignedUVec4Uniform(
+        pc.GatherBufferIndex,
+        entryIndex * 4u);
+    vec2 ddgiXy = unpackHalf2x16(packed.x);
+    vec2 ddgiZEnvironmentX = unpackHalf2x16(packed.y);
+    vec2 environmentYz = unpackHalf2x16(packed.z);
+    ReceiverCacheGatherSample result;
+    result.DdgiIrradiance = vec3(ddgiXy, ddgiZEnvironmentX.x);
+    result.EnvironmentIrradiance = vec3(
+        ddgiZEnvironmentX.y,
+        environmentYz);
+    depthCode = packed.w;
+    return result;
+}
+
+bool TryLoadGatherSample(
+    ivec2 coord,
+    out ReceiverCacheGatherSample value,
+    out uint depthCode)
+{
+    if (any(lessThan(coord, ivec2(0))) ||
+        any(greaterThanEqual(coord, ivec2(pc.GatherWidth, pc.GatherHeight))))
+    {
+        value = EmptyReceiverCacheGatherSample();
+        depthCode = 0u;
+        return false;
+    }
+
+    value = LoadGatherSample(uvec2(coord), depthCode);
+    return depthCode != 0u;
+}
+
+ReceiverCacheGatherSample ResolveGatherSample(ivec2 requestedCoord)
+{
+    ivec2 extent = ivec2(pc.GatherWidth, pc.GatherHeight);
+    ivec2 coord = clamp(requestedCoord, ivec2(0), extent - ivec2(1));
+    uint centerDepthCode;
+    ReceiverCacheGatherSample resolved;
+    if (TryLoadGatherSample(coord, resolved, centerDepthCode))
+        return resolved;
+
+    // Empty lattice cells adjacent to an occupied receiver must not pull the
+    // reconstructed field toward black. Deterministically prefer the nearest
+    // valid sample, then the closest reverse-Z surface for equal distance.
+    bool found = false;
+    uint bestDistance = 3u;
+    uint bestDepthCode = 0u;
+    for (int y = -1; y <= 1; y++)
+    for (int x = -1; x <= 1; x++)
+    {
+        if (x == 0 && y == 0)
+            continue;
+
+        ReceiverCacheGatherSample candidate;
+        uint candidateDepthCode;
+        if (!TryLoadGatherSample(
+                coord + ivec2(x, y),
+                candidate,
+                candidateDepthCode))
+        {
+            continue;
+        }
+
+        uint distance = uint(abs(x) + abs(y));
+        if (!found || distance < bestDistance ||
+            (distance == bestDistance &&
+             candidateDepthCode > bestDepthCode))
+        {
+            found = true;
+            bestDistance = distance;
+            bestDepthCode = candidateDepthCode;
+            resolved = candidate;
+        }
+    }
+
+    if (found)
+        return resolved;
+    return EmptyReceiverCacheGatherSample();
+}
+
+void main()
+{
+    uvec2 resolvedCoord = gl_GlobalInvocationID.xy;
+    uvec2 outputExtent = uvec2(pc.CacheWidth, pc.CacheHeight);
+    if (any(greaterThanEqual(resolvedCoord, outputExtent)))
+    {
+        return;
+    }
+
+    uint cacheScale = CacheScale();
+    uvec2 blockExtent = uvec2(cacheScale);
+    uvec2 lastBlockExtent = LastCacheBlockExtent();
+    if (resolvedCoord.x + 1u == outputExtent.x)
+        blockExtent.x = lastBlockExtent.x;
+    if (resolvedCoord.y + 1u == outputExtent.y)
+        blockExtent.y = lastBlockExtent.y;
+
+    // Evaluate the same centered, clamp-to-edge bilinear reconstruction used
+    // by the former fragment texture sample at the mean pixel center of this
+    // (possibly partial) cache block.
+    vec2 screenCoordinate =
+        vec2(resolvedCoord * cacheScale) + vec2(blockExtent) * 0.5;
+    vec2 latticePosition =
+        (screenCoordinate - vec2(0.5)) / float(GatherScale()) - vec2(0.5);
+    ivec2 baseCoord = ivec2(floor(latticePosition));
+    vec2 blend = fract(latticePosition);
+    ReceiverCacheGatherSample top = MixReceiverCacheGatherSamples(
+        ResolveGatherSample(baseCoord),
+        ResolveGatherSample(baseCoord + ivec2(1, 0)),
+        blend.x);
+    ReceiverCacheGatherSample bottom = MixReceiverCacheGatherSamples(
+        ResolveGatherSample(baseCoord + ivec2(0, 1)),
+        ResolveGatherSample(baseCoord + ivec2(1, 1)),
+        blend.x);
+    ReceiverCacheGatherSample resolved = MixReceiverCacheGatherSamples(
+        top,
+        bottom,
+        blend.y);
+
+    // Store both irradiance fields divided by pi so the constant
+    // diffuse-Lambert factor is paid once per cache sample instead of once per
+    // full-resolution fragment. Keeping them separate preserves the distinct
+    // DDGI material-AO and environment screen-space-AO policies.
+    resolved.DdgiIrradiance *= RECEIVER_CACHE_INV_PI;
+    resolved.EnvironmentIrradiance *= RECEIVER_CACHE_INV_PI;
+    uint entryIndex = resolvedCoord.y * pc.CacheWidth + resolvedCoord.x;
+    ReceiverCacheOutput.Entries[entryIndex] = uvec4(
+        packHalf2x16(resolved.DdgiIrradiance.xy),
+        packHalf2x16(vec2(
+            resolved.DdgiIrradiance.z,
+            resolved.EnvironmentIrradiance.x)),
+        packHalf2x16(resolved.EnvironmentIrradiance.yz),
+        0u);
+}

@@ -27,10 +27,9 @@ const uint SIMPLE_DDGI_SCHEDULER_CANDIDATE_WORDS = 4u;
 const uint SIMPLE_DDGI_SCHEDULER_COMPACT_OUTPUT_WORDS = 1u;
 const uint SIMPLE_DDGI_SCHEDULER_GROUP_LANE_VALUES_PER_WORD = 2u;
 // Public probe state and private scheduler state are different ABIs. Keep the
-// public stride here because several scheduler shaders read the public buffer,
-// and use the eleven-word private stride for the resident arena mirror.
+// public stride here because several scheduler shaders read the public buffer;
+// the cross-subsystem private stride lives in scheduler_metadata_abi.glsl.
 const uint SIMPLE_DDGI_PROBE_STATE_WORDS = 8u;
-const uint SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS = 11u;
 // The public queue is twelve words so the predecessor's exact outcome/source
 // epoch fields and sparse physical identity coexist while every record remains
 // 16-byte aligned. The internal proposal appends physical index and mapping
@@ -52,7 +51,7 @@ const uint SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE = 256u;
 // of a VkDispatchIndirectCommand.
 const uint SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_METADATA_WORDS = 4u;
 const uint SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_COMMAND_WORDS = 4u;
-const uint SIMPLE_DDGI_SCHEDULER_COUNTER_WORDS = 64u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_WORDS = 80u;
 
 // Per-request producer completion. A request is committable only when every
 // required bit is set and no failure reason was recorded.
@@ -66,6 +65,8 @@ const uint SIMPLE_DDGI_SCHEDULER_COMPLETE_SAMPLED_PUBLISH = 1u << 6u;
 const uint SIMPLE_DDGI_SCHEDULER_SAMPLED_PUBLISH_NOT_REQUIRED = 1u << 7u;
 const uint SIMPLE_DDGI_SCHEDULER_FEATURE_SAMPLED_PUBLICATION = 1u << 8u;
 const uint SIMPLE_DDGI_SCHEDULER_FEATURE_TAIL_CERTIFICATION = 1u << 9u;
+const uint SIMPLE_DDGI_SCHEDULER_FEATURE_PERIODIC_SOURCE_WAVE = 1u << 10u;
+const uint SIMPLE_DDGI_SCHEDULER_FEATURE_CERTIFIED_QUIESCED = 1u << 11u;
 
 const uint SIMPLE_DDGI_SCHEDULER_FAILURE_INVALID_GENERATION = 1u << 0u;
 const uint SIMPLE_DDGI_SCHEDULER_FAILURE_PRODUCER = 1u << 1u;
@@ -100,6 +101,7 @@ const uint SIMPLE_DDGI_SCHEDULER_REASON_ROUTINE_DUE = 1u << 8u;
 const uint SIMPLE_DDGI_SCHEDULER_REASON_CONVERGENCE = 1u << 9u;
 const uint SIMPLE_DDGI_SCHEDULER_REASON_INACTIVE_RETRY = 1u << 10u;
 const uint SIMPLE_DDGI_SCHEDULER_REASON_TOPOLOGY = 1u << 11u;
+const uint SIMPLE_DDGI_SCHEDULER_REASON_VISIBLE_PAGE_COHORT = 1u << 12u;
 
 // Scheduler-private visibility/publication bits live in the high half of the
 // dirty-reason word. The low reason bits are transient; these two bits survive
@@ -178,6 +180,58 @@ const uint SIMPLE_DDGI_SCHEDULER_COUNTER_PENDING_TAIL_SOURCE = 48u;
 // failures separate so a failed resident transaction cannot be hidden by the
 // much larger population that was legitimately deferred by the frame budget.
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_COMMIT_REJECTED = 49u;
+// Commit failures are exceptional and already pay the generic rejected
+// atomic. Preserve a bounded stage breakdown in otherwise-unused counter
+// words so a source-repair loop can be diagnosed without a per-probe readback.
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_COMMIT_FAILURE_BASE = 50u;
+const uint SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_CATEGORY_COUNT = 10u;
+const uint SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_TRANSACTION = 0u;
+const uint SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_PUBLIC_GENERATION = 1u;
+const uint SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_SOURCE_EPOCH = 2u;
+const uint SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_PAYLOAD_IDENTITY = 3u;
+const uint SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_CACHE_PRECONDITION = 4u;
+const uint SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_CACHE_ADDRESS = 5u;
+const uint SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_CACHE_CLASSIFICATION = 6u;
+const uint SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_CACHE_GENERATION = 7u;
+const uint SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_CACHE_EPOCH_OR_CARDINALITY = 8u;
+const uint SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_RECEIVER_PACK = 9u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_TRANSACTION_PREDICATE_MASK = 60u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_MISSING_COMPLETION_MASK = 61u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_PRODUCER_FAILURE_MASK = 62u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_CACHE_READ_FAILURE_MASK = 63u;
+// Classification appends one exact source-candidate count per volume for
+// unpublished pages that were allocated from visible/receiver demand. These
+// counters are scheduler-private and intentionally sit after the fixed
+// diagnostic counter prefix.
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_VISIBLE_PAGE_COHORT_BASE = 64u;
+
+// Transaction-predicate witnesses are a bitset rather than counters: every
+// failed request already contributes to the transaction category above, while
+// this word identifies which invariant(s) were false without allocating a
+// per-request readback. Multiple predicates may be recorded in one frame.
+const uint SIMPLE_DDGI_SCHEDULER_TRANSACTION_QUEUE_GENERATION = 1u << 0u;
+const uint SIMPLE_DDGI_SCHEDULER_TRANSACTION_RESOURCE_GENERATION = 1u << 1u;
+const uint SIMPLE_DDGI_SCHEDULER_TRANSACTION_VOLUME_GENERATION = 1u << 2u;
+const uint SIMPLE_DDGI_SCHEDULER_TRANSACTION_SOURCE_GENERATION = 1u << 3u;
+const uint SIMPLE_DDGI_SCHEDULER_TRANSACTION_TRANSPORT_GENERATION = 1u << 4u;
+const uint SIMPLE_DDGI_SCHEDULER_TRANSACTION_COMPLETION = 1u << 5u;
+const uint SIMPLE_DDGI_SCHEDULER_TRANSACTION_PRODUCER_FAILURE = 1u << 6u;
+const uint SIMPLE_DDGI_SCHEDULER_TRANSACTION_PROBE_BOUNDS = 1u << 7u;
+const uint SIMPLE_DDGI_SCHEDULER_TRANSACTION_EXPECTED_GENERATION = 1u << 8u;
+const uint SIMPLE_DDGI_SCHEDULER_TRANSACTION_INVALIDATION_WITHOUT_SOURCE =
+    1u << 9u;
+
+// The 4 KiB feedback region contains a 64-word header followed by 896 lane
+// cursors. Words 960..1023 are intentionally spare; copy the ten exceptional
+// commit counters and two active-participant mutation witnesses there without
+// growing either the arena or readback buffers.
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_COMMIT_FAILURE_OFFSET = 960u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_TRANSACTION_PREDICATE_OFFSET = 970u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_MISSING_COMPLETION_OFFSET = 971u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_PRODUCER_FAILURE_OFFSET = 972u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_CACHE_READ_FAILURE_OFFSET = 973u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_ACTIVE_SOURCE_MUTATION_OFFSET = 974u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_ACTIVE_CANONICAL_MUTATION_OFFSET = 975u;
 
 const uint SIMPLE_DDGI_SCHEDULER_DISPATCH_RESET = 0u;
 const uint SIMPLE_DDGI_SCHEDULER_DISPATCH_CLASSIFY = 1u;
@@ -262,7 +316,9 @@ uint SchedulerCandidateGroupCount() { return (SchedulerCandidateCapacity() + 63u
 uint SchedulerRequestCapacity() { return SchedulerFrame(3u); }
 uint SchedulerRequestBudget() { return SchedulerFrame(5u); }
 uint SchedulerPrimaryRayBudget() { return SchedulerFrame(6u); }
+uint SchedulerSourceTargetProbes() { return SchedulerFrame(7u); }
 uint SchedulerFrameIndex() { return SchedulerFrame(10u); }
+uint SchedulerPeriodicSourceRefreshControlFrame() { return SchedulerFrame(11u); }
 uint SchedulerVolumeGeneration() { return SchedulerFrame(14u); }
 uint SchedulerResourceGeneration() { return SchedulerFrame(15u); }
 uint SchedulerQueueGeneration() { return SchedulerFrame(16u); }
@@ -293,7 +349,30 @@ bool SchedulerSampledPublicationRequired() {
 bool SchedulerTailCertification() {
     return (SchedulerFeatureFlags() & SIMPLE_DDGI_SCHEDULER_FEATURE_TAIL_CERTIFICATION) != 0u;
 }
+bool SchedulerPeriodicSourceRefreshWave() {
+    return (SchedulerFeatureFlags() &
+        SIMPLE_DDGI_SCHEDULER_FEATURE_PERIODIC_SOURCE_WAVE) != 0u;
+}
+bool SchedulerCertifiedQuiesced() {
+    return (SchedulerFeatureFlags() &
+        SIMPLE_DDGI_SCHEDULER_FEATURE_CERTIFIED_QUIESCED) != 0u;
+}
 uint SchedulerSolveEpoch() { return SchedulerFrame(19u); }
+
+bool SchedulerFrameReached(uint frame, uint target)
+{
+    return target == 0u || frame - target < 0x80000000u;
+}
+
+bool SchedulerSourceRefreshDueAtCutoff(
+    uint lastSourceFrame,
+    uint cutoffFrame,
+    uint refreshInterval)
+{
+    uint ageAtCutoff = cutoffFrame - lastSourceFrame;
+    return ageAtCutoff < 0x80000000u &&
+        ageAtCutoff >= max(refreshInterval, 1u);
+}
 
 uint SchedulerLaneIndex(
     uint volume,
@@ -488,28 +567,6 @@ uint SchedulerGroupLaneCount(uint group, uint lane)
     return (packed >> ((logicalIndex & 1u) * 16u)) & 0xffffu;
 }
 
-void SchedulerWriteGroupLaneValue(uint group, uint lane, uint value)
-{
-    uint logicalIndex = group * SIMPLE_DDGI_SCHEDULER_MAX_LANES + lane;
-    uint wordOffset = pc.CandidateGroupLaneCountsOffsetWords + (logicalIndex >> 1u);
-    uint shift = (logicalIndex & 1u) * 16u;
-    uint mask = 0xffffu << shift;
-    uint observed = atomicAdd(
-        BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[wordOffset],
-        0u);
-    for (;;)
-    {
-        uint replacement = (observed & ~mask) | ((min(value, 0xffffu) & 0xffffu) << shift);
-        uint previous = atomicCompSwap(
-            BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[wordOffset],
-            observed,
-            replacement);
-        if (previous == observed)
-            return;
-        observed = previous;
-    }
-}
-
 void SchedulerAtomicIncrementGroupLaneCount(uint group, uint lane)
 {
     uint logicalIndex = group * SIMPLE_DDGI_SCHEDULER_MAX_LANES + lane;
@@ -592,11 +649,12 @@ bool SchedulerTryReserve(uint counterWord, uint amount, uint limit)
 // resident scheduler already identify toroidal physical slots, which are also
 // the sparse page-table coordinate space. The complete receiver/update helper
 // lives in ddgi_simple_page_shared.glsl.
-bool SchedulerResolvePayloadAddress(
+bool SchedulerResolvePayloadAddressDetailed(
     uint probeIndex,
     uint volumeIndex,
     out uint physicalProbeIndex,
-    out uint pageMappingGeneration)
+    out uint pageMappingGeneration,
+    out bool published)
 {
     const uint paramsHeaderWords = 60u;
     const uint volumeStrideWords = 28u;
@@ -610,11 +668,14 @@ bool SchedulerResolvePayloadAddress(
     const uint physicalMetadataWords = 12u;
     const uint sparseMode = 2u;
     const uint tableValid = 1u << 0u;
+    const uint tableInitializing = 1u << 1u;
+    const uint tablePublished = 1u << 2u;
     const uint tableSuppressed = 1u << 3u;
     const uint invalidIndex = 0xffffffffu;
 
     physicalProbeIndex = invalidIndex;
     pageMappingGeneration = 0u;
+    published = false;
     if (volumeIndex >= SchedulerActiveVolumeCount())
         return false;
 
@@ -657,7 +718,8 @@ bool SchedulerResolvePayloadAddress(
     {
         physicalProbeIndex = densePhysicalFirst + localProbe;
         pageMappingGeneration = 0xffffffffu;
-        return physicalProbeIndex < physicalCapacity;
+        published = physicalProbeIndex < physicalCapacity;
+        return published;
     }
 
     uint residencyArena = ReadStorageWordUniform(
@@ -748,7 +810,24 @@ bool SchedulerResolvePayloadAddress(
     physicalProbeIndex = sparsePoolFirst +
         physicalPage * 8u + pageLocal;
     pageMappingGeneration = mappingGeneration;
+    published = (tableFlags & tablePublished) != 0u &&
+        (tableFlags & tableInitializing) == 0u;
     return physicalProbeIndex < physicalCapacity;
+}
+
+bool SchedulerResolvePayloadAddress(
+    uint probeIndex,
+    uint volumeIndex,
+    out uint physicalProbeIndex,
+    out uint pageMappingGeneration)
+{
+    bool published;
+    return SchedulerResolvePayloadAddressDetailed(
+        probeIndex,
+        volumeIndex,
+        physicalProbeIndex,
+        pageMappingGeneration,
+        published);
 }
 
 bool SchedulerResolveSparsePageMetadata(
@@ -874,6 +953,46 @@ bool SchedulerResolveSparsePageMetadata(
             validProbeMask |= 1u << slot;
     }
     return validProbeMask != 0u;
+}
+
+bool SchedulerSparseVisiblePagePublicationPending(
+    uint probeIndex,
+    uint volumeIndex,
+    uint physicalProbeIndex,
+    uint pageMappingGeneration)
+{
+    const uint tablePublished = 1u << 2u;
+    const uint allocationDemandClassShift = 8u;
+    const uint receiverMissDemandClass = 5u;
+    uint arena;
+    uint tableBase;
+    uint metadataBase;
+    uint pageLocalBit;
+    uint validMask;
+    if (!SchedulerResolveSparsePageMetadata(
+            probeIndex,
+            volumeIndex,
+            physicalProbeIndex,
+            pageMappingGeneration,
+            arena,
+            tableBase,
+            metadataBase,
+            pageLocalBit,
+            validMask))
+    {
+        return false;
+    }
+
+    uint tableFlags = ReadStorageWordUniform(arena, tableBase + 2u);
+    uint allocation = ReadStorageWordUniform(arena, metadataBase + 11u);
+    uint allocationDemandClass =
+        (allocation >> allocationDemandClassShift) & 0xffu;
+    uint publishedMask =
+        (ReadStorageWordUniform(arena, metadataBase + 3u) >> 8u) & 0xffu;
+    return (tableFlags & tablePublished) == 0u &&
+        allocationDemandClass >= receiverMissDemandClass &&
+        ReadStorageWordUniform(arena, metadataBase + 8u) != 0u &&
+        (publishedMask & validMask) != validMask;
 }
 
 bool SchedulerRetainSparsePage(
@@ -1026,6 +1145,44 @@ void SchedulerPublishSparsePageProbe(
                 tableBase + 2u],
             1u << 2u);
     }
+}
+
+// Admission owns deterministic selection order but update materialization is
+// embarrassingly parallel. Store the five words needed by the materializer in
+// the final update slot; the next scheduler stage overwrites the complete
+// ten-word proposal before emit can observe it.
+void SchedulerWriteUpdateSelection(
+    uint updateIndex,
+    uint probeIndex,
+    uint volumeIndex,
+    uint workClassAndTransport,
+    uint rayTierAndReason,
+    uint expectedGeneration)
+{
+    uint base = pc.UpdateRecordsOffsetWords +
+        updateIndex * SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS;
+    SchedulerArenaWrite(base + 0u, probeIndex);
+    SchedulerArenaWrite(base + 1u, volumeIndex);
+    SchedulerArenaWrite(base + 2u, workClassAndTransport);
+    SchedulerArenaWrite(base + 3u, rayTierAndReason);
+    SchedulerArenaWrite(base + 4u, expectedGeneration);
+}
+
+void SchedulerReadUpdateSelection(
+    uint updateIndex,
+    out uint probeIndex,
+    out uint volumeIndex,
+    out uint workClassAndTransport,
+    out uint rayTierAndReason,
+    out uint expectedGeneration)
+{
+    uint base = pc.UpdateRecordsOffsetWords +
+        updateIndex * SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS;
+    probeIndex = SchedulerArenaRead(base + 0u);
+    volumeIndex = SchedulerArenaRead(base + 1u);
+    workClassAndTransport = SchedulerArenaRead(base + 2u);
+    rayTierAndReason = SchedulerArenaRead(base + 3u);
+    expectedGeneration = SchedulerArenaRead(base + 4u);
 }
 
 void SchedulerWriteUpdate(

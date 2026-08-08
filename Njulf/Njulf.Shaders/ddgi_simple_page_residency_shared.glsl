@@ -23,10 +23,12 @@ layout(push_constant) uniform SimpleDdgiPageResidencyPushBlock
     uint GeometryGeneration;
     uint SourceGeneration;
     uint CohortGeneration;
-    uint CameraCut;
+    uint AllocationFlags;
+    uint VisiblePublicationProbeBudget;
+    uint PublicationLatencyTargetFrames;
     uint Stage;
-    uint Reserved0;
-    uint Reserved1;
+    uint FrameSerialLow;
+    uint FrameSerialHigh;
 } pc;
 
 uint ResidencyRead(SimpleDdgiParams params, uint word)
@@ -131,7 +133,11 @@ void ResidencyInvalidateVirtualProbe(
     WriteStorageVec4Uniform(
         pc.ProbeStateBufferIndex,
         stateBase,
-        vec4(0.0));
+        // A newly resident slot must be admitted for one complete source and
+        // relocation/classification transaction. Zero active weight would make
+        // the scheduler suppress it as already inactive, leaving its page's
+        // coherent publication mask permanently incomplete.
+        vec4(0.0, 0.0, 0.0, 1.0));
     WriteStorageWordUniform(
         pc.ProbeStateBufferIndex,
         stateBase + 4u,
@@ -164,7 +170,7 @@ void ResidencyInvalidateVirtualProbe(
         virtualProbeIndex < pc.SchedulerActiveProbeCount)
     {
         uint schedulerBase = pc.SchedulerProbeStateOffsetWords +
-            virtualProbeIndex * 10u;
+            virtualProbeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
         WriteStorageWordUniform(
             pc.SchedulerArenaBufferIndex,
             schedulerBase + 0u,

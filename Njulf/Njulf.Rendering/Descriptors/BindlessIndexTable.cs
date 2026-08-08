@@ -549,6 +549,17 @@ namespace Njulf.Rendering.Descriptors
         public const int SimpleDdgiStorageValidationBufferFrame1 =
             SimpleDdgiStorageValidationBufferBase + 1;
 
+        /// <summary>
+        /// Reduced 8x8 exact-gather lattice used only by the receiver-cache
+        /// resolve for frame 0.
+        /// </summary>
+        public const int SimpleDdgiReceiverGatherBufferBase =
+            SimpleDdgiStorageValidationBufferFrame1 + 1;
+
+        /// <summary>Simple-DDGI receiver gather lattice for frame 1.</summary>
+        public const int SimpleDdgiReceiverGatherBufferFrame1 =
+            SimpleDdgiReceiverGatherBufferBase + 1;
+
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
         // ============================================
@@ -670,7 +681,8 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>First dynamically allocated material texture index</summary>
         public const int FirstDynamicTextureIndex =
-            SimpleDdgiSampledVisibilityTextureBase + MaxSimpleDdgiSampledAtlasTextureGroups;
+            SimpleDdgiSampledVisibilityTextureBase +
+            MaxSimpleDdgiSampledAtlasTextureGroups;
 
         /// <summary>Maximum number of textures</summary>
         public const int MaxTextures = 65536;
@@ -680,7 +692,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
 
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = SimpleDdgiStorageValidationBufferFrame1 + 1;
+        public const int StaticBufferCount = SimpleDdgiReceiverGatherBufferFrame1 + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -874,6 +886,8 @@ namespace Njulf.Rendering.Descriptors
                     SimpleDdgiResidencyArenaBuffer => nameof(SimpleDdgiResidencyArenaBuffer),
                     SimpleDdgiStorageValidationBufferBase => nameof(SimpleDdgiStorageValidationBufferBase),
                     SimpleDdgiStorageValidationBufferFrame1 => nameof(SimpleDdgiStorageValidationBufferFrame1),
+                    SimpleDdgiReceiverGatherBufferBase => nameof(SimpleDdgiReceiverGatherBufferBase),
+                    SimpleDdgiReceiverGatherBufferFrame1 => nameof(SimpleDdgiReceiverGatherBufferFrame1),
                     _ => "Unknown"
                 };
             }

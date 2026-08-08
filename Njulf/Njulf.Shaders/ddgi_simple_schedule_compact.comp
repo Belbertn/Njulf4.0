@@ -6,50 +6,59 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
+shared uint CandidateLanes[SIMPLE_DDGI_SCHEDULER_WORKGROUP_SIZE];
+
 void main()
 {
-    uint candidateIndex = gl_GlobalInvocationID.x;
-    if (candidateIndex >= SchedulerCandidateCapacity())
+    if (SchedulerCertifiedQuiesced())
         return;
 
+    uint candidateIndex = gl_GlobalInvocationID.x;
+    uint localIndex = gl_LocalInvocationIndex;
+    bool inRange = candidateIndex < SchedulerCandidateCapacity();
     uint inputBase = pc.CandidateInputOffsetWords +
         candidateIndex * SIMPLE_DDGI_SCHEDULER_CANDIDATE_WORDS;
-    uint probeIndex = SchedulerCandidateWord(inputBase, 0u);
-    if (probeIndex == SIMPLE_DDGI_SCHEDULER_INVALID_PROBE)
-        return;
-
-    uint volumeIndex = SchedulerCandidateWord(inputBase, 1u);
-    uint workClassAndTransport = SchedulerCandidateWord(inputBase, 2u);
-    uint rayTierAndReason = SchedulerCandidateWord(inputBase, 3u);
-    uint workClass = workClassAndTransport & 7u;
-    uint transport = (workClassAndTransport >> 3u) & 3u;
-    uint rayTier = rayTierAndReason & 0xffu;
-    if (volumeIndex >= SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES ||
-        workClass >= SIMPLE_DDGI_SCHEDULER_WORK_CLASSES ||
-        transport >= SIMPLE_DDGI_SCHEDULER_TRANSPORT_CATEGORIES ||
-        rayTier >= SIMPLE_DDGI_SCHEDULER_RAY_TIERS)
-        return;
-
-    uint lane = SchedulerLaneIndex(volumeIndex, workClass, transport, rayTier);
-    uint group = candidateIndex / SIMPLE_DDGI_SCHEDULER_WORKGROUP_SIZE;
-    uint groupStart = group * SIMPLE_DDGI_SCHEDULER_WORKGROUP_SIZE;
-    uint localRank = 0u;
-    for (uint prior = groupStart; prior < candidateIndex; prior++)
+    uint probeIndex = inRange
+        ? SchedulerCandidateWord(inputBase, 0u)
+        : SIMPLE_DDGI_SCHEDULER_INVALID_PROBE;
+    uint volumeIndex = 0u;
+    uint workClassAndTransport = 0u;
+    uint rayTierAndReason = 0u;
+    uint lane = SIMPLE_DDGI_SCHEDULER_MAX_LANES;
+    if (probeIndex != SIMPLE_DDGI_SCHEDULER_INVALID_PROBE)
     {
-        uint priorBase = pc.CandidateInputOffsetWords +
-            prior * SIMPLE_DDGI_SCHEDULER_CANDIDATE_WORDS;
-        uint priorProbe = SchedulerCandidateWord(priorBase, 0u);
-        if (priorProbe == SIMPLE_DDGI_SCHEDULER_INVALID_PROBE)
-            continue;
-        uint priorVolume = SchedulerCandidateWord(priorBase, 1u);
-        uint priorClassTransport = SchedulerCandidateWord(priorBase, 2u);
-        uint priorRayReason = SchedulerCandidateWord(priorBase, 3u);
-        uint priorLane = SchedulerLaneIndex(
-            priorVolume,
-            priorClassTransport & 7u,
-            (priorClassTransport >> 3u) & 3u,
-            priorRayReason & 0xffu);
-        if (priorLane == lane)
+        volumeIndex = SchedulerCandidateWord(inputBase, 1u);
+        workClassAndTransport = SchedulerCandidateWord(inputBase, 2u);
+        rayTierAndReason = SchedulerCandidateWord(inputBase, 3u);
+        uint workClass = workClassAndTransport & 7u;
+        uint transport = (workClassAndTransport >> 3u) & 3u;
+        uint rayTier = rayTierAndReason & 0xffu;
+        if (volumeIndex < SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES &&
+            workClass < SIMPLE_DDGI_SCHEDULER_WORK_CLASSES &&
+            transport < SIMPLE_DDGI_SCHEDULER_TRANSPORT_CATEGORIES &&
+            rayTier < SIMPLE_DDGI_SCHEDULER_RAY_TIERS)
+        {
+            lane = SchedulerLaneIndex(
+                volumeIndex,
+                workClass,
+                transport,
+                rayTier);
+        }
+    }
+    CandidateLanes[localIndex] = lane;
+    barrier();
+    if (lane >= SIMPLE_DDGI_SCHEDULER_MAX_LANES)
+        return;
+
+    uint group = candidateIndex / SIMPLE_DDGI_SCHEDULER_WORKGROUP_SIZE;
+    uint localRank = 0u;
+    // Candidate metadata was previously re-read from the storage buffer for
+    // every preceding lane in this workgroup. Publish the resolved lane once
+    // to shared memory instead: ordering is identical and the O(64) comparison
+    // becomes on-chip rather than millions of uncached SSBO word reads.
+    for (uint prior = 0u; prior < localIndex; prior++)
+    {
+        if (CandidateLanes[prior] == lane)
             localRank++;
     }
 

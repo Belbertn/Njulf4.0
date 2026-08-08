@@ -4,6 +4,7 @@
 
 #include "common.glsl"
 
+
 #ifdef FORWARD_COMPACTED_MESH
 #define FORWARD_MESH_LOCAL_SIZE 64
 #else

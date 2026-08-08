@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Diagnostics;
 using NjulfHelloGame;
 using NUnit.Framework;
 
@@ -231,6 +232,55 @@ public sealed class SampleBenchmarkPairComparerTests
     }
 
     [Test]
+    public void Compare_ProducesForwardGiPairedEstimateFromControlledVariants()
+    {
+        SampleBenchmarkReport disabled = CreateReport(
+            "forward-pair",
+            "sha256:locked-state",
+            SampleBenchmarkCaptureVariant.ForwardGiDisabled,
+            10.0,
+            4.0) with
+        {
+            GpuPasses =
+            [
+                Stats("ForwardPlusPass", 4.0),
+                Stats("ForwardGiGatherPass", 4.0)
+            ]
+        };
+        SampleBenchmarkReport enabled = CreateReport(
+            "forward-pair",
+            "sha256:locked-state",
+            SampleBenchmarkCaptureVariant.ForwardGiEnabled,
+            10.1,
+            4.12) with
+        {
+            GpuPasses =
+            [
+                Stats("ForwardPlusPass", 4.12),
+                Stats("ForwardGiGatherPass", 4.12)
+            ]
+        };
+
+        SampleBenchmarkPairComparison comparison =
+            SampleBenchmarkPairComparer.Compare(
+                disabled,
+                enabled,
+                requireRepeatability: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(comparison.Comparable, Is.True);
+            Assert.That(comparison.ForwardGiGatherEstimate, Is.Not.Null);
+            Assert.That(
+                comparison.ForwardGiGatherEstimate!.Attribution,
+                Is.EqualTo(GiTimingAttribution.PairedEstimate));
+            Assert.That(
+                comparison.ForwardGiGatherEstimate.IncrementalP95Milliseconds,
+                Is.EqualTo(0.12).Within(1e-9));
+        });
+    }
+
+    [Test]
     public void PairComparisonCli_WritesBoundedMachineReadableReport()
     {
         string directory = Path.Combine(
@@ -311,6 +361,39 @@ public sealed class SampleBenchmarkPairComparerTests
             settings.GlobalIllumination
                 .SimpleDdgiForceLegacyFarFieldFallbackEvaluation,
             Is.True);
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.ForwardGiDisabled);
+        Assert.That(
+            settings.Diagnostics.SuppressForwardGiGatherForBenchmark,
+            Is.True);
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.ForwardGiEnabled);
+        Assert.That(
+            settings.Diagnostics.SuppressForwardGiGatherForBenchmark,
+            Is.False);
+
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.ForwardGiExact);
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                settings.Diagnostics.ForceExactForwardGiGatherForBenchmark,
+                Is.True);
+            Assert.That(
+                settings.Diagnostics.SuppressForwardGiGatherForBenchmark,
+                Is.False);
+        });
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.ForwardGiEnabled);
+        Assert.That(
+            settings.Diagnostics.ForceExactForwardGiGatherForBenchmark,
+            Is.False);
     }
 
     private static SampleBenchmarkReport CreateReport(

@@ -327,10 +327,15 @@ public static class SampleTailDdgiQualificationEvaluator
             evidence.ExpectedParticipantCount == evidence.AuditedParticipantCount &&
             evidence.ExpectedTexelCount > 0u &&
             evidence.ExpectedTexelCount == evidence.AuditedTexelCount;
-        bool cleanAudit = evidence.InvalidCacheCount == 0u &&
+        bool cleanAudit = evidence.ExcludedStaleSourceCount == 0u &&
+            evidence.InvalidCacheCount == 0u &&
+            evidence.CacheIdentityFailureCount == 0u &&
+            evidence.CacheCardinalityFailureCount == 0u &&
+            evidence.CacheSourceGenerationFailureCount == 0u &&
+            evidence.CacheSourceEpochFailureCount == 0u &&
+            evidence.CachePhysicalGenerationFailureCount == 0u &&
             evidence.NonFiniteCount == 0u &&
-            evidence.CounterOverflowCount == 0u &&
-            evidence.ExcludedNotVisibleCount == 0u;
+            evidence.CounterOverflowCount == 0u;
         bool currentCertificate = evidence.FinalAuditComplete &&
             evidence.FinalCertificateCurrent &&
             float.IsFinite(evidence.FinalTailBound) &&
@@ -346,8 +351,13 @@ public static class SampleTailDdgiQualificationEvaluator
             exactCoverage && cleanAudit && currentCertificate && trackingValid,
             $"participants={evidence.AuditedParticipantCount}/{evidence.ExpectedParticipantCount}, " +
             $"texels={evidence.AuditedTexelCount}/{evidence.ExpectedTexelCount}, invalidCache={evidence.InvalidCacheCount}, " +
+            $"staleSource={evidence.ExcludedStaleSourceCount}, cacheIdentity={evidence.CacheIdentityFailureCount}, " +
+            $"cacheCardinality={evidence.CacheCardinalityFailureCount}, " +
+            $"cacheSourceGeneration={evidence.CacheSourceGenerationFailureCount}, " +
+            $"cacheSourceEpoch={evidence.CacheSourceEpochFailureCount}, " +
+            $"cachePhysicalGeneration={evidence.CachePhysicalGenerationFailureCount}, " +
             $"nonFinite={evidence.NonFiniteCount}, overflow={evidence.CounterOverflowCount}, " +
-            $"excludedNotVisible={evidence.ExcludedNotVisibleCount}, auditComplete={evidence.FinalAuditComplete}, " +
+            $"excludedNonResidentOrUnpublished={evidence.ExcludedNotVisibleCount}, auditComplete={evidence.FinalAuditComplete}, " +
             $"certificateCurrent={evidence.FinalCertificateCurrent}, bound={evidence.FinalTailBound:R}, " +
             $"tolerance={evidence.FinalTailTolerance:R}, tracking={evidence.FinalTrackingState}, " +
             $"staticWithoutCertificate={evidence.StaticConvergedWithoutCurrentCertificateCount}");

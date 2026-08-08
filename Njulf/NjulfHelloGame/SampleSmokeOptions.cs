@@ -27,6 +27,8 @@ public sealed record SampleSmokeOptions(
     TransparencyMode TransparencyMode = Njulf.Rendering.Data.TransparencyMode.SortedAlphaBlend,
     SampleBenchmarkOptions? Benchmark = null,
     string? SponzaGiCaptureDirectory = null,
+    SampleSponzaGiCaptureMode SponzaGiCaptureMode =
+        SampleSponzaGiCaptureMode.DetailedDiagnostics,
     AsyncComputeMode? AsyncComputeModeOverride = null,
     string? MaterialGiCaptureDirectory = null,
     RenderQualityPreset? QualityPresetOverride = null,

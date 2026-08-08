@@ -22,6 +22,296 @@ public sealed class SimpleDdgiTransportTailTests
         SchedulerResources: 10u);
 
     [Test]
+    public void BlockingSourceWork_IncludesEveryResidentTransientAndPackedCause()
+    {
+        GPUSimpleDdgiSchedulerFeedback[] feedbackCases =
+        [
+            new() { PendingSourceCount = 1u },
+            new() { PendingFreshCount = 2u },
+            new() { PendingExposedCount = 3u },
+            new() { PendingRelocationCount = 4u },
+            new() { PackedPendingSourceInvalidAndCardinalityCounts = 5u << 16 },
+            new() { PackedPendingSourceRepairAndGenerationCounts = 6u << 16 }
+        ];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager.ResolveBlockingTailSourceWorkCount(default),
+                Is.Zero);
+            for (int i = 0; i < feedbackCases.Length; i++)
+            {
+                Assert.That(
+                    SimpleDdgiVolumeManager.HasBlockingTailSourceWork(feedbackCases[i]),
+                    Is.True,
+                    $"source-work cause {i} must block audit");
+            }
+            Assert.That(
+                SimpleDdgiVolumeManager.ResolveBlockingTailSourceWorkCount(
+                    new GPUSimpleDdgiSchedulerFeedback
+                    {
+                        PendingSourceCount = 2u,
+                        PendingFreshCount = 7u,
+                        PendingRelocationCount = 3u
+                    }),
+                Is.EqualTo(7u));
+        });
+    }
+
+    [Test]
+    public void ResidentGenerationWitness_IgnoresExcludedInactiveRetryMutation()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldAdvanceResidentSourceEpoch(
+                    admittedSourceProbeCount: 23u,
+                    activeParticipantSourceMutationCount: 0u),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldAdvanceResidentCanonicalGeneration(
+                    publishedProbeCount: 23u,
+                    activeParticipantCanonicalMutationCount: 0u),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldAdvanceResidentSourceEpoch(23u, 1u),
+                Is.True);
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldAdvanceResidentCanonicalGeneration(23u, 1u),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void SolveDrain_RequiresANewerQuiescedFenceCompleteFeedback()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager.CanCompleteTransportSolveDrain(
+                    true, 100UL, 101UL, 0u, 0u, 0u, false),
+                Is.True);
+            Assert.That(
+                SimpleDdgiVolumeManager.CanCompleteTransportSolveDrain(
+                    true, 100UL, 100UL, 0u, 0u, 0u, false),
+                Is.False,
+                "the completion packet must postdate the quiesce request");
+            Assert.That(
+                SimpleDdgiVolumeManager.CanCompleteTransportSolveDrain(
+                    true, 100UL, 101UL, 7u, 0u, 0u, false),
+                Is.False,
+                "a nonzero epoch still permits cached solve mutation");
+            Assert.That(
+                SimpleDdgiVolumeManager.CanCompleteTransportSolveDrain(
+                    true, 100UL, 101UL, 0u, 1u, 0u, false),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager.CanCompleteTransportSolveDrain(
+                    true, 100UL, 101UL, 0u, 0u, 1u, false),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager.CanCompleteTransportSolveDrain(
+                    true, 100UL, 101UL, 0u, 0u, 0u, true),
+                Is.False);
+        });
+    }
+
+    [Test]
+    public void AuditMismatchIdentity_DecodesBoundedVirtualAndPhysicalWitness()
+    {
+        uint packed = (321u + 1u) | ((654u + 1u) << 16);
+        SimpleDdgiTransportMismatchIdentity identity =
+            SimpleDdgiTransportMismatchIdentity.FromPacked(packed);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(identity.IsValid, Is.True);
+            Assert.That(identity.VirtualProbeIndex, Is.EqualTo(321u));
+            Assert.That(identity.PhysicalProbeIndex, Is.EqualTo(654u));
+            Assert.That(
+                SimpleDdgiTransportMismatchIdentity.FromPacked(0u).IsValid,
+                Is.False);
+        });
+    }
+
+    [Test]
+    public void ConvergenceDeadline_IncludesSourceSolveAuditAndSchedulingWindows()
+    {
+        Assert.That(
+            SimpleDdgiTransportSolveController.ResolveConvergenceDeadlineFrames(
+                sourceSweepFrames: 120,
+                participantCount: 5_787,
+                solveProbeBudgetPerFrame: 256,
+                acceleratedSweepCount: 2,
+                auditDeadlineFrames: 27,
+                schedulingMarginFrames: 4),
+            Is.EqualTo(197));
+    }
+
+    [TestCase(SimpleDdgiTransportPhase.Certified, false, true)]
+    [TestCase(SimpleDdgiTransportPhase.Certified, true, false)]
+    [TestCase(SimpleDdgiTransportPhase.AcceleratedSolve, false, false)]
+    [TestCase(SimpleDdgiTransportPhase.SourceRepair, false, false)]
+    public void StaleCertificate_StartsANewConvergenceDeadlineWave(
+        SimpleDdgiTransportPhase phase,
+        bool certificateCurrent,
+        bool expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager
+                .ShouldRestartTransportConvergenceForStaleCertificate(
+                    phase,
+                    certificateCurrent),
+            Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void AcceptedCertificate_RearmsPeriodicSourceRefreshAfterFullInterval()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager.ResolveNextPeriodicSourceRefreshFrame(
+                    certificateFrame: 1_000u,
+                    refreshIntervalFrames: 480),
+                Is.EqualTo(1_480u));
+            Assert.That(
+                SimpleDdgiVolumeManager.ResolveNextPeriodicSourceRefreshFrame(
+                    certificateFrame: uint.MaxValue - 2u,
+                    refreshIntervalFrames: 4),
+                Is.EqualTo(1u),
+                "the GPU frame comparison is wrap-safe, so the CPU control frame must wrap identically");
+            Assert.That(
+                SimpleDdgiVolumeManager.ResolveNextPeriodicSourceRefreshFrame(
+                    certificateFrame: 77u,
+                    refreshIntervalFrames: 0),
+                Is.EqualTo(78u));
+        });
+    }
+
+    [Test]
+    public void CertifiedMaintenance_QuiescesBetweenPulsesButNeverMasksRealWork()
+    {
+        const uint interval = 64u;
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldQuiesceCertifiedResidentMaintenance(
+                    true, false, false, false, false, 0u, 65u, interval),
+                Is.True);
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldQuiesceCertifiedResidentMaintenance(
+                    true, false, false, false, false, 0u, 128u, interval),
+                Is.False,
+                "the deterministic maintenance pulse must remain live");
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldQuiesceCertifiedResidentMaintenance(
+                    false, false, false, false, false, 0u, 65u, interval),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldQuiesceCertifiedResidentMaintenance(
+                    true, true, false, false, false, 0u, 65u, interval),
+                Is.False,
+                "periodic source replacement has priority");
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldQuiesceCertifiedResidentMaintenance(
+                    true, false, true, false, false, 0u, 65u, interval),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldQuiesceCertifiedResidentMaintenance(
+                    true, false, false, true, false, 0u, 65u, interval),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldQuiesceCertifiedResidentMaintenance(
+                    true, false, false, false, true, 0u, 65u, interval),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldQuiesceCertifiedResidentMaintenance(
+                    true, false, false, false, false, 1u, 65u, interval),
+                Is.False,
+                "dirty work must open admission immediately");
+        });
+    }
+
+    [Test]
+    public void PostBootstrapPageManagement_WakesForIdentityChangesAndPeriodicAudit()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldRunFullProbePageManagement(
+                    false, true, false, false, false, 1u, 64u),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldRunFullProbePageManagement(
+                    false, true, false, false, false, 64u, 64u),
+                Is.True);
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldRunFullProbePageManagement(
+                    true, true, false, false, false, 1u, 64u),
+                Is.True,
+                "sparse bootstrap remains eager until its authoritative boundary");
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldRunFullProbePageManagement(
+                    false, false, false, false, false, 1u, 64u),
+                Is.True);
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldRunFullProbePageManagement(
+                    false, true, true, false, false, 1u, 64u),
+                Is.True);
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldRunFullProbePageManagement(
+                    false, true, false, true, false, 1u, 64u),
+                Is.True);
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldRunFullProbePageManagement(
+                    false, true, false, false, true, 1u, 64u),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void ResidencyBootstrapClassification_EndsOnlyAtAnAuthoritativeBoundary()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ShouldCompleteProbeResidencyBootstrapClassification(
+                        true, false, true, 200u, 0u, 0u),
+                Is.False,
+                "a quiet page summary cannot replace a requested transport certificate");
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ShouldCompleteProbeResidencyBootstrapClassification(
+                        true, true, false, 0u, 17u, 8u),
+                Is.True,
+                "the current certificate is the authoritative tail-enabled boundary");
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ShouldCompleteProbeResidencyBootstrapClassification(
+                        false, false, true, 200u, 0u, 0u),
+                Is.True,
+                "tail-disabled configurations use a fence-complete quiet page summary");
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ShouldCompleteProbeResidencyBootstrapClassification(
+                        false, false, true, 200u, 1u, 0u),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ShouldCompleteProbeResidencyBootstrapClassification(
+                        false, false, true, 200u, 0u, 1u),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ShouldCompleteProbeResidencyBootstrapClassification(
+                        false, false, false, 200u, 0u, 0u),
+                Is.False);
+        });
+    }
+
+    [Test]
     public void ParticipantCoverage_IncludesOffscreenActiveProbe()
     {
         (bool Visible, bool Inactive)[] probes =
@@ -541,6 +831,50 @@ public sealed class SimpleDdgiTransportTailTests
     }
 
     [Test]
+    public void AuditReadback_RejectsMutationOfEveryFrozenGeneration()
+    {
+        for (int field = 0; field < 10; field++)
+        {
+            SimpleDdgiTransportSolveController controller =
+                CreateAuditingController(participantCount: 1);
+            SimpleDdgiTransportTailSummary summary = CreateFiniteAuditSummary(
+                controller,
+                expectedParticipants: 1,
+                auditedParticipants: 1,
+                reason: SimpleDdgiTransportCertificationReason.Certified);
+            SimpleDdgiTransportGenerations current = controller.FrozenGenerations;
+            SimpleDdgiTransportGenerations changed = field switch
+            {
+                0 => current with { VolumeTable = current.VolumeTable + 1u },
+                1 => current with { PhysicalOwnership = current.PhysicalOwnership + 1u },
+                2 => current with { SourceLighting = current.SourceLighting + 1u },
+                3 => current with { SourceEpoch = current.SourceEpoch + 1u },
+                4 => current with { TransportOperator = current.TransportOperator + 1u },
+                5 => current with { CanonicalField = current.CanonicalField + 1u },
+                6 => current with { Solve = current.Solve + 1u },
+                7 => current with { Audit = current.Audit + 1u },
+                8 => current with { Queue = current.Queue + 1u },
+                _ => current with
+                {
+                    SchedulerResources = current.SchedulerResources + 1u
+                }
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(controller.TryAcceptAudit(summary, changed), Is.False,
+                    $"generation field {field}");
+                Assert.That(controller.Phase,
+                    Is.Not.EqualTo(SimpleDdgiTransportPhase.AuditFrozen),
+                    $"generation field {field}");
+                Assert.That(controller.LastReason,
+                    Is.EqualTo(SimpleDdgiTransportCertificationReason.GenerationsChanged),
+                    $"generation field {field}");
+            });
+        }
+    }
+
+    [Test]
     public void Controller_TailAboveToleranceStartsANewFullyVisitedSolveEpoch()
     {
         var controller = new SimpleDdgiTransportSolveController();
@@ -594,6 +928,274 @@ public sealed class SimpleDdgiTransportTailTests
     }
 
     [Test]
+    public void CoverageFailure_ClearsWitnessAndCannotReauditSameTuple()
+    {
+        var controller = new SimpleDdgiTransportSolveController();
+        Assert.That(controller.BeginSolveEpoch(Generations, 2), Is.True);
+        SimpleDdgiTransportGenerations solve = controller.FrozenGenerations;
+        Assert.That(controller.MarkParticipantVisited(0, solve), Is.True);
+        Assert.That(controller.MarkParticipantVisited(1, solve), Is.True);
+        Assert.That(controller.TryBeginAudit(solve), Is.True);
+
+        SimpleDdgiTransportTailSummary incomplete = CreateFiniteAuditSummary(
+            controller,
+            expectedParticipants: 2u,
+            auditedParticipants: 1u,
+            reason: SimpleDdgiTransportCertificationReason.ParticipantCoverageIncomplete);
+
+        Assert.That(
+            controller.TryAcceptAudit(incomplete, controller.FrozenGenerations),
+            Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(controller.Phase, Is.EqualTo(
+                SimpleDdgiTransportPhase.ParticipantReconciliation));
+            Assert.That(controller.RecoveryAction, Is.EqualTo(
+                SimpleDdgiTransportRecoveryAction.ReconcileParticipants));
+            Assert.That(controller.ExpectedParticipantCount, Is.Zero);
+            Assert.That(controller.VisitedParticipantCount, Is.Zero);
+            Assert.That(controller.IsSolveEpochComplete, Is.False);
+            Assert.That(controller.TryBeginAudit(controller.FrozenGenerations), Is.False);
+            Assert.That(controller.RecoveryCount, Is.EqualTo(1u));
+        });
+    }
+
+    [Test]
+    public void InvalidCacheFailure_EntersSourceRepairAndClearsWitness()
+    {
+        var controller = CreateAuditingController(participantCount: 1);
+        SimpleDdgiTransportTailSummary invalidCache = CreateFiniteAuditSummary(
+            controller,
+            expectedParticipants: 1u,
+            auditedParticipants: 0u,
+            reason: SimpleDdgiTransportCertificationReason.ParticipantCoverageIncomplete) with
+        {
+            ExcludedInvalidCacheCount = 1u,
+            CacheIdentityFailureCount = 1u
+        };
+
+        Assert.That(
+            controller.TryAcceptAudit(invalidCache, controller.FrozenGenerations),
+            Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(controller.Phase, Is.EqualTo(SimpleDdgiTransportPhase.SourceRepair));
+            Assert.That(controller.LastReason, Is.EqualTo(
+                SimpleDdgiTransportCertificationReason.InvalidCache));
+            Assert.That(controller.RecoveryAction, Is.EqualTo(
+                SimpleDdgiTransportRecoveryAction.RepairSourceCache));
+            Assert.That(controller.ExpectedParticipantCount, Is.Zero);
+            Assert.That(controller.VisitedParticipantCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void AboveTolerance_AdvancesSolveEpochBeforeNextAudit()
+    {
+        var controller = CreateAuditingController(participantCount: 1);
+        uint rejectedSolveEpoch = controller.SolveEpoch;
+        SimpleDdgiTransportTailSummary aboveTolerance = CreateFiniteAuditSummary(
+            controller,
+            expectedParticipants: 1u,
+            auditedParticipants: 1u,
+            reason: SimpleDdgiTransportCertificationReason.TailAboveTolerance) with
+        {
+            FixedPointDefect = 0.1f,
+            CertifiedContractionBound = 0.5f,
+            AbsoluteTailBound = 0.2f,
+            RelativeTailBound = 0.2f
+        };
+
+        Assert.That(
+            controller.TryAcceptAudit(aboveTolerance, controller.FrozenGenerations),
+            Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(controller.SolveEpoch, Is.Not.EqualTo(rejectedSolveEpoch));
+            Assert.That(controller.Phase, Is.EqualTo(SimpleDdgiTransportPhase.AcceleratedSolve));
+            Assert.That(controller.VisitedParticipantCount, Is.Zero);
+            Assert.That(controller.RecoveryAction, Is.EqualTo(
+                SimpleDdgiTransportRecoveryAction.AdvanceSolveEpoch));
+        });
+    }
+
+    [Test]
+    public void NonFiniteAudit_EntersFailClosedRecovery()
+    {
+        var controller = CreateAuditingController(participantCount: 1);
+        SimpleDdgiTransportTailSummary nonFinite = CreateFiniteAuditSummary(
+            controller,
+            expectedParticipants: 1u,
+            auditedParticipants: 1u,
+            reason: SimpleDdgiTransportCertificationReason.NonFiniteEvidence) with
+        {
+            FixedPointDefect = float.NaN,
+            NonFiniteCount = 1u
+        };
+
+        Assert.That(
+            controller.TryAcceptAudit(nonFinite, controller.FrozenGenerations),
+            Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(controller.Phase, Is.EqualTo(
+                SimpleDdgiTransportPhase.FailClosedRecovery));
+            Assert.That(controller.RecoveryAction, Is.EqualTo(
+                SimpleDdgiTransportRecoveryAction.RebuildPrivateField));
+            Assert.That(controller.RecoveryGeneration, Is.Not.Zero);
+            Assert.That(controller.ExpectedParticipantCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void ConvergenceDeadline_EntersFreshPrivateFieldRecovery()
+    {
+        var controller = CreateAuditingController(participantCount: 2);
+        uint recoveryGeneration = controller.RecoveryGeneration;
+
+        controller.EnterConvergenceDeadlineRecovery(controller.FrozenGenerations);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(controller.Phase, Is.EqualTo(
+                SimpleDdgiTransportPhase.FailClosedRecovery));
+            Assert.That(controller.LastReason, Is.EqualTo(
+                SimpleDdgiTransportCertificationReason.ConvergenceDeadlineExceeded));
+            Assert.That(controller.LastSummary.Reason, Is.EqualTo(
+                SimpleDdgiTransportCertificationReason.ConvergenceDeadlineExceeded));
+            Assert.That(controller.LastSummary.IsComplete, Is.False);
+            Assert.That(controller.RecoveryAction, Is.EqualTo(
+                SimpleDdgiTransportRecoveryAction.RebuildPrivateField));
+            Assert.That(controller.RecoveryGeneration, Is.Not.EqualTo(recoveryGeneration));
+            Assert.That(controller.ExpectedParticipantCount, Is.Zero);
+            Assert.That(controller.VisitedParticipantCount, Is.Zero);
+            Assert.That(controller.CompletedAuditPending, Is.False);
+        });
+    }
+
+    [Test]
+    public void QuantizationLimited_ReportsUnsupportedFloorWithoutSpinning()
+    {
+        var controller = CreateAuditingController(participantCount: 1);
+        SimpleDdgiTransportTailSummary limited = CreateFiniteAuditSummary(
+            controller,
+            expectedParticipants: 1u,
+            auditedParticipants: 1u,
+            reason: SimpleDdgiTransportCertificationReason.QuantizationLimited) with
+        {
+            CanonicalQuantizationFloor = 0.05f,
+            Tolerance = 0.025f
+        };
+
+        Assert.That(
+            controller.TryAcceptAudit(limited, controller.FrozenGenerations),
+            Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(controller.Phase, Is.EqualTo(
+                SimpleDdgiTransportPhase.UnsupportedTolerance));
+            Assert.That(controller.RecoveryAction, Is.EqualTo(
+                SimpleDdgiTransportRecoveryAction.ReportUnsupportedTolerance));
+            Assert.That(controller.TryBeginAudit(controller.FrozenGenerations), Is.False);
+        });
+    }
+
+    [Test]
+    public void CompleteAudit_LeavesFrozenPhaseWithinReadbackDeadline()
+    {
+        var controller = CreateAuditingController(participantCount: 1);
+        int deadline = SimpleDdgiTransportSolveController.ResolveAuditReadbackDeadlineFrames(
+            probeCount: 5_787,
+            chunkSize: 256,
+            framesInFlight: RenderingConstants.FramesInFlight,
+            readbackMargin: 2);
+        Assert.That(deadline, Is.EqualTo(
+            23 + RenderingConstants.FramesInFlight + 2));
+
+        for (int age = 0; age < deadline; age++)
+            controller.ObserveProgressFrame(madeProgress: age == 0);
+        Assert.That(controller.Phase, Is.EqualTo(SimpleDdgiTransportPhase.AuditFrozen));
+
+        Assert.That(controller.ExpireAudit(controller.FrozenGenerations), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(controller.Phase, Is.EqualTo(SimpleDdgiTransportPhase.AcceleratedSolve));
+            Assert.That(controller.LastReason, Is.EqualTo(
+                SimpleDdgiTransportCertificationReason.AuditReadbackTimeout));
+            Assert.That(controller.IsSolveEpochComplete, Is.False);
+            Assert.That(controller.NoProgressFrames, Is.EqualTo(deadline - 1));
+        });
+    }
+
+    [Test]
+    public void CompletedAuditSummary_MustBeConsumedBeforeAnyOtherTransition()
+    {
+        var controller = CreateAuditingController(participantCount: 1);
+        SimpleDdgiTransportTailSummary summary = CreateFiniteAuditSummary(
+            controller,
+            expectedParticipants: 1u,
+            auditedParticipants: 1u,
+            reason: SimpleDdgiTransportCertificationReason.Certified);
+
+        Assert.That(
+            controller.TryStageCompletedAudit(summary, controller.FrozenGenerations),
+            Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(controller.CompletedAuditPending, Is.True);
+            Assert.That(controller.TryBeginAudit(controller.FrozenGenerations), Is.False);
+            Assert.That(controller.LastReason, Is.EqualTo(
+                SimpleDdgiTransportCertificationReason.CompletedAuditUnconsumed));
+        });
+        Assert.That(controller.TryConsumeCompletedAudit(out bool accepted), Is.True);
+        Assert.That(accepted, Is.True);
+        Assert.That(controller.CompletedAuditPending, Is.False);
+    }
+
+    [Test]
+    public void StateMachineModel_OneThousandFramesCannotRemainInTerminalFrozenLoop()
+    {
+        var controller = new SimpleDdgiTransportSolveController();
+        SimpleDdgiTransportGenerations generations = Generations;
+        int frozenAge = 0;
+        int deadline = SimpleDdgiTransportSolveController.ResolveAuditReadbackDeadlineFrames(
+            probeCount: 1,
+            chunkSize: 256,
+            framesInFlight: 3,
+            readbackMargin: 2);
+
+        for (int frame = 0; frame < 1_000; frame++)
+        {
+            if (controller.Phase is SimpleDdgiTransportPhase.SourceRepair or
+                SimpleDdgiTransportPhase.ParticipantReconciliation or
+                SimpleDdgiTransportPhase.FailClosedRecovery)
+            {
+                Assert.That(controller.BeginSolveEpoch(generations, 1), Is.True);
+            }
+            if (controller.Phase == SimpleDdgiTransportPhase.AcceleratedSolve)
+            {
+                SimpleDdgiTransportGenerations solve = controller.FrozenGenerations;
+                if (!controller.IsSolveEpochComplete)
+                    Assert.That(controller.MarkParticipantVisited(0, solve), Is.True);
+                Assert.That(controller.TryBeginAudit(solve), Is.True);
+                frozenAge = 0;
+            }
+            else if (controller.Phase == SimpleDdgiTransportPhase.AuditFrozen)
+            {
+                frozenAge++;
+                if (frozenAge > deadline)
+                {
+                    Assert.That(controller.ExpireAudit(controller.FrozenGenerations), Is.True);
+                    frozenAge = 0;
+                }
+            }
+        }
+
+        Assert.That(frozenAge, Is.LessThanOrEqualTo(deadline));
+        Assert.That(controller.RecoveryCount, Is.GreaterThan(0u));
+    }
+
+    [Test]
     public void Controller_PreservesExplicitAuditFailureReason()
     {
         var controller = new SimpleDdgiTransportSolveController();
@@ -632,7 +1234,7 @@ public sealed class SimpleDdgiTransportTailTests
                 SimpleDdgiTransportCertificationReason.ParticipantCoverageIncomplete));
             Assert.That(controller.LastSummary, Is.EqualTo(rejected));
             Assert.That(controller.Phase, Is.EqualTo(
-                SimpleDdgiTransportPhase.AcceleratedSolve));
+                SimpleDdgiTransportPhase.ParticipantReconciliation));
         });
     }
 
@@ -852,5 +1454,47 @@ public sealed class SimpleDdgiTransportTailTests
         SimpleDdgiTransportSolveController.OrderVolumes(keys, ordered);
 
         Assert.That(ordered, Is.EqualTo(new[] { 1, 0, 2 }));
+    }
+
+    private static SimpleDdgiTransportSolveController CreateAuditingController(
+        int participantCount)
+    {
+        var controller = new SimpleDdgiTransportSolveController();
+        Assert.That(controller.BeginSolveEpoch(Generations, participantCount), Is.True);
+        SimpleDdgiTransportGenerations solve = controller.FrozenGenerations;
+        for (int participant = 0; participant < participantCount; participant++)
+            Assert.That(controller.MarkParticipantVisited(participant, solve), Is.True);
+        Assert.That(controller.TryBeginAudit(solve), Is.True);
+        return controller;
+    }
+
+    private static SimpleDdgiTransportTailSummary CreateFiniteAuditSummary(
+        SimpleDdgiTransportSolveController controller,
+        uint expectedParticipants,
+        uint auditedParticipants,
+        SimpleDdgiTransportCertificationReason reason)
+    {
+        uint expectedTexels = checked(expectedParticipants * 64u);
+        uint auditedTexels = checked(auditedParticipants * 64u);
+        return new SimpleDdgiTransportTailSummary
+        {
+            AuditEpoch = controller.AuditEpoch,
+            Generations = controller.FrozenGenerations,
+            ExpectedParticipantCount = expectedParticipants,
+            AuditedParticipantCount = auditedParticipants,
+            ExpectedTexelCount = expectedTexels,
+            AuditedTexelCount = auditedTexels,
+            FixedPointDefect = 0.00001f,
+            FieldMagnitude = 1.0f,
+            ConfiguredContractionBound = 0.9f,
+            ObservedContractionBound = 0.5f,
+            CertifiedContractionBound = 0.5f,
+            AbsoluteTailBound = 0.00002f,
+            RelativeTailBound = 0.00002f,
+            Tolerance = 0.025f,
+            CanonicalQuantizationFloor = 0.001f,
+            IsComplete = true,
+            Reason = reason
+        };
     }
 }

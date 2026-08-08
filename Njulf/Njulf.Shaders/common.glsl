@@ -220,7 +220,8 @@ const int SIMPLE_DDGI_SCHEDULER_ARENA_BUFFER_INDEX = 173;
 const int SIMPLE_DDGI_RECEIVER_PROBE_BUFFER_INDEX = 174;
 const int SIMPLE_DDGI_RESIDENCY_ARENA_BUFFER_INDEX = 175;
 const int SIMPLE_DDGI_STORAGE_VALIDATION_BUFFER_BASE_INDEX = 176;
-const int STATIC_BUFFER_COUNT = 178;
+const int SIMPLE_DDGI_RECEIVER_GATHER_BUFFER_BASE_INDEX = 178;
+const int STATIC_BUFFER_COUNT = 180;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -1272,6 +1273,14 @@ layout(set = 0, binding = 0) readonly buffer BindlessStorageVectorBuffer
     uvec4 Vectors[];
 } BindlessStorageVectorBuffers[];
 
+// Read-only 64-bit view for compact two-word records. As with the uvec4 view,
+// callers must prove both a dynamically-uniform descriptor and record-aligned
+// word offset.
+layout(set = 0, binding = 0) readonly buffer BindlessStoragePairBuffer
+{
+    uvec2 Pairs[];
+} BindlessStoragePairBuffers[];
+
 layout(set = 1, binding = 0) uniform sampler2D BindlessTextures[];
 layout(set = 1, binding = 0) uniform sampler2DArray BindlessArrayTextures[];
 layout(set = 1, binding = 0) uniform samplerCube BindlessCubeTextures[];
@@ -1904,6 +1913,15 @@ const uint SIMPLE_DDGI_INVALID_SOURCE_EPOCH_COUNTER =
     SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 21u;
 const uint SIMPLE_DDGI_INVALID_HIT_KIND_COUNTER =
     SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 22u;
+// Detailed-only per-volume energy distribution and coherent maximum witness.
+// Keep synchronized with RendererDiagnosticsBuffer. Existing offsets remain
+// stable because this family is appended after storage validation.
+const uint SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_COUNTER_BASE =
+    SIMPLE_DDGI_STORAGE_VALIDATION_COUNTER_BASE + 23u;
+const uint SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_HISTOGRAM_COUNT = 16u;
+const uint SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_COUNTER_STRIDE =
+    23u + SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_HISTOGRAM_COUNT;
+const uint SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_COUNTER_COUNT = 16u;
 const float DDGI_THIN_LUMINANCE_SCALE = 4096.0;
 const float DDGI_SHADOW_VISIBILITY_HIT_DISTANCE_SCALE = 256.0;
 const float DIRECTIONAL_SHADOW_RECEIVER_DEPTH_QUANTIZATION_SCALE = 65535.0;
@@ -1972,6 +1990,12 @@ uvec4 ReadStorageUVec4Uniform(uint bufferIndex, uint wordOffset)
 uvec4 ReadStorageAlignedUVec4Uniform(uint bufferIndex, uint wordOffset)
 {
     return BindlessStorageVectorBuffers[bufferIndex].Vectors[wordOffset >> 2u];
+}
+
+// wordOffset must be two-word aligned.
+uvec2 ReadStorageAlignedUVec2Uniform(uint bufferIndex, uint wordOffset)
+{
+    return BindlessStoragePairBuffers[bufferIndex].Pairs[wordOffset >> 1u];
 }
 
 void WriteStorageWord(uint bufferIndex, uint wordOffset, uint value)

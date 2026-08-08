@@ -154,7 +154,8 @@ namespace Njulf.Rendering.Resources
                 SimpleDdgiVolumeManager.VisibilityTexelsPerProbe) * 4UL;
         public const ulong LegacyRayResultBytes = 32;
         public const ulong RayResultBytes = 20;
-        public const uint TransportRayCacheAbiVersion = 5;
+        public const uint TransportRayCacheAbiVersion =
+            (uint)SimpleDdgiStorageAbiVersion.Packed;
         public const ulong TransportRayCacheBytes = 36;
         public const ulong Compact28TransportRayCacheBytes = 28;
         public const ulong Compact24TransportRayCacheBytes = 24;
@@ -335,13 +336,21 @@ namespace Njulf.Rendering.Resources
                     0,
                     probes);
                 densePayloadProbes = densePayloadProbeCount < 0
-                    ? probes - sparseVirtualProbes
+                    ? (resolvedResidencyMode.UsesSparsePayloads()
+                        ? probes - sparseVirtualProbes
+                        : probes)
                     : densePayloadProbeCount;
-                if (densePayloadProbes < 0 ||
-                    checked(densePayloadProbes + sparseVirtualProbes) != probes)
+                bool payloadPopulationValid =
+                    resolvedResidencyMode.UsesSparsePayloads()
+                        ? densePayloadProbes >= 0 &&
+                            checked(densePayloadProbes + sparseVirtualProbes) == probes
+                        : densePayloadProbes == probes;
+                if (!payloadPopulationValid)
                 {
                     throw new ArgumentException(
-                        "Dense and sparse virtual probe populations must exactly partition the virtual field.");
+                        resolvedResidencyMode.UsesSparsePayloads()
+                            ? "Dense and sparse virtual probe populations must exactly partition the virtual field."
+                            : "Demand-only residency modes must retain a dense payload for every virtual probe.");
                 }
                 sparseVirtualPages = sparseVirtualPageCount > 0
                     ? sparseVirtualPageCount
@@ -1142,8 +1151,11 @@ namespace Njulf.Rendering.Resources
                         continue;
                     selectedIndices.Add(requestIndex);
                     SimpleDdgiLayoutVolumeRequest request = requests[requestIndex];
+                    // Shadow retains dense payload authority but still needs
+                    // the exact sparse virtual topology for its demand and
+                    // reference-page-model telemetry.
                     if (!request.SparseNearRingEligible ||
-                        planResidencyMode == SimpleDdgiProbeResidencyMode.Dense)
+                        !planResidencyMode.CollectsDemand())
                     {
                         continue;
                     }
@@ -1152,8 +1164,9 @@ namespace Njulf.Rendering.Resources
                     sparseVirtualPages = checked(
                         sparseVirtualPages + request.VirtualPageCount);
                 }
-                int densePayloadProbes = checked(
-                    totalProbeCount - sparseVirtualProbes);
+                int densePayloadProbes = planResidencyMode.UsesSparsePayloads()
+                    ? checked(totalProbeCount - sparseVirtualProbes)
+                    : totalProbeCount;
                 int configuredPhysicalPages = physicalPageCapacityOverride ??
                     Math.Min(
                         Math.Max(0, sparsePhysicalPageBudget),
