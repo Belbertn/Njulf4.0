@@ -437,6 +437,21 @@ namespace Njulf.Tests
                         GlobalIlluminationDebugView.DdgiSourceCacheRadiance),
                     Is.True);
                 Assert.That(
+                    RendererBuildFeatures.SourceCacheRadianceReceiverDiagnosticCompiled,
+                    Is.False);
+                Assert.That(
+                    RendererBuildFeatures.IsGlobalIlluminationDebugViewAvailable(
+                        GlobalIlluminationDebugView.DdgiSourceCacheRadiance),
+                    Is.False);
+                Assert.That(
+                    RendererBuildFeatures.ResolveGlobalIlluminationDebugView(
+                        GlobalIlluminationDebugView.DdgiSourceCacheRadiance),
+                    Is.EqualTo(GlobalIlluminationDebugView.None));
+                Assert.That(
+                    RendererBuildFeatures.GetGlobalIlluminationDebugViewAvailabilityReason(
+                        GlobalIlluminationDebugView.DdgiSourceCacheRadiance),
+                    Does.Contain("compute-projected"));
+                Assert.That(
                     RendererBuildFeatures.RequiresDetailedDdgiReceiverDiagnostics(
                         GlobalIlluminationDebugView.FinalIndirect),
                     Is.False);

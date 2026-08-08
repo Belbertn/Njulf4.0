@@ -14249,10 +14249,14 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private static bool NearlyEqual(float left, float right, float epsilon) =>
             MathF.Abs(left - right) <= epsilon;
 
-        internal static uint ResolveSimpleDdgiDebugViewMode(GlobalIlluminationDebugView debugView) =>
-            debugView == GlobalIlluminationDebugView.DdgiSourceCacheRadiance
+        internal static uint ResolveSimpleDdgiDebugViewMode(GlobalIlluminationDebugView debugView)
+        {
+            GlobalIlluminationDebugView effectiveView =
+                RendererBuildFeatures.ResolveGlobalIlluminationDebugView(debugView);
+            return effectiveView == GlobalIlluminationDebugView.DdgiSourceCacheRadiance
                 ? SourceCacheRadianceDebugViewMode
-                : (uint)debugView;
+                : (uint)effectiveView;
+        }
 
         private GPUSimpleDdgiParams CreateDisabledParams(GlobalIlluminationSettings settings)
         {
@@ -14389,7 +14393,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             // diagnostics capture or an active GI debug view.
             if (RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled &&
                 (_settings.Diagnostics.DdgiForwardEstimateCountersEnabled ||
-                    settings.DebugView != GlobalIlluminationDebugView.None))
+                    RendererBuildFeatures.ResolveGlobalIlluminationDebugView(
+                        settings.DebugView) != GlobalIlluminationDebugView.None))
             {
                 flags |= 1u << 9;
             }

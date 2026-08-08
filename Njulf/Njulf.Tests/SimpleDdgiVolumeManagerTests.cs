@@ -49,13 +49,13 @@ public sealed class SimpleDdgiVolumeManagerTests
     }
 
     [Test]
-    public void SimpleDdgiDebugView_MapsSourceCacheToForwardShaderAbi()
+    public void SimpleDdgiDebugView_ReservesSourceCacheAbiButRejectsUnavailableReceiverPath()
     {
         Assert.Multiple(() =>
         {
             Assert.That(
                 SimpleDdgiVolumeManager.ResolveSimpleDdgiDebugViewMode(GlobalIlluminationDebugView.DdgiSourceCacheRadiance),
-                Is.EqualTo(SimpleDdgiVolumeManager.SourceCacheRadianceDebugViewMode));
+                Is.Zero);
             Assert.That(SimpleDdgiVolumeManager.SourceCacheRadianceDebugViewMode, Is.EqualTo(125u));
             Assert.That(
                 SimpleDdgiVolumeManager.ResolveSimpleDdgiDebugViewMode(GlobalIlluminationDebugView.None),

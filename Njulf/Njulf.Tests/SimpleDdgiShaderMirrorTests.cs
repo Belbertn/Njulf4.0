@@ -1375,6 +1375,22 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void SourceCacheRadianceDiagnostic_IsNotCompiledIntoReceiverFragmentShader()
+        {
+            string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    forward,
+                    Does.Not.Contain("#define NJULF_SIMPLE_DDGI_SOURCE_CACHE_DIAGNOSTIC 1"));
+                Assert.That(
+                    forward,
+                    Does.Contain("#include \"ddgi_simple_shared.glsl\""));
+            });
+        }
+
+        [Test]
         public void StorageValidationTelemetry_UsesDedicatedBankAtConsumerBoundaries()
         {
             string common = ReadRepoText("Njulf.Shaders", "common.glsl");

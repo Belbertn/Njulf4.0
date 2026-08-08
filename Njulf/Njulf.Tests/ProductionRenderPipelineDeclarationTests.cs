@@ -197,7 +197,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
                 Assert.That(
                     declarations[passName].Usages.Any(
                         candidate => candidate.Resource == RenderGraphResourceId.SimpleDdgiTransportSourceCache),
-                    Is.EqualTo(expectsForwardDiagnosticResources),
+                    Is.False,
                     passName);
             });
         }

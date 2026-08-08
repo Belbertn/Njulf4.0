@@ -142,7 +142,7 @@ public sealed record SampleSponzaGiVisualMetricGate(
 /// </summary>
 public sealed class SampleSponzaGiCaptureContract
 {
-    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v11";
+    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v12";
     public const string VisualMetricGateSchemaVersion = "realtime-gi-closure-sponza-visual-metrics/v1";
     public const string CoverageOracleSchemaVersion = "realtime-gi-closure-sponza-coverage-oracle/v1";
     public const int LockedWidth = 1600;
@@ -970,9 +970,9 @@ public sealed class SampleSponzaGiCaptureContract
         if (ReceiverRois.Count != 10)
             throw new InvalidOperationException(
                 "The closure capture requires the established coverage ROIs plus lit-side, shadowed-side, and adjacent curtain transport ROIs.");
-        if (Outputs.Count != 28)
+        if (Outputs.Count != 27)
             throw new InvalidOperationException(
-                "The closure capture requires the twenty-eight locked beauty/direct/GI and sparse-residency attribution outputs.");
+                "The closure capture requires the twenty-seven locked beauty/direct/GI and sparse-residency attribution outputs.");
 
         ValidateDistinctNames(ReceiverRois.Select(static roi => roi.Name), "receiver ROI");
         ValidateDistinctNames(Outputs.Select(static output => output.Name), "output");
@@ -1023,7 +1023,7 @@ public sealed class SampleSponzaGiCaptureContract
 
         string[] requiredOutputs =
         [
-            "beauty", "direct-only", "final-indirect", "irradiance-log", "source-cache-radiance", "sampled-irradiance", "final-diffuse",
+            "beauty", "direct-only", "final-indirect", "irradiance-log", "sampled-irradiance", "final-diffuse",
             "volume-contributor", "gather-clipmap", "gather-blend-weight", "gather-fallback",
             "spatial-coverage", "support", "visibility", "ownership", "fallback",
             "data-confidence", "directional-support", "confidence-chain",
@@ -1158,7 +1158,6 @@ public sealed class SampleSponzaGiCaptureContract
                     DisableEnvironmentLighting: true),
                 new SampleSponzaGiCaptureOutput("final-indirect", "final-indirect", GlobalIlluminationDebugView.FinalIndirect, false, "Final indirect debug output."),
                 new SampleSponzaGiCaptureOutput("irradiance-log", "irradiance-log", GlobalIlluminationDebugView.DdgiIrradiance, false, "Log-normalized structured-gather irradiance; exact zero remains black while low nonzero energy stays visible."),
-                new SampleSponzaGiCaptureOutput("source-cache-radiance", "source-cache-radiance", GlobalIlluminationDebugView.DdgiSourceCacheRadiance, false, "Log-normalized direct, emissive, and sky source-cache irradiance before recursive transport."),
                 new SampleSponzaGiCaptureOutput("sampled-irradiance", "sampled-irradiance", GlobalIlluminationDebugView.DdgiSampledIrradiance, false, "Sampled DDGI irradiance before final diffuse composition."),
                 new SampleSponzaGiCaptureOutput("final-diffuse", "final-diffuse", GlobalIlluminationDebugView.DdgiFinalDiffuse, false, "Final diffuse GI after material composition."),
                 new SampleSponzaGiCaptureOutput("volume-contributor", "volume-contributor", GlobalIlluminationDebugView.DdgiGatherLocalVolume, false, "Local authored-volume contribution; empty in the default Sponza profile."),

@@ -35,8 +35,8 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(contract.VerticalPathDurationSeconds, Is.InRange(10, 20));
             Assert.That(contract.VerticalTraversalFrameCount, Is.EqualTo(960));
             Assert.That(contract.MotionTraversalFrameCount, Is.EqualTo(300));
-            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v11"));
-            Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(6_164));
+            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v12"));
+            Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(6_158));
             Assert.That(contract.LowBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeLow"));
             Assert.That(contract.LowBookmark.Position.Y, Is.EqualTo(1.35f));
             Assert.That(contract.HighBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeHigh"));
@@ -63,7 +63,6 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                 "direct-only",
                 "final-indirect",
                 "irradiance-log",
-                "source-cache-radiance",
                 "sampled-irradiance",
                 "final-diffuse",
                 "volume-contributor",

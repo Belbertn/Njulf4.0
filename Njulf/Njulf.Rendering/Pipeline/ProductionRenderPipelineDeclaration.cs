@@ -147,11 +147,9 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadGraphicsAndComputeStorage(RenderGraphResourceId.SimpleDdgiReceiverProbes),
                 ReadWriteGraphicsAndComputeStorage(RenderGraphResourceId.SimpleDdgiResidency),
 #if DEBUG || NJULF_DETAILED_INVESTIGATION
-                // Only diagnostic forward artifacts can inspect update-side
-                // source-cache generations. Production receiver artifacts have
-                // neither dependency and remain compact-only.
+                // Detailed receiver views inspect the update-side probe state.
+                // Raw source-cache decoding is deliberately compute-only.
                 ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiProbeState),
-                ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiTransportSourceCache),
 #endif
                 ReadWriteGraphicsStorage(RenderGraphResourceId.RendererDiagnosticsBuffer),
                 WriteColorAttachment(RenderGraphResourceId.SceneColor)));
@@ -312,7 +310,6 @@ internal sealed class ProductionRenderPipelineDeclaration
             ReadWriteGraphicsStorage(RenderGraphResourceId.SimpleDdgiResidency),
 #if DEBUG || NJULF_DETAILED_INVESTIGATION
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiProbeState),
-            ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiTransportSourceCache),
 #endif
             ReadWriteGraphicsStorage(RenderGraphResourceId.RendererDiagnosticsBuffer),
             ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)),
@@ -334,7 +331,6 @@ internal sealed class ProductionRenderPipelineDeclaration
             ReadWriteGraphicsStorage(RenderGraphResourceId.SimpleDdgiResidency),
 #if DEBUG || NJULF_DETAILED_INVESTIGATION
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiProbeState),
-            ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiTransportSourceCache),
 #endif
             ReadWriteGraphicsStorage(RenderGraphResourceId.RendererDiagnosticsBuffer),
             WriteColorAttachment(RenderGraphResourceId.WeightedOitAccumulation),

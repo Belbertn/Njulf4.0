@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text;
 using Hexa.NET.ImGui;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Diagnostics;
 using CoreVector3 = Njulf.Core.Math.Vector3;
 using NumericsVector3 = System.Numerics.Vector3;
 
@@ -76,6 +77,12 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
         ImGui.SeparatorText("Transparent and decal receivers");
         ImGui.TextWrapped(
             "Layered receivers sample Simple DDGI directly.");
+
+        bool geometryDecalsEnabled = settings.Decals.GeometryDecalsEnabled;
+        if (ImGui.Checkbox("Geometry decals enabled", ref geometryDecalsEnabled))
+            settings.Decals.GeometryDecalsEnabled = geometryDecalsEnabled;
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Enables or disables geometry-decal rendering. Changes apply immediately.");
 
         bool transparentGi = settings.Transparency.ReceiveGlobalIllumination;
         if (ImGui.Checkbox("Transparent materials receive DDGI", ref transparentGi))
@@ -214,6 +221,12 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
             {
                 foreach (object value in Enum.GetValues(type))
                 {
+                    if (value is GlobalIlluminationDebugView giView &&
+                        !RendererBuildFeatures.IsGlobalIlluminationDebugViewAvailable(giView))
+                    {
+                        continue;
+                    }
+
                     bool selected = Equals(value, current);
                     if (ImGui.Selectable(value.ToString() ?? string.Empty, selected))
                     {
@@ -222,6 +235,13 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
                     }
                 }
                 ImGui.EndCombo();
+            }
+
+            if (current is GlobalIlluminationDebugView currentGiView &&
+                !RendererBuildFeatures.IsGlobalIlluminationDebugViewAvailable(currentGiView))
+            {
+                ImGui.TextDisabled(
+                    RendererBuildFeatures.GetGlobalIlluminationDebugViewAvailabilityReason(currentGiView));
             }
         }
 

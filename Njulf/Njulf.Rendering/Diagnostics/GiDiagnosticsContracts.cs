@@ -79,6 +79,14 @@ namespace Njulf.Rendering.Diagnostics
 #endif
 
         /// <summary>
+        /// Raw transport-cache projection is intentionally absent from receiver
+        /// fragment shaders. NVIDIA's Vulkan backend cannot reliably lower that
+        /// storage-access graph; a future implementation must project it in
+        /// compute and expose only a compact receiver resource.
+        /// </summary>
+        public const bool SourceCacheRadianceReceiverDiagnosticCompiled = false;
+
+        /// <summary>
         /// Returns true for receiver views whose inputs and branch fan-out are
         /// deliberately absent from production Simple-DDGI shaders.  General GI
         /// views (final indirect, far-field inspection, and material provenance)
@@ -130,8 +138,10 @@ namespace Njulf.Rendering.Diagnostics
 
         public static bool IsGlobalIlluminationDebugViewAvailable(
             GlobalIlluminationDebugView view) =>
-            DetailedDdgiDiagnosticsCompiled ||
-            !RequiresDetailedDdgiReceiverDiagnostics(view);
+            (SourceCacheRadianceReceiverDiagnosticCompiled ||
+             view != GlobalIlluminationDebugView.DdgiSourceCacheRadiance) &&
+            (DetailedDdgiDiagnosticsCompiled ||
+             !RequiresDetailedDdgiReceiverDiagnostics(view));
 
         /// <summary>
         /// Resolves an authored request to a branch that exists in the running
@@ -145,10 +155,18 @@ namespace Njulf.Rendering.Diagnostics
                 : GlobalIlluminationDebugView.None;
 
         public static string GetGlobalIlluminationDebugViewAvailabilityReason(
-            GlobalIlluminationDebugView view) =>
-            IsGlobalIlluminationDebugViewAvailable(view)
-                ? string.Empty
-                : "The requested DDGI receiver view requires a Debug or DetailedInvestigation shader artifact.";
+            GlobalIlluminationDebugView view)
+        {
+            if (IsGlobalIlluminationDebugViewAvailable(view))
+                return string.Empty;
+            if (view == GlobalIlluminationDebugView.DdgiSourceCacheRadiance)
+            {
+                return "Raw DDGI source-cache inspection is not compiled into receiver shaders; " +
+                    "it requires a compute-projected diagnostic resource.";
+            }
+
+            return "The requested DDGI receiver view requires a Debug or DetailedInvestigation shader artifact.";
+        }
     }
 
     public enum GiMetricFreshness
