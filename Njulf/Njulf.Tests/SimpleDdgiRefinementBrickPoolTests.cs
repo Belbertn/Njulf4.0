@@ -18,6 +18,29 @@ public sealed class SimpleDdgiRefinementBrickPoolTests
             RetentionFrames: 3);
 
     [Test]
+    public void OriginDemand_ProducesSymmetricWorldKeyedBrick()
+    {
+        var pool = new SimpleDdgiRefinementBrickPool();
+
+        pool.Update(
+            1,
+            Configuration,
+            [new(new Vector3(0f), 100f,
+                SimpleDdgiRefinementDemandReason.VisibleReceiver)]);
+
+        SimpleDdgiRefinementBrick brick = pool.ActiveBricks.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(brick.Key, Is.EqualTo(
+                new SimpleDdgiRefinementBrickKey(0, 0, 0)));
+            Assert.That(brick.Origin, Is.EqualTo(
+                new Vector3(-1.25f, -0.75f, -1.25f)));
+            Assert.That(brick.Origin + brick.LatticeSize * 0.5f,
+                Is.EqualTo(Vector3.Zero));
+        });
+    }
+
+    [Test]
     public void Update_DeduplicatesWorldCellAndUsesBoundedProbePool()
     {
         var pool = new SimpleDdgiRefinementBrickPool();

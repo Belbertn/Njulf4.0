@@ -352,7 +352,11 @@ namespace Njulf.Rendering.Diagnostics
         int AcceptedProbeCount,
         ulong RequestedPersistentBytes,
         SimpleDdgiLayoutDecision Decision,
-        string Reason);
+        string Reason)
+    {
+        public SimpleDdgiLayoutAdmissionClass AdmissionClass { get; init; } =
+            SimpleDdgiLayoutAdmissionClass.Required;
+    }
 
     /// <summary>
     /// Tier-resolved Simple-DDGI layout and budget.  Origin and physical offsets remain in
@@ -395,6 +399,24 @@ namespace Njulf.Rendering.Diagnostics
         public bool PhysicalPageBudgetWasReduced { get; init; }
         public string PhysicalPageBudgetDecision { get; init; } = string.Empty;
         public string ResidencyFallbackReason { get; init; } = string.Empty;
+        public int RequiredRejectedVolumeCount { get; init; }
+        public int OptionalRejectedVolumeCount { get; init; }
+
+        /// <summary>
+        /// Rejections captured before admission classes were serialized are treated as
+        /// required. This preserves the conservative meaning of older captures while newer
+        /// captures can distinguish an optional refinement fallback from a broken base field.
+        /// </summary>
+        public int UnclassifiedRejectedVolumeCount => Math.Max(
+            0,
+            RejectedVolumeCount -
+            RequiredRejectedVolumeCount -
+            OptionalRejectedVolumeCount);
+
+        public bool HasRequiredDegradation =>
+            PhysicalPageBudgetWasReduced ||
+            RequiredRejectedVolumeCount > 0 ||
+            UnclassifiedRejectedVolumeCount > 0;
 
         public static SimpleDdgiLayoutTelemetry Unavailable(string reason) => new(
             false,
@@ -453,7 +475,10 @@ namespace Njulf.Rendering.Diagnostics
                     decision.AcceptedProbeCount,
                     requestedPersistentBytes,
                     decision.Decision,
-                    decision.Reason));
+                    decision.Reason)
+                {
+                    AdmissionClass = request.AdmissionClass
+                });
             }
 
             return new SimpleDdgiLayoutTelemetry(
@@ -493,7 +518,9 @@ namespace Njulf.Rendering.Diagnostics
                 ResidencyArenaBytes = report.AcceptedMemoryPlan.ResidencyArenaBytes,
                 PhysicalPageBudgetWasReduced = report.PhysicalPageBudgetWasReduced,
                 PhysicalPageBudgetDecision = report.PhysicalPageBudgetDecision,
-                ResidencyFallbackReason = report.ResidencyFallbackReason
+                ResidencyFallbackReason = report.ResidencyFallbackReason,
+                RequiredRejectedVolumeCount = report.RequiredRejectionCount,
+                OptionalRejectedVolumeCount = report.OptionalRejectionCount
             };
         }
     }
@@ -1812,7 +1839,7 @@ namespace Njulf.Rendering.Diagnostics
             if (!layout.IsAvailable)
                 return;
 
-            if (layout.WasDegraded)
+            if (layout.HasRequiredDegradation)
             {
                 GiDiagnosticSeverity severity = layout.AdmissionMode == SimpleDdgiLayoutAdmissionMode.Reject
                     ? GiDiagnosticSeverity.Error
@@ -1820,9 +1847,12 @@ namespace Njulf.Rendering.Diagnostics
                 warnings.Add(new GiDiagnosticWarning(
                     GiDiagnosticWarningCode.SimpleDdgiLayoutDegraded,
                     severity,
-                    $"Simple DDGI layout was degraded before allocation: {layout.RejectedVolumeCount} of {layout.RequestedVolumeCount} requested volumes were rejected ({layout.Summary}).",
+                    $"Simple DDGI required layout was degraded before allocation: " +
+                    $"{layout.RequiredRejectedVolumeCount + layout.UnclassifiedRejectedVolumeCount} required volume(s) were rejected " +
+                    $"and physical-page-budget-reduced={layout.PhysicalPageBudgetWasReduced} ({layout.Summary}).",
                     "simple-ddgi-layout",
-                    layout.RejectedVolumeCount,
+                    layout.RequiredRejectedVolumeCount +
+                        layout.UnclassifiedRejectedVolumeCount,
                     0,
                     "volumes",
                     GiMetricFreshness.CurrentFrame,
@@ -1834,7 +1864,8 @@ namespace Njulf.Rendering.Diagnostics
                     "Inspect the per-volume layout decisions, preserve receiver-hero priority, and either select a supported tier or explicitly approve the documented degraded layout."));
             }
 
-            if (layout.RequestedProbeCount > layout.ProbeBudget)
+            if (layout.HasRequiredDegradation &&
+                layout.RequestedProbeCount > layout.ProbeBudget)
             {
                 AddBudgetWarning(
                     warnings,
@@ -1846,7 +1877,8 @@ namespace Njulf.Rendering.Diagnostics
                     "probes",
                     "Reduce or reprioritize requested volume density, or select a tier that can represent the receiver layout before allocation.");
             }
-            if (layout.RequestedPersistentBytes > layout.PersistentMemoryBudgetBytes)
+            if (layout.HasRequiredDegradation &&
+                layout.RequestedPersistentBytes > layout.PersistentMemoryBudgetBytes)
             {
                 AddBudgetWarning(
                     warnings,
@@ -1858,7 +1890,8 @@ namespace Njulf.Rendering.Diagnostics
                     "bytes",
                     "Reduce layout memory, disable an optional mirror deliberately, or select a tier with sufficient persistent DDGI storage before allocation.");
             }
-            if (layout.RequestedVolumeCount > layout.VolumeBudget)
+            if (layout.HasRequiredDegradation &&
+                layout.RequestedVolumeCount > layout.VolumeBudget)
             {
                 AddBudgetWarning(
                     warnings,
@@ -2394,6 +2427,10 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "layout.acceptedVolumes", layout.AcceptedVolumeCount);
             AddSetting(settings, "layout.rejectedVolumes", layout.RejectedVolumeCount);
             AddSetting(settings, "layout.degraded", layout.WasDegraded ? 1 : 0);
+            AddSetting(settings, "layout.requiredDegraded", layout.HasRequiredDegradation ? 1 : 0);
+            AddSetting(settings, "layout.requiredRejectedVolumes", layout.RequiredRejectedVolumeCount);
+            AddSetting(settings, "layout.optionalRejectedVolumes", layout.OptionalRejectedVolumeCount);
+            AddSetting(settings, "layout.unclassifiedRejectedVolumes", layout.UnclassifiedRejectedVolumeCount);
             AddSetting(settings, "layout.residency.mode", layout.ResidencyMode.ToString());
             AddSetting(settings, "layout.residency.densePayloadProbes", layout.DensePayloadProbeCount);
             AddSetting(settings, "layout.residency.sparseVirtualProbes", layout.SparseVirtualProbeCount);
@@ -2433,6 +2470,7 @@ namespace Njulf.Rendering.Diagnostics
                         volume.RequestedProbeCount.ToString(CultureInfo.InvariantCulture),
                         volume.AcceptedProbeCount.ToString(CultureInfo.InvariantCulture),
                         volume.RequestedPersistentBytes.ToString(CultureInfo.InvariantCulture),
+                        volume.AdmissionClass.ToString(),
                         volume.Decision.ToString(),
                         volume.Reason
                     }));

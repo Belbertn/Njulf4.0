@@ -45,6 +45,51 @@ public sealed class SimpleDdgiHotColdSourceCacheTests
         });
     }
 
+    [Test]
+    public void Admission_IsBoundToLayoutIdentityAndRetainsAValidCompletedSample()
+    {
+        var model = new SimpleDdgiHotColdAdmissionModel();
+        const ulong firstIdentity = 17UL;
+        const ulong secondIdentity = 18UL;
+
+        for (int sample = 0; sample < 2; sample++)
+        {
+            model.Observe(
+                new SimpleDdgiHotColdAdmissionSample(
+                    SurfaceHitCount: 128,
+                    MissCount: 1_792,
+                    RejectedBackFaceCount: 128),
+                firstIdentity,
+                sampleFrameSerial: (ulong)(100 + sample));
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(model.State.Admitted, Is.True);
+            Assert.That(model.State.HasCompletedSampleForIdentity, Is.True);
+            Assert.That(model.State.LayoutIdentity, Is.EqualTo(firstIdentity));
+            Assert.That(model.State.LastCompletedSampleFrameSerial, Is.EqualTo(101UL));
+        });
+
+        model.Observe(default, firstIdentity);
+        Assert.Multiple(() =>
+        {
+            Assert.That(model.State.Admitted, Is.True);
+            Assert.That(model.State.Reason, Does.Contain("retained-no-new-sample"));
+        });
+
+        Assert.That(model.EnsureIdentity(secondIdentity), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(model.State.Admitted, Is.False);
+            Assert.That(model.State.HasCompletedSampleForIdentity, Is.False);
+            Assert.That(model.State.LayoutIdentity, Is.EqualTo(secondIdentity));
+            Assert.That(model.State.LastCompletedSampleFrameSerial, Is.Zero);
+            Assert.That(model.State.Reason,
+                Is.EqualTo("awaiting-completed-work-sample"));
+        });
+    }
+
     [TestCase(SimpleDdgiTransportCacheFormat.Compact24)]
     [TestCase(SimpleDdgiTransportCacheFormat.Compact28)]
     public void TransposedProbe_ReconstructsEveryFixedRecordBitExactly(

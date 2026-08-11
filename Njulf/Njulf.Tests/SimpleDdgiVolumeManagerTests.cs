@@ -1091,21 +1091,21 @@ public sealed class SimpleDdgiVolumeManagerTests
     }
 
     [Test]
-    public void SecondVolumeOwnershipEarlyOutThreshold_ClampsFiniteValuesAndFallsBackForNonFiniteValues()
+    public void SecondVolumeOwnershipEarlyOutThreshold_IsConservativeForEveryInput()
     {
         var settings = new GlobalIlluminationSettings();
 
         settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = -1.0f;
-        Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.Zero);
+        Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.EqualTo(1.0f));
 
         settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = 2.0f;
         Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.EqualTo(1.0f));
 
         settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = float.NaN;
-        Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.EqualTo(0.95f));
+        Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.EqualTo(1.0f));
 
         settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = float.PositiveInfinity;
-        Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.EqualTo(0.95f));
+        Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.EqualTo(1.0f));
     }
 
     [Test]
@@ -1205,6 +1205,46 @@ public sealed class SimpleDdgiVolumeManagerTests
         Assert.That(
             SimpleDdgiVolumeManager.ResolveDispatchRayCount(update, queueRayStride),
             Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void BuildVolumes_AlwaysIncludesAuthoredOwnershipUnderTransportV2()
+    {
+        string source = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiVolumeManager.cs"));
+        int buildStart = source.IndexOf(
+            "private void BuildVolumeTable(",
+            StringComparison.Ordinal);
+        int buildEnd = source.IndexOf(
+            "private SimpleDdgiProbeResidencyMode ResolveProbeResidencyMode(",
+            buildStart,
+            StringComparison.Ordinal);
+        Assert.That(buildStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(buildEnd, Is.GreaterThan(buildStart));
+        string build = source[buildStart..buildEnd];
+
+        int settingsAuthored = build.IndexOf(
+            "foreach (SimpleDdgiAuthoredVolume authored in gi.SimpleDdgiAuthoredVolumes)",
+            StringComparison.Ordinal);
+        int sceneAuthored = build.IndexOf(
+            "authoredSceneVolumes.Count",
+            StringComparison.Ordinal);
+        int rings = build.IndexOf(
+            "int ringCount = gi.SimpleDdgiRingCount;",
+            StringComparison.Ordinal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settingsAuthored, Is.GreaterThanOrEqualTo(0));
+            Assert.That(sceneAuthored, Is.GreaterThan(settingsAuthored));
+            Assert.That(rings, Is.GreaterThan(sceneAuthored));
+            Assert.That(build, Does.Not.Contain(
+                "if (!gi.SimpleDdgiTransportV2Enabled)"));
+            Assert.That(build, Does.Contain(
+                "AdmissionClass = candidate.Kind == VolumeKindRefinement"));
+        });
     }
 
     private static string FindSourceFile(params string[] relativeParts)

@@ -1073,6 +1073,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     "receiver-feedback-not-supplied-for-scheduler-frame");
         private ulong _receiverFeedbackSchedulingFrameSerial = ulong.MaxValue;
         private readonly SimpleDdgiHotColdAdmissionModel _hotColdSourceCacheAdmission = new();
+        private ulong _hotColdSourceCacheAdmissionIdentity;
         private readonly SimpleDdgiWarmStartCacheStore _warmStartStore = new();
         private Task<SimpleDdgiWarmStartLoadResult>? _warmStartLoadTask;
         private Task<SimpleDdgiWarmStartSaveResult>? _warmStartSaveTask;
@@ -1240,6 +1241,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _schedulerCostEstimate;
         public SimpleDdgiHotColdAdmissionState HotColdSourceCacheAdmission =>
             _hotColdSourceCacheAdmission.State;
+        public ulong SourceCacheAdmissionIdentity =>
+            _hotColdSourceCacheAdmissionIdentity;
         public SimpleDdgiRefinementBrickDiagnostics RefinementBrickDiagnostics => new(
             _settings.GlobalIllumination.SimpleDdgiRefinementBricksEnabled,
             _refinementRequestedBrickCount,
@@ -1255,11 +1258,26 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             ulong surfaceHitCount,
             ulong missCount,
             ulong rejectedBackFaceCount) =>
+            ObserveSourceCacheWorkload(
+                surfaceHitCount,
+                missCount,
+                rejectedBackFaceCount,
+                _hotColdSourceCacheAdmissionIdentity,
+                0UL);
+
+        public bool ObserveSourceCacheWorkload(
+            ulong surfaceHitCount,
+            ulong missCount,
+            ulong rejectedBackFaceCount,
+            ulong layoutIdentity,
+            ulong sampleFrameSerial) =>
             _hotColdSourceCacheAdmission.Observe(
                 new SimpleDdgiHotColdAdmissionSample(
                     surfaceHitCount,
                     missCount,
-                    rejectedBackFaceCount));
+                    rejectedBackFaceCount),
+                layoutIdentity,
+                sampleFrameSerial);
 
         public void SetSchedulerCostEstimate(
             SimpleDdgiSchedulerCostEstimate estimate)
@@ -1744,6 +1762,23 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             string mirrorFallback = !string.IsNullOrEmpty(_sampledAtlasFallbackReason)
                 ? _sampledAtlasFallbackReason
                 : _sampledAtlasLayout.FallbackReason;
+            SimpleDdgiSourceCacheLayoutMode requestedSourceCacheLayout =
+                _settings.GlobalIllumination.SimpleDdgiSourceCacheLayoutMode.Sanitize();
+            SimpleDdgiSourceCacheLayoutMode effectiveSourceCacheLayout =
+                hotColdVolumes > 0
+                    ? SimpleDdgiSourceCacheLayoutMode.HotHeaderConditionalPayload
+                    : SimpleDdgiSourceCacheLayoutMode.FixedRecord;
+            string sourceCacheAdmissionReason = requestedSourceCacheLayout switch
+            {
+                SimpleDdgiSourceCacheLayoutMode.FixedRecord =>
+                    "fixed-record-requested",
+                SimpleDdgiSourceCacheLayoutMode.HotHeaderConditionalPayload =>
+                    effectiveSourceCacheLayout ==
+                        SimpleDdgiSourceCacheLayoutMode.HotHeaderConditionalPayload
+                            ? "hot-cold-layout-forced"
+                            : "hot-cold-layout-unavailable",
+                _ => hotColdAdmission.Reason
+            };
             return new SimpleDdgiStorageDiagnostics(
                 IsAvailable: _volumeCount > 0,
                 PackingMode: _storageLayout.PackingMode,
@@ -1796,7 +1831,14 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 SourceCacheConditionalPayloadCapacityBytes = conditionalPayloadBytes,
                 SourceCacheEstimatedSolveReadBytes = estimatedSolveReadBytes,
                 SourceCacheMeasuredColdExitFraction = hotColdAdmission.ColdExitFraction,
-                SourceCacheLayoutAdmissionReason = hotColdAdmission.Reason
+                SourceCacheLayoutAdmissionReason = sourceCacheAdmissionReason,
+                SourceCacheRequestedLayoutMode = requestedSourceCacheLayout,
+                SourceCacheEffectiveLayoutMode = effectiveSourceCacheLayout,
+                SourceCacheAdmissionLayoutIdentity = hotColdAdmission.LayoutIdentity,
+                SourceCacheAdmissionHasCompletedSample =
+                    hotColdAdmission.HasCompletedSampleForIdentity,
+                SourceCacheAdmissionSampleFrameSerial =
+                    hotColdAdmission.LastCompletedSampleFrameSerial
             };
         }
 
@@ -11053,44 +11095,39 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             Array.Clear(_volumeScratch);
             Array.Clear(_volumePurposes);
             Array.Clear(_volumePriorities);
-            // V2 deliberately has no authored-volume dependency.  Its bounded
-            // camera clipmaps are the whole field, with density concentrated in
-            // the near/mid rings.  Retain the authored path only for the explicit
-            // V1 fallback so existing captures can still be replayed.
+            // Authored volumes are scene ownership declarations. Transport V2
+            // changes how their probes are solved, not whether they exist.
             bool anyAuthored = false;
-            if (!gi.SimpleDdgiTransportV2Enabled)
+            int authoredOrdinal = 0;
+            foreach (SimpleDdgiAuthoredVolume authored in gi.SimpleDdgiAuthoredVolumes)
             {
-                int authoredOrdinal = 0;
-                foreach (SimpleDdgiAuthoredVolume authored in gi.SimpleDdgiAuthoredVolumes)
+                if (authoredOrdinal >= GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount)
+                    break;
+                authoredOrdinal++;
+                if (!TryCreateAuthoredVolume(authored, authoredOrdinal, out VolumeCandidate candidate))
+                    continue;
+                anyAuthored = true;
+                _volumeCandidates.Add(candidate);
+            }
+            if (authoredSceneVolumes != null)
+            {
+                for (int sceneOrdinal = 0;
+                     sceneOrdinal < authoredSceneVolumes.Count &&
+                     authoredOrdinal < GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount;
+                     sceneOrdinal++)
                 {
-                    if (authoredOrdinal >= GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount)
-                        break;
+                    GlobalIlluminationProbeVolume? authored = authoredSceneVolumes[sceneOrdinal];
                     authoredOrdinal++;
-                    if (!TryCreateAuthoredVolume(authored, authoredOrdinal, out VolumeCandidate candidate))
+                    if (authored == null || !authored.Enabled ||
+                        !TryCreateAuthoredVolume(
+                            authored,
+                            20_000 + sceneOrdinal,
+                            out VolumeCandidate candidate))
+                    {
                         continue;
+                    }
                     anyAuthored = true;
                     _volumeCandidates.Add(candidate);
-                }
-                if (authoredSceneVolumes != null)
-                {
-                    for (int sceneOrdinal = 0;
-                         sceneOrdinal < authoredSceneVolumes.Count &&
-                         authoredOrdinal < GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount;
-                         sceneOrdinal++)
-                    {
-                        GlobalIlluminationProbeVolume? authored = authoredSceneVolumes[sceneOrdinal];
-                        authoredOrdinal++;
-                        if (authored == null || !authored.Enabled ||
-                            !TryCreateAuthoredVolume(
-                                authored,
-                                20_000 + sceneOrdinal,
-                                out VolumeCandidate candidate))
-                        {
-                            continue;
-                        }
-                        anyAuthored = true;
-                        _volumeCandidates.Add(candidate);
-                    }
                 }
             }
 
@@ -11137,7 +11174,14 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 return spacing != 0 ? spacing : left.SourceOrdinal.CompareTo(right.SourceOrdinal);
             });
 
-            bool useHotColdSourceCacheLayout = ResolveHotColdSourceCacheLayout(gi);
+            _hotColdSourceCacheAdmissionIdentity = CalculateLayoutFingerprint(
+                gi,
+                _volumeCandidates,
+                structuredGatherAvailable,
+                useHotColdSourceCacheLayout: false);
+            bool useHotColdSourceCacheLayout = ResolveHotColdSourceCacheLayout(
+                gi,
+                _hotColdSourceCacheAdmissionIdentity);
             ulong layoutFingerprint = CalculateLayoutFingerprint(
                 gi,
                 _volumeCandidates,
@@ -11178,6 +11222,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         DenseCoarserRingEligible =
                             candidate.Kind == VolumeKindRing &&
                             candidate.SourceOrdinal > 10_000,
+                        AdmissionClass = candidate.Kind == VolumeKindRefinement
+                            ? SimpleDdgiLayoutAdmissionClass.Optional
+                            : SimpleDdgiLayoutAdmissionClass.Required,
                         RingIndex = candidate.Kind == VolumeKindRing
                             ? candidate.SourceOrdinal - 10_000
                             : -1,
@@ -11263,11 +11310,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             }
 
             _lastLayoutReport = _cachedLayoutReport;
-            if (_lastLayoutReport.WasDegraded &&
-                gi.SimpleDdgiLayoutAdmissionMode == SimpleDdgiLayoutAdmissionMode.Reject)
+            if (_lastLayoutReport.HasRequiredRejection)
             {
                 throw new InvalidOperationException(
-                    $"Simple-DDGI layout is invalid for {gi.DdgiQualityTier}: {_lastLayoutReport.Summary}.");
+                    $"Simple-DDGI required layout is invalid for {gi.DdgiQualityTier}: {_lastLayoutReport.Summary}.");
             }
 
             if (_lastLayoutReport.WasDegraded)
@@ -11295,7 +11341,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                               _refinementRequestedBrickCount
                                 ? "degraded-by-layout-budget"
                                 : "admitted-awaiting-certificate";
-            _lastBudgetWarning = _lastLayoutReport.WasDegraded
+            _lastBudgetWarning = _lastLayoutReport.HasRequiredDegradation
                 ? $"simple-ddgi-layout-degraded:{_lastLayoutReport.Summary}"
                 : string.Empty;
             int firstProbe = 0;
@@ -11616,16 +11662,23 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         }
 
         private bool ResolveHotColdSourceCacheLayout(
-            GlobalIlluminationSettings settings)
+            GlobalIlluminationSettings settings,
+            ulong layoutIdentity)
         {
             if (!settings.SimpleDdgiStoragePackingMode.UsesPackedCache())
                 return false;
+
+            _hotColdSourceCacheAdmission.EnsureIdentity(layoutIdentity);
+            SimpleDdgiHotColdAdmissionState admission =
+                _hotColdSourceCacheAdmission.State;
 
             return settings.SimpleDdgiSourceCacheLayoutMode.Sanitize() switch
             {
                 SimpleDdgiSourceCacheLayoutMode.HotHeaderConditionalPayload => true,
                 SimpleDdgiSourceCacheLayoutMode.Auto =>
-                    _hotColdSourceCacheAdmission.State.Admitted,
+                    admission.Admitted &&
+                    admission.HasCompletedSampleForIdentity &&
+                    admission.LayoutIdentity == layoutIdentity,
                 _ => false
             };
         }

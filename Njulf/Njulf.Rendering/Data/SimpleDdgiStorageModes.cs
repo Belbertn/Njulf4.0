@@ -78,6 +78,8 @@ public readonly record struct SimpleDdgiStorageValidationCounters(
     uint InvalidSourceEpochCount,
     uint InvalidHitKindCount)
 {
+    public ulong FrameSerial { get; init; }
+
     public static SimpleDdgiStorageValidationCounters Empty { get; } = new(
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0f, 0.0f, 0, 0, 0.0f,
         Array.Empty<uint>(), 0, 0);

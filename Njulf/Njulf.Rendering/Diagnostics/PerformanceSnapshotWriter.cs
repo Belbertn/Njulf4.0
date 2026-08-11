@@ -658,9 +658,11 @@ namespace Njulf.Rendering.Diagnostics
                 warnings.Add(
                     $"{diagnostics.MeshPostCommitCleanupFailureCount} post-commit mesh cleanup operation(s) were deferred or quarantined.");
             }
-            if (diagnostics.SimpleDdgiLayout.IsAvailable && diagnostics.SimpleDdgiLayout.WasDegraded)
+            if (diagnostics.SimpleDdgiLayout.IsAvailable &&
+                diagnostics.SimpleDdgiLayout.HasRequiredDegradation)
                 warnings.Add("Simple DDGI layout was degraded before allocation: " + diagnostics.SimpleDdgiLayout.Summary);
             if (diagnostics.SimpleDdgiLayout.IsAvailable &&
+                diagnostics.SimpleDdgiLayout.HasRequiredDegradation &&
                 (diagnostics.SimpleDdgiLayout.RequestedProbeCount > diagnostics.SimpleDdgiLayout.ProbeBudget ||
                  diagnostics.SimpleDdgiLayout.RequestedPersistentBytes > diagnostics.SimpleDdgiLayout.PersistentMemoryBudgetBytes ||
                  diagnostics.SimpleDdgiLayout.RequestedVolumeCount > diagnostics.SimpleDdgiLayout.VolumeBudget))

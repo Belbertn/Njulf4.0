@@ -395,9 +395,9 @@ public sealed class SimpleDdgiRefinementBrickPool
     {
         Vector3 step = LatticeSize(configuration);
         return new SimpleDdgiRefinementBrickKey(
-            FloorToInt(position.X / step.X),
-            FloorToInt(position.Y / step.Y),
-            FloorToInt(position.Z / step.Z));
+            FloorToInt(position.X / step.X + 0.5f),
+            FloorToInt(position.Y / step.Y + 0.5f),
+            FloorToInt(position.Z / step.Z + 0.5f));
     }
 
     private static Vector3 ResolveOrigin(
@@ -405,7 +405,8 @@ public sealed class SimpleDdgiRefinementBrickPool
         SimpleDdgiRefinementBrickConfiguration configuration)
     {
         Vector3 step = LatticeSize(configuration);
-        return new Vector3(key.X * step.X, key.Y * step.Y, key.Z * step.Z);
+        return new Vector3(key.X * step.X, key.Y * step.Y, key.Z * step.Z) -
+            step * 0.5f;
     }
 
     private static Vector3 LatticeSize(

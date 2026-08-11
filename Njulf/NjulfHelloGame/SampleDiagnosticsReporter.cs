@@ -506,11 +506,13 @@ internal sealed class SampleDiagnosticsReporter
                 $"canonical={storage.CanonicalIrradianceFormat}:{storage.CanonicalIrradianceBytes}/{storage.CanonicalVisibilityFormat}:{storage.CanonicalVisibilityBytes}, " +
                 $"cache total/legacy/c28/c24/pad={storage.SourceCacheBytes}/{storage.SourceCacheLegacyBytes}/{storage.SourceCacheCompact28Bytes}/{storage.SourceCacheCompact24Bytes}/{storage.SourceCacheAlignmentBytes}, " +
                 $"cacheRays legacy/c28/c24={storage.SourceCacheLegacyRayCount}/{storage.SourceCacheCompact28RayCount}/{storage.SourceCacheCompact24RayCount}, " +
+                $"cacheLayout requested/effective/hotColdVolumes={storage.SourceCacheRequestedLayoutMode}/{storage.SourceCacheEffectiveLayoutMode}/{storage.SourceCacheHotColdVolumeCount}, " +
+                $"cacheAdmission identity/hasSample/frame/reason={storage.SourceCacheAdmissionLayoutIdentity}/{storage.SourceCacheAdmissionHasCompletedSample}/{storage.SourceCacheAdmissionSampleFrameSerial}/'{storage.SourceCacheLayoutAdmissionReason}', " +
                 $"distance16 volumes/probes={storage.Fp16DistanceEligibleVolumeCount}/{storage.Fp16DistanceEligibleProbeCount}, " +
                 $"scratch stride/bytes={storage.RayScratchStrideBytes}/{storage.RayScratchBytes}, " +
                 $"mirror mode requested/eligible/admitted/provisioned={storage.MirrorCoverageMode}/{storage.MirrorRequestedProbeCount}/{storage.MirrorEligibleProbeCount}/{storage.MirrorAdmittedProbeCount}/{storage.MirrorProvisionedProbeCount}, " +
                 $"mirror logical/allocated={storage.MirrorTotalBytes}/{storage.MirrorAllocatedBytes}, " +
-                $"mirrorSamples valid/opportunity/hit/seam/unmirrored/invalidMap={validation.ReadbackValid}/{validation.MirrorInteriorOpportunityCount}/{validation.MirrorImageHitCount}/{validation.MirrorSeamFallbackCount}/{validation.MirrorUnmirroredFallbackCount}/{validation.MirrorInvalidMapFallbackCount}, " +
+                $"mirrorSamples valid/frame/opportunity/hit/seam/unmirrored/invalidMap={validation.ReadbackValid}/{validation.FrameSerial}/{validation.MirrorInteriorOpportunityCount}/{validation.MirrorImageHitCount}/{validation.MirrorSeamFallbackCount}/{validation.MirrorUnmirroredFallbackCount}/{validation.MirrorInvalidMapFallbackCount}, " +
                 $"pack attempts/nonfinite/saturated/maxRadianceError/maxDistanceError={validation.CachePackAttemptCount}/{validation.CachePackNonFiniteCount}/{validation.CachePackRadianceSaturationCount}/{validation.CachePackMaximumRadianceError:G6}/{validation.CachePackMaximumDistanceError:G6}, " +
                 $"direction samples/epochMismatch/invalidEpoch/invalidHitKind/max/p99={validation.DirectionComparisonSampleCount}/{validation.DirectionEpochMismatchCount}/{validation.InvalidSourceEpochCount}/{validation.InvalidHitKindCount}/{validation.DirectionMaximumAngularErrorRadians:G6}/{validation.DirectionAngularErrorP99UpperBoundRadians:G6}, " +
                 $"generation storage/mirror/allocation={storage.StorageLayoutFingerprint}/{storage.MirrorLayoutFingerprint}/{storage.MirrorAllocationGeneration}, " +
@@ -557,10 +559,17 @@ internal sealed class SampleDiagnosticsReporter
             $"status='{refinement.AdmissionStatus}'.");
         SimpleDdgiNearVisibilityDiagnostics nearVisibility =
             diagnostics.SimpleDdgiNearVisibility;
+        SimpleDdgiNearVisibilityGpuCounters nearVisibilityEvidence =
+            nearVisibility.Evidence;
         Console.WriteLine(
             $"Frame diagnostics Simple DDGI B4 near visibility: requested/active={nearVisibility.Requested}/{nearVisibility.Active}, " +
             $"eligibleVolumes={nearVisibility.EligibleVolumeCount}, " +
             $"bytes public/private/allocated/required/budget={nearVisibility.PublicBytes}/{nearVisibility.PrivateBytes}/{nearVisibility.AllocatedBytes}/{nearVisibility.RequiredBytes}/{nearVisibility.BudgetBytes}, " +
+            $"evidence valid/frame={nearVisibilityEvidence.ReadbackValid}/{nearVisibilityEvidence.FrameSerial}, " +
+            $"clusters coherent/rejected={nearVisibilityEvidence.CoherentClusterTexelCount}/{nearVisibilityEvidence.RejectedClusterTexelCount}, " +
+            $"taps lowConfidence/invalidDepth/noDiscrepancy/receiverInFront={nearVisibilityEvidence.InsufficientConfidenceTapCount}/{nearVisibilityEvidence.InvalidDepthTapCount}/{nearVisibilityEvidence.NoMomentDiscrepancyTapCount}/{nearVisibilityEvidence.ReceiverInFrontTapCount}, " +
+            $"evaluations applied/total={nearVisibilityEvidence.AppliedEvaluationCount}/{nearVisibilityEvidence.EvaluationCount}, " +
+            $"clamp avg/max={nearVisibilityEvidence.AverageClamp:0.####}/{nearVisibilityEvidence.MaximumClamp:0.####}, " +
             $"status='{nearVisibility.Status}'.");
         GiRoadmapExperimentDiagnostics experiments =
             diagnostics.GiRoadmapExperiments;

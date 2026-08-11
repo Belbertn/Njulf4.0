@@ -12,7 +12,12 @@ public readonly record struct SimpleDdgiHotColdAdmissionState(
     ulong AcceptedSampleCount,
     ulong AcceptedRayCount,
     float ColdExitFraction,
-    string Reason);
+    string Reason)
+{
+    public ulong LayoutIdentity { get; init; }
+    public bool HasCompletedSampleForIdentity { get; init; }
+    public ulong LastCompletedSampleFrameSerial { get; init; }
+}
 
 /// <summary>
 /// Hysteretic admission controller for the source-cache SoA layout. It consumes
@@ -32,16 +37,47 @@ public sealed class SimpleDdgiHotColdAdmissionModel
     private ulong _acceptedRayCount;
     private bool _admitted;
     private string _reason = "awaiting-completed-work-sample";
+    private ulong _layoutIdentity;
+    private bool _identityInitialized;
+    private bool _hasCompletedSampleForIdentity;
+    private ulong _lastCompletedSampleFrameSerial;
 
     public SimpleDdgiHotColdAdmissionState State => new(
         _admitted,
         _acceptedSampleCount,
         _acceptedRayCount,
         (float)_coldFraction,
-        _reason);
-
-    public bool Observe(SimpleDdgiHotColdAdmissionSample sample)
+        _reason)
     {
+        LayoutIdentity = _layoutIdentity,
+        HasCompletedSampleForIdentity = _hasCompletedSampleForIdentity,
+        LastCompletedSampleFrameSerial = _lastCompletedSampleFrameSerial
+    };
+
+    public bool EnsureIdentity(ulong layoutIdentity)
+    {
+        if (_identityInitialized && _layoutIdentity == layoutIdentity)
+            return false;
+
+        bool changed = _admitted;
+        _layoutIdentity = layoutIdentity;
+        _identityInitialized = true;
+        _coldFraction = 0.0;
+        _acceptedSampleCount = 0;
+        _acceptedRayCount = 0;
+        _admitted = false;
+        _hasCompletedSampleForIdentity = false;
+        _lastCompletedSampleFrameSerial = 0UL;
+        _reason = "awaiting-completed-work-sample";
+        return changed;
+    }
+
+    public bool Observe(
+        SimpleDdgiHotColdAdmissionSample sample,
+        ulong layoutIdentity = 0UL,
+        ulong sampleFrameSerial = 0UL)
+    {
+        bool identityChanged = EnsureIdentity(layoutIdentity);
         ulong total;
         ulong cold;
         try
@@ -52,16 +88,24 @@ public sealed class SimpleDdgiHotColdAdmissionModel
         }
         catch (OverflowException)
         {
-            _reason = "counter-overflow-retained-last-layout";
-            return false;
+            _reason = identityChanged
+                ? "counter-overflow-reset-for-layout-identity"
+                : "counter-overflow-retained-last-layout";
+            return identityChanged;
         }
 
         if (total == 0)
         {
-            _reason = "missing-completed-work-sample";
-            return false;
+            _reason = !_hasCompletedSampleForIdentity
+                ? "awaiting-completed-work-sample"
+                : _admitted
+                    ? "hot-cold-layout-retained-no-new-sample"
+                    : "fixed-record-retained-no-new-sample";
+            return identityChanged;
         }
 
+        _hasCompletedSampleForIdentity = true;
+        _lastCompletedSampleFrameSerial = sampleFrameSerial;
         double measured = cold / (double)total;
         _coldFraction = _acceptedSampleCount == 0
             ? measured
@@ -73,7 +117,7 @@ public sealed class SimpleDdgiHotColdAdmissionModel
         if (_acceptedRayCount < MinimumMeasuredRayCount)
         {
             _reason = "insufficient-measured-rays";
-            return false;
+            return identityChanged;
         }
 
         if (!_admitted && _coldFraction >= AdmissionColdFraction)
@@ -93,7 +137,7 @@ public sealed class SimpleDdgiHotColdAdmissionModel
                 : "fixed-record-retained-by-hysteresis";
         }
 
-        return previous != _admitted;
+        return identityChanged || previous != _admitted;
     }
 
     public static ulong EstimateSolveReadBytes(

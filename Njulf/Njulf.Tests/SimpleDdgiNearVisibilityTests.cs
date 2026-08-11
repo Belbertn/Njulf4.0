@@ -83,10 +83,109 @@ public sealed class SimpleDdgiNearVisibilityTests
         Assert.Multiple(() =>
         {
             Assert.That(blended.ConservativeDepth, Is.EqualTo(1.0f));
-            Assert.That(blended.Confidence, Is.EqualTo(0.20f).Within(1.0e-6f));
+            Assert.That(blended.Confidence, Is.Zero);
             Assert.That(blended.Confidence,
                 Is.LessThan(SimpleDdgiNearVisibility.MinimumConfidence));
         });
+    }
+
+    [Test]
+    public void MixedDepthLobe_DoesNotBorrowFarHitConfidenceForNearestRay()
+    {
+        SimpleDdgiNearVisibilityRay[] rays =
+        [
+            new(1.0f, 1.0f, true),
+            new(1.0f, 4.0f, true),
+            new(1.0f, 4.0f, true),
+            new(1.0f, 4.0f, true),
+            new(1.0f, 4.0f, true),
+            new(1.0f, 4.0f, true),
+            new(1.0f, 4.0f, true),
+            new(1.0f, 4.0f, true)
+        ];
+
+        SimpleDdgiNearVisibilitySample sample =
+            SimpleDdgiNearVisibility.BuildSample(
+                rays,
+                probeSpacing: 0.5f,
+                architecturalThickness: 0.10f);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sample.ConservativeDepth, Is.EqualTo(1.0f));
+            Assert.That(sample.Confidence, Is.EqualTo(0.125f).Within(1.0e-6f));
+            Assert.That(sample.Confidence,
+                Is.LessThan(SimpleDdgiNearVisibility.MinimumConfidence));
+        });
+    }
+
+    [Test]
+    public void CoherentThinWall_ProducesCorrelatedDepthAndConfidence()
+    {
+        SimpleDdgiNearVisibilityRay[] rays = Enumerable.Range(0, 8)
+            .Select(index => new SimpleDdgiNearVisibilityRay(
+                1.0f,
+                1.0f + index * 0.002f,
+                true))
+            .ToArray();
+
+        SimpleDdgiNearVisibilitySample sample =
+            SimpleDdgiNearVisibility.BuildSample(
+                rays,
+                probeSpacing: 0.5f,
+                architecturalThickness: 0.10f);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sample.ConservativeDepth, Is.EqualTo(1.007f).Within(1.0e-5f));
+            Assert.That(sample.Confidence, Is.EqualTo(1.0f).Within(1.0e-6f));
+        });
+    }
+
+    [Test]
+    public void BilinearDiscontinuity_BlendsOcclusionFactorsWithoutInventingDepth()
+    {
+        SimpleDdgiNearVisibilityQuery[] taps =
+        [
+            Query(3.0f, 9.25f, 2.5f, 1.0f, 1.0f),
+            Query(2.01f, 4.2901f, 2.5f, 2.0f, 1.0f),
+            Query(2.01f, 4.2901f, 2.5f, 2.0f, 1.0f),
+            Query(2.01f, 4.2901f, 2.5f, 2.0f, 1.0f)
+        ];
+
+        SimpleDdgiNearVisibilityBilinearEvaluation result =
+            SimpleDdgiNearVisibility.EvaluateBilinear(
+                1.0f,
+                taps,
+                [0.25f, 0.25f, 0.25f, 0.25f]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.AppliedTapCount, Is.EqualTo(1));
+            Assert.That(result.ConservativeVisibility,
+                Is.EqualTo(0.755f).Within(0.001f));
+            Assert.That(result.FinalVisibility,
+                Is.EqualTo(0.755f).Within(0.001f));
+        });
+    }
+
+    [Test]
+    public void DistinctConfidentDepthLayer_ReplacesHistoryWithoutInterpolation()
+    {
+        var previous = new SimpleDdgiNearVisibilitySample(1.0f, 1.0f);
+        var current = new SimpleDdgiNearVisibilitySample(2.0f, 1.0f);
+
+        SimpleDdgiNearVisibilitySample result =
+            SimpleDdgiNearVisibility.BlendEvidence(
+                previous,
+                current,
+                texelHysteresis: 0.97f,
+                historyValid: true,
+                freshUpdate: false,
+                probeSpacing: 0.5f,
+                architecturalThickness: 0.10f);
+
+        Assert.That(result, Is.EqualTo(current));
     }
 
     [Test]
@@ -172,9 +271,15 @@ public sealed class SimpleDdgiNearVisibilityTests
             Assert.That(shared, Does.Contain(
                 "float SimpleDdgiApplyNearVisibilitySidecar("));
             Assert.That(shared, Does.Contain(
-                "momentMean <= conservativeDepth + discrepancyMargin"));
+                "tapMomentMean <= conservativeDepth + discrepancyMargin"));
+            Assert.That(shared, Does.Contain(
+                "vec4 tapFactors = vec4("));
+            Assert.That(shared, Does.Not.Contain(
+                "float interpolatedConfidence = dot(weights, confidence)"));
             Assert.That(blend, Does.Contain(
-                "currentConfidence < 0.65"));
+                "coherentDepthWeightSum / narrowWeightSum"));
+            Assert.That(blend, Does.Contain(
+                "abs(currentDepth - previousNearVisibility.x) > coherentDepthBand"));
             Assert.That(blend, Does.Contain(
                 "pc.PrivateVisibilityAtlasOffsetWords +"));
             Assert.That(commit, Does.Contain(

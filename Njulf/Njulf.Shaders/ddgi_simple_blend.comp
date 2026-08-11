@@ -529,7 +529,15 @@ void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint
     float broadMissWeightSum = 0.0;
     float narrowHitWeightSum = 0.0;
     float narrowWeightSum = 0.0;
-    float conservativeHitDistance = 65504.0;
+    float nearestQualifyingHitDistance = 65504.0;
+    float coherentDepthWeightedSum = 0.0;
+    float coherentDepthWeightSum = 0.0;
+    float coherentDepthBand = max(
+        0.02,
+        min(volume.spacing * 0.10, params.architecturalThickness * 0.50));
+    bool nearVisibilitySidecarActive =
+        (params.flags & SIMPLE_DDGI_FLAG_NEAR_VISIBILITY_SIDECAR) != 0u &&
+        SimpleDdgiVolumeUsesNearVisibilitySidecar(volume);
 
     uint rayCount = min(activeRayCount, SIMPLE_DDGI_MAX_RAYS_PER_PROBE);
 #if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
@@ -567,11 +575,14 @@ void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint
             broadHitMean2 += d * d * broadWeight;
             broadHitWeightSum += broadWeight;
             narrowHitWeightSum += narrowWeight;
-            // Ignore the extreme edge of the directional lobe. A tiny grazing
-            // vote must never become the conservative depth for the whole oct
-            // texel even when other, farther hits establish confidence.
-            if (narrowWeight >= 0.04)
-                conservativeHitDistance = min(conservativeHitDistance, d);
+            // The nearest depth only seeds a cluster. Confidence is computed in
+            // a second pass from rays belonging to that same depth layer.
+            if (nearVisibilitySidecarActive && narrowWeight >= 0.04)
+            {
+                nearestQualifyingHitDistance = min(
+                    nearestQualifyingHitDistance,
+                    d);
+            }
         }
         else
         {
@@ -582,10 +593,50 @@ void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint
         narrowWeightSum += narrowWeight;
     }
 
+    if (nearVisibilitySidecarActive &&
+        nearestQualifyingHitDistance < 65503.0)
+    {
+        for (uint ray = 0u; ray < rayCount; ray++)
+        {
+#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
+            if (guidingActive &&
+                SharedSimpleRayGuidingTechnique[ray] !=
+                    SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE)
+            {
+                continue;
+            }
+#endif
+            vec4 directionHit = ReadCachedSimpleRayDirectionHit(
+                params,
+                localProbeOffset,
+                ray,
+                sharedRayCacheEnabled);
+            float cosine = max(
+                dot(texelDirection, normalize(directionHit.xyz)),
+                0.0);
+            float broadWeight = pow(
+                cosine,
+                SIMPLE_DDGI_VISIBILITY_BROAD_MOMENT_EXPONENT);
+            float narrowWeight = broadWeight * broadWeight;
+            if (narrowWeight <= 0.000001)
+                continue;
+
+            vec2 visibilityHit = ReadCachedSimpleRayVisibilityHit(
+                params,
+                localProbeOffset,
+                ray,
+                sharedRayCacheEnabled);
+            float d = max(visibilityHit.x, 0.0);
+            if (visibilityHit.y >= 0.5 &&
+                abs(d - nearestQualifyingHitDistance) <= coherentDepthBand)
+            {
+                coherentDepthWeightedSum += d * narrowWeight;
+                coherentDepthWeightSum += narrowWeight;
+            }
+        }
+    }
+
     vec2 previous = ReadSimpleDdgiVisibilityMoments(pc.VisibilityAtlasBufferIndex, physicalProbeIndex, texel, params.visibilityTexels);
-    bool nearVisibilitySidecarActive =
-        (params.flags & SIMPLE_DDGI_FLAG_NEAR_VISIBILITY_SIDECAR) != 0u &&
-        SimpleDdgiVolumeUsesNearVisibilitySidecar(volume);
     uint publicNearVisibilityOffsetWords =
         SimpleDdgiVisibilityAtlasWordCount(params);
     vec2 previousNearVisibility = nearVisibilitySidecarActive
@@ -661,14 +712,20 @@ void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint
     if (nearVisibilitySidecarActive)
     {
         float currentConfidence = narrowWeightSum > 0.000001 &&
-                conservativeHitDistance < 65503.0
-            ? clamp(narrowHitWeightSum / narrowWeightSum, 0.0, 1.0)
+                coherentDepthWeightSum > 0.000001
+            ? clamp(coherentDepthWeightSum / narrowWeightSum, 0.0, 1.0)
             : 0.0;
+        AddRendererDiagnostic(
+            pc.CurrentFrameIndex,
+            currentConfidence >= 0.65
+                ? SIMPLE_DDGI_NEAR_VISIBILITY_COHERENT_CLUSTER_COUNTER
+                : SIMPLE_DDGI_NEAR_VISIBILITY_REJECTED_CLUSTER_COUNTER,
+            1u);
         // Preserve a finite depth while confidence is released. Confidence is
         // authoritative, so a miss update disables stale occlusion in one
         // refresh without blending toward half-float infinity.
-        float currentDepth = currentConfidence > 0.0
-            ? conservativeHitDistance
+        float currentDepth = coherentDepthWeightSum > 0.000001
+            ? coherentDepthWeightedSum / coherentDepthWeightSum
             : (previousNearVisibility.y > 0.0
                 ? previousNearVisibility.x
                 : 65504.0);
@@ -676,14 +733,14 @@ void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint
         float nearHysteresis = visibilityHistoryValid && !freshUpdate
             ? min(texelHysteresis, 0.85)
             : 0.0;
-        if (currentConfidence < 0.65)
-            nearHysteresis = min(nearHysteresis, 0.20);
-        else if (previousNearVisibility.y >= 0.65 &&
-            currentDepth > previousNearVisibility.x + volume.spacing * 0.10)
-            nearHysteresis = min(nearHysteresis, 0.25);
-        else if (previousNearVisibility.y >= 0.65 &&
-            currentDepth < previousNearVisibility.x - volume.spacing * 0.10)
-            nearHysteresis = min(nearHysteresis, 0.50);
+        // Confidence is the authority gate. A miss or incoherent cluster must
+        // release stale occlusion in one refresh. Distinct confident layers are
+        // replacements, never averaged depths that invent a phantom blocker.
+        if (currentConfidence < 0.65 || previousNearVisibility.y < 0.65 ||
+            abs(currentDepth - previousNearVisibility.x) > coherentDepthBand)
+        {
+            nearHysteresis = 0.0;
+        }
         blendedNearVisibility = mix(
             currentNearVisibility,
             previousNearVisibility,

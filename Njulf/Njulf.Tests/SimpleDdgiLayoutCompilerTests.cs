@@ -702,6 +702,57 @@ public sealed class SimpleDdgiLayoutCompilerTests
     }
 
     [Test]
+    public void CornellRequiredTopology_FitsAndRejectsRefinementAsOptional()
+    {
+        SimpleDdgiLayoutVolumeRequest[] requests =
+        [
+            new("cornell-authored", 1, true,
+                SimpleDdgiVolumePurpose.ReceiverHero, 100, 0.75f, 880),
+            new("ring-0", 10_000, false,
+                SimpleDdgiVolumePurpose.TransitionSupport, 0, 0.875f, 10_976),
+            new("ring-1", 10_001, false,
+                SimpleDdgiVolumePurpose.TransitionSupport, 0, 3.137475f, 3_240),
+            new("ring-2", 10_002, false,
+                SimpleDdgiVolumePurpose.TransitionSupport, 0, 11.25f, 1_152),
+            new("refinement-0", 30_000, false,
+                SimpleDdgiVolumePurpose.ReceiverHero, 0, 0.4375f, 144)
+            {
+                AdmissionClass = SimpleDdgiLayoutAdmissionClass.Optional
+            },
+            new("refinement-1", 30_001, false,
+                SimpleDdgiVolumePurpose.ReceiverHero, 0, 0.4375f, 144)
+            {
+                AdmissionClass = SimpleDdgiLayoutAdmissionClass.Optional
+            }
+        ];
+        var budget = new SimpleDdgiLayoutBudget(
+            DdgiQualityTier.DdgiHigh,
+            ProbeBudget: 16_384,
+            PersistentMemoryBudgetBytes: ulong.MaxValue,
+            VolumeBudget: GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount);
+
+        SimpleDdgiLayoutReport report = SimpleDdgiLayoutCompiler.Compile(
+            requests,
+            budget,
+            sampledAtlasRequested: false,
+            SimpleDdgiLayoutAdmissionMode.Reject);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.AcceptedProbeCount, Is.EqualTo(16_248));
+            Assert.That(report.AcceptedSourceOrdinals,
+                Is.EquivalentTo(new[] { 1, 10_000, 10_001, 10_002 }));
+            Assert.That(report.WasDegraded, Is.True);
+            Assert.That(report.HasRequiredRejection, Is.False);
+            Assert.That(report.RequiredRejectionCount, Is.Zero);
+            Assert.That(report.OptionalRejectionCount, Is.EqualTo(2));
+            Assert.That(report.Volumes.Skip(4).All(static decision =>
+                decision.Decision == SimpleDdgiLayoutDecision.RejectedBudget),
+                Is.True);
+        });
+    }
+
+    [Test]
     public void ShadowCompile_RetainsDensePayloadForSparseEligibleNearRing()
     {
         SimpleDdgiLayoutVolumeRequest[] requests =

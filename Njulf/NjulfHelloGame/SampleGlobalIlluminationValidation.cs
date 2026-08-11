@@ -405,7 +405,7 @@ public static class SampleGlobalIlluminationValidation
         gi.SimpleDdgiNearMaintenanceRaysPerProbe = 32;
         gi.SimpleDdgiMidMaintenanceRaysPerProbe = 16;
         gi.SimpleDdgiFarMaintenanceRaysPerProbe = 8;
-        gi.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = 0.95f;
+        gi.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold = 1.0f;
         gi.SimpleDdgiSampledAtlasEnabled = true;
         gi.SimpleDdgiReducedBlendEnabled = false;
         gi.TemporalEnabled = false;

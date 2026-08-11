@@ -171,6 +171,13 @@ public sealed record SimpleDdgiStorageDiagnostics(
     public ulong SourceCacheEstimatedSolveReadBytes { get; init; }
     public float SourceCacheMeasuredColdExitFraction { get; init; }
     public string SourceCacheLayoutAdmissionReason { get; init; } = string.Empty;
+    public SimpleDdgiSourceCacheLayoutMode SourceCacheRequestedLayoutMode { get; init; } =
+        SimpleDdgiSourceCacheLayoutMode.FixedRecord;
+    public SimpleDdgiSourceCacheLayoutMode SourceCacheEffectiveLayoutMode { get; init; } =
+        SimpleDdgiSourceCacheLayoutMode.FixedRecord;
+    public ulong SourceCacheAdmissionLayoutIdentity { get; init; }
+    public bool SourceCacheAdmissionHasCompletedSample { get; init; }
+    public ulong SourceCacheAdmissionSampleFrameSerial { get; init; }
 
     public static SimpleDdgiStorageDiagnostics Unavailable { get; } = new(
         false,

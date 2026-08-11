@@ -4353,100 +4353,60 @@ vec2 SampleSimpleDdgiVisibilityBilinearAtAddress(
     return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
 }
 
-vec2 SampleSimpleDdgiNearVisibilityBilinearAtAddress(
-    uint bufferIndex,
-    SimpleDdgiAtlasAddress address,
-    vec3 direction,
-    SimpleDdgiParams p)
-{
-    vec2 encodedDirection = SimpleDdgiOctEncode(direction);
-    vec2 texelUv = encodedDirection * float(p.visibilityTexels) - vec2(0.5);
-    ivec2 base = ivec2(floor(texelUv));
-    vec2 f = fract(texelUv);
-    uint sidecarProbeBase = SimpleDdgiVisibilityAtlasWordCount(p) +
-        address.visibilityBaseWord;
-
-    vec2 s00 = unpackHalf2x16(ReadStorageWordUniform(
-        bufferIndex,
-        sidecarProbeBase + SimpleDdgiMirrorOctTexelIndex(
-            base, p.visibilityTexels)));
-    vec2 s10 = unpackHalf2x16(ReadStorageWordUniform(
-        bufferIndex,
-        sidecarProbeBase + SimpleDdgiMirrorOctTexelIndex(
-            base + ivec2(1, 0), p.visibilityTexels)));
-    vec2 s01 = unpackHalf2x16(ReadStorageWordUniform(
-        bufferIndex,
-        sidecarProbeBase + SimpleDdgiMirrorOctTexelIndex(
-            base + ivec2(0, 1), p.visibilityTexels)));
-    vec2 s11 = unpackHalf2x16(ReadStorageWordUniform(
-        bufferIndex,
-        sidecarProbeBase + SimpleDdgiMirrorOctTexelIndex(
-            base + ivec2(1, 1), p.visibilityTexels)));
-
-    vec4 weights = vec4(
-        (1.0 - f.x) * (1.0 - f.y),
-        f.x * (1.0 - f.y),
-        (1.0 - f.x) * f.y,
-        f.x * f.y);
-    vec4 confidence = clamp(
-        vec4(s00.y, s10.y, s01.y, s11.y),
-        vec4(0.0),
-        vec4(1.0));
-    float interpolatedConfidence = dot(weights, confidence);
-    float depthWeight = dot(weights, confidence);
-    float conservativeDepth = depthWeight > 0.0001
-        ? dot(
-            weights * confidence,
-            vec4(s00.x, s10.x, s01.x, s11.x)) / depthWeight
-        : 65504.0;
-    return vec2(conservativeDepth, interpolatedConfidence);
-}
-
-float SimpleDdgiApplyNearVisibilitySidecar(
+float SimpleDdgiNearVisibilityTapFactor(
     SimpleDdgiParams p,
     SimpleDdgiVolume volume,
-    SimpleDdgiAtlasAddress address,
-    vec3 probeToReceiver,
+    vec2 sidecar,
+    float tapMomentMean,
     float receiverDistance,
-    float momentMean,
-    float momentVisibility)
+    float tapWeight)
 {
-    if ((p.flags & SIMPLE_DDGI_FLAG_NEAR_VISIBILITY_SIDECAR) == 0u ||
-        !SimpleDdgiVolumeUsesNearVisibilitySidecar(volume))
-    {
-        return momentVisibility;
-    }
+    if (tapWeight <= 0.000001)
+        return 1.0;
 
-    vec2 sidecar = SampleSimpleDdgiNearVisibilityBilinearAtAddress(
-        uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX),
-        address,
-        probeToReceiver,
-        p);
     float conservativeDepth = sidecar.x;
-    float confidence = sidecar.y;
-    if (confidence < 0.65 || conservativeDepth <= 0.0 ||
-        conservativeDepth >= 65503.0)
+    float confidence = clamp(sidecar.y, 0.0, 1.0);
+    if (confidence < 0.65)
     {
-        return momentVisibility;
+        AddRendererDiagnostic(
+            p.frameIndex,
+            SIMPLE_DDGI_NEAR_VISIBILITY_INSUFFICIENT_CONFIDENCE_COUNTER,
+            1u);
+        return 1.0;
+    }
+    if (conservativeDepth <= 0.0 || conservativeDepth >= 65503.0)
+    {
+        AddRendererDiagnostic(
+            p.frameIndex,
+            SIMPLE_DDGI_NEAR_VISIBILITY_INVALID_DEPTH_COUNTER,
+            1u);
+        return 1.0;
     }
 
-    // The sidecar is corroborating evidence, never an independent shadow map.
-    // It can clamp only when ordinary moments demonstrably look through a
-    // nearer surface and the receiver is safely behind that surface. This
-    // measured-discrepancy gate is what keeps doorway and foliage false
-    // occlusion bounded when a conservative sample straddles a silhouette.
     float discrepancyMargin = max(
         0.02,
         min(volume.spacing * 0.12, p.architecturalThickness * 0.75));
-    if (momentMean <= conservativeDepth + discrepancyMargin)
-        return momentVisibility;
+    if (tapMomentMean <= conservativeDepth + discrepancyMargin)
+    {
+        AddRendererDiagnostic(
+            p.frameIndex,
+            SIMPLE_DDGI_NEAR_VISIBILITY_NO_DISCREPANCY_COUNTER,
+            1u);
+        return 1.0;
+    }
 
     float receiverMargin = max(
         0.01,
         min(volume.spacing * 0.04, p.architecturalThickness * 0.35));
     float receiverDepthDelta = receiverDistance - conservativeDepth;
     if (receiverDepthDelta <= receiverMargin)
-        return momentVisibility;
+    {
+        AddRendererDiagnostic(
+            p.frameIndex,
+            SIMPLE_DDGI_NEAR_VISIBILITY_RECEIVER_IN_FRONT_COUNTER,
+            1u);
+        return 1.0;
+    }
 
     float transitionWidth = max(
         0.03,
@@ -4457,11 +4417,98 @@ float SimpleDdgiApplyNearVisibilitySidecar(
         receiverMargin + transitionWidth,
         receiverDepthDelta);
     float evidenceTrust = smoothstep(0.65, 0.90, confidence);
-    float conservativeVisibility = mix(
-        1.0,
-        0.02,
-        occluderCoverage * evidenceTrust);
-    return min(momentVisibility, conservativeVisibility);
+    return mix(1.0, 0.02, occluderCoverage * evidenceTrust);
+}
+
+float SimpleDdgiApplyNearVisibilitySidecar(
+    SimpleDdgiParams p,
+    SimpleDdgiVolume volume,
+    SimpleDdgiAtlasAddress address,
+    vec3 probeToReceiver,
+    float receiverDistance,
+    float momentVisibility)
+{
+    if ((p.flags & SIMPLE_DDGI_FLAG_NEAR_VISIBILITY_SIDECAR) == 0u ||
+        !SimpleDdgiVolumeUsesNearVisibilitySidecar(volume))
+    {
+        return momentVisibility;
+    }
+
+    uint bufferIndex = uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX);
+    vec2 encodedDirection = SimpleDdgiOctEncode(probeToReceiver);
+    vec2 texelUv = encodedDirection * float(p.visibilityTexels) - vec2(0.5);
+    ivec2 base = ivec2(floor(texelUv));
+    vec2 f = fract(texelUv);
+    uvec4 indices = uvec4(
+        SimpleDdgiMirrorOctTexelIndex(base, p.visibilityTexels),
+        SimpleDdgiMirrorOctTexelIndex(base + ivec2(1, 0), p.visibilityTexels),
+        SimpleDdgiMirrorOctTexelIndex(base + ivec2(0, 1), p.visibilityTexels),
+        SimpleDdgiMirrorOctTexelIndex(base + ivec2(1, 1), p.visibilityTexels));
+    uint sidecarProbeBase = SimpleDdgiVisibilityAtlasWordCount(p) +
+        address.visibilityBaseWord;
+
+    vec2 sidecar00 = unpackHalf2x16(ReadStorageWordUniform(
+        bufferIndex, sidecarProbeBase + indices.x));
+    vec2 sidecar10 = unpackHalf2x16(ReadStorageWordUniform(
+        bufferIndex, sidecarProbeBase + indices.y));
+    vec2 sidecar01 = unpackHalf2x16(ReadStorageWordUniform(
+        bufferIndex, sidecarProbeBase + indices.z));
+    vec2 sidecar11 = unpackHalf2x16(ReadStorageWordUniform(
+        bufferIndex, sidecarProbeBase + indices.w));
+    vec2 moments00 = ReadSimpleDdgiVisibilityMomentsAtBase(
+        bufferIndex, address.visibilityBaseWord, indices.x);
+    vec2 moments10 = ReadSimpleDdgiVisibilityMomentsAtBase(
+        bufferIndex, address.visibilityBaseWord, indices.y);
+    vec2 moments01 = ReadSimpleDdgiVisibilityMomentsAtBase(
+        bufferIndex, address.visibilityBaseWord, indices.z);
+    vec2 moments11 = ReadSimpleDdgiVisibilityMomentsAtBase(
+        bufferIndex, address.visibilityBaseWord, indices.w);
+
+    vec4 weights = vec4(
+        (1.0 - f.x) * (1.0 - f.y),
+        f.x * (1.0 - f.y),
+        (1.0 - f.x) * f.y,
+        f.x * f.y);
+    vec4 tapFactors = vec4(
+        SimpleDdgiNearVisibilityTapFactor(
+            p, volume, sidecar00, moments00.x, receiverDistance, weights.x),
+        SimpleDdgiNearVisibilityTapFactor(
+            p, volume, sidecar10, moments10.x, receiverDistance, weights.y),
+        SimpleDdgiNearVisibilityTapFactor(
+            p, volume, sidecar01, moments01.x, receiverDistance, weights.z),
+        SimpleDdgiNearVisibilityTapFactor(
+            p, volume, sidecar11, moments11.x, receiverDistance, weights.w));
+    float conservativeVisibility = dot(weights, tapFactors);
+    float finalVisibility = min(momentVisibility, conservativeVisibility);
+
+#if NJULF_DDGI_DETAILED_COUNTERS
+    AddRendererDiagnostic(
+        p.frameIndex,
+        SIMPLE_DDGI_NEAR_VISIBILITY_EVALUATION_COUNTER,
+        1u);
+    float clampAmount = clamp(
+        momentVisibility - finalVisibility,
+        0.0,
+        1.0);
+    if (clampAmount > 0.000001)
+    {
+        AddRendererDiagnostic(
+            p.frameIndex,
+            SIMPLE_DDGI_NEAR_VISIBILITY_APPLIED_COUNTER,
+            1u);
+        AddRendererDiagnostic(
+            p.frameIndex,
+            SIMPLE_DDGI_NEAR_VISIBILITY_CLAMP_SUM_COUNTER,
+            uint(clampAmount *
+                SIMPLE_DDGI_NEAR_VISIBILITY_CLAMP_SUM_SCALE + 0.5));
+        MaxRendererDiagnostic(
+            p.frameIndex,
+            SIMPLE_DDGI_NEAR_VISIBILITY_CLAMP_MAX_COUNTER,
+            uint(clampAmount *
+                SIMPLE_DDGI_NEAR_VISIBILITY_CLAMP_MAX_SCALE + 0.5));
+    }
+#endif
+    return finalVisibility;
 }
 
 float SimpleDdgiChebyshev(float mean, float mean2, float receiverDistance, float probeSpacing)
@@ -5406,7 +5453,6 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
             atlasAddress,
             probeToSurface,
             biasedReceiverDistance,
-            moments.x,
             transportVisibility);
         float visibilitySelectionWeight =
             SimpleDdgiVisibilitySelectionWeight(transportVisibility);
@@ -5997,10 +6043,12 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
     // estimate inside one field; treating them as missing coverage made almost
     // every interior receiver sample a coarser ring as well. A second gather is
     // still required at a ring edge, after a bias-domain crossing, or when the
-    // primary field lacks the configured fraction of valid probe data.
+    // primary field lacks any representable fraction of valid probe data.
+    // A normalized fine estimate must not receive full authority while even a
+    // small trilinear corner mass is missing.
     float selectedTransitionOwnership = selected.validSupport * edgeWeight;
     if (!selectedBiasOutsideSelectionDomain &&
-        selectedTransitionOwnership >= p.secondVolumeOwnershipEarlyOutThreshold)
+        1.0 - selectedTransitionOwnership <= 0.00001)
     {
 #if NJULF_DDGI_DETAILED_COUNTERS
         AddSimpleDdgiGatherDiagnostic(
@@ -6057,8 +6105,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
             secondGatherReasonCounter =
                 SIMPLE_DDGI_SECOND_GATHER_RING_TRANSITION_COUNTER;
         }
-        else if (selectedTransitionOwnership <
-                 p.secondVolumeOwnershipEarlyOutThreshold)
+        else if (1.0 - selectedTransitionOwnership > 0.00001)
         {
             secondGatherReasonCounter =
                 SIMPLE_DDGI_SECOND_GATHER_OWNERSHIP_BELOW_COUNTER;
@@ -6482,7 +6529,6 @@ SimpleDdgiDebugSample SampleSimpleDdgiDebug(
             atlasAddress,
             probeToSurface,
             biasedReceiverDistance,
-            moments.x,
             result.visibility);
     }
     result.visibilityMaxRayDistance = max(volume.spacing * float(max(max(volume.gridCount.x, volume.gridCount.y), volume.gridCount.z)), volume.spacing);

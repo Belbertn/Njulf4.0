@@ -423,6 +423,8 @@ namespace Njulf.Rendering
             publicationReadbackLatencyFrames: FramesInFlight);
         private readonly SimpleDdgiSchedulerCostModel _simpleDdgiSchedulerCostModel =
             new();
+        private readonly SimpleDdgiSubmittedWorkload[] _simpleDdgiSubmittedWorkloads =
+            new SimpleDdgiSubmittedWorkload[FramesInFlight];
         // Generation-rejection counters are cumulative. Keep a renderer-local
         // baseline so the liveness record reports only a rejection observed in
         // the current diagnostic interval, rather than attributing an old
@@ -2746,6 +2748,7 @@ namespace Njulf.Rendering
             _completedDdgiManyLightCounters =
                 _diagnosticsBuffer.GetLastCompletedDdgiManyLightCounters(
                     _currentFrame);
+            ObserveCompletedSimpleDdgiWorkload(_currentFrame);
             _completedGpuParticleCounters = _gpuParticleRuntimeManager.GetLastCompletedCounters(_currentFrame);
             _completedFoliageCounters = _foliageManager.GetLastCompletedCounters(_currentFrame);
             _completedSceneSubmissionCounters = _sceneOpaqueCompactionPass?.GetLastCompletedCounters(_currentFrame) ?? SceneSubmissionCounterSnapshot.Invalid;
@@ -3604,7 +3607,8 @@ namespace Njulf.Rendering
                 _currentFrame,
                 directionalShadowCasterCapture.FrameSerial,
                 directionalShadowCasterCapture.ResourceGeneration,
-                directionalShadowCasterCapture.Valid != 0);
+                directionalShadowCasterCapture.Valid != 0,
+                sceneData.DdgiFrameSerial);
 
             if (!isolateSkinnedAnimationDebug)
             {
@@ -3790,6 +3794,7 @@ namespace Njulf.Rendering
             sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
             UpdateGlobalIlluminationCpuTiming(sceneData);
             CaptureAsyncComputeTimingFrame(frameAsyncComputePlan, sceneData);
+            RecordSimpleDdgiSubmittedWorkload(_currentFrame, sceneData);
             _lastSceneData = sceneData;
             _lastDiagnostics = BuildDiagnostics(sceneData);
             _debugDraw.ClearFrame();
@@ -11263,7 +11268,6 @@ namespace Njulf.Rendering
                     scene,
                     sceneData,
                     lightSnapshot);
-            UpdateSimpleDdgiSchedulerCostEstimate();
             _simpleDdgiVolumeManager!.SetSchedulerCostEstimate(
                 _simpleDdgiSchedulerCostModel.Estimate);
             IReadOnlyList<SimpleDdgiRefinementDemand> refinementEmissiveDemands =
@@ -11926,11 +11930,16 @@ namespace Njulf.Rendering
                     .DefaultMaximumTransparentLayersPerTile);
         }
 
-        private void UpdateSimpleDdgiSchedulerCostEstimate()
+        private void ObserveCompletedSimpleDdgiWorkload(int frameIndex)
         {
-            SceneRenderingData? previous = _lastSceneData;
-            if (previous == null)
+            if ((uint)frameIndex >= (uint)_simpleDdgiSubmittedWorkloads.Length)
+                throw new ArgumentOutOfRangeException(nameof(frameIndex));
+
+            SimpleDdgiSubmittedWorkload workload =
+                _simpleDdgiSubmittedWorkloads[frameIndex];
+            if (!workload.Valid)
                 return;
+            _simpleDdgiSubmittedWorkloads[frameIndex] = default;
 
             ulong farFieldSteps =
                 (ulong)_completedDdgiInvestigationCounters.FarFieldStepBucket0Count * 2UL +
@@ -11945,20 +11954,30 @@ namespace Njulf.Rendering
                 _completedMaterialGiCounters.EstimatedFarFieldTransportHitCount;
             _simpleDdgiSchedulerCostModel.Observe(
                 new SimpleDdgiSchedulerCostSample(
-                    previous.DdgiScheduledPrimaryRayCount,
-                    previous.DdgiVisibilityRayCount,
+                    workload.ScheduledPrimaryRayCount,
+                    workload.VisibilityRayCount,
                     _completedMaterialGiCounters.EstimatedAlphaCandidateTestCount,
                     materialEvaluations,
                     farFieldSteps));
 
-            ulong completedHits = previous.DdgiTraceEnergyHitCount;
-            ulong completedMisses = previous.DdgiTraceEnergyMissCount;
-            ulong rejectedBackFaces = previous.DdgiTraceOneSidedBackFaceHitCount;
-            if (completedHits == 0 && completedMisses == 0)
+            ulong completedHits = 0UL;
+            ulong completedMisses = 0UL;
+            ulong rejectedBackFaces = 0UL;
+            if (_completedDdgiForwardEstimateCounters.ReadbackValid != 0)
             {
-                completedHits = previous.DdgiSimpleTraceHitCount;
-                completedMisses = previous.DdgiSimpleTraceMissCount;
-                rejectedBackFaces = 0;
+                completedHits =
+                    _completedDdgiForwardEstimateCounters.TraceEnergyHitCount;
+                completedMisses =
+                    _completedDdgiForwardEstimateCounters.TraceEnergyMissCount;
+                rejectedBackFaces =
+                    _completedDdgiForwardEstimateCounters.TraceOneSidedBackFaceHitCount;
+            }
+            if (completedHits == 0UL && completedMisses == 0UL &&
+                _completedDdgiInvestigationCounters.ReadbackValid != 0)
+            {
+                completedHits = _completedDdgiInvestigationCounters.SimpleTraceHitCount;
+                completedMisses = _completedDdgiInvestigationCounters.SimpleTraceMissCount;
+                rejectedBackFaces = 0UL;
             }
             ulong shadeableHits = completedHits > rejectedBackFaces
                 ? completedHits - rejectedBackFaces
@@ -11966,7 +11985,30 @@ namespace Njulf.Rendering
             _simpleDdgiVolumeManager?.ObserveSourceCacheWorkload(
                 shadeableHits,
                 completedMisses,
-                rejectedBackFaces);
+                rejectedBackFaces,
+                workload.SourceCacheLayoutIdentity,
+                workload.FrameSerial);
+        }
+
+        private void RecordSimpleDdgiSubmittedWorkload(
+            int frameIndex,
+            SceneRenderingData sceneData)
+        {
+            if ((uint)frameIndex >= (uint)_simpleDdgiSubmittedWorkloads.Length)
+                throw new ArgumentOutOfRangeException(nameof(frameIndex));
+
+            SimpleDdgiVolumeManager? manager = _simpleDdgiVolumeManager;
+            _simpleDdgiSubmittedWorkloads[frameIndex] =
+                manager != null && sceneData.SimpleDdgiActive != 0
+                    ? new SimpleDdgiSubmittedWorkload(
+                        Valid: true,
+                        FrameSerial: sceneData.DdgiFrameSerial,
+                        SourceCacheLayoutIdentity:
+                            manager.SourceCacheAdmissionIdentity,
+                        ScheduledPrimaryRayCount:
+                            sceneData.DdgiScheduledPrimaryRayCount,
+                        VisibilityRayCount: sceneData.DdgiVisibilityRayCount)
+                    : default;
         }
 
 
@@ -12028,6 +12070,13 @@ namespace Njulf.Rendering
             ulong SourceRayCount,
             ulong TransportRayCount,
             int PublishedProbeCount);
+
+        internal readonly record struct SimpleDdgiSubmittedWorkload(
+            bool Valid,
+            ulong FrameSerial,
+            ulong SourceCacheLayoutIdentity,
+            ulong ScheduledPrimaryRayCount,
+            ulong VisibilityRayCount);
 
         /// <summary>
         /// Selects the authority for per-frame work diagnostics. Resident mode
@@ -12403,7 +12452,10 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiRefinementEmissiveDemand =
                 _simpleDdgiRefinementEmissiveDemandDiagnostics;
             sceneData.SimpleDdgiNearVisibility =
-                _simpleDdgiVolumeManager.NearVisibilityDiagnostics;
+                _simpleDdgiVolumeManager.NearVisibilityDiagnostics with
+                {
+                    Evidence = _completedDdgiInvestigationCounters.NearVisibility
+                };
             sceneData.SimpleDdgiRecentered = _simpleDdgiVolumeManager.RecenteredThisFrame ? 1 : 0;
             sceneData.SimpleDdgiAtlasPreservedOnRecenter = _simpleDdgiVolumeManager.AtlasPreservedOnRecenterThisFrame ? 1 : 0;
             sceneData.SimpleDdgiAtlasCleared = _simpleDdgiVolumeManager.AtlasClearedThisFrame ? 1 : 0;

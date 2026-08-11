@@ -82,6 +82,12 @@ public sealed class GlobalIlluminationDefaultsTests
         {
             Assert.That(settings.SimpleDdgiStoragePackingMode,
                 Is.EqualTo(SimpleDdgiStoragePackingMode.Packed));
+            Assert.That(settings.SimpleDdgiSourceCacheLayoutMode,
+                Is.EqualTo(SimpleDdgiSourceCacheLayoutMode.FixedRecord));
+            Assert.That(settings.SimpleDdgiRefinementBricksEnabled, Is.False);
+            Assert.That(settings.SimpleDdgiNearVisibilitySidecarEnabled, Is.False);
+            Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold,
+                Is.EqualTo(1.0f));
             Assert.That(settings.SimpleDdgiSampledAtlasEnabled, Is.True);
             Assert.That(settings.SimpleDdgiSampledAtlasCoverageMode,
                 Is.EqualTo(SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant));
@@ -109,6 +115,15 @@ public sealed class GlobalIlluminationDefaultsTests
         {
             Assert.That(settings.GlobalIllumination.SimpleDdgiStoragePackingMode,
                 Is.EqualTo(SimpleDdgiStoragePackingMode.Packed));
+            Assert.That(settings.GlobalIllumination.SimpleDdgiSourceCacheLayoutMode,
+                Is.EqualTo(SimpleDdgiSourceCacheLayoutMode.FixedRecord));
+            Assert.That(settings.GlobalIllumination.SimpleDdgiRefinementBricksEnabled,
+                Is.False);
+            Assert.That(settings.GlobalIllumination.SimpleDdgiNearVisibilitySidecarEnabled,
+                Is.False);
+            Assert.That(
+                settings.GlobalIllumination.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold,
+                Is.EqualTo(1.0f));
             Assert.That(settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled,
                 Is.EqualTo(expectedSampledAtlasEnabled));
             Assert.That(settings.GlobalIllumination.SimpleDdgiSampledAtlasCoverageMode,

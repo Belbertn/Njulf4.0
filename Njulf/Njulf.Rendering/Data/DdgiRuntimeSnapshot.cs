@@ -530,6 +530,7 @@ namespace Njulf.Rendering.Data
         public SimpleDdgiGatherMultiplicityCounters GatherMultiplicity { get; init; }
         public DecalFragmentAttributionCounters DecalFragmentAttribution { get; init; }
         public SimpleDdgiStorageValidationCounters StorageValidation { get; init; }
+        public SimpleDdgiNearVisibilityGpuCounters NearVisibility { get; init; }
     }
 
     public readonly record struct ThinSurfaceTransportCounters(

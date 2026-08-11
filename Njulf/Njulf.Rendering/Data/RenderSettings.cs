@@ -1877,7 +1877,7 @@ namespace Njulf.Rendering.Data
         private int _simpleDdgiFarRingGridSizeX = 12;
         private int _simpleDdgiFarRingGridSizeY = 8;
         private int _simpleDdgiFarRingGridSizeZ = 12;
-        private bool _simpleDdgiRefinementBricksEnabled = true;
+        private bool _simpleDdgiRefinementBricksEnabled;
         private int _simpleDdgiRefinementMaximumBricks = 2;
         private int _simpleDdgiRefinementGridSizeX = 6;
         private int _simpleDdgiRefinementGridSizeY = 4;
@@ -1886,7 +1886,7 @@ namespace Njulf.Rendering.Data
         private int _simpleDdgiRefinementRetentionFrames = 90;
         private float _simpleDdgiRefinementMinimumEmissiveLuminanceNits = 250f;
         private float _simpleDdgiRefinementMaximumEmitterAreaSquareMeters = 4f;
-        private bool _simpleDdgiNearVisibilitySidecarEnabled = true;
+        private bool _simpleDdgiNearVisibilitySidecarEnabled;
         private ulong _simpleDdgiNearVisibilitySidecarMemoryBudgetBytes =
             32UL * 1024UL * 1024UL;
         private int _simpleDdgiRaysPerProbe = 96;
@@ -1919,7 +1919,7 @@ namespace Njulf.Rendering.Data
         // can move an interpolation query through a thin wall.
         private float _simpleDdgiMaximumWorldBiasMeters = 0.20f;
         private float _simpleDdgiArchitecturalThicknessMeters = 0.80f;
-        private float _simpleDdgiSecondVolumeOwnershipEarlyOutThreshold = 0.95f;
+        private float _simpleDdgiSecondVolumeOwnershipEarlyOutThreshold = 1.0f;
         private int _simpleDdgiSchedulerReentryStableFrameCount = 120;
         private SimpleDdgiProbeResidencyMode _simpleDdgiProbeResidencyMode =
             SimpleDdgiProbeResidencyMode.SparseNearRing;
@@ -2338,7 +2338,7 @@ namespace Njulf.Rendering.Data
         /// gate; forced hot/cold remains useful for locked A/B captures.
         /// </summary>
         public SimpleDdgiSourceCacheLayoutMode SimpleDdgiSourceCacheLayoutMode { get; set; } =
-            SimpleDdgiSourceCacheLayoutMode.Auto;
+            SimpleDdgiSourceCacheLayoutMode.FixedRecord;
         public bool SimpleDdgiClassificationReadbackEnabled { get; set; } = true;
         public bool SimpleDdgiAdaptiveHysteresisEnabled { get; set; } = true;
         public bool SimpleDdgiLightingDirtyBoostEnabled { get; set; } = true;
@@ -2357,9 +2357,8 @@ namespace Njulf.Rendering.Data
         /// </summary>
         public bool SimpleDdgiThinSurfaceTransmissionEnabled { get; set; }
         /// <summary>
-        /// Keeps the V2 field entirely camera-clipmap driven.  No authored
-        /// volumes participate while this mode is enabled; the near and mid rings
-        /// instead use the automatic density policy below.
+        /// Applies the automatic density policy to camera-relative rings.
+        /// Authored volumes remain independent scene ownership declarations.
         /// </summary>
         public bool SimpleDdgiAutomaticProbeDensityEnabled { get; set; } = true;
         /// <summary>
@@ -2397,16 +2396,13 @@ namespace Njulf.Rendering.Data
         public SimpleDdgiStoragePackingMode SimpleDdgiStoragePackingMode { get; set; } =
             SimpleDdgiStoragePackingMode.Packed;
         /// <summary>
-        /// Ownership at which an interior camera-relative ring can skip sampling a
-        /// containing coarser ring. Lower values trade a small transition error for
-        /// fewer eight-corner gathers; 1.0 preserves the fully conservative path.
+        /// Compatibility property for the former approximate early-out. Runtime
+        /// ownership composition is conservative and therefore always uses 1.0.
         /// </summary>
         public float SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold
         {
             get => _simpleDdgiSecondVolumeOwnershipEarlyOutThreshold;
-            set => _simpleDdgiSecondVolumeOwnershipEarlyOutThreshold = float.IsFinite(value)
-                ? Clamp(value, 0.0f, 1.0f)
-                : 0.95f;
+            set => _simpleDdgiSecondVolumeOwnershipEarlyOutThreshold = 1.0f;
         }
 
         /// <summary>
@@ -3715,21 +3711,21 @@ namespace Njulf.Rendering.Data
             SimpleDdgiTransportAcceleratedSweepCount = 2;
             SimpleDdgiTransportAccelerationEnabled = true;
             SimpleDdgiTransportTailCertificationEnabled = true;
-            SimpleDdgiRefinementBricksEnabled = tier is
-                DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra;
+            SimpleDdgiRefinementBricksEnabled = false;
             SimpleDdgiRefinementMaximumBricks = tier == DdgiQualityTier.DdgiUltra
                 ? 4
                 : tier == DdgiQualityTier.DdgiHigh
                     ? 2
                     : 0;
-            SimpleDdgiNearVisibilitySidecarEnabled = tier is
-                DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra;
+            SimpleDdgiNearVisibilitySidecarEnabled = false;
             SimpleDdgiNearVisibilitySidecarMemoryBudgetBytes = tier ==
                 DdgiQualityTier.DdgiUltra
                     ? 48UL * 1024UL * 1024UL
                     : tier == DdgiQualityTier.DdgiHigh
                         ? 32UL * 1024UL * 1024UL
                         : 0UL;
+            SimpleDdgiSourceCacheLayoutMode =
+                SimpleDdgiSourceCacheLayoutMode.FixedRecord;
             SimpleDdgiTransportMaximumSolverGenerations = 8;
             SimpleDdgiVerticalRingPolicy = SimpleDdgiVerticalRingPolicy.CameraRelativeWithHysteresis;
             SimpleDdgiVerticalRecenterHysteresisFraction = 0.25f;
@@ -5346,7 +5342,7 @@ namespace Njulf.Rendering.Data
             public bool SimpleDdgiUrgentRelightEnabled { get; init; } = true;
             public int? SimpleDdgiUrgentRelightProbeBudget { get; init; }
             public SimpleDdgiSourceCacheLayoutMode SimpleDdgiSourceCacheLayoutMode { get; init; } =
-                SimpleDdgiSourceCacheLayoutMode.Auto;
+                SimpleDdgiSourceCacheLayoutMode.FixedRecord;
             public bool SimpleDdgiClassificationReadbackEnabled { get; init; } = true;
             public bool SimpleDdgiAdaptiveHysteresisEnabled { get; init; } = true;
             public bool SimpleDdgiLightingDirtyBoostEnabled { get; init; } = true;
@@ -5364,7 +5360,7 @@ namespace Njulf.Rendering.Data
             public bool? SimpleDdgiSampledAtlasEnabled { get; init; }
             public SimpleDdgiSampledAtlasCoverageMode? SimpleDdgiSampledAtlasCoverageMode { get; init; }
             public SimpleDdgiStoragePackingMode? SimpleDdgiStoragePackingMode { get; init; }
-            public float SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold { get; init; } = 0.95f;
+            public float SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold { get; init; } = 1.0f;
             public bool SimpleDdgiToroidalScrollingEnabled { get; init; } = true;
             public bool SimpleDdgiRegionalInvalidationEnabled { get; init; } = true;
             public bool SimpleDdgiMutationJournalEnabled { get; init; } = true;

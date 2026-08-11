@@ -235,6 +235,60 @@ public sealed class GiFeatureStateFactoryTests
     }
 
     [Test]
+    public void Create_OptionalLayoutRejectionRemainsAuditableWithoutPoisoningRequiredLayout()
+    {
+        SimpleDdgiLayoutVolumeRequest[] requests =
+        [
+            new SimpleDdgiLayoutVolumeRequest(
+                "required-ring", 0, false, SimpleDdgiVolumePurpose.TransitionSupport,
+                0, 1.0f, 16),
+            new SimpleDdgiLayoutVolumeRequest(
+                "optional-refinement", 1, false, SimpleDdgiVolumePurpose.ReceiverHero,
+                0, 0.5f, 4)
+            {
+                AdmissionClass = SimpleDdgiLayoutAdmissionClass.Optional
+            }
+        ];
+        SimpleDdgiLayoutReport report = SimpleDdgiLayoutCompiler.Compile(
+            requests,
+            new SimpleDdgiLayoutBudget(
+                DdgiQualityTier.DdgiHigh,
+                ProbeBudget: 16,
+                PersistentMemoryBudgetBytes: ulong.MaxValue,
+                VolumeBudget: 2),
+            sampledAtlasRequested: false,
+            SimpleDdgiLayoutAdmissionMode.Reject);
+        SimpleDdgiLayoutTelemetry layout = SimpleDdgiLayoutTelemetryFactory.Create(report);
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            SimpleDdgiLayout = layout
+        };
+
+        IReadOnlyList<GiDiagnosticWarning> warnings = GiDiagnosticWarningFactory.Create(
+            diagnostics,
+            new GiWarningEvaluator().Evaluate(diagnostics),
+            GiFeatureStateFactory.Create(diagnostics));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(layout.WasDegraded, Is.True);
+            Assert.That(layout.HasRequiredDegradation, Is.False);
+            Assert.That(layout.RequiredRejectedVolumeCount, Is.Zero);
+            Assert.That(layout.OptionalRejectedVolumeCount, Is.EqualTo(1));
+            Assert.That(layout.Volumes.Single(volume =>
+                    volume.Id == "optional-refinement").AdmissionClass,
+                Is.EqualTo(SimpleDdgiLayoutAdmissionClass.Optional));
+            Assert.That(warnings.Any(warning =>
+                    warning.Code == GiDiagnosticWarningCode.SimpleDdgiLayoutDegraded),
+                Is.False);
+            Assert.That(warnings.Any(warning =>
+                    warning.Code == GiDiagnosticWarningCode.GiBudgetOverrun &&
+                    warning.Feature.StartsWith("simple-ddgi-layout", StringComparison.Ordinal)),
+                Is.False);
+        });
+    }
+
+    [Test]
     public void Create_SteppedSunLagBeyondDeclaredSweepEmitsStructuredWarning()
     {
         RendererDiagnostics diagnostics = RendererDiagnostics.Empty with

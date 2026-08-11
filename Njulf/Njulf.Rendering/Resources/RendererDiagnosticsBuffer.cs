@@ -156,8 +156,14 @@ namespace Njulf.Rendering.Resources
         public const float DdgiManyLightPdfScale = 1_048_576.0f;
         public const float DdgiManyLightLogPdfScale = 1_024.0f;
         public const float DdgiManyLightEstimatorWeightScale = 1_024.0f;
-        public const int CounterCount =
+        public const int SimpleDdgiNearVisibilityCounterBase =
             DdgiManyLightCounterBase + DdgiManyLightCounterCount;
+        public const int SimpleDdgiNearVisibilityCounterCount = 10;
+        public const float SimpleDdgiNearVisibilityClampSumScale = 256.0f;
+        public const float SimpleDdgiNearVisibilityClampMaximumScale = 65_535.0f;
+        public const int CounterCount =
+            SimpleDdgiNearVisibilityCounterBase +
+            SimpleDdgiNearVisibilityCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const float DdgiShadowHitDistanceScale = 256.0f;
@@ -200,6 +206,10 @@ namespace Njulf.Rendering.Resources
         private readonly DdgiManyLightGpuCounters[]
             _lastCompletedDdgiManyLightCounters =
                 new DdgiManyLightGpuCounters[FramesInFlight];
+        private readonly ulong[] _diagnosticFrameSerials =
+            new ulong[FramesInFlight];
+        private readonly bool[] _diagnosticFrameSubmitted =
+            new bool[FramesInFlight];
         private bool _disposed;
 
         public RendererDiagnosticsBuffer(VulkanContext context, BufferManager bufferManager)
@@ -541,6 +551,16 @@ namespace Njulf.Rendering.Resources
             if (storageValidationValid)
                 investigationValid = true;
 
+#if DEBUG || NJULF_DETAILED_INVESTIGATION
+            // This bank is reset and frame-stamped on the CPU before submission,
+            // then read only after the owning frame fence. Unlike the optional
+            // shader dispositions, an all-zero B4 result is still valid evidence.
+            bool nearVisibilityReadbackValid =
+                _diagnosticFrameSubmitted[frameIndex];
+#else
+            bool nearVisibilityReadbackValid = false;
+#endif
+
             float invInvestigationSampleCount = ddgiInvestigationSampleCount > 0 ? 1.0f / ddgiInvestigationSampleCount : 0.0f;
             float invSimpleVisibilitySampleCount = simpleVisibilitySampleCount > 0 ? 1.0f / simpleVisibilitySampleCount : 0.0f;
             float invSkyVisibilitySampleCount = skyVisibilitySampleCount > 0 ? 1.0f / skyVisibilitySampleCount : 0.0f;
@@ -622,7 +642,7 @@ namespace Njulf.Rendering.Resources
             }
 
             _lastCompletedDdgiInvestigationCounters[frameIndex] =
-                investigationValid || volumeEnergyValid
+                investigationValid || volumeEnergyValid || nearVisibilityReadbackValid
                 ? new DdgiInvestigationCounters(
                     ReadbackValid: investigationValid ? 1 : 0,
                     SimpleForwardSampleCount: counters[DdgiInvestigationCounterBase + 0],
@@ -715,7 +735,14 @@ namespace Njulf.Rendering.Resources
                             DirectionAngularErrorHistogram: directionAngularHistogram,
                             InvalidSourceEpochCount: storageValidationCounters[21],
                             InvalidHitKindCount: storageValidationCounters[22])
-                        : SimpleDdgiStorageValidationCounters.Empty
+                        {
+                            FrameSerial = _diagnosticFrameSerials[frameIndex]
+                        }
+                        : SimpleDdgiStorageValidationCounters.Empty,
+                    NearVisibility = DecodeSimpleDdgiNearVisibilityCounters(
+                        counters,
+                        frameIndex,
+                        nearVisibilityReadbackValid)
                 }
                 : DdgiInvestigationCounters.Empty;
             if (sampleCount > 0 ||
@@ -900,6 +927,10 @@ namespace Njulf.Rendering.Resources
             {
                 _lastCompletedDdgiForwardEstimateCounters[frameIndex] = DdgiForwardEstimateCounters.Empty;
             }
+
+            // A ring slot's submission stamp is one-shot evidence. Keeping it set would make
+            // a later read without a matching submission look like a valid all-zero frame.
+            _diagnosticFrameSubmitted[frameIndex] = false;
         }
 
         public GpuMeshletCounters GetLastCompletedCounters(int frameIndex)
@@ -1066,6 +1097,46 @@ namespace Njulf.Rendering.Resources
                 ? counters[DdgiAlbedoCounterBase + relativeSumOffset] /
                     DdgiForwardEstimateLuminanceScale / count
                 : 0.0f;
+        }
+
+        private SimpleDdgiNearVisibilityGpuCounters DecodeSimpleDdgiNearVisibilityCounters(
+            uint* counters,
+            int frameIndex,
+            bool readbackValid)
+        {
+            if (!readbackValid)
+                return SimpleDdgiNearVisibilityGpuCounters.Unavailable;
+
+            uint receiverEvaluationCount =
+                counters[SimpleDdgiNearVisibilityCounterBase + 7];
+            float averageClamp = receiverEvaluationCount > 0
+                ? counters[SimpleDdgiNearVisibilityCounterBase + 8] /
+                  SimpleDdgiNearVisibilityClampSumScale /
+                  receiverEvaluationCount
+                : 0.0f;
+
+            return new SimpleDdgiNearVisibilityGpuCounters(
+                ReadbackValid: 1,
+                FrameSerial: _diagnosticFrameSerials[frameIndex],
+                CoherentClusterTexelCount:
+                    counters[SimpleDdgiNearVisibilityCounterBase + 0],
+                RejectedClusterTexelCount:
+                    counters[SimpleDdgiNearVisibilityCounterBase + 1],
+                InsufficientConfidenceTapCount:
+                    counters[SimpleDdgiNearVisibilityCounterBase + 2],
+                InvalidDepthTapCount:
+                    counters[SimpleDdgiNearVisibilityCounterBase + 3],
+                NoMomentDiscrepancyTapCount:
+                    counters[SimpleDdgiNearVisibilityCounterBase + 4],
+                ReceiverInFrontTapCount:
+                    counters[SimpleDdgiNearVisibilityCounterBase + 5],
+                AppliedEvaluationCount:
+                    counters[SimpleDdgiNearVisibilityCounterBase + 6],
+                EvaluationCount: receiverEvaluationCount,
+                AverageClamp: averageClamp,
+                MaximumClamp:
+                    counters[SimpleDdgiNearVisibilityCounterBase + 9] /
+                    SimpleDdgiNearVisibilityClampMaximumScale);
         }
 
         private static SimpleDdgiVolumeEnergyCounters ReadSimpleDdgiVolumeEnergyCounters(
@@ -1249,9 +1320,12 @@ namespace Njulf.Rendering.Resources
             int frameIndex,
             ulong directionalShadowCasterFrameSerial = 0UL,
             uint directionalShadowCasterResourceGeneration = 0u,
-            bool directionalShadowCasterFrameMetadataValid = false)
+            bool directionalShadowCasterFrameMetadataValid = false,
+            ulong diagnosticFrameSerial = 0UL)
         {
             ValidateFrameIndex(frameIndex);
+            _diagnosticFrameSerials[frameIndex] = diagnosticFrameSerial;
+            _diagnosticFrameSubmitted[frameIndex] = true;
 
             // Do not overlap a fill and an update write to the frame-metadata
             // header. Vulkan does not make the later transfer write win merely

@@ -1272,7 +1272,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void SecondVolumeGather_UsesCombinedTransitionOwnershipEarlyOut()
+        public void SecondVolumeGather_EarlyOutRequiresCompleteTransitionOwnership()
         {
             string shared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
 
@@ -1281,7 +1281,7 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain(
                     "float selectedTransitionOwnership = selected.validSupport * edgeWeight;"));
                 Assert.That(shared, Does.Contain(
-                    "selectedTransitionOwnership >= p.secondVolumeOwnershipEarlyOutThreshold"));
+                    "1.0 - selectedTransitionOwnership <= 0.00001"));
                 Assert.That(shared, Does.Contain("selected.transitionWeight = edgeWeight;"));
                 Assert.That(shared, Does.Contain(
                     "result.secondVolumeUsed = result.secondaryContributionWeight > 0.000001 ? 1.0 : 0.0;"));

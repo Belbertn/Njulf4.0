@@ -70,7 +70,7 @@ namespace Njulf.Rendering.Resources
         int ExpectedRingRecenterEvents)
     {
         public bool IsCovered => Issues.Count == 0;
-        public bool HasLayoutDegradation => Layout.WasDegraded;
+        public bool HasLayoutDegradation => Layout.HasRequiredDegradation;
     }
 
     /// <summary>
@@ -175,7 +175,7 @@ namespace Njulf.Rendering.Resources
             IReadOnlyList<SimpleDdgiCoverageCameraSample> cameras,
             List<SimpleDdgiReceiverCoverageIssue> issues)
         {
-            if (!layout.WasDegraded)
+            if (!layout.HasRequiredDegradation)
                 return;
 
             string reason = $"Simple-DDGI layout was degraded before allocation: {layout.Summary}.";

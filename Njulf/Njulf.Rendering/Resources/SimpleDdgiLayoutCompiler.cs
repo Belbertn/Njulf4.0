@@ -13,6 +13,16 @@ namespace Njulf.Rendering.Resources
         RejectedVolumeLimit = 2
     }
 
+    /// <summary>
+    /// Required volumes form the complete receiver field. Optional volumes are
+    /// overlays which may be rejected without invalidating that field.
+    /// </summary>
+    public enum SimpleDdgiLayoutAdmissionClass : uint
+    {
+        Required = 0,
+        Optional = 1
+    }
+
     /// <summary>One pre-allocation volume request in deterministic priority order.</summary>
     public sealed record SimpleDdgiLayoutVolumeRequest(
         string Id,
@@ -32,6 +42,8 @@ namespace Njulf.Rendering.Resources
         public int GridCountZ { get; init; } = 1;
         public bool SparseNearRingEligible { get; init; }
         public bool DenseCoarserRingEligible { get; init; }
+        public SimpleDdgiLayoutAdmissionClass AdmissionClass { get; init; } =
+            SimpleDdgiLayoutAdmissionClass.Required;
         public int RingIndex { get; init; } = -1;
         public float ArchitecturalThickness { get; init; } = 0.08f;
         /// <summary>
@@ -832,6 +844,26 @@ namespace Njulf.Rendering.Resources
         public bool WasDegraded => PhysicalPageBudgetWasReduced ||
             Volumes.Any(static volume => volume.Decision != SimpleDdgiLayoutDecision.Accepted);
 
+        public bool HasRequiredRejection => Volumes.Any(static volume =>
+            volume.Request.AdmissionClass == SimpleDdgiLayoutAdmissionClass.Required &&
+            volume.Decision != SimpleDdgiLayoutDecision.Accepted);
+
+        /// <summary>
+        /// A required-volume rejection or a reduced physical residency budget changes the
+        /// receiver field promised by the selected tier. Optional overlay rejection remains
+        /// observable through <see cref="WasDegraded"/>, but does not invalidate that field.
+        /// </summary>
+        public bool HasRequiredDegradation =>
+            PhysicalPageBudgetWasReduced || HasRequiredRejection;
+
+        public int RequiredRejectionCount => Volumes.Count(static volume =>
+            volume.Request.AdmissionClass == SimpleDdgiLayoutAdmissionClass.Required &&
+            volume.Decision != SimpleDdgiLayoutDecision.Accepted);
+
+        public int OptionalRejectionCount => Volumes.Count(static volume =>
+            volume.Request.AdmissionClass == SimpleDdgiLayoutAdmissionClass.Optional &&
+            volume.Decision != SimpleDdgiLayoutDecision.Accepted);
+
         public IReadOnlySet<int> AcceptedSourceOrdinals => Volumes
             .Where(static volume => volume.Decision == SimpleDdgiLayoutDecision.Accepted)
             .Select(static volume => volume.Request.SourceOrdinal)
@@ -847,7 +879,8 @@ namespace Njulf.Rendering.Resources
             $"nearVisibility={NearVisibilitySidecarBytes}+{NearVisibilityPrivateSidecarBytes}:" +
             $"{NearVisibilitySidecarFallbackReason} " +
             $"avoided={AvoidedBytes} " +
-            $"rejected={Volumes.Count(static volume => volume.Decision != SimpleDdgiLayoutDecision.Accepted)}";
+            $"requiredRejected={RequiredRejectionCount} " +
+            $"optionalRejected={OptionalRejectionCount}";
     }
 
     /// <summary>

@@ -67,7 +67,8 @@ namespace Njulf.Tests
                 ("simple DDGI per-volume energy evidence", RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyEvidenceCounterBase, RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyEvidenceCounterCount),
                 ("directional shadow caster attribution", RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticCounterBase, RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticCounterCount),
                 ("DDGI geometry participation", RendererDiagnosticsBuffer.DdgiGeometryParticipationCounterBase, RendererDiagnosticsBuffer.DdgiGeometryParticipationCounterCount),
-                ("DDGI many-light estimator", RendererDiagnosticsBuffer.DdgiManyLightCounterBase, RendererDiagnosticsBuffer.DdgiManyLightCounterCount)
+                ("DDGI many-light estimator", RendererDiagnosticsBuffer.DdgiManyLightCounterBase, RendererDiagnosticsBuffer.DdgiManyLightCounterCount),
+                ("simple DDGI near visibility", RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterBase, RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -118,8 +119,9 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticRecordStride, Is.EqualTo(28));
                 Assert.That(RendererDiagnosticsBuffer.DdgiGeometryParticipationCounterCount, Is.EqualTo(12));
                 Assert.That(RendererDiagnosticsBuffer.DdgiManyLightCounterCount, Is.EqualTo(16));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterCount, Is.EqualTo(10));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount,
-                    Is.EqualTo(RendererDiagnosticsBuffer.DdgiManyLightCounterBase + 16));
+                    Is.EqualTo(RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterBase + 10));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize,
                     Is.GreaterThanOrEqualTo((ulong)RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount * sizeof(uint)));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize % 256ul, Is.Zero);
@@ -147,6 +149,8 @@ namespace Njulf.Tests
                     "DDGI_GEOMETRY_PARTICIPATION_COUNTER_BASE ="));
                 Assert.That(commonShader, Does.Contain(
                     "DDGI_MANY_LIGHT_COUNTER_BASE ="));
+                Assert.That(commonShader, Does.Contain(
+                    "SIMPLE_DDGI_NEAR_VISIBILITY_COUNTER_BASE ="));
                 Assert.That(simpleSharedShader, Does.Contain(
                     "void RecordSimpleDdgiVolumeEnergyEvidence("));
                 Assert.That(simpleSharedShader, Does.Contain(
@@ -652,7 +656,7 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.SimpleDdgiStructuredGatherEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiReducedBlendEnabled, Is.False);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled, Is.True);
-                Assert.That(settings.GlobalIllumination.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.EqualTo(0.95f));
+                Assert.That(settings.GlobalIllumination.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.EqualTo(1.0f));
                 Assert.That(settings.GlobalIllumination.SimpleDdgiToroidalScrollingEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiRegionalInvalidationEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.FarFieldSkyVisibilityEnabled, Is.True);

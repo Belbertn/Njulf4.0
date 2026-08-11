@@ -28,6 +28,12 @@ public readonly record struct SimpleDdgiNearVisibilitySample(
         new(MaximumHalf, 0.0f);
 }
 
+/// <summary>One uniform visibility ray projected into an octahedral texel.</summary>
+public readonly record struct SimpleDdgiNearVisibilityRay(
+    float Cosine,
+    float Distance,
+    bool Hit);
+
 public readonly record struct SimpleDdgiNearVisibilityQuery(
     float MomentMean,
     float MomentSecond,
@@ -51,6 +57,15 @@ public readonly record struct SimpleDdgiNearVisibilityEvaluation(
         Disposition == SimpleDdgiNearVisibilityDisposition.Applied;
 }
 
+public readonly record struct SimpleDdgiNearVisibilityBilinearEvaluation(
+    float MomentVisibility,
+    float FinalVisibility,
+    float ConservativeVisibility,
+    int AppliedTapCount)
+{
+    public bool Applied => FinalVisibility < MomentVisibility - 1.0e-6f;
+}
+
 /// <summary>
 /// CPU reference for B4 admission, packing, temporal release, and receiver
 /// evaluation. Constants and branch order intentionally mirror
@@ -62,6 +77,72 @@ public static class SimpleDdgiNearVisibility
     public const int BytesPerTexel = sizeof(uint);
     public const float MinimumConfidence = 0.65f;
     public const float FullConfidence = 0.90f;
+    public const float MinimumQualifyingNarrowWeight = 0.04f;
+
+    public static float CoherentDepthBand(
+        float probeSpacing,
+        float architecturalThickness)
+    {
+        EnsureFinite(probeSpacing, nameof(probeSpacing));
+        EnsureFinite(architecturalThickness, nameof(architecturalThickness));
+        if (probeSpacing <= 0.0f || architecturalThickness <= 0.0f)
+            throw new ArgumentOutOfRangeException(nameof(probeSpacing));
+        return Math.Max(
+            0.02f,
+            Math.Min(probeSpacing * 0.10f, architecturalThickness * 0.50f));
+    }
+
+    public static SimpleDdgiNearVisibilitySample BuildSample(
+        ReadOnlySpan<SimpleDdgiNearVisibilityRay> rays,
+        float probeSpacing,
+        float architecturalThickness)
+    {
+        float nearest = SimpleDdgiNearVisibilitySample.MaximumHalf;
+        double allNarrowWeight = 0.0;
+        for (int index = 0; index < rays.Length; index++)
+        {
+            SimpleDdgiNearVisibilityRay ray = rays[index];
+            EnsureFinite(ray.Cosine, nameof(rays));
+            EnsureFinite(ray.Distance, nameof(rays));
+            float broadWeight = MathF.Pow(
+                Math.Clamp(ray.Cosine, 0.0f, 1.0f),
+                16.0f);
+            float narrowWeight = broadWeight * broadWeight;
+            allNarrowWeight += narrowWeight;
+            if (ray.Hit && narrowWeight >= MinimumQualifyingNarrowWeight)
+                nearest = Math.Min(nearest, Math.Max(ray.Distance, 0.0f));
+        }
+
+        if (nearest >= SimpleDdgiNearVisibilitySample.MaximumHalf - 1.0f ||
+            allNarrowWeight <= 1.0e-6)
+        {
+            return SimpleDdgiNearVisibilitySample.Empty;
+        }
+
+        float band = CoherentDepthBand(probeSpacing, architecturalThickness);
+        double clusteredWeight = 0.0;
+        double clusteredDepth = 0.0;
+        for (int index = 0; index < rays.Length; index++)
+        {
+            SimpleDdgiNearVisibilityRay ray = rays[index];
+            float depth = Math.Max(ray.Distance, 0.0f);
+            if (!ray.Hit || Math.Abs(depth - nearest) > band)
+                continue;
+
+            float broadWeight = MathF.Pow(
+                Math.Clamp(ray.Cosine, 0.0f, 1.0f),
+                16.0f);
+            float narrowWeight = broadWeight * broadWeight;
+            clusteredWeight += narrowWeight;
+            clusteredDepth += depth * narrowWeight;
+        }
+
+        if (clusteredWeight <= 1.0e-6)
+            return SimpleDdgiNearVisibilitySample.Empty;
+        return new SimpleDdgiNearVisibilitySample(
+            (float)(clusteredDepth / clusteredWeight),
+            Math.Clamp((float)(clusteredWeight / allNarrowWeight), 0.0f, 1.0f));
+    }
 
     public static bool UsesSidecar(
         SimpleDdgiVolumeKind volumeKind,
@@ -97,7 +178,8 @@ public static class SimpleDdgiNearVisibility
         float texelHysteresis,
         bool historyValid,
         bool freshUpdate,
-        float probeSpacing)
+        float probeSpacing,
+        float architecturalThickness = 0.08f)
     {
         EnsureFinite(previous.ConservativeDepth, nameof(previous));
         EnsureFinite(previous.Confidence, nameof(previous));
@@ -105,6 +187,7 @@ public static class SimpleDdgiNearVisibility
         EnsureFinite(current.Confidence, nameof(current));
         EnsureFinite(texelHysteresis, nameof(texelHysteresis));
         EnsureFinite(probeSpacing, nameof(probeSpacing));
+        EnsureFinite(architecturalThickness, nameof(architecturalThickness));
 
         float previousDepth = Math.Clamp(
             previous.ConservativeDepth,
@@ -124,15 +207,15 @@ public static class SimpleDdgiNearVisibility
         float hysteresis = historyValid && !freshUpdate
             ? Math.Min(Math.Clamp(texelHysteresis, 0.0f, 1.0f), 0.85f)
             : 0.0f;
-        float spacing = Math.Max(probeSpacing, 0.0f);
-        if (currentConfidence < MinimumConfidence)
-            hysteresis = Math.Min(hysteresis, 0.20f);
-        else if (previousConfidence >= MinimumConfidence &&
-            currentDepth > previousDepth + spacing * 0.10f)
-            hysteresis = Math.Min(hysteresis, 0.25f);
-        else if (previousConfidence >= MinimumConfidence &&
-            currentDepth < previousDepth - spacing * 0.10f)
-            hysteresis = Math.Min(hysteresis, 0.50f);
+        float depthBand = CoherentDepthBand(
+            Math.Max(probeSpacing, 0.001f),
+            Math.Max(architecturalThickness, 0.008f));
+        if (currentConfidence < MinimumConfidence ||
+            previousConfidence < MinimumConfidence ||
+            Math.Abs(currentDepth - previousDepth) > depthBand)
+        {
+            hysteresis = 0.0f;
+        }
 
         return new SimpleDdgiNearVisibilitySample(
             Lerp(currentDepth, previousDepth, hysteresis),
@@ -140,6 +223,41 @@ public static class SimpleDdgiNearVisibility
                 Lerp(currentConfidence, previousConfidence, hysteresis),
                 0.0f,
                 1.0f));
+    }
+
+    public static SimpleDdgiNearVisibilityBilinearEvaluation EvaluateBilinear(
+        float momentVisibility,
+        ReadOnlySpan<SimpleDdgiNearVisibilityQuery> taps,
+        ReadOnlySpan<float> weights)
+    {
+        EnsureFinite(momentVisibility, nameof(momentVisibility));
+        if (taps.Length != 4 || weights.Length != 4)
+            throw new ArgumentException("Bilinear near visibility requires four taps.");
+
+        float conservativeVisibility = 0.0f;
+        float weightSum = 0.0f;
+        int appliedTapCount = 0;
+        for (int index = 0; index < 4; index++)
+        {
+            EnsureFinite(weights[index], nameof(weights));
+            float weight = Math.Max(weights[index], 0.0f);
+            SimpleDdgiNearVisibilityEvaluation tap = Evaluate(taps[index]);
+            float tapFactor = tap.Applied ? tap.ConservativeVisibility : 1.0f;
+            conservativeVisibility += weight * tapFactor;
+            weightSum += weight;
+            if (tap.Applied && weight > 0.0f)
+                appliedTapCount++;
+        }
+
+        conservativeVisibility = weightSum > 1.0e-6f
+            ? conservativeVisibility / weightSum
+            : 1.0f;
+        float clampedMomentVisibility = Math.Clamp(momentVisibility, 0.0f, 1.0f);
+        return new SimpleDdgiNearVisibilityBilinearEvaluation(
+            clampedMomentVisibility,
+            Math.Min(clampedMomentVisibility, conservativeVisibility),
+            conservativeVisibility,
+            appliedTapCount);
     }
 
     public static SimpleDdgiNearVisibilityEvaluation Evaluate(
